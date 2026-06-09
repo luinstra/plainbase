@@ -1,0 +1,49 @@
+# Plainbase — Docker Compose tier.
+#
+# `docker compose up --build` serves the SPA shell on http://localhost:8080.
+#
+# NOTE: Meilisearch is the OPTIONAL search tier (§2.4/§5.6). Plainbase defaults to
+# embedded SQLite FTS5 and needs no containers at all (single native binary).
+# Run compose when you want the upgraded search engine (typo tolerance, better
+# relevance). It is included here so the upgrade path is one `docker compose up`.
+
+services:
+  plainbase:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      CONTENT_DIR: /content
+      DATA_DIR: /data
+      # Search engine selection lands in Phase 2:
+      # SEARCH_ENGINE: meilisearch
+      # MEILI_URL: http://meilisearch:7700
+    volumes:
+      # Point this bind mount at your own Markdown tree; the demo fixtures are the default.
+      - ./fixtures/demo-docs:/content
+      - plainbase-data:/data
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # OPTIONAL search tier — deliberately better search (typo tolerance, relevance).
+  # The embedded FTS5 engine inside plainbase is the default and requires nothing.
+  meilisearch:
+    image: getmeili/meilisearch:v1.46
+    environment:
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  plainbase-data:
+  meilisearch-data:
