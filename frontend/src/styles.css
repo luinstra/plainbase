@@ -1,0 +1,56 @@
+/* Two-tier design tokens (§5.9): primitives -> semantic aliases.
+   Components consume semantic tokens only. */
+:root {
+  /* primitives */
+  --pb-gray-50: #fafafa;
+  --pb-gray-100: #f4f4f5;
+  --pb-gray-700: #3f3f46;
+  --pb-gray-900: #18181b;
+  --pb-blue-600: #2563eb;
+
+  /* semantic */
+  --pb-bg-surface: var(--pb-gray-50);
+  --pb-bg-header: var(--pb-gray-100);
+  --pb-text-body: var(--pb-gray-900);
+  --pb-text-muted: var(--pb-gray-700);
+  --pb-accent: var(--pb-blue-600);
+}
+
+[data-theme="dark"] {
+  --pb-bg-surface: var(--pb-gray-900);
+  --pb-bg-header: #27272a;
+  --pb-text-body: var(--pb-gray-50);
+  --pb-text-muted: #a1a1aa;
+}
+
+body {
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  background: var(--pb-bg-surface);
+  color: var(--pb-text-body);
+}
+
+.pb-header {
+  padding: 0.75rem 1.5rem;
+  background: var(--pb-bg-header);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.pb-logo {
+  font-weight: 700;
+  color: var(--pb-accent);
+}
+
+.pb-main {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.pb-health code {
+  color: var(--pb-text-muted);
+}
