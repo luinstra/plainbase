@@ -4,6 +4,7 @@ import com.plainbase.domain.principal.PasswordHasher
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator
 import org.bouncycastle.crypto.params.Argon2Parameters
 import org.bouncycastle.util.Arrays
+import java.nio.CharBuffer
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.util.Base64
@@ -27,7 +28,7 @@ class Argon2PasswordHasher(
         val salt = ByteArray(saltLength).also(random::nextBytes)
         val hash = compute(plain, salt, memoryKb, iterations, parallelism, hashLength)
         val b64 = Base64.getEncoder().withoutPadding()
-        return "\$argon2id\$v=19\$m=$memoryKb,t=$iterations,p=$parallelism" +
+        return "\$argon2id\$v=$PHC_VERSION\$m=$memoryKb,t=$iterations,p=$parallelism" +
             "\$${b64.encodeToString(salt)}\$${b64.encodeToString(hash)}"
     }
 
@@ -35,18 +36,34 @@ class Argon2PasswordHasher(
         val parts = encoded.split('$')
         // ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
         if (parts.size != 6 || parts[1] != "argon2id") return false
+        // Validate the PHC version segment explicitly: we only ever emit and
+        // accept Argon2 version 19 (0x13). Anything else — missing, malformed,
+        // or a different version — is rejected outright.
+        val version = parts[2]
+        if (!version.startsWith("v=")) return false
+        if (version.removePrefix("v=").toIntOrNull() != PHC_VERSION) return false
         val params = parts[3].split(',').associate {
-            val (k, v) = it.split('=', limit = 2)
-            k to v.toInt()
+            val kv = it.split('=', limit = 2)
+            if (kv.size != 2) return false
+            kv[0] to (kv[1].toIntOrNull() ?: return false)
         }
         val m = params["m"] ?: return false
         val t = params["t"] ?: return false
         val p = params["p"] ?: return false
-        val salt = Base64.getDecoder().decode(parts[4])
-        val expected = Base64.getDecoder().decode(parts[5])
+        if (m <= 0 || t <= 0 || p <= 0) return false
+        val salt = decodeBase64(parts[4]) ?: return false
+        val expected = decodeBase64(parts[5]) ?: return false
+        if (salt.isEmpty() || expected.isEmpty()) return false
         val actual = compute(plain, salt, m, t, p, expected.size)
         return Arrays.constantTimeAreEqual(expected, actual)
     }
+
+    private fun decodeBase64(value: String): ByteArray? =
+        try {
+            Base64.getDecoder().decode(value)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
 
     private fun compute(
         plain: CharArray,
@@ -66,8 +83,23 @@ class Argon2PasswordHasher(
         val generator = Argon2BytesGenerator()
         generator.init(parameters)
         val out = ByteArray(hashLength)
-        val bytes = String(plain).toByteArray(StandardCharsets.UTF_8)
-        generator.generateBytes(bytes, out)
-        return out
+        // Encode the password CharArray to UTF-8 without going through a String:
+        // Strings are immutable and unzeroable, so a copy would linger on the heap
+        // until GC. Both intermediate byte buffers are zeroed in `finally`.
+        val encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(plain))
+        val bytes = ByteArray(encoded.remaining())
+        encoded.get(bytes)
+        try {
+            generator.generateBytes(bytes, out)
+            return out
+        } finally {
+            bytes.fill(0)
+            if (encoded.hasArray()) encoded.array().fill(0)
+        }
+    }
+
+    private companion object {
+        /** The only Argon2 version we emit or accept (0x13 — “v=19” in PHC strings). */
+        const val PHC_VERSION = 19
     }
 }
