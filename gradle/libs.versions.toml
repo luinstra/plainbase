@@ -1,0 +1,64 @@
+[versions]
+kotlin = "2.4.0"
+kotlinx-serialization = "1.11.0"
+kotlinx-coroutines = "1.11.0"
+ktor = "3.5.0"
+sqldelight = "2.3.2"
+sqlite-jdbc = "3.53.2.0"
+koin = "4.2.1"
+jgit = "7.6.0.202603022253-r"
+flexmark = "0.64.8"
+bouncycastle = "1.84"
+mcp = "0.13.0"
+logback = "1.5.34"
+graalvm-buildtools = "1.1.1"
+node-gradle = "7.1.0"
+
+[libraries]
+# Ktor server — CIO engine ONLY (Netty is banned: reflection-heavy, hostile to native image)
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+
+# Serialization — kotlinx.serialization ONLY (Jackson/Gson are banned from the dependency tree)
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+
+# Persistence — SQLDelight (compile-time SQL codegen, zero reflection), NOT Exposed
+sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+
+# DI — Koin constructor DSL only (no annotations, no reflection)
+koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
+
+# Git layer
+jgit = { module = "org.eclipse.jgit:org.eclipse.jgit", version.ref = "jgit" }
+
+# Markdown
+flexmark = { module = "com.vladsch.flexmark:flexmark", version.ref = "flexmark" }
+flexmark-ext-gfm-tables = { module = "com.vladsch.flexmark:flexmark-ext-tables", version.ref = "flexmark" }
+flexmark-ext-gfm-strikethrough = { module = "com.vladsch.flexmark:flexmark-ext-gfm-strikethrough", version.ref = "flexmark" }
+flexmark-ext-yaml-front-matter = { module = "com.vladsch.flexmark:flexmark-ext-yaml-front-matter", version.ref = "flexmark" }
+flexmark-ext-anchorlink = { module = "com.vladsch.flexmark:flexmark-ext-anchorlink", version.ref = "flexmark" }
+
+# Password hashing — Bouncy Castle Argon2 (pure Java, native-image safe; no JNA/JNI)
+bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+# MCP Kotlin SDK
+mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
+
+# Logging
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# Test
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-buildtools" }
+node-gradle = { id = "com.github.node-gradle.node", version.ref = "node-gradle" }

@@ -1,0 +1,34 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Kotlin / JVM
+*.class
+*.hprof
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.node/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.kotlin/
+
+# OS
+.DS_Store
+
+# Plainbase runtime state (never commit app-owned state)
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Native image build output
+*.build_artifacts.txt
+
+# Env
+.env
