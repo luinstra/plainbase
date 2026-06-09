@@ -49,7 +49,7 @@ Java 21+.
 ./gradlew build                      # backend + frontend + tests (universal JAR floor)
 ./gradlew :server:run --args=serve   # run the server on the JVM
 ./gradlew :server:run --args=spike   # full-stack native dependency spike (JVM)
-./gradlew :server:nativeCompile      # native binary (requires GraalVM 21 on JAVA_HOME)
+./gradlew :server:nativeCompile      # native binary (requires GraalVM 25+ on JAVA_HOME/GRAALVM_HOME)
 ```
 
 Requirements: JDK 21+ (the build auto-provisions the 21 toolchain). Node is
@@ -65,6 +65,14 @@ failure. CI runs it on the JVM **and** against the native binary (the native
 gate). If a dependency ever fails irreparably under native-image, the
 documented escape hatch is: v0.1 ships JVM-only and native moves to v0.2 —
 the JAR is always the release floor.
+
+**Status (Phase 0):** all 8 checks pass on the JVM and inside the native
+binary (verified locally on macos-arm64 with GraalVM CE 25, Kotlin bytecode
+targeting 21; CI covers linux-x64). The reachability metadata that made
+flexmark (BitFieldSet enum universes), JGit (config enums), the MCP SDK
+(polymorphic JSONRPC serializers), and kotlinx DTO lookups work under
+native-image lives in `server/src/main/resources/META-INF/native-image/`.
+Native startup: ~3ms to first request handler.
 
 ### Architecture
 

@@ -1,0 +1,3674 @@
+[
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.AbstractClientTransport",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.AbstractClientTransport$WhenMappings",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ClientTransportState",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ClientTransportState$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.Protocol",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ProtocolKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ProtocolOptions",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ReadBuffer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ReadBuffer$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.ReadBufferKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.RequestHandlerExtra",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.TooLongFrameException",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.Transport",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.Transport$DefaultImpls",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.TransportSendOptions",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.WebSocketMcpTransport",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.shared.WebSocketMcpTransportKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Annotations",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Annotations$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Annotations$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.AudioContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.AudioContent$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.AudioContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.AudioContentBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BaseRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BlobResourceContents",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BlobResourceContents$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BlobResourceContents$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BooleanSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BooleanSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.BooleanSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CallToolResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelTaskRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CancelledNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Elicitation",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Elicitation$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Elicitation$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Roots",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Roots$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Roots$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Sampling",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Sampling$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Sampling$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Elicitation",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Elicitation$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Elicitation$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Sampling",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Sampling$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities$Tasks$Requests$Sampling$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilitiesBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientNotificationPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ClientResultPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CommonKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Argument",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Argument$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Argument$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Context",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Context$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteRequestParams$Context$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult$Completion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult$Completion$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CompleteResult$Completion$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Completion_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ContentBlock",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ContentBlock$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ContentBlockPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ContentTypes",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ContentTypes$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateMessageResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateTaskResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateTaskResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CreateTaskResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.CustomRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.DoubleSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.DoubleSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.DoubleSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestFormParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestFormParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestFormParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParams$RequestedSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParams$RequestedSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParams$RequestedSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestParamsSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestURLParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestURLParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestURLParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitRequestedSchemaBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitResult$Action",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitResult$Action$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationCompleteNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ElicitationKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Elicitation_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmbeddedResource",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmbeddedResource$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmbeddedResource$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmptyResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmptyResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EmptyResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EnumOption",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EnumOption$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EnumOption$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EnumSchemaDefinition",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.EnumSchemaDefinition$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetPromptResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskPayloadResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.GetTaskResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Icon",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Icon$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Icon$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Icon$Theme",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Icon$Theme$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ImageContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ImageContent$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ImageContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ImageContentBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Implementation",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Implementation$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Implementation$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.IncludeContext",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.IncludeContext$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializeResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Initialize_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.InitializedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.IntegerSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.IntegerSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.IntegerSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCEmptyMessage",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCError",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCError$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCError$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessagePolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JSONRPCResponse$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JsonRpcKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.JsonUtilsKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LegacyTitledEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LegacyTitledEnumSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LegacyTitledEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListPromptsResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourceTemplatesResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListResourcesResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListRootsResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListTasksResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ListToolsResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingLevel$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.LoggingMessageNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Logging_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.McpDsl",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.McpException",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MediaContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MediaContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MediaContentBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MediaContentPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Custom",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Custom$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Custom$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Defined",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Method$Defined$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MethodSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelHint",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelHint$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelHint$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelPreferences",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelPreferences$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ModelPreferences$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MultiSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.MultiSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Notification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Notification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.NotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.NotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.NotificationPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.NumberSchemaDefinition",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.NumberSchemaDefinition$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequest$DefaultImpls",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PaginatedResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PingRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PingRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PingRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PingRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PingRequest_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PrimitiveSchemaDefinition",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PrimitiveSchemaDefinition$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PrimitiveSchemaDefinitionSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Progress",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Progress$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Progress$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ProgressNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Prompt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Prompt$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Prompt$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptArgument",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptArgument$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptArgument$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptListChangedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptListChangedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptListChangedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptMessage",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptMessage$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptMessage$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptReference",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptReference$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.PromptReference$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Prompts_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RPCError",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RPCError$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RPCError$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RPCError$ErrorCode",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Reference",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Reference$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReferencePolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReferenceType",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ReferenceType$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RelatedTaskMetadata",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RelatedTaskMetadata$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RelatedTaskMetadata$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Request",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Request$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$NumberId",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$NumberId$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$NumberId$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$StringId",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$StringId$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestId$StringId$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestIdPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestMeta",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestMeta$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestMeta$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestMetaBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestParams$DefaultImpls",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RequestResultPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Resource",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Resource$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Resource$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceContents",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceContents$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceContentsPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceLike",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceLike$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceLink",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceLink$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceLink$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceListChangedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceListChangedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceListChangedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplate",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplate$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplate$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplateReference",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplateReference$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceTemplateReference$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ResourceUpdatedNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Resources_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Role",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Role$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Root",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Root$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Root$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RootsListChangedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RootsListChangedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.RootsListChangedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Roots_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingContentSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessage",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessage$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessage$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessageBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessageContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessageContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SamplingMessageContentPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Sampling_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SerializersKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Prompts",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Prompts$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Prompts$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Resources",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Resources$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Resources$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests$Tools",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests$Tools$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tasks$Requests$Tools$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tools",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tools$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities$Tools$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerNotificationPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerResult$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ServerResultPolymorphicSerializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SetLevelRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SingleSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SingleSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StopReason",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StopReason$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StopReason$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StringSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StringSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StringSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StringSchemaFormat",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.StringSchemaFormat$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.SubscribeRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Task",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Task$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Task$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskFields",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskMetadata",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskMetadata$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskMetadata$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatus",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatus$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotificationParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotificationParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskStatusNotificationParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskSupport",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TaskSupport$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TasksKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextContent$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextContentBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema$Items",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema$Items$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledMultiSelectEnumSchema$Items$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledSingleSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledSingleSelectEnumSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.TitledSingleSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Tool",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Tool$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Tool$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolAnnotations$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolChoice",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolChoice$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolChoice$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolChoice$Mode",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolChoice$Mode$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolExecution",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolExecution$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolExecution$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolListChangedNotification$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolResultContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolResultContent$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolResultContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolUseContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolUseContent$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolUseContent$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.ToolsKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.Tools_dslKt",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnknownResourceContents",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnknownResourceContents$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnknownResourceContents$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequest$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequest$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequestBuilder",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequestParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequestParams$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UnsubscribeRequestParams$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema$Items",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema$Items$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledMultiSelectEnumSchema$Items$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledSingleSelectEnumSchema",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledSingleSelectEnumSchema$$serializer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.UntitledSingleSelectEnumSchema$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.WithMeta",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.WithMeta$Companion",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.modelcontextprotocol.kotlin.sdk.types.WithMeta$DefaultImpls",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  }
+]

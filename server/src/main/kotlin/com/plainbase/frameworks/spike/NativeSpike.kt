@@ -102,7 +102,11 @@ object NativeSpike {
     private fun check(name: String, block: () -> String): CheckResult = try {
         CheckResult(name, true, block())
     } catch (t: Throwable) {
-        CheckResult(name, false, "${t::class.simpleName}: ${t.message}")
+        val chain = generateSequence(t) { it.cause }
+            .joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
+        val origin = generateSequence(t) { it.cause }.last()
+            .stackTrace.take(12).joinToString("") { "\n        at $it" }
+        CheckResult(name, false, chain + origin)
     }
 
     // ---- 1. Ktor CIO round-trip ----------------------------------------------------------

@@ -73,9 +73,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GraalVM from the current line (25): native-image buildtools 1.x and its
+      # reachability-metadata repository require it. Kotlin bytecode still
+      # targets 21 via the Gradle toolchain — the native binary is built FROM
+      # 21-targeted class files BY the GraalVM 25 compiler.
       - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: "21"
+          java-version: "25"
           distribution: graalvm-community
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
