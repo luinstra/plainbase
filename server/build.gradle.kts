@@ -119,6 +119,9 @@ graalvmNative {
         named("test") {
             buildArgs.add("--no-fallback")
             buildArgs.add("-J-Xmx6g")
+            // The test image must also embed classpath resources (the SPA shell
+            // under static/) or HealthRouteTest's root-route check 404s natively.
+            resources.autodetect()
         }
     }
     metadataRepository {
