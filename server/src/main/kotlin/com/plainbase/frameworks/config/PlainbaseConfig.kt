@@ -1,0 +1,35 @@
+package com.plainbase.frameworks.config
+
+import java.nio.file.Path
+
+/**
+ * Application configuration.
+ *
+ * - `CONTENT_DIR` — canonical, user-owned content tree (Markdown + assets). §4 hard rule.
+ * - `DATA_DIR`    — app-owned state (SQLite DB, plainbase.yaml, caches, search.db).
+ *
+ * Environment variables override defaults; `plainbase.yaml` in DATA_DIR is layered
+ * in by later phases (env always wins).
+ */
+data class PlainbaseConfig(
+    val contentDir: Path,
+    val dataDir: Path,
+    val host: String,
+    val port: Int,
+) {
+    /** Path of the app-state SQLite database (workflow + security state, never content). */
+    val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
+
+    companion object {
+        const val VERSION: String = "0.1.0"
+
+        const val DEFAULT_PORT: Int = 8080
+
+        fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig = PlainbaseConfig(
+            contentDir = Path.of(env["CONTENT_DIR"] ?: "./content").toAbsolutePath().normalize(),
+            dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
+            host = env["PLAINBASE_HOST"] ?: "0.0.0.0",
+            port = env["PLAINBASE_PORT"]?.toIntOrNull() ?: DEFAULT_PORT,
+        )
+    }
+}

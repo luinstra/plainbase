@@ -26,6 +26,8 @@ frontend/.node/
 *.db
 *.db-wal
 *.db-shm
+# ...but the SQLDelight migration-verification baseline IS committed
+!server/src/main/sqldelight/schema/*.db
 
 # Native image build output
 *.build_artifacts.txt

@@ -1,0 +1,16 @@
+-- App-state key/value scaffold (schema versioning sanity, spike target).
+-- Real workflow tables (users, tokens, proposals, audit) land in Phases 3-5.
+CREATE TABLE app_meta (
+  key TEXT NOT NULL PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+upsert:
+INSERT INTO app_meta(key, value)
+VALUES (:key, :value)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+selectByKey:
+SELECT value
+FROM app_meta
+WHERE key = :key;
