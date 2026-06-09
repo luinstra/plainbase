@@ -37,7 +37,9 @@ services:
     volumes:
       - meilisearch-data:/meili_data
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7700/health"]
+      # 127.0.0.1, not localhost: the image resolves localhost to ::1 while
+      # Meilisearch binds 0.0.0.0 (IPv4 only).
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://127.0.0.1:7700/health"]
       interval: 10s
       timeout: 3s
       retries: 5

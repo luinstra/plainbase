@@ -27,7 +27,7 @@ VOLUME ["/content", "/data"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
-    CMD curl -fsS http://localhost:8080/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
 ENTRYPOINT ["/opt/plainbase/bin/plainbase"]
 CMD ["serve"]
