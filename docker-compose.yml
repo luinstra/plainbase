@@ -23,8 +23,11 @@ services:
       - ./fixtures/demo-docs:/content
       - plainbase-data:/data
     depends_on:
+      # service_started, NOT service_healthy: the app's default search engine is
+      # embedded FTS5 and works without Meilisearch at all. A slow or unhealthy
+      # Meili container must never block (or take down) the app itself.
       meilisearch:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
   # OPTIONAL search tier — deliberately better search (typo tolerance, relevance).
