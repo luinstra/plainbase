@@ -5,7 +5,8 @@
         </encoder>
     </appender>
 
-    <root level="INFO">
+    <!-- Operator-tunable via PLAINBASE_LOG_LEVEL (matches the PLAINBASE_* env config family). -->
+    <root level="${PLAINBASE_LOG_LEVEL:-INFO}">
         <appender-ref ref="STDOUT"/>
     </root>
 

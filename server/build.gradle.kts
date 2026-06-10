@@ -89,6 +89,8 @@ dependencies {
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
 
+    // Logging — kotlin-logging facade (house style; already transitive via MCP SDK) over logback
+    implementation(libs.kotlin.logging)
     runtimeOnly(libs.logback.classic)
 
     testImplementation(libs.kotlin.test)

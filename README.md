@@ -42,6 +42,7 @@ Java 21+.
 | `DATA_DIR` | `./data` | App-owned state: SQLite DB, config, caches, search index. |
 | `PLAINBASE_HOST` | `0.0.0.0` | Bind address. |
 | `PLAINBASE_PORT` | `8080` | HTTP port. |
+| `PLAINBASE_LOG_LEVEL` | `INFO` | Root log level (`ERROR`/`WARN`/`INFO`/`DEBUG`). |
 
 ## Development
 
