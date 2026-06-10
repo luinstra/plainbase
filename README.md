@@ -52,8 +52,17 @@ Java 21+.
 ./gradlew :server:nativeCompile      # native binary (requires GraalVM 25+ on JAVA_HOME/GRAALVM_HOME)
 ```
 
-Requirements: JDK 21+ (the build auto-provisions the 21 toolchain). Node is
-downloaded by the Gradle build — no local install needed.
+Requirements: JDK 21+ (the build auto-provisions the 21 toolchain for
+bytecode). Node is downloaded by the Gradle build — no local install needed.
+
+For native builds, the repo pins GraalVM via [asdf](https://asdf-vm.com/) —
+`.tool-versions` selects `graalvm-community-25.0.2`, so inside the repo
+`java` and `native-image` resolve to the same GraalVM the CI native gate
+uses:
+
+```sh
+asdf install        # one-time: installs the pinned GraalVM
+```
 
 ### The native dependency spike
 
