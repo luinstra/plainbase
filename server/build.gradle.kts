@@ -160,3 +160,80 @@ graalvmNative {
         enabled.set(true) // pulls reachability metadata for sqlite-jdbc, jgit, etc.
     }
 }
+
+// ---- Dependency discipline (native-image gate protection) ----
+// Adding a server dependency is a deliberate act: justify it against the native gate,
+// then run `./gradlew :server:writeDependencyAllowlist` and commit the updated
+// dependency-allowlist.txt alongside the catalog change. `check` (and therefore CI)
+// fails on any unrecorded drift of the runtime classpath — including transitives.
+
+// Reflection-heavy / native-image-hostile groups fail resolution outright, even when
+// pulled transitively. See master plan §3.
+val bannedDependencyGroups = listOf(
+    "io.netty",
+    "com.fasterxml.jackson",
+    "com.google.code.gson",
+    "org.jetbrains.exposed",
+)
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        val group = requested.group
+        if (bannedDependencyGroups.any { group == it || group.startsWith("$it.") }) {
+            throw GradleException(
+                "Banned dependency group '$group' (via ${requested.name}): reflection-heavy and native-image-hostile. " +
+                    "This ban is load-bearing for the single-binary distribution — see master plan §3.",
+            )
+        }
+    }
+}
+
+val dependencyAllowlistFile = layout.projectDirectory.file("dependency-allowlist.txt").asFile
+
+fun resolvedRuntimeModules(): List<String> =
+    configurations.getByName("runtimeClasspath").incoming.resolutionResult.allComponents
+        .mapNotNull { component ->
+            (component.id as? org.gradle.api.artifacts.component.ModuleComponentIdentifier)
+                ?.let { "${it.group}:${it.module}" }
+        }
+        .distinct()
+        .sorted()
+
+tasks.register("writeDependencyAllowlist") {
+    group = "verification"
+    description = "Regenerate dependency-allowlist.txt from the resolved runtime classpath (a deliberate act — see comment above)"
+    doLast {
+        dependencyAllowlistFile.writeText(resolvedRuntimeModules().joinToString("\n", postfix = "\n"))
+        println("Wrote ${dependencyAllowlistFile.name} (${resolvedRuntimeModules().size} modules)")
+    }
+}
+
+tasks.register("verifyDependencyAllowlist") {
+    group = "verification"
+    description = "Fail if the server runtime dependency set drifted from dependency-allowlist.txt"
+    doLast {
+        val expected = if (dependencyAllowlistFile.exists()) {
+            dependencyAllowlistFile.readLines().filter { it.isNotBlank() }.toSet()
+        } else {
+            emptySet()
+        }
+        val actual = resolvedRuntimeModules().toSet()
+        val added = (actual - expected).sorted()
+        val removed = (expected - actual).sorted()
+        if (added.isNotEmpty() || removed.isNotEmpty()) {
+            throw GradleException(
+                buildString {
+                    appendLine("Server runtime dependencies drifted from dependency-allowlist.txt.")
+                    if (added.isNotEmpty()) appendLine("  Added:   ${added.joinToString(", ")}")
+                    if (removed.isNotEmpty()) appendLine("  Removed: ${removed.joinToString(", ")}")
+                    appendLine("New dependencies must be justified against the native gate (master plan §3).")
+                    append("If deliberate: run ./gradlew :server:writeDependencyAllowlist and commit the result.")
+                },
+            )
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn("verifyDependencyAllowlist")
+}
