@@ -84,7 +84,9 @@ object NativeSpike {
 
     fun runAsMain(): Int {
         println("Plainbase full-stack native dependency spike (v${PlainbaseConfig.VERSION})")
-        println("runtime: ${System.getProperty("java.vm.name")} / ${System.getProperty("java.vendor.version") ?: System.getProperty("java.version")}")
+        val vm = System.getProperty("java.vm.name")
+        val vmVersion = System.getProperty("java.vendor.version") ?: System.getProperty("java.version")
+        println("runtime: $vm / $vmVersion")
         val results = runAll()
         for (r in results) {
             println("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")

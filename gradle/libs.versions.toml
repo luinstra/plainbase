@@ -13,6 +13,8 @@ mcp = "0.13.0"
 logback = "1.5.34"
 graalvm-buildtools = "1.1.1"
 node-gradle = "7.1.0"
+spotless = "8.6.0"
+ktlint = "1.8.0"
 
 [libraries]
 # Ktor server — CIO engine ONLY (Netty is banned: reflection-heavy, hostile to native image)
@@ -60,5 +62,6 @@ kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotl
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-buildtools" }
 node-gradle = { id = "com.github.node-gradle.node", version.ref = "node-gradle" }

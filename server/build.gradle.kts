@@ -5,7 +5,36 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.sqldelight)
     alias(libs.plugins.graalvm.native)
+    alias(libs.plugins.spotless)
     application
+}
+
+// Rule ENABLEMENT must be passed via editorConfigOverride — Spotless does not honor
+// `ktlint_standard_<rule> = disabled` from .editorconfig files (rule CONFIG properties
+// like max_line_length work fine from there). Keep in sync with /.editorconfig, which
+// carries the same disables for IDE/ktlint-CLI users.
+// Owner style: author's layout wins; the formatter enforces the 140-col limit and
+// baseline style, but never restructures signatures, when-branches, or `=` wrapping.
+val ktlintDisabledRules =
+    mapOf(
+        "ktlint_standard_class-signature" to "disabled",
+        "ktlint_standard_function-signature" to "disabled",
+        "ktlint_standard_when-entry-bracing" to "disabled",
+        "ktlint_standard_blank-line-between-when-conditions" to "disabled",
+        "ktlint_standard_multiline-expression-wrapping" to "disabled",
+        // string-template-indent hard-depends on multiline-expression-wrapping
+        "ktlint_standard_string-template-indent" to "disabled",
+    )
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        ktlint(libs.versions.ktlint.get()).editorConfigOverride(ktlintDisabledRules)
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktlint(libs.versions.ktlint.get()).editorConfigOverride(ktlintDisabledRules)
+    }
 }
 
 group = "com.plainbase"
@@ -78,11 +107,12 @@ sqldelight {
 }
 
 // ---- Frontend embedding: :frontend builds the Vite SPA, we ship it as static resources ----
-val copyFrontend = tasks.register<Copy>("copyFrontend") {
-    dependsOn(":frontend:npmBuild")
-    from(rootProject.layout.projectDirectory.dir("frontend/dist"))
-    into(layout.buildDirectory.dir("generated/frontend/static"))
-}
+val copyFrontend =
+    tasks.register<Copy>("copyFrontend") {
+        dependsOn(":frontend:npmBuild")
+        from(rootProject.layout.projectDirectory.dir("frontend/dist"))
+        into(layout.buildDirectory.dir("generated/frontend/static"))
+    }
 
 sourceSets {
     main {

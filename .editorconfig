@@ -1,0 +1,23 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+
+[*.{kt,kts}]
+# ktlint_official defaults apply except where overridden below.
+# Pinned explicitly so ktlint upgrades can't silently change it (owner preference: >= 120).
+max_line_length = 140
+
+# Owner style: author's layout wins. The disables below are honored by IDEs and the
+# ktlint CLI; Spotless ignores enablement properties from this file, so the SAME list
+# is passed via editorConfigOverride in server/build.gradle.kts — keep them in sync.
+ktlint_standard_class-signature = disabled
+ktlint_standard_function-signature = disabled
+ktlint_standard_when-entry-bracing = disabled
+ktlint_standard_blank-line-between-when-conditions = disabled
+ktlint_standard_multiline-expression-wrapping = disabled
+ktlint_standard_string-template-indent = disabled
