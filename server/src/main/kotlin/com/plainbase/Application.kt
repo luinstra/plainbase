@@ -2,6 +2,7 @@ package com.plainbase
 
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.configModule
+import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.repositoryModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
@@ -22,7 +23,7 @@ fun main(args: Array<String>) {
 
 private fun serve() {
     val koin = startKoin {
-        modules(configModule, repositoryModule, securityModule)
+        modules(configModule, contentModule, repositoryModule, securityModule)
     }.koin
 
     val config = koin.get<PlainbaseConfig>()
