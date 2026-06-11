@@ -13,9 +13,14 @@ mcp = "0.13.0"
 logback = "1.5.34"
 kotlin-logging = "7.0.14"
 graalvm-buildtools = "1.1.1"
+junit = "5.10.1"
+# JUnit Platform trails Jupiter by one major (Jupiter 5.10.x ⇄ Platform 1.10.x) — bump together.
+junit-platform = "1.10.1"
 node-gradle = "7.1.0"
 spotless = "8.6.0"
 ktlint = "1.8.0"
+kotest = "5.9.1"
+mockk = "1.14.3"
 
 [libraries]
 # Ktor server — CIO engine ONLY (Netty is banned: reflection-heavy, hostile to native image)
@@ -58,7 +63,27 @@ logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "lo
 kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kotlin-logging" }
 
 # Test
+# kotlin.test is MANDATORY for the nativeTest source set: it runs cleanly inside the closed-world
+# native image (see the test split in server/build.gradle.kts). Kotest/MockK are JVM-only.
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+# JUnit 5 binding for kotlin.test (pulls junit-jupiter); the engine the native test image runs.
+kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+# JUnit Platform launcher + engine: required on the nativeTest classpath so GraalVM's
+# NativeImageJUnitLauncher entry point and the jupiter engine are present in the native test image.
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
+# GraalVM's native JUnit Platform support (provides org.graalvm.junit.platform.NativeImageJUnitLauncher).
+graalvm-junit-platform-native = { module = "org.graalvm.buildtools:junit-platform-native", version.ref = "graalvm-buildtools" }
+
+# Kotest + MockK — JVM logic tests ONLY. MockK does runtime bytecode generation
+# (ByteBuddy/Objenesis) and Kotest's runner/Arb machinery are native-image-hostile, so these
+# never run under nativeTest. testImplementation-scoped → absent from the runtime classpath
+# (the native gate / dependency allowlist is unaffected).
+kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
+kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
+kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
+kotest-property = { module = "io.kotest:kotest-property", version.ref = "kotest" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

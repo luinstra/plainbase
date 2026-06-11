@@ -9,9 +9,15 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
+// Lives in the `nativeTest` source set: runs in the JVM `test` suite AND as native code via
+// `nativeTest`. The root-route check validates that the SPA shell under static/ is embedded in the
+// native test image. On kotlin.test (not Kotest/MockK) because only that can run in a closed-world
+// native image; @Tag("native") documents the intent and keeps the smoke set greppable.
+@Tag("native")
 class HealthRouteTest {
 
     @Test

@@ -52,6 +52,18 @@ application {
     applicationName = "plainbase"
 }
 
+// Native-smoke tests live in their own source set so the native test image's classpath carries NO
+// Kotest/MockK engine (see the test-stack comment in dependencies{}). Declared before dependencies{}
+// so its `nativeTestImplementation`/`nativeTestRuntimeOnly` configurations exist. It compiles against
+// the main output and inherits main's own deps (ktor, kotlinx, …) via the extendsFrom wiring below.
+val nativeTest: SourceSet =
+    sourceSets.create("nativeTest") {
+        compileClasspath += sourceSets.main.get().output
+        runtimeClasspath += sourceSets.main.get().output
+    }
+configurations["nativeTestImplementation"].extendsFrom(configurations["implementation"])
+configurations["nativeTestRuntimeOnly"].extendsFrom(configurations["runtimeOnly"])
+
 dependencies {
     // Ktor server — CIO engine only (native-image constraint; Netty banned)
     implementation(libs.ktor.server.cio)
@@ -93,8 +105,40 @@ dependencies {
     implementation(libs.kotlin.logging)
     runtimeOnly(libs.logback.classic)
 
+    // --- Test stack split (native-gate-aware) -------------------------------------------------
+    // Two test source sets, split by what can survive a closed-world GraalVM native image:
+    //
+    //   src/test       — JVM logic tests on Kotest + MockK. MockK does runtime bytecode generation
+    //                    (ByteBuddy/Objenesis) and Kotest's runner/Arb machinery use reflection that
+    //                    native-image cannot satisfy, so these NEVER run natively.
+    //   src/nativeTest — native-smoke tests on kotlin.test (→ junit-jupiter), which compiles and runs
+    //                    cleanly inside the native image. This is THE native gate's proof set.
+    //
+    // The split is by SOURCE SET, not just JUnit tag: the GraalVM native test launcher discovers via
+    // every TestEngine on its classpath, so merely tag-filtering a shared classpath still drags the
+    // Kotest engine into the image (it fails on java.lang.Module.getLayer under native). Keeping
+    // Kotest/MockK off the nativeTest classpath is the only robust guarantee. All test deps are
+    // test-scoped → absent from the runtime classpath, so the dependency allowlist is unaffected.
     testImplementation(libs.kotlin.test)
     testImplementation(libs.ktor.server.test.host)
+    testImplementation(libs.kotest.runner.junit5)
+    testImplementation(libs.kotest.assertions.core)
+    testImplementation(libs.kotest.framework.engine)
+    testImplementation(libs.kotest.property)
+    testImplementation(libs.mockk)
+
+    // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
+    // GraalVM's native JUnit launcher, and the ktor test host ONLY — deliberately no Kotest/MockK, so
+    // the native test image's classpath carries no native-hostile engine. The junit-platform pieces
+    // and GraalVM launcher are explicit here because the main `test` set inherited the jupiter engine
+    // transitively from Kotest (which this set does not depend on) and the plugin injects its native
+    // launcher only into the default `test` runtime classpath — we wire our own source set by hand.
+    "nativeTestImplementation"(libs.kotlin.test)
+    "nativeTestImplementation"(libs.kotlin.test.junit5)
+    "nativeTestImplementation"(libs.junit.jupiter.engine)
+    "nativeTestImplementation"(libs.junit.platform.launcher)
+    "nativeTestImplementation"(libs.graalvm.junit.platform.native)
+    "nativeTestImplementation"(libs.ktor.server.test.host)
 }
 
 sqldelight {
@@ -126,12 +170,35 @@ tasks.processResources {
     dependsOn(copyFrontend)
 }
 
+// ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
+//
+// The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
+// native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
+// always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
+// GraalVM native test image — and ONLY it does, so the closed-world image never sees Kotest/MockK.
 tasks.test {
     useJUnitPlatform()
+    // Fold the native-smoke source set into the JVM `test` run so the JVM suite stays complete.
+    val nativeTestSourceSet = sourceSets["nativeTest"]
+    testClassesDirs += nativeTestSourceSet.output.classesDirs
+    classpath += nativeTestSourceSet.runtimeClasspath
     testLogging {
         events("passed", "failed", "skipped")
         showStandardStreams = true
     }
+}
+
+// JVM task that runs ONLY the nativeTest source set. It feeds the GraalVM native test image (see
+// the `nativeTestCompile` rewire under graalvmNative); the image's test set and classpath both come
+// from here, which is what keeps Kotest/MockK out of the native binary. Not wired into `check`
+// (those tests already run under `test`); its sole job is to record the native test list.
+val nativeTestList by tasks.registering(Test::class) {
+    description = "Runs ONLY the nativeTest source set, recording the test list for the native image."
+    group = "verification"
+    val nativeTestSourceSet = sourceSets["nativeTest"]
+    testClassesDirs = nativeTestSourceSet.output.classesDirs
+    classpath = nativeTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
 }
 
 // ---- GraalVM native image ----
@@ -139,6 +206,7 @@ tasks.test {
 // The universal JAR remains the release floor: a native failure blocks the native artifact only.
 graalvmNative {
     toolchainDetection.set(false) // CI/dev provide GraalVM via JAVA_HOME/GRAALVM_HOME
+
     binaries {
         named("main") {
             imageName.set("plainbase")
@@ -158,6 +226,71 @@ graalvmNative {
     }
     metadataRepository {
         enabled.set(true) // pulls reachability metadata for sqlite-jdbc, jgit, etc.
+    }
+}
+
+// ---- Re-point the native test image at the nativeTest source set --------------------------
+// How the plugin's native test image gets its test set: GraalVM Native Build Tools 1.1.1 attaches
+// JUnit Platform UID tracking to a JVM `Test` task (system properties
+// `junit.platform.listeners.uid.tracking.{enabled,output.dir}`); `nativeTestCompile`
+// (BuildNativeImageTask) then reads that directory via `testListDirectory` and compiles/runs
+// EXACTLY those tests, against the bound task's classpath. By default the auto-created `test`
+// binary binds to the full JVM `test` task — whose classpath carries the Kotest engine, which the
+// native test launcher discovers and chokes on (java.lang.Module.getLayer is unsupported under
+// native). The plugin exposes no DSL to re-point the auto-created `test` binary (re-calling
+// registerTestBinary("test") throws "NativeImageOptions ... already exists"), so we re-point its
+// own mechanism here: run the UID listener on `nativeTestList` (the nativeTest source set only) and
+// feed BOTH the test list AND the image classpath from that source set. Net effect: JVM `test`
+// still runs the FULL suite; the native image is built from kotlin.test-only code, no Kotest/MockK.
+run {
+    val nativeTestListDir = layout.buildDirectory.dir("test-results/nativeTestList/testlist")
+    val nativeTestSourceSet = sourceSets["nativeTest"]
+
+    nativeTestList.configure {
+        // Mirror the plugin's UID-tracking wiring onto this source-set-scoped task.
+        systemProperty("junit.platform.listeners.uid.tracking.enabled", true)
+        systemProperty("junit.platform.listeners.uid.tracking.output.dir", nativeTestListDir.get().asFile.absolutePath)
+        outputs.dir(nativeTestListDir)
+        // Start from a clean dir: the UID listener writes a NEW junit-platform-unique-ids-*.txt each
+        // run, so a prior run's files would otherwise linger — letting nativeTestCompile consume
+        // removed/renamed test IDs and letting the guard below pass on a stale list. Clearing first
+        // makes the recorded set EXACTLY the current src/nativeTest tests; the listener recreates it.
+        doFirst { nativeTestListDir.get().asFile.deleteRecursively() }
+    }
+
+    // Build the native test image from the nativeTest source set's classpath (no Kotest/MockK),
+    // not the default main-test runtime.
+    graalvmNative.binaries.named("test") {
+        classpath(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
+    }
+
+    tasks.named<org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask>("nativeTestCompile") {
+        // Read the native test set from `nativeTestList` (nativeTest source set) instead of the
+        // full-suite `test` task. (The plugin leaves a `dependsOn(test)` edge so the JVM suite runs
+        // first; harmless — `testListDirectory` is what decides the image's test set.)
+        dependsOn(nativeTestList)
+        testListDirectory.set(nativeTestListDir)
+        options.get().classpath.setFrom(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
+        // Anti-vacuous-green guard, on the CONSUMER side. The native image is built from EXACTLY the
+        // UID list in testListDirectory; an empty/missing list yields a passing, test-free image — a
+        // silent no-op gate. The guard lives HERE, not on nativeTestList, because Gradle skips that
+        // task as NO-SOURCE when src/nativeTest is empty, so a guard there never fires in the exact
+        // case it defends against. This task always runs before the image is built. Fail loud.
+        doFirst {
+            val recordedIds = nativeTestListDir.get().asFile.walk()
+                .filter { it.isFile }
+                .flatMap { it.readLines().asSequence() }
+                .filter { it.isNotBlank() }
+                .toList()
+            if (recordedIds.isEmpty()) {
+                throw GradleException(
+                    "Native gate has no tests: src/nativeTest produced an empty UID list, so the native " +
+                        "image would be vacuously green. Ensure src/nativeTest holds at least one " +
+                        "@Tag(\"native\") kotlin.test test.",
+                )
+            }
+            logger.lifecycle("Native gate: building image from ${recordedIds.size} recorded native test id(s).")
+        }
     }
 }
 
