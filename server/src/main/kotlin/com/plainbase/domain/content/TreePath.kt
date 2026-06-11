@@ -58,7 +58,11 @@ class TreePath private constructor(
 
         /** Like [of] but throws [IllegalArgumentException] on invalid input. */
         fun require(raw: String): TreePath =
-            of(raw) ?: throw IllegalArgumentException("not a valid content-relative path: '$raw'")
+            requireNotNull(of(raw)) { "not a valid content-relative path: '$raw'" }
+
+        /** Resolves a single validated [name] under [parent], or as a top-level path when [parent] is null. */
+        fun childOf(parent: TreePath?, name: String): TreePath =
+            parent?.resolveChild(name) ?: require(name)
 
         /** A segment is valid iff it is non-empty and is neither `.` nor `..` (and has no `/`). */
         private fun isValidSegment(segment: String): Boolean =

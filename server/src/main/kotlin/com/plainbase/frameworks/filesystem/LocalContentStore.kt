@@ -19,6 +19,8 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.Arrays
 
 /** The on-disk name of a folder's metadata sidecar (§A4). */
 private const val FOLDER_META_NAME = "_folder.yaml"
@@ -85,7 +87,7 @@ class LocalContentStore(
         val dirs: Map<TreePath, ContentFolder>,
         val children: Map<TreePath, List<ContentEntry>>,
         val rootChildren: List<ContentEntry>,
-        val dirRawNames: Map<TreePath, String> = emptyMap(),
+        val dirRawNames: Map<TreePath, String>,
     ) {
         /** True iff [path] names an indexed file (the [read] membership gate). */
         fun isIndexedFile(path: TreePath): Boolean = files.containsKey(path)
@@ -101,29 +103,21 @@ class LocalContentStore(
             if (dir == null) rootChildren else children[dir] ?: emptyList()
 
         companion object {
-            val EMPTY = IndexSnapshot(emptyMap(), emptyMap(), emptyMap(), emptyList())
+            val EMPTY = IndexSnapshot(emptyMap(), emptyMap(), emptyMap(), emptyList(), emptyMap())
 
             /**
              * Builds an [IndexSnapshot] from a [ScanResult], preserving its [list] ordering
              * (folders before files, in scan-discovery order) per direct parent.
              */
-            fun of(result: ScanResult): IndexSnapshot {
-                val byParent = mutableMapOf<TreePath, MutableList<ContentEntry>>()
-                val rootChildren = mutableListOf<ContentEntry>()
-                // Folders first, then files — matching the legacy list() ordering (folders + files).
-                for (entry in (result.folders as List<ContentEntry>) + result.files) {
-                    val parent = entry.path.parent
-                    if (parent == null) {
-                        rootChildren.add(entry)
-                    } else {
-                        byParent.getOrPut(parent) { mutableListOf() }.add(entry)
-                    }
-                }
+            fun of(result: ScanResult, dirRawNames: Map<TreePath, String>): IndexSnapshot {
+                val entries: List<ContentEntry> = result.folders + result.files // folders before files (list() order)
+                val (atRoot, nested) = entries.partition { it.path.parent == null }
                 return IndexSnapshot(
                     files = result.files.associateBy { it.path },
                     dirs = result.folders.associateBy { it.path },
-                    children = byParent.mapValues { it.value.toList() },
-                    rootChildren = rootChildren.toList(),
+                    children = nested.groupBy { checkNotNull(it.path.parent) },
+                    rootChildren = atRoot,
+                    dirRawNames = dirRawNames,
                 )
             }
         }
@@ -131,7 +125,7 @@ class LocalContentStore(
 
     /**
      * A mutable accumulator threaded through the recursive [scanDir] so the whole tree is gathered
-     * before the immutable [RawNames] snapshot is assigned ONCE at the end of [scan] — no
+     * before the immutable [IndexSnapshot] is assigned ONCE at the end of [scan] — no
      * element-by-element field mutation, no partially-populated map ever observable.
      */
     private class ScanAccumulator {
@@ -155,7 +149,7 @@ class LocalContentStore(
         val result = ScanResult(files = acc.files.toList(), folders = acc.folders.toList(), issues = acc.issues.toList())
         // Retain the raw directory names too so resolveOnDisk reaches an NFD-named ancestor (P4);
         // ContentFolder carries no rawName, so the dir map is sourced from the scan accumulator.
-        snapshot = IndexSnapshot.of(result).copy(dirRawNames = acc.dirNames.toMap())
+        snapshot = IndexSnapshot.of(result, acc.dirNames.toMap())
         logger.info {
             "Scanned $root: ${acc.files.size} file(s), ${acc.folders.size} folder(s), ${acc.issues.size} issue(s)"
         }
@@ -194,24 +188,20 @@ class LocalContentStore(
     /** Lists [dir]'s non-ignored children as [Candidate]s (raw name + NFC [TreePath]). */
     private fun collectCandidates(dir: Path, dirPath: TreePath?): List<Candidate> {
         val children = Files.newDirectoryStream(dir).use { it.toList() }
-        val out = mutableListOf<Candidate>()
-        for (child in children) {
+        return children.mapNotNull { child ->
             val rawName = child.fileName.toString()
-            if (rawName == FOLDER_META_NAME) continue // metadata sidecar, not a content entry
+            if (rawName == FOLDER_META_NAME) return@mapNotNull null // metadata sidecar, not a content entry
             val relativePath = childRelativePath(dirPath, rawName)
-            if (ignoreRules.isIgnored(rawName, relativePath)) continue
-            // Skip symlinks: a symlink cycle is a startup stack overflow and an out-of-root
-            // target is a content-root escape. NOFOLLOW_LINKS keeps the directory/type checks
-            // honest about the link itself rather than following it.
+            if (ignoreRules.isIgnored(rawName, relativePath)) return@mapNotNull null
+            // Skip symlinks: a symlink cycle is a startup stack overflow and an out-of-root target is
+            // a content-root escape. NOFOLLOW_LINKS keeps the type checks honest about the link itself.
             if (Files.isSymbolicLink(child)) {
                 logger.warn { "Skipping symlink (policy: links are not content): $relativePath" }
-                continue
+                return@mapNotNull null
             }
-            val nfcName = Nfc.normalize(rawName)
-            val treePath = dirPath?.resolveChild(nfcName) ?: TreePath.require(nfcName)
-            out.add(Candidate(rawName, child, treePath, Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)))
+            val treePath = TreePath.childOf(dirPath, Nfc.normalize(rawName))
+            Candidate(rawName, child, treePath, Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS))
         }
-        return out
     }
 
     /**
@@ -265,9 +255,7 @@ class LocalContentStore(
     }
 
     override fun read(path: TreePath): ByteArray? {
-        // Indexed-only gate: answer solely from the retained scan snapshot. A path the scan skipped
-        // (dotfile/.git, symlink, collision loser) is absent here and therefore unreadable — never
-        // re-touch disk to decide visibility.
+        // Indexed-only gate (see class header): a path the scan skipped is unreadable.
         if (!snapshot.isIndexedFile(path)) return null
         val osPath = resolveOnDisk(path)
         if (!Files.isRegularFile(osPath, LinkOption.NOFOLLOW_LINKS)) return null
@@ -282,26 +270,29 @@ class LocalContentStore(
     }
 
     override fun stat(path: TreePath): ContentStat? {
-        // Indexed-only gate (file OR directory). Unindexed paths return null per the port contract.
+        // Indexed-only gate (see class header), file OR directory; unindexed -> null per the contract.
         if (!snapshot.isIndexedEntry(path)) return null
         val osPath = resolveOnDisk(path)
-        if (!Files.exists(osPath, LinkOption.NOFOLLOW_LINKS)) return null
+        // One filesystem hit, no-follow: a missing target throws and is reported as null (port contract).
+        val attrs = try {
+            Files.readAttributes(osPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (_: IOException) {
+            return null
+        }
         if (!isWithinRoot(osPath)) {
             logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
             return null
         }
-        val isDirectory = Files.isDirectory(osPath, LinkOption.NOFOLLOW_LINKS)
         return ContentStat(
             path = path,
-            isDirectory = isDirectory,
-            sizeBytes = if (Files.isRegularFile(osPath, LinkOption.NOFOLLOW_LINKS)) Files.size(osPath) else 0L,
+            isDirectory = attrs.isDirectory,
+            sizeBytes = if (attrs.isRegularFile) attrs.size() else 0L, // non-regular -> 0L (preserved)
         )
     }
 
     override fun list(dir: TreePath?): List<ContentEntry> {
-        // Derive children purely from the indexed snapshot — never a fresh directory stream that
-        // could surface an ignored or symlinked sibling. The root (null) is always listable; any
-        // other directory must itself be indexed, else it is invisible (empty list per the port).
+        // Indexed-only gate (see class header): children come purely from the snapshot. The root
+        // (null) is always listable; any other directory must itself be indexed, else empty list.
         if (dir != null && !snapshot.isIndexedDir(dir)) return emptyList()
         return snapshot.childrenOf(dir)
     }
@@ -343,7 +334,6 @@ class LocalContentStore(
                 // the pre-write intent log above is what makes an interrupted run reconcilable).
                 logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
                 Files.copy(tmp, target, StandardCopyOption.REPLACE_EXISTING)
-                Files.deleteIfExists(tmp)
             }
         } finally {
             Files.deleteIfExists(tmp)
@@ -375,16 +365,10 @@ class LocalContentStore(
          * platform-stable B3 winner rule (reused for §A4 slug collisions in chunk 5).
          */
         val RAW_BYTE_ORDER: Comparator<String> = Comparator { a, b ->
-            val ba = a.toByteArray(StandardCharsets.UTF_8)
-            val bb = b.toByteArray(StandardCharsets.UTF_8)
-            val n = minOf(ba.size, bb.size)
-            var i = 0
-            while (i < n) {
-                val cmp = (ba[i].toInt() and 0xFF) - (bb[i].toInt() and 0xFF)
-                if (cmp != 0) return@Comparator cmp
-                i++
-            }
-            ba.size - bb.size
+            Arrays.compareUnsigned(
+                a.toByteArray(StandardCharsets.UTF_8),
+                b.toByteArray(StandardCharsets.UTF_8),
+            )
         }
     }
 }

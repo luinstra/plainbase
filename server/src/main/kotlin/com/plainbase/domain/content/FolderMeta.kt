@@ -23,8 +23,6 @@ data class FolderMeta(
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        private val KNOWN_KEYS = setOf("title", "order", "slug")
-
         /**
          * Parses the three known keys from a `_folder.yaml` body with a deliberately tiny
          * line grammar — NOT a YAML engine (the native-image bet bans Jackson/SnakeYAML and
@@ -51,36 +49,25 @@ data class FolderMeta(
                 }
                 val key = line.substring(0, colon).trim()
                 val value = stripQuotes(line.substring(colon + 1).trim())
-                if (key !in KNOWN_KEYS) {
-                    logger.warn { "Ignoring unknown key '$key' in $source (known keys: title, order, slug)" }
-                    continue
-                }
                 when (key) {
                     "title" -> title = value
                     "slug" -> slug = value
-                    "order" -> {
-                        val parsed = value.toIntOrNull()
-                        if (parsed == null) {
-                            logger.warn { "Ignoring non-integer 'order' in $source: '$value'" }
-                        } else {
-                            order = parsed
-                        }
+                    "order" -> when (val parsed = value.toIntOrNull()) {
+                        null -> logger.warn { "Ignoring non-integer 'order' in $source: '$value'" }
+                        else -> order = parsed
                     }
+                    else -> logger.warn { "Ignoring unknown key '$key' in $source (known keys: title, order, slug)" }
                 }
             }
             return FolderMeta(title = title, order = order, slug = slug)
         }
 
         /** Strips one layer of matching surrounding single or double quotes, if present. */
-        private fun stripQuotes(value: String): String {
-            if (value.length >= 2) {
-                val first = value.first()
-                val last = value.last()
-                if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
-                    return value.substring(1, value.length - 1)
-                }
-            }
-            return value
+        private fun stripQuotes(value: String): String = when {
+            value.length < 2 -> value
+            value.first() == '"' && value.last() == '"' -> value.substring(1, value.length - 1)
+            value.first() == '\'' && value.last() == '\'' -> value.substring(1, value.length - 1)
+            else -> value
         }
     }
 }

@@ -5,18 +5,15 @@ package com.plainbase.domain.content
  * that the scan surfaced (e.g. an NFC path collision).
  *
  * [files] holds exactly the entries that own their [TreePath] — collision *losers* are
- * excluded here and recorded only as issues (policy B3). [rawNames] is the retained
- * `TreePath -> raw on-disk name` mapping (P4) for every indexed file; reads of a file go
- * through this map, never through a name re-derived from the NFC path.
+ * excluded here and recorded only as issues (policy B3). Each [ContentFile] retains its
+ * raw on-disk name (P4) so reads reach the winner's bytes, never a name re-derived from
+ * the NFC path.
  */
 data class ScanResult(
     val files: List<ContentFile>,
     val folders: List<ContentFolder>,
     val issues: List<ScanIssue>,
-) {
-    /** The retained `TreePath -> raw on-disk name` map (P4) for every indexed file. Computed once. */
-    val rawNames: Map<TreePath, String> = files.associate { it.path to it.rawName }
-}
+)
 
 /**
  * A problem detected during a scan that does not abort the scan but must be surfaced

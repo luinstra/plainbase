@@ -17,8 +17,8 @@ interface ContentStore {
      * Recursively scans the content tree, honoring the configured ignore rules, and returns
      * the indexed entries plus any [ScanIssue]s (e.g. NFC path collisions, policy B3).
      *
-     * The result retains a `TreePath -> raw on-disk name` map ([ScanResult.rawNames], P4) so
-     * subsequent [read]s of a collision winner reach the winner's bytes, not the loser's.
+     * Each indexed [ContentFile] retains its raw on-disk name (P4) so subsequent [read]s of a
+     * collision winner reach the winner's bytes, not the loser's.
      */
     fun scan(): ScanResult
 

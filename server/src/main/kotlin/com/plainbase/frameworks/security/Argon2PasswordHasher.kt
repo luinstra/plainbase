@@ -33,29 +33,44 @@ class Argon2PasswordHasher(
     }
 
     override fun verify(plain: CharArray, encoded: String): Boolean {
+        val phc = parsePhc(encoded) ?: return false
+        val actual = compute(plain, phc.salt, phc.memoryKb, phc.iterations, phc.parallelism, phc.hash.size)
+        return Arrays.constantTimeAreEqual(phc.hash, actual)
+    }
+
+    /** Holds the parsed PHC parameters; a plain class (not `data`) because of the [ByteArray] fields. */
+    private class Phc(
+        val memoryKb: Int,
+        val iterations: Int,
+        val parallelism: Int,
+        val salt: ByteArray,
+        val hash: ByteArray,
+    )
+
+    /**
+     * Parses `$argon2id$v=19$m=..,t=..,p=..$<salt>$<hash>` into a [Phc], or null on any deviation.
+     * Only Argon2 version 19 (0x13) is accepted; the `v=` prefix is load-bearing — a bare `19` must
+     * not pass.
+     */
+    private fun parsePhc(encoded: String): Phc? {
         val parts = encoded.split('$')
-        // ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
-        if (parts.size != 6 || parts[1] != "argon2id") return false
-        // Validate the PHC version segment explicitly: we only ever emit and
-        // accept Argon2 version 19 (0x13). Anything else — missing, malformed,
-        // or a different version — is rejected outright.
-        val version = parts[2]
-        if (!version.startsWith("v=")) return false
-        if (version.removePrefix("v=").toIntOrNull() != PHC_VERSION) return false
-        val params = parts[3].split(',').associate {
-            val kv = it.split('=', limit = 2)
-            if (kv.size != 2) return false
-            kv[0] to (kv[1].toIntOrNull() ?: return false)
+        if (parts.size != 6 || parts[1] != "argon2id") return null
+        val version = parts[2].takeIf { it.startsWith("v=") }?.removePrefix("v=")?.toIntOrNull()
+        if (version != PHC_VERSION) return null
+        val params = parseParams(parts[3]) ?: return null
+        val m = params["m"]?.takeIf { it > 0 } ?: return null
+        val t = params["t"]?.takeIf { it > 0 } ?: return null
+        val p = params["p"]?.takeIf { it > 0 } ?: return null
+        val salt = decodeBase64(parts[4])?.takeIf { it.isNotEmpty() } ?: return null
+        val hash = decodeBase64(parts[5])?.takeIf { it.isNotEmpty() } ?: return null
+        return Phc(m, t, p, salt, hash)
+    }
+
+    private fun parseParams(segment: String): Map<String, Int>? = buildMap {
+        for (param in segment.split(',')) {
+            val (k, v) = param.split('=', limit = 2).takeIf { it.size == 2 } ?: return null
+            put(k, v.toIntOrNull() ?: return null)
         }
-        val m = params["m"] ?: return false
-        val t = params["t"] ?: return false
-        val p = params["p"] ?: return false
-        if (m <= 0 || t <= 0 || p <= 0) return false
-        val salt = decodeBase64(parts[4]) ?: return false
-        val expected = decodeBase64(parts[5]) ?: return false
-        if (salt.isEmpty() || expected.isEmpty()) return false
-        val actual = compute(plain, salt, m, t, p, expected.size)
-        return Arrays.constantTimeAreEqual(expected, actual)
     }
 
     private fun decodeBase64(value: String): ByteArray? =

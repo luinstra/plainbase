@@ -1,10 +1,12 @@
 package com.plainbase.frameworks.sqldelight
 
+import app.cash.sqldelight.db.QueryResult.Value
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import java.nio.file.Files
 import java.nio.file.Path
 
+/** Opens, creates, and migrates the app-state SQLite database via SQLDelight's JDBC driver. */
 object DatabaseFactory {
 
     /**
@@ -31,7 +33,7 @@ object DatabaseFactory {
             sql = "PRAGMA user_version;",
             mapper = { cursor ->
                 cursor.next()
-                app.cash.sqldelight.db.QueryResult.Value(cursor.getLong(0) ?: 0L)
+                Value(cursor.getLong(0) ?: 0L)
             },
             parameters = 0,
         ).value
@@ -45,6 +47,9 @@ object DatabaseFactory {
                 PlainbaseDb.Schema.migrate(driver, current, target)
                 driver.execute(null, "PRAGMA user_version = $target;", 0)
             }
+            // current > target: an older binary opening a newer DB. Intentionally a no-op for now —
+            // a downgrade guard (throwing) would be a behavior change; defer that hardening.
+            else -> Unit
         }
     }
 }

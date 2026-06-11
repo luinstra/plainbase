@@ -104,10 +104,9 @@ object NativeSpike {
     private fun check(name: String, block: () -> String): CheckResult = try {
         CheckResult(name, true, block())
     } catch (t: Throwable) {
-        val chain = generateSequence(t) { it.cause }
-            .joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
-        val origin = generateSequence(t) { it.cause }.last()
-            .stackTrace.take(12).joinToString("") { "\n        at $it" }
+        val causes = generateSequence(t) { it.cause }.toList()
+        val chain = causes.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
+        val origin = causes.last().stackTrace.take(12).joinToString("") { "\n        at $it" }
         CheckResult(name, false, chain + origin)
     }
 
@@ -196,23 +195,19 @@ object NativeSpike {
         val dir = Files.createTempDirectory("plainbase-spike-git").toFile()
         try {
             Git.init().setDirectory(dir).setInitialBranch("main").call().use { git ->
+                fun commit(message: String) = git.commit()
+                    .setMessage(message)
+                    .setAuthor("Spike", "spike@plainbase.local")
+                    .setCommitter("Spike", "spike@plainbase.local")
+                    .setSign(false)
+                    .call()
                 val file = dir.resolve("notes.md")
                 file.writeText("# Notes\n\nhello\n")
                 git.add().addFilepattern("notes.md").call()
-                val c1 = git.commit()
-                    .setMessage("init")
-                    .setAuthor("Spike", "spike@plainbase.local")
-                    .setCommitter("Spike", "spike@plainbase.local")
-                    .setSign(false)
-                    .call()
+                val c1 = commit("init")
                 file.writeText("# Notes\n\nhello\nworld\n")
                 git.add().addFilepattern("notes.md").call()
-                val c2 = git.commit()
-                    .setMessage("update")
-                    .setAuthor("Spike", "spike@plainbase.local")
-                    .setCommitter("Spike", "spike@plainbase.local")
-                    .setSign(false)
-                    .call()
+                val c2 = commit("update")
                 val log = git.log().call().toList()
                 require(log.size == 2) { "expected 2 commits, got ${log.size}" }
                 val out = ByteArrayOutputStream()

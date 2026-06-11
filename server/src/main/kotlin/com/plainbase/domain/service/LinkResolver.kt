@@ -24,9 +24,15 @@ class LinkResolver(private val index: PageIndexView) {
      * The classification order is frozen (§A2): scheme/protocol-relative → same-page anchor →
      * empty target → internal.
      */
-    fun resolve(sourcePath: TreePath, rawLink: String): LinkOutcome {
-        // ---- Classification (in the frozen order) -------------------------------------------------
+    fun resolve(sourcePath: TreePath, rawLink: String): LinkOutcome =
+        classify(rawLink) ?: resolveInternal(sourcePath, rawLink)
 
+    /**
+     * The frozen classification prefix (§A2): scheme/protocol-relative and same-page anchor cases
+     * that resolve without touching the index. Returns null when [rawLink] is an internal target to
+     * be resolved by [resolveInternal].
+     */
+    private fun classify(rawLink: String): LinkOutcome? {
         // Scheme'd / protocol-relative: allowlist decides external pass-through vs blocked_scheme.
         schemePrefix(rawLink)?.let { scheme ->
             return if (scheme.lowercase() in ALLOWED_SCHEMES) {
@@ -37,21 +43,17 @@ class LinkResolver(private val index: PageIndexView) {
         }
         if (rawLink.startsWith("//")) return LinkOutcome.Resolved.External(rawLink) // protocol-relative
 
-        // Same-page anchor (empty path, `#fragment` only). The fragment goes through the SAME strict
-        // decode/re-encode path as page/asset fragments (§A2 step 1, owner-ratified amendment): an
-        // undecodable same-page fragment -> broken_malformed (never emitted raw); a clean one is
-        // emitted as `#<re-encoded>`. Without this it would early-return the raw fragment and skip the
-        // strict path the rest of resolution now enforces (PB-LINK-1 fragment-consistency fix).
+        // Same-page anchor (`#fragment` only): the fragment takes the same strict decode/re-encode
+        // path as every other fragment (see decodedOrNull) — never emitted raw.
         if (rawLink.startsWith("#")) {
-            val anchorFragment = rawLink.substring(1)
-            return when (val r = PercentCoding.decodeOnce(anchorFragment)) {
-                is PercentCoding.DecodeResult.Success -> LinkOutcome.Resolved.Anchor("#" + PercentCoding.encodeSegment(r.value))
-                is PercentCoding.DecodeResult.Failure -> LinkOutcome.Broken(BrokenReason.MALFORMED)
-            }
+            val fragment = decodedOrNull(rawLink.substring(1)) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED)
+            return LinkOutcome.Resolved.Anchor("#${PercentCoding.encodeSegment(fragment)}")
         }
+        return null
+    }
 
-        // ---- Internal resolution ------------------------------------------------------------------
-
+    /** §A2 steps 1–6 for an internal target (path/query/fragment split, decode, lexical resolve, match). */
+    private fun resolveInternal(sourcePath: TreePath, rawLink: String): LinkOutcome {
         // Step 1: split on the RAW link string — fragment at the first UNENCODED '#', query at the
         // first UNENCODED '?'. Encoded %23/%3F therefore remain path data. The query is discarded
         // for page targets but PRESERVED (raw, still-encoded — never decoded, so it is never emitted
@@ -59,29 +61,15 @@ class LinkResolver(private val index: PageIndexView) {
         val (beforeFragment, fragment) = splitOnce(rawLink, '#')
         val (rawPath, rawQuery) = splitOnce(beforeFragment, '?')
 
-        // Empty target: path, query and fragment all empty (`[]()`).
-        if (rawPath.isEmpty() && fragment == null) return LinkOutcome.Broken(BrokenReason.MALFORMED)
-
-        // A bare `#...` was handled above; a `?...#...` with an empty path is malformed too.
+        // Empty path (`[]()` or a `?...#...` with no path) is malformed; a bare `#...` was handled above.
         if (rawPath.isEmpty()) return LinkOutcome.Broken(BrokenReason.MALFORMED)
 
-        // The fragment is percent-decoded ONCE under the SAME strict rules as the path (§A2 step 1,
-        // owner-ratified amendment): a fragment that fails strict decode -> broken_malformed
-        // (symmetric with the path; an undecodable fragment is never emitted raw). A cleanly-decoding
-        // fragment is carried forward as its re-encoded form for the emitted URL.
         val emittedFragment = when (fragment) {
             null -> null
-            else -> when (val r = PercentCoding.decodeOnce(fragment)) {
-                is PercentCoding.DecodeResult.Success -> PercentCoding.encodeSegment(r.value)
-                is PercentCoding.DecodeResult.Failure -> return LinkOutcome.Broken(BrokenReason.MALFORMED)
-            }
+            else -> PercentCoding.encodeSegment(decodedOrNull(fragment) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED))
         }
 
-        // Step 2: percent-decode the PATH exactly once (strict). Any failure -> broken_malformed.
-        val decodedPath = when (val r = PercentCoding.decodeOnce(rawPath)) {
-            is PercentCoding.DecodeResult.Success -> r.value
-            is PercentCoding.DecodeResult.Failure -> return LinkOutcome.Broken(BrokenReason.MALFORMED)
-        }
+        val decodedPath = decodedOrNull(rawPath) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED)
 
         // Steps 3+4: NFC-normalize and resolve lexically against the root (ContentRoot does both —
         // it NFC-normalizes each surviving segment and is the single containment guard). A leading
@@ -122,7 +110,7 @@ class LinkResolver(private val index: PageIndexView) {
 
         // Extensionless file -> try `<path>.md` (page) first, then `<path>` (asset).
         if (!name.contains('.')) {
-            val asMd = path.parent?.resolveChild("$name.md") ?: TreePath.require("$name.md")
+            val asMd = TreePath.childOf(path.parent, "$name.md")
             if (index.kindOf(asMd) == PageIndexView.EntryKind.PAGE) return pageOutcome(asMd, fragment)
             if (index.kindOf(path) == PageIndexView.EntryKind.ASSET) return assetOutcome(path, fragment, rawQuery)
             // Rescue across BOTH inferred candidates (§A2 step 5 precedence: `.md` page first, then the
@@ -140,13 +128,13 @@ class LinkResolver(private val index: PageIndexView) {
     }
 
     /** §A2 step 5 directory form — `<dir>/index.md` then `<dir>/README.md` (fixed precedence). */
-    private fun resolveDirectory(dir: TreePath?, fragment: String?): LinkOutcome {
-        for (candidateName in listOf("index.md", "README.md")) {
-            val candidate = dir?.resolveChild(candidateName) ?: TreePath.require(candidateName)
-            if (index.kindOf(candidate) == PageIndexView.EntryKind.PAGE) return pageOutcome(candidate, fragment)
-        }
-        return LinkOutcome.Broken(BrokenReason.MISSING)
-    }
+    private fun resolveDirectory(dir: TreePath?, fragment: String?): LinkOutcome =
+        DIRECTORY_INDEX_NAMES
+            .map { TreePath.childOf(dir, it) }
+            .firstNotNullOfOrNull { candidate ->
+                if (index.kindOf(candidate) == PageIndexView.EntryKind.PAGE) pageOutcome(candidate, fragment) else null
+            }
+            ?: LinkOutcome.Broken(BrokenReason.MISSING)
 
     /**
      * §A2 step 6 — case-insensitive rescue scan (broken-link classification only, never resolves).
@@ -157,17 +145,15 @@ class LinkResolver(private val index: PageIndexView) {
      * the bare `<path>` asset form when the page form matches nothing. A single candidate (the `.md`
      * page miss above) reduces to the original one-path scan.
      */
-    private fun rescue(vararg candidates: TreePath): LinkOutcome {
-        for (candidate in candidates) {
-            val matches = index.caseInsensitiveMatches(candidate)
-            when (matches.size) {
-                0 -> Unit
-                1 -> return LinkOutcome.Broken(BrokenReason.CASE_MISMATCH)
-                else -> return LinkOutcome.Broken(BrokenReason.AMBIGUOUS)
+    private fun rescue(vararg candidates: TreePath): LinkOutcome =
+        candidates.firstNotNullOfOrNull { candidate ->
+            when (index.caseInsensitiveMatches(candidate).size) {
+                0 -> null
+                1 -> LinkOutcome.Broken(BrokenReason.CASE_MISMATCH)
+                else -> LinkOutcome.Broken(BrokenReason.AMBIGUOUS)
             }
         }
-        return LinkOutcome.Broken(BrokenReason.MISSING)
-    }
+            ?: LinkOutcome.Broken(BrokenReason.MISSING)
 
     /**
      * Builds a resolved-page outcome, appending the (already re-encoded) fragment if present. A
@@ -190,14 +176,30 @@ class LinkResolver(private val index: PageIndexView) {
     }
 
     /**
-     * Appends a fragment to an emitted URL. [fragment] is already the re-encoded form (the raw
-     * fragment was strict-decoded then re-encoded per RFC 3986 up in [resolve] — an undecodable
+     * Strict-decodes [raw] exactly once, or null on a decode failure.
+     *
+     * Used for the path and every fragment so all three go through the SAME strict path (§A2 step 1,
+     * owner-ratified amendment): an undecodable input yields null -> `broken_malformed` at the call
+     * site (never emitted raw). The path uses the decoded value as-is for lexical resolution;
+     * fragments re-encode it ([encodeSegment]) for the emitted URL.
+     */
+    private fun decodedOrNull(raw: String): String? =
+        when (val r = PercentCoding.decodeOnce(raw)) {
+            is PercentCoding.DecodeResult.Success -> r.value
+            is PercentCoding.DecodeResult.Failure -> null
+        }
+
+    /**
+     * Appends a fragment to an emitted URL. [fragment] is already the re-encoded form (an undecodable
      * fragment never reaches here; it returned `broken_malformed`). So this is a plain `#`-join.
      */
     private fun appendFragment(base: String, fragment: String?): String =
         if (fragment == null) base else "$base#$fragment"
 
     private companion object {
+        /** §A2 step 5 directory index probe order (fixed precedence). */
+        val DIRECTORY_INDEX_NAMES = listOf("index.md", "README.md")
+
         /** The frozen, append-only scheme allowlist (§A2). Compared case-insensitively. */
         val ALLOWED_SCHEMES = setOf("http", "https", "mailto")
 

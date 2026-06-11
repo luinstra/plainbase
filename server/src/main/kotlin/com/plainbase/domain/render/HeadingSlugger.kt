@@ -36,54 +36,22 @@ object HeadingSlugger {
     fun headingId(text: String): String = slugify(text, HEADING_FALLBACK)
 
     /**
-     * PB-SLUG-1 steps 1–6 as the shared slugifier (§A4): lowercase → NFC → whitespace→space →
-     * delete non-kept code points → space→hyphen → empty-fallback → **final NFC normalize**.
-     * [emptyFallback] is the literal used when the transformed result is empty (`section` for
-     * headings, `page`/`folder` for URLs).
-     *
-     * Output is always NFC: step 2 normalizes, but step 4's deletions can strand a kept combining
-     * mark after a newly-preceding base (or merge two mark runs out of canonical order), so step 6's
-     * **final NFC pass** unconditionally restores the "IDs are always NFC" invariant (owner-ratified
-     * §A1 step 6; row 19, e.g. `A!` + U+0301 → `á`). The pass cannot introduce a code point outside
-     * step 4's keep-set (hyphen/underscore/digits head no composition; every composite over a kept
-     * Letter/Mark starter is itself a Letter or Mark). Output never contains U+0020 and never splits a
-     * surrogate pair (code-point iteration).
+     * PB-SLUG-1 steps 1–6 as the shared slugifier (also §A4's URL-segment slugifier). [emptyFallback]
+     * is returned when the transform yields an empty string (`section` for headings, `page`/`folder`
+     * for URLs). Output is always NFC and never contains U+0020; the algorithm and the final-NFC proof
+     * live in §A1.
      */
     fun slugify(text: String, emptyFallback: String): String {
-        // Step 1: lowercase, locale-independent (Locale.ROOT — no Turkish-I hazard).
-        val lowered = text.lowercase()
-        // Step 2: NFC normalize (the single NFC call site).
-        val normalized = Nfc.normalize(lowered)
-
-        val out = StringBuilder(normalized.length)
-        var i = 0
-        while (i < normalized.length) {
-            val cp = normalized.codePointAt(i)
-            i += Character.charCount(cp)
-            when {
-                // Step 3: every White_Space code point -> U+0020 SPACE.
-                isWhiteSpace(cp) -> out.append(' ')
-                // Step 4: keep Letters, Marks, Decimal Numbers, and SPACE / '-' / '_'; delete the rest.
-                isKept(cp) -> out.appendCodePoint(cp)
-                // else: deleted (emoji, punctuation, symbols).
+        val slug = buildString {
+            Nfc.normalize(text.lowercase()).codePoints().forEach { cp ->
+                when {
+                    isWhiteSpace(cp) -> append('-') // White_Space folds straight to a hyphen (no collapsing)
+                    isKept(cp) -> appendCodePoint(cp)
+                }
             }
         }
-
-        // Step 5: replace each remaining U+0020 with one U+002D HYPHEN-MINUS. No collapsing, no trimming.
-        val hyphenated = StringBuilder(out.length)
-        for (j in out.indices) {
-            hyphenated.append(if (out[j] == ' ') '-' else out[j])
-        }
-
-        // Step 6: empty -> caller's fallback literal, then a FINAL NFC normalize (owner-ratified
-        // §A1 step 6). Step 4 deletes code points, which can re-adjacent a base letter and a
-        // combining mark that did NOT compose before deletion (e.g. `a` `!` U+0301 -> delete `!`
-        // -> `a` + U+0301, which composes to U+00E1), or merge two mark runs out of canonical
-        // order. The final NFC pass unconditionally restores the "IDs are always NFC" invariant
-        // (row 19). It is the identity on every frozen §A1 golden row whose step-5 output is
-        // already NFC, so it changes no frozen outcome.
-        val result = hyphenated.toString().ifEmpty { emptyFallback }
-        return Nfc.normalize(result)
+        // Final NFC: deletion can strand a combining mark that must recompose; keeps ids NFC (see A1).
+        return Nfc.normalize(slug.ifEmpty { emptyFallback })
     }
 
     /**
@@ -101,20 +69,20 @@ object HeadingSlugger {
      * The frozen Unicode `White_Space` property set (Unicode `PropList.txt`): the 25 code points
      * `White_Space=Yes`. Data-pinned so JDK Unicode-table drift can never move the boundary.
      */
-    private val WHITE_SPACE: Set<Int> = buildSet {
-        addAll(listOf(0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680))
-        for (cp in 0x2000..0x200A) add(cp)
-        addAll(listOf(0x2028, 0x2029, 0x202F, 0x205F, 0x3000))
-    }
+    private val WHITE_SPACE: Set<Int> =
+        setOf(0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680) +
+            (0x2000..0x200A) +
+            setOf(0x2028, 0x2029, 0x202F, 0x205F, 0x3000)
 
     /**
      * Step 4 keep-set: Unicode general category Letter (Lu/Ll/Lt/Lm/Lo), Mark (Mn/Mc/Me), Decimal
-     * Number (Nd), or one of SPACE / HYPHEN-MINUS / LOW LINE. (Mirrors Ruby `[[:word:]]` =
-     * `\p{L}\p{M}\p{Nd}\p{Pc}` plus hyphen/space — GitHub's effective keep-set, but `\p{Pc}` is
-     * narrowed here to exactly LOW LINE per the frozen spec text.)
+     * Number (Nd), or HYPHEN-MINUS / LOW LINE. (Mirrors Ruby `[[:word:]]` = `\p{L}\p{M}\p{Nd}\p{Pc}`
+     * plus hyphen — GitHub's effective keep-set, but `\p{Pc}` is narrowed here to exactly LOW LINE
+     * per the frozen spec text.) SPACE is in the spec keep-set but unreachable: White_Space folds to
+     * a hyphen before this predicate runs.
      */
     private fun isKept(cp: Int): Boolean {
-        if (cp == ' '.code || cp == '-'.code || cp == '_'.code) return true
+        if (cp == '-'.code || cp == '_'.code) return true
         return when (Character.getType(cp)) {
             Character.UPPERCASE_LETTER.toInt(),
             Character.LOWERCASE_LETTER.toInt(),

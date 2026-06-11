@@ -2,6 +2,7 @@ package com.plainbase.frameworks.filesystem
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.FileSystems
+import java.nio.file.Path
 import java.nio.file.PathMatcher
 
 /**
@@ -33,7 +34,7 @@ class IgnoreRules(
             return true
         }
         if (matchers.isNotEmpty()) {
-            val candidate = FileSystems.getDefault().getPath(relativePath)
+            val candidate = Path.of(relativePath)
             if (matchers.any { it.matches(candidate) }) {
                 logger.debug { "Ignoring entry matching content.ignore glob: $relativePath" }
                 return true
