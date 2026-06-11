@@ -1,0 +1,70 @@
+# PB-LINK-1 golden corpus — internal link resolution (§A2).
+# NOT YET FROZEN — chunk-2 free-correction window. Rows 1-29 transcribed from the §A2 golden table
+# BEFORE any flexmark code existed (anti-circularity); rows 30-31 added in the free window from the
+# amended §A2 (B2 asset-query preservation, B3 undecodable-fragment -> broken_malformed), authored
+# from the SPEC then validated by the contract-smoke spike. URLs use §A4 canonical-URL construction over
+# the fixture tree, computed by the stub PageIndexView in the test (no _folder.yaml slug
+# overrides in fixtures; deploy-guide.md carries slug: deploy-guide; root index.md carries
+# slug: welcome). Run against the pure-domain LinkResolver with a stub index.
+#
+# Columns (tab-separated):
+#   row        the §A2 row number (for traceability).
+#   source     content-relative file path of the page the link is written in.
+#   link       the link href exactly as written in Markdown.
+#   outcome    one of: page, asset, external, anchor, blocked_scheme, broken_missing,
+#              broken_case_mismatch, broken_malformed, outside_content_root, ambiguous.
+#   url_or_hint  for page/asset: the emitted URL. For external/anchor: the verbatim
+#              passed-through value. For broken_case_mismatch: the candidate path hint.
+#              For other broken classes: empty (a single literal `-`).
+#
+# row	source	link	outcome	url_or_hint
+1	guides/deploy-guide.md	../infra/kubernetes.md	page	/docs/infra/kubernetes
+2	guides/deploy-guide.md	setup.md	page	/docs/guides/setup
+3	guides/deploy-guide.md	./setup.md#prerequisites	page	/docs/guides/setup#prerequisites
+4	guides/deploy-guide.md	/api/rest.md	page	/docs/api/rest
+5	guides/deploy-guide.md	../infra/assets/diagram.svg	asset	/assets/infra/assets/diagram.svg
+6	guides/deploy-guide.md	#rollback	anchor	#rollback
+7	guides/deploy-guide.md	../notes/release%20notes%202026.md	page	/docs/notes/release-notes-2026
+8	guides/deploy-guide.md	../notes/re%CC%81union.md	page	/docs/notes/r%C3%A9union
+9	guides/deploy-guide.md	does-not-exist.md	broken_missing	-
+10	guides/deploy-guide.md	../../outside.txt	outside_content_root	-
+11	guides/deploy-guide.md	../api/REST.md	broken_case_mismatch	api/rest.md
+12	guides/deploy-guide.md	setup	page	/docs/guides/setup
+13	guides/deploy-guide.md	../	page	/docs/welcome
+14	guides/deploy-guide.md	../api/	broken_missing	-
+15	guides/deploy-guide.md	../api/rest.md#no-such-heading	page	/docs/api/rest#no-such-heading
+16	guides/deploy-guide.md	https://example.com/a.md	external	https://example.com/a.md
+17	guides/deploy-guide.md	mailto:ops@example.com	external	mailto:ops@example.com
+18	guides/deploy-guide.md	javascript:alert(1)	blocked_scheme	-
+19	guides/deploy-guide.md	//cdn.example.com/lib.js	external	//cdn.example.com/lib.js
+20	guides/deploy-guide.md	ftp://files.example.com/spec.md	blocked_scheme	-
+21	guides/deploy-guide.md	tel:+15551234567	blocked_scheme	-
+22	guides/deploy-guide.md	notes:stuff.md	blocked_scheme	-
+23	guides/deploy-guide.md	./notes:stuff.md	broken_missing	-
+24	guides/deploy-guide.md		broken_malformed	-
+25	guides/deploy-guide.md	setup%2Fextra.md	broken_malformed	-
+26	guides/deploy-guide.md	%252e%252e/secret.md	broken_missing	-
+27	guides/deploy-guide.md	%2e%2e/%2e%2e/outside.txt	outside_content_root	-
+28	guides/deploy-guide.md	setup.md%23prerequisites	broken_missing	-
+29	guides/deploy-guide.md	caf%E9-notes.md	broken_malformed	-
+# B2 (chunk-2 free-correction window): asset ?query is PRESERVED for assets (raw, never decoded),
+# appended before any fragment. §A2 step 1 + output-form table; §A4 asset URL = /assets/{root-rel}.
+30	guides/deploy-guide.md	../infra/assets/diagram.svg?v=2	asset	/assets/infra/assets/diagram.svg?v=2
+# B3 (chunk-2 free-correction window, owner-ratified): an undecodable fragment fails strict decode
+# -> broken_malformed (symmetric with the path; never emitted raw). The space + lone `%` in
+# `100% done` cannot strict-decode (`% d` is not a valid %XX escape).
+31	guides/deploy-guide.md	setup.md#100% done	broken_malformed	-
+# B4 (chunk-2 free-correction window): a SAME-PAGE `#fragment` goes through the SAME strict fragment
+# decode/re-encode as page/asset fragments (§A2 step 1, owner-ratified). Row 32: a valid unicode anchor
+# `#café` strict-decodes then re-encodes per RFC 3986 on the wire -> `#caf%C3%A9` (NEVER emitted raw).
+32	guides/deploy-guide.md	#café	anchor	#caf%C3%A9
+# Row 33: an undecodable same-page fragment (`caf%E9` — lone `%E9` is not valid strict UTF-8) fails the
+# same strict decode the path/asset fragments use -> broken_malformed (never emitted raw). This is the
+# one path that previously skipped the strict decode and returned the raw fragment as a resolved anchor.
+33	guides/deploy-guide.md	#caf%E9	broken_malformed	-
+# B5 (chunk-2 free-correction window): an EXTENSIONLESS wrong-case link to an existing PAGE. `Setup`
+# resolves to `guides/Setup`; the `.md` probe (`guides/Setup.md`) and asset probe (`guides/Setup`) both
+# miss case-sensitively, so the rescue scan (§A2 step 6) runs against the INFERRED `.md` page candidate
+# (`guides/Setup.md`), which matches `guides/setup.md` case-insensitively -> broken_case_mismatch (NOT
+# broken_missing). Mirrors row 11's `.md` case-mismatch, for the extensionless inferred-page form.
+34	guides/deploy-guide.md	Setup	broken_case_mismatch	guides/setup.md

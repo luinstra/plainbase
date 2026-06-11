@@ -1,0 +1,44 @@
+# PB-SLUG-1 golden corpus — heading-ID algorithm (§A1).
+# FROZEN at the end of chunk 2. Transcribed from the §A1 golden table (rows 1-25)
+# BEFORE any flexmark code existed (anti-circularity: expected ids come from the SPEC,
+# never generated from renderer output). The chunk-2 contract-smoke spike validates these
+# predictions against flexmark inside the free-correction window; see the spike report.
+#
+# Columns (tab-separated):
+#   group         allocator namespace — rows sharing a group are processed in document
+#                 order through ONE HeadingIdAllocator (per-page dedup, step 7).
+#   heading_md    the heading's Markdown source (the spike parses this with flexmark and
+#                 extracts the heading text content per §A1's input rule).
+#   text          the §A1 "text content" the HeadingSlugger receives (text nodes verbatim,
+#                 code-span contents, link/emphasis text, image alt text, breaks -> space).
+#                 This is what the DOMAIN golden test feeds directly (zero flexmark imports).
+#   expected_id   the frozen anchor id.
+#
+# group	heading_md	text	expected_id
+setup	## Setup	Setup	setup
+setup	## Setup	Setup	setup-1
+setup	### Setup	Setup	setup-2
+setup	## Setup 1	Setup 1	setup-1-1
+r5	# Hello, World!	Hello, World!	hello-world
+r6	# Hello  World	Hello  World	hello--world
+r7	# C++ & Rust	C++ & Rust	c--rust
+r8	# Use `git status` daily	Use git status daily	use-git-status-daily
+r9	# [Sign-in flow](https://auth.example.com)	Sign-in flow	sign-in-flow
+r10	# **Bold** _move_	Bold move	bold-move
+r11	# snake_case matters	snake_case matters	snake_case-matters
+r12	# 1. Introduction	1. Introduction	1-introduction
+r13	# 100% Done	100% Done	100-done
+r14	# 🚀 Launch Plan	🚀 Launch Plan	-launch-plan
+r15	# Émigré Café	Émigré Café	émigré-café
+r16	# 日本語ガイド	日本語ガイド	日本語ガイド
+r17	# Tabs\tin\theadings	Tabs\tin\theadings	tabs-in-headings
+punct	# !!!	!!!	section
+punct	# ???	???	section-1
+r19	# re\u{0301}union	re\u{0301}union	réunion
+r20	# Hello <em>world</em>	Hello world	hello-world
+r21	# ![Build badge](b.svg) Status	Build badge Status	build-badge-status
+r22	# --draft--	--draft--	--draft--
+r23	# 𐐷 Deseret	𐐷 Deseret	𐐷-deseret
+r24	# 𠀋 CJK Ext B	𠀋 CJK Ext B	𠀋-cjk-ext-b
+r25	# q̃ tilde	q̃ tilde	q̃-tilde
+stranded	# A!\u{0301}	A!\u{0301}	\u{00E1}
