@@ -2,6 +2,7 @@ package com.plainbase.frameworks.markdown
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.LinkOutcome
+import com.plainbase.domain.model.PageLink
 import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.PageIndexView
@@ -98,7 +99,7 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
         pass.walk(document)
 
         val html = htmlRenderer(pass).render(document)
-        return RenderedPage(html = html, headings = pass.headings, links = pass.linkOutcomes)
+        return RenderedPage(html = html, headings = pass.headings, links = pass.links)
     }
 
     /** Builds a per-render [HtmlRenderer] bound to [pass]'s pre-computed ids and link outcomes. */
@@ -127,7 +128,7 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
  * matching `[x]: url` definition, so flexmark renders it as literal text — no `<a>`, no href, hence no
  * security exposure (the fail-closed attribute provider still covers anything that DOES render). Were
  * such nodes routed, every undefined bracket in prose would resolve to `Broken(MALFORMED)` and pollute
- * [linkOutcomes] with phantom "broken links" that the chunk-8 link checker would then flag falsely. So
+ * [links] with phantom "broken links" that the chunk-8 link checker would then flag falsely. So
  * a [RefNode] is routed only when [RefNode.getReferenceNode] finds its definition.
  */
 private class ResolutionPass(private val sourcePath: TreePath, private val resolver: LinkResolver) {
@@ -137,7 +138,7 @@ private class ResolutionPass(private val sourcePath: TreePath, private val resol
     private val outcomeByNode = HashMap<Node, LinkOutcome>()
 
     val headings = mutableListOf<Heading>()
-    val linkOutcomes = mutableListOf<LinkOutcome>()
+    val links = mutableListOf<PageLink>()
 
     fun walk(document: Document) {
         document.descendants.forEach { node ->
@@ -163,9 +164,12 @@ private class ResolutionPass(private val sourcePath: TreePath, private val resol
     }
 
     private fun visitLink(document: Document, node: Node) {
-        val outcome = resolver.resolve(sourcePath, rawTarget(document, node))
+        val target = rawTarget(document, node)
+        val outcome = resolver.resolve(sourcePath, target)
         outcomeByNode[node] = outcome
-        linkOutcomes += outcome
+        // The raw target and the link's text content travel with the outcome so the chunk-8 link
+        // checker can report WHAT broke without ever re-resolving (PageLink doc).
+        links += PageLink(target = target, text = TextCollectingVisitor().collectAndGetText(node), outcome = outcome)
     }
 
     /**

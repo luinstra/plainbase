@@ -3,7 +3,7 @@ package com.plainbase.domain.page
 import com.plainbase.domain.content.ContentFolder
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.model.LinkOutcome
+import com.plainbase.domain.model.PageLink
 
 /**
  * The immutable page-index snapshot (chunk 5, caching decision §C4): every page with its stable
@@ -120,7 +120,7 @@ data class IndexedPage(
     val contentHash: String,
     val html: String,
     val headings: List<Heading>,
-    val links: List<LinkOutcome>,
+    val links: List<PageLink>,
 ) {
 
     /** The canonical path URL on the wire (§A4), or null for a collision loser (REST `url` field). */

@@ -1,0 +1,23 @@
+{
+  "policy": "Phase-1 acceptance gate (chunk 8): the COMPLETE expected broken set of fixtures/demo-docs. notes/broken-links.md is deliberate Phase-5 test material (2 broken links + 1 broken anchor); every other fixture link must resolve. Any extra broken link, any missing entry, or any drift in page/text/target/class fails the build. The fixture file is editorially pinned alongside this manifest — change both together, deliberately.",
+  "broken": [
+    {
+      "page": "notes/broken-links.md",
+      "text": "missing page",
+      "target": "does-not-exist.md",
+      "class": "broken_missing"
+    },
+    {
+      "page": "notes/broken-links.md",
+      "text": "missing too",
+      "target": "../nowhere/gone.md",
+      "class": "broken_missing"
+    },
+    {
+      "page": "notes/broken-links.md",
+      "text": "bad anchor",
+      "target": "../api/rest.md#no-such-heading",
+      "class": "broken_anchor"
+    }
+  ]
+}

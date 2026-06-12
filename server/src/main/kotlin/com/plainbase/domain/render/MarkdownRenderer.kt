@@ -1,7 +1,7 @@
 package com.plainbase.domain.render
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.model.LinkOutcome
+import com.plainbase.domain.model.PageLink
 import com.plainbase.domain.page.Heading
 
 /**
@@ -30,10 +30,11 @@ interface MarkdownRenderer {
  *  - [html] — body HTML, raw HTML escaped (§C3), anchor ids from PB-SLUG-1, hrefs/srcs rewritten
  *    per PB-LINK-1 (resolved → `/docs`/`/assets` URL; broken/blocked → inert, see [links]);
  *  - [headings] — document order, each carrying its allocated id, level, and §A1 text;
- *  - [links] — every link/image target with its [LinkOutcome] (the link-checker's input, chunk 8).
+ *  - [links] — every link/image occurrence as a [PageLink] (raw target, text, resolved outcome) —
+ *    the link-checker's input (chunk 8).
  */
 data class RenderedPage(
     val html: String,
     val headings: List<Heading>,
-    val links: List<LinkOutcome>,
+    val links: List<PageLink>,
 )

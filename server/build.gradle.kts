@@ -60,6 +60,11 @@ val nativeTest: SourceSet =
     sourceSets.create("nativeTest") {
         compileClasspath += sourceSets.main.get().output
         runtimeClasspath += sourceSets.main.get().output
+        // The golden resources (notably golden/known-broken-links.json, the chunk-8 acceptance
+        // manifest) are shared with the native test image: putting src/test/resources on THIS
+        // source set's resource path is what lets `resources.autodetect()` embed them in the
+        // image (risk R6), keeping one committed copy as the single source of truth.
+        resources.srcDir("src/test/resources")
     }
 configurations["nativeTestImplementation"].extendsFrom(configurations["implementation"])
 configurations["nativeTestRuntimeOnly"].extendsFrom(configurations["runtimeOnly"])
@@ -133,6 +138,11 @@ dependencies {
     // extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so this never reaches the
     // native test image's classpath; the parser stays off the native gate. See FrontmatterPatcherOracleTest.
     testImplementation(libs.snakeyaml)
+    // JUnit Platform launcher API — the chunk-8 acceptance suites (Phase1AcceptanceTest,
+    // ForeverApiGoldenSuite) run existing test classes by SELECTION through an in-process launcher
+    // (suite-without-duplication, with executed-test floors against vacuous green). Already in the
+    // catalog for nativeTest; testImplementation-scoped, so the runtime allowlist is unaffected.
+    testImplementation(libs.junit.platform.launcher)
 
     // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
     // GraalVM's native JUnit launcher, and the ktor test host ONLY — deliberately no Kotest/MockK, so
@@ -193,6 +203,20 @@ tasks.test {
         events("passed", "failed", "skipped")
         showStandardStreams = true
     }
+}
+
+// The Phase-1 acceptance gate as one named task (chunk 8). The gate ALREADY runs inside `test`
+// (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
+// alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
+// inside the image. Not wired into `check` — that would re-run the same classes twice per build.
+val acceptanceTest by tasks.registering(Test::class) {
+    description = "Runs ONLY the Phase-1 acceptance gate (Phase1AcceptanceTest + ForeverApiGoldenSuite)."
+    group = "verification"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("com.plainbase.acceptance.*") }
+    testLogging { events("passed", "failed", "skipped") }
 }
 
 // JVM task that runs ONLY the nativeTest source set. It feeds the GraalVM native test image (see
