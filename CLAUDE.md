@@ -11,7 +11,9 @@ Filesystem-native, agent-native internal docs product. Master plan:
   with the catalog change. CI fails on unrecorded runtime-classpath drift.
 - **Banned outright** (fails resolution, even transitively): Netty, Jackson, Gson, Exposed.
 - Ktor server engine is **CIO only**. Serialization is **kotlinx.serialization only**.
-  Persistence is **SQLDelight only**.
+  The app DB is **SQLDelight only**; `DATA_DIR/search.db` is **raw JDBC over the same
+  xerial driver** per ADR-0004 (derived state, deletable, no migrations — never SQLDelight,
+  never a second driver).
 - Compute-hungry features (search scoring, future embeddings/OCR) belong in external
   processes (the Meilisearch pattern), never in this binary.
 
