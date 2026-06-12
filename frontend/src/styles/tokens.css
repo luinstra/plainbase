@@ -1,0 +1,154 @@
+/*
+ * Plainbase design tokens — the §5.9 two-tier foundation.
+ *
+ * Tier 1: primitive palette (`--pb-<hue>-<step>`). The ONLY place in the frontend where
+ *         color literals (hex/rgb/hsl/oklch) may appear — enforced by the token-discipline
+ *         test (src/__tests__/token-discipline.test.ts).
+ * Tier 2: semantic aliases (`--pb-surface`, `--pb-text`, `--pb-link`, ...). Components and
+ *         utilities consume THESE and only these; primitives never leak past this file.
+ *
+ * Dark mode is a pure swap of the semantic tier under `[data-theme="dark"]` — no component
+ * carries color logic. Runtime customization (plainbase.yaml `theme:` block, custom.css)
+ * overrides the same semantic tier after this stylesheet, which is why nothing else in the
+ * app may hardcode a color.
+ */
+
+:root {
+  /* ---- Tier 1: primitives ------------------------------------------------------------- */
+  /* The hue list (white|black|gray|blue|red|green|amber|violet) is mirrored in the
+     discipline test's PRIMITIVE_TOKEN regex — keep in sync when adding a hue. */
+  --pb-white: #ffffff;
+
+  --pb-gray-50: #fafafa;
+  --pb-gray-100: #f4f4f5;
+  --pb-gray-200: #e4e4e7;
+  --pb-gray-300: #d4d4d8;
+  --pb-gray-400: #a1a1aa;
+  --pb-gray-500: #71717a;
+  --pb-gray-600: #52525b;
+  --pb-gray-700: #3f3f46;
+  --pb-gray-750: #303036;
+  --pb-gray-800: #27272a;
+  --pb-gray-850: #1f1f23;
+  --pb-gray-900: #18181b;
+  --pb-gray-925: #141416;
+  --pb-gray-950: #0f0f11;
+
+  --pb-blue-200: #bfdbfe;
+  --pb-blue-300: #93c5fd;
+  --pb-blue-400: #60a5fa;
+  --pb-blue-500: #3b82f6;
+  --pb-blue-600: #2563eb;
+  --pb-blue-700: #1d4ed8;
+  --pb-blue-900: #1e3a8a;
+
+  --pb-red-300: #fca5a5;
+  --pb-red-400: #f87171;
+  --pb-red-600: #dc2626;
+  --pb-red-700: #b91c1c;
+
+  --pb-green-400: #4ade80;
+  --pb-green-600: #16a34a;
+  --pb-green-700: #15803d;
+
+  --pb-amber-300: #fcd34d;
+  --pb-amber-400: #fbbf24;
+  --pb-amber-600: #d97706;
+  --pb-amber-700: #b45309;
+
+  --pb-violet-300: #c4b5fd;
+  --pb-violet-400: #a78bfa;
+  --pb-violet-600: #7c3aed;
+  --pb-violet-700: #6d28d9;
+
+  /* ---- Tier 2: semantic aliases (light theme defaults) -------------------------------- */
+  color-scheme: light;
+
+  /* surfaces */
+  --pb-surface: var(--pb-white);
+  --pb-surface-raised: var(--pb-gray-50);
+  --pb-surface-hover: var(--pb-gray-100);
+  --pb-surface-active: var(--pb-gray-200);
+
+  /* text */
+  --pb-text: var(--pb-gray-900);
+  --pb-text-muted: var(--pb-gray-600);
+  --pb-text-faint: var(--pb-gray-400);
+
+  /* edges */
+  --pb-border: var(--pb-gray-200);
+  --pb-border-strong: var(--pb-gray-300);
+
+  /* interactive */
+  --pb-accent: var(--pb-blue-600);
+  --pb-accent-contrast: var(--pb-white);
+  --pb-link: var(--pb-blue-600);
+  --pb-link-hover: var(--pb-blue-700);
+  --pb-link-broken: var(--pb-red-600);
+  --pb-focus-ring: var(--pb-blue-500);
+  --pb-selection-bg: var(--pb-blue-200);
+
+  /* code */
+  --pb-code-bg: var(--pb-gray-50);
+  --pb-code-border: var(--pb-gray-200);
+  --pb-code-text: var(--pb-gray-800);
+  --pb-inline-code-bg: var(--pb-gray-100);
+
+  /* syntax highlighting (consumed by the hljs class mapping in app.css) */
+  --pb-syntax-keyword: var(--pb-violet-600);
+  --pb-syntax-string: var(--pb-green-700);
+  --pb-syntax-comment: var(--pb-gray-500);
+  --pb-syntax-literal: var(--pb-amber-700);
+  --pb-syntax-title: var(--pb-blue-700);
+  --pb-syntax-attr: var(--pb-red-700);
+
+  /* prose furniture */
+  --pb-blockquote-border: var(--pb-gray-300);
+  --pb-table-header-bg: var(--pb-gray-50);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* surfaces */
+  --pb-surface: var(--pb-gray-925);
+  --pb-surface-raised: var(--pb-gray-900);
+  --pb-surface-hover: var(--pb-gray-850);
+  --pb-surface-active: var(--pb-gray-800);
+
+  /* text */
+  --pb-text: var(--pb-gray-100);
+  --pb-text-muted: var(--pb-gray-400);
+  --pb-text-faint: var(--pb-gray-500);
+
+  /* edges */
+  --pb-border: var(--pb-gray-800);
+  --pb-border-strong: var(--pb-gray-750);
+
+  /* interactive */
+  --pb-accent: var(--pb-blue-400);
+  --pb-accent-contrast: var(--pb-gray-950);
+  --pb-link: var(--pb-blue-400);
+  --pb-link-hover: var(--pb-blue-300);
+  --pb-link-broken: var(--pb-red-400);
+  --pb-focus-ring: var(--pb-blue-400);
+  --pb-selection-bg: var(--pb-blue-900);
+
+  /* code */
+  --pb-code-bg: var(--pb-gray-950);
+  --pb-code-border: var(--pb-gray-800);
+  --pb-code-text: var(--pb-gray-200);
+  --pb-inline-code-bg: var(--pb-gray-850);
+
+  /* syntax highlighting */
+  --pb-syntax-keyword: var(--pb-violet-400);
+  --pb-syntax-string: var(--pb-green-400);
+  --pb-syntax-comment: var(--pb-gray-500);
+  --pb-syntax-literal: var(--pb-amber-400);
+  --pb-syntax-title: var(--pb-blue-300);
+  --pb-syntax-attr: var(--pb-red-300);
+
+  /* prose furniture */
+  --pb-blockquote-border: var(--pb-gray-700);
+  --pb-table-header-bg: var(--pb-gray-900);
+}

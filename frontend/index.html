@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Plainbase</title>
+    <script>
+      // Pre-paint theme bootstrap (inline copy of theme.ts's resolveTheme) — avoids a
+      // light-mode flash before React mounts. Pure data-theme swap; tokens.css does the rest.
+      (function () {
+        try {
+          var stored = localStorage.getItem("pb-theme");
+          var dark = stored === "dark" || (stored !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.dataset.theme = "dark";
+        } catch (e) {
+          /* no localStorage (privacy mode) — fall through to light */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

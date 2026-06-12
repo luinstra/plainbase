@@ -11,6 +11,9 @@ build/
 node_modules/
 frontend/dist/
 frontend/.node/
+frontend/.smoke-data/
+frontend/test-results/
+frontend/playwright-report/
 
 # IDE
 .idea/

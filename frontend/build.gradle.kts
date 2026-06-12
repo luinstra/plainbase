@@ -20,8 +20,29 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     outputs.dir(layout.projectDirectory.dir("dist"))
 }
 
+// Unit/snapshot tests + the §5.9 token-discipline gate (vitest). Part of `build`, so the
+// JAR floor (`./gradlew build`) fails on a hex color outside tokens.css.
+val npmTest = tasks.register<NpmTask>("npmTest") {
+    dependsOn(tasks.npmInstall)
+    args.set(listOf("run", "test"))
+    inputs.files("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html")
+    inputs.dir("src")
+    inputs.dir("e2e") // scanned by the token-discipline test
+    outputs.upToDateWhen { false }
+}
+
 tasks.register("build") {
-    dependsOn(npmBuild)
+    dependsOn(npmBuild, npmTest)
+}
+
+// Playwright smoke flow against the REAL server (installed dist + embedded SPA + fixture
+// tree) — see playwright.config.ts. A separate invocation, NOT part of `build`: it
+// downloads a Chromium on first run, which would break the hermetic JAR floor.
+tasks.register<NpmTask>("smokeTest") {
+    group = "verification"
+    description = "Runs the Playwright smoke flow against the installed server serving fixtures/demo-docs"
+    dependsOn(tasks.npmInstall, ":server:installDist")
+    args.set(listOf("run", "smoke"))
 }
 
 tasks.register<Delete>("clean") {

@@ -1,0 +1,62 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
+<aside
+  class="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-72 shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+  data-pb-sidebar="true"
+>
+  <nav
+    aria-label="Documentation tree"
+    class="px-4 py-5 text-sm"
+  >
+    <ul
+      class="space-y-0.5"
+    >
+      <li
+        data-pb-nav-item="folder"
+      >
+        <details
+          open=""
+        >
+          <summary
+            class="rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+          >
+            Guides
+          </summary>
+          <div
+            class="ml-3 border-l border-edge pl-2"
+          >
+            <ul
+              class="space-y-0.5"
+            >
+              <li
+                data-pb-nav-item="page"
+              >
+                <a
+                  aria-current="page"
+                  class="block rounded bg-active px-2 py-1 font-medium text-ink"
+                  data-pb-status="active"
+                  href="/docs/guides/deploy-guide"
+                >
+                  Deploy Guide
+                </a>
+              </li>
+            </ul>
+          </div>
+        </details>
+      </li>
+      <li
+        data-pb-nav-item="page"
+      >
+        <a
+          class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
+          data-pb-status="active"
+          href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+        >
+          Shadowed Page
+        </a>
+      </li>
+    </ul>
+  </nav>
+</aside>
+`;
