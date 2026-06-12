@@ -1,0 +1,49 @@
+# Golden canonical URL set (chunk 5, §A4) — the COMPLETE page->url map for fixtures/demo-docs.
+# Columns: content file path <TAB> canonical URL (wire form: /docs/ + percent-encoded slug segments).
+# Construction: ancestor dir segments + page slug, each through PB-SLUG-1 steps 1-6; page slug from
+# frontmatter `slug:` (index.md -> welcome, guides/getting-started.md, guides/deploy-guide.md,
+# api/overview.md -> api-overview) else the filename stem. No `_folder.yaml` slug overrides exist in
+# the fixtures. Unicode slugs are NFC and percent-encoded on emit (réunion.md is committed NFD; the
+# TreePath boundary normalizes, so the URL is the NFC bytes either way).
+# Updating this file = changing a frozen URL surface; review deliberately.
+README.md	/docs/readme
+api/authentication.md	/docs/api/authentication
+api/changelog-policy.md	/docs/api/changelog-policy
+api/errors.md	/docs/api/errors
+api/mcp.md	/docs/api/mcp
+api/overview.md	/docs/api/api-overview
+api/rest.md	/docs/api/rest
+changelog/2026-01.md	/docs/changelog/2026-01
+changelog/2026-02.md	/docs/changelog/2026-02
+changelog/2026-03.md	/docs/changelog/2026-03
+guides/advanced/backup-restore.md	/docs/guides/advanced/backup-restore
+guides/advanced/scaling.md	/docs/guides/advanced/scaling
+guides/advanced/tuning.md	/docs/guides/advanced/tuning
+guides/deploy-guide.md	/docs/guides/deploy-guide
+guides/editor.md	/docs/guides/editor
+guides/getting-started.md	/docs/guides/getting-started
+guides/search.md	/docs/guides/search
+guides/setup.md	/docs/guides/setup
+guides/writing-style.md	/docs/guides/writing-style
+index.md	/docs/welcome
+infra/incident-runbook.md	/docs/infra/incident-runbook
+infra/kubernetes.md	/docs/infra/kubernetes
+infra/monitoring.md	/docs/infra/monitoring
+infra/networking.md	/docs/infra/networking
+infra/setup.md	/docs/infra/setup
+infra/terraform.md	/docs/infra/terraform
+notes/broken-links.md	/docs/notes/broken-links
+notes/caf\u{00E9}-notes.md	/docs/notes/caf%C3%A9-notes
+notes/deeply/nested/folder/treasure.md	/docs/notes/deeply/nested/folder/treasure
+notes/just-text.md	/docs/notes/just-text
+notes/no-frontmatter.md	/docs/notes/no-frontmatter
+notes/release notes 2026.md	/docs/notes/release-notes-2026
+notes/r\u{00E9}union.md	/docs/notes/r%C3%A9union
+notes/\u{65E5}\u{672C}\u{8A9E}\u{30AC}\u{30A4}\u{30C9}.md	/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89
+scratch/ideas.md	/docs/scratch/ideas
+scratch/todo.md	/docs/scratch/todo
+team/handbook.md	/docs/team/handbook
+team/meetings/2026-01-retro.md	/docs/team/meetings/2026-01-retro
+team/meetings/2026-02-planning.md	/docs/team/meetings/2026-02-planning
+team/onboarding.md	/docs/team/onboarding
+team/roles.md	/docs/team/roles

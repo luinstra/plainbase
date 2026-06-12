@@ -11,6 +11,7 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 
 /**
  * SqlDelightIdMapRepository over an in-memory SQLite db: binding round-trips, the move-supersede
@@ -79,11 +80,26 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
                 IdentityIssue.DuplicateId(idX, keptPath = pathA, reassignedPath = pathB),
                 IdentityIssue.PatchRefused(pathA, "frontmatter keys must be plain unquoted scalars"),
                 IdentityIssue.RedirectConflict(pathB, "alias shadowed by live canonical path"),
-                IdentityIssue.PathCollision(keptPath = pathA, collidingPath = pathB),
+                IdentityIssue.PathCollision(keptPath = pathB, loserRawName = "re\u0301union.md"),
                 IdentityIssue.PathSlugCollision(keptPath = pathA, loserPath = pathB),
             )
             all.forEach(repo::record)
             repo.issues() shouldContainExactly all
+        }
+    }
+
+    test("a path_collision keeps the NFD loser's raw name verbatim — never normalized back into keptPath") {
+        withRepo { repo, _ ->
+            // The exact case the issue exists for: NFC/NFD siblings. The kept TreePath is NFC by
+            // construction; the loser's raw NFD name must survive persistence un-normalized,
+            // otherwise the issue degenerates to keptPath == loser and stops being actionable.
+            val loserRawName = "re\u0301union.md" // e + combining acute — raw on-disk NFD bytes
+            repo.record(IdentityIssue.PathCollision(keptPath = pathB, loserRawName = loserRawName))
+
+            val issue = repo.issues().filterIsInstance<IdentityIssue.PathCollision>().single()
+            issue.keptPath shouldBe pathB
+            issue.loserRawName shouldBe loserRawName
+            issue.loserRawName shouldNotBe issue.keptPath.name
         }
     }
 
@@ -113,7 +129,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             // PathCollision has no page_id and PatchRefused additionally has no other_path: if those
             // persisted as NULL, SQLite's UNIQUE index would treat every row as distinct and the
             // schema-enforced dedup would silently pass duplicates through.
-            val collision = IdentityIssue.PathCollision(keptPath = pathA, collidingPath = pathB)
+            val collision = IdentityIssue.PathCollision(keptPath = pathB, loserRawName = "re\u0301union.md")
             val refusal = IdentityIssue.PatchRefused(pathB, "frontmatter keys must be plain unquoted scalars")
             repeat(2) {
                 repo.record(collision)

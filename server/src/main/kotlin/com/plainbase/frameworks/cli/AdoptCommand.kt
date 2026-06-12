@@ -118,7 +118,7 @@ object AdoptCommand {
         is IdentityIssue.RedirectConflict ->
             "redirect_conflict ${issue.path.value}: ${issue.message}"
         is IdentityIssue.PathCollision ->
-            "path_collision: ${issue.keptPath.value} kept; ${issue.collidingPath.value} excluded"
+            "path_collision: ${issue.keptPath.value} kept; on-disk sibling '${issue.loserRawName}' excluded"
         is IdentityIssue.PathSlugCollision ->
             "path_slug_collision: ${issue.keptPath.value} owns the URL; ${issue.loserPath.value} reachable by id only"
     }

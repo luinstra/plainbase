@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -19,6 +20,17 @@ data class PlainbaseConfig(
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
+
+    /**
+     * Startup guard: fails fast with an operator-actionable message when the configured
+     * CONTENT_DIR is missing or not a directory. Without it the first scan dies on a bare
+     * `NoSuchFileException` that names nothing the operator can act on; silently serving an
+     * empty tree would be worse (§4 — the content tree is the product).
+     */
+    fun requireContentDir(): Path {
+        require(Files.isDirectory(contentDir)) { "CONTENT_DIR does not exist or is not a directory: $contentDir" }
+        return contentDir
+    }
 
     companion object {
         const val VERSION: String = "0.1.0"

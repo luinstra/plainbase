@@ -7,6 +7,7 @@ import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.FolderMeta
 import com.plainbase.domain.content.Nfc
+import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
@@ -20,7 +21,6 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
-import java.util.Arrays
 
 /** The on-disk name of a folder's metadata sidecar (§A4). */
 private const val FOLDER_META_NAME = "_folder.yaml"
@@ -176,7 +176,7 @@ class LocalContentStore(
                 resolveCollision(treePath, group, acc.issues)
             }
             if (winner.isDirectory) {
-                acc.folders.add(ContentFolder(path = treePath, meta = readFolderMeta(winner.osPath, treePath)))
+                acc.folders.add(ContentFolder(path = treePath, rawName = winner.rawName, meta = readFolderMeta(winner.osPath, treePath)))
                 acc.dirNames[treePath] = winner.rawName
                 scanDir(winner.osPath, treePath, acc)
             } else {
@@ -213,7 +213,7 @@ class LocalContentStore(
         group: List<Candidate>,
         issues: MutableList<ScanIssue>,
     ): Candidate {
-        val sorted = group.sortedWith(compareBy(RAW_BYTE_ORDER) { it.rawName })
+        val sorted = group.sortedWith(compareBy(RawByteOrder) { it.rawName })
         val winner = sorted.first()
         for (loser in sorted.drop(1)) {
             logger.warn {
@@ -359,16 +359,5 @@ class LocalContentStore(
 
     companion object {
         private val logger = KotlinLogging.logger {}
-
-        /**
-         * Unsigned-byte lexicographic order over a filename's UTF-8 bytes — the deterministic,
-         * platform-stable B3 winner rule (reused for §A4 slug collisions in chunk 5).
-         */
-        val RAW_BYTE_ORDER: Comparator<String> = Comparator { a, b ->
-            Arrays.compareUnsigned(
-                a.toByteArray(StandardCharsets.UTF_8),
-                b.toByteArray(StandardCharsets.UTF_8),
-            )
-        }
     }
 }

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
 import io.kotest.core.spec.style.FunSpec
@@ -140,7 +141,7 @@ class LocalContentStoreTest : FunSpec({
                 // Winner = raw bytes sort first. NFC 'é' = c3 a9; NFD 'e'+ '́' = 65 cc 81.
                 // At index 1: 0xc3 (195) vs 0x65 (101) → NFC name's bytes sort LATER, so the NFD
                 // name ("réunion.md") is the byte-order winner.
-                val expectedWinner = listOf(nfdActual, nfcActual).minWithOrNull(LocalContentStore.RAW_BYTE_ORDER)!!
+                val expectedWinner = listOf(nfdActual, nfcActual).minWithOrNull(RawByteOrder)!!
                 winner.rawName shouldBe expectedWinner
 
                 // P4: the winner's CONTENT is served via raw-name read-back.
@@ -167,7 +168,7 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
-    test("RAW_BYTE_ORDER compares filename bytes as UNSIGNED - the B3/A4 winner rule") {
+    test("RawByteOrder compares filename bytes as UNSIGNED - the B3/A4 winner rule") {
         // Independent of resolveCollision: the collision test above SHARES this comparator to pick
         // its expected winner, so a signed-Byte regression would flip both sides and escape. Pin the
         // unsigned semantics directly with a hardcoded expected sign. NFC 'é' = 0xC3 0xA9; NFD
@@ -175,8 +176,8 @@ class LocalContentStoreTest : FunSpec({
         // → NFD sorts FIRST. A signed comparison would flip it (signed 0xC3 = -61 < 0x65 = 101).
         val nfc = "réunion.md" // precomposed é (0xC3 0xA9)
         val nfd = "re" + '́' + "union.md" // e + U+0301 combining acute (0x65 0xCC 0x81)
-        (LocalContentStore.RAW_BYTE_ORDER.compare(nfd, nfc) < 0) shouldBe true
-        (LocalContentStore.RAW_BYTE_ORDER.compare(nfc, nfd) > 0) shouldBe true
+        (RawByteOrder.compare(nfd, nfc) < 0) shouldBe true
+        (RawByteOrder.compare(nfc, nfd) > 0) shouldBe true
     }
 
     // ---- Criterion 4: _folder.yaml from the fixtures and a runtime slug round-trip ----------
@@ -354,7 +355,7 @@ class LocalContentStoreTest : FunSpec({
             if (onDisk.size == 2) {
                 // Both byte-forms exist (Linux ext4): list() collapses them to the single winner.
                 entries shouldContainExactly listOf(nfcName)
-                val expectedWinner = listOf(nfdActual, nfcActual).minWithOrNull(LocalContentStore.RAW_BYTE_ORDER)!!
+                val expectedWinner = listOf(nfdActual, nfcActual).minWithOrNull(RawByteOrder)!!
                 (store.list(null).single() as com.plainbase.domain.content.ContentFile).rawName shouldBe expectedWinner
             } else {
                 // APFS/HFS+: a single file landed.

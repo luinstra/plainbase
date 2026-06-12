@@ -32,8 +32,12 @@ data class ContentFile(
 
 /**
  * A directory in the content tree. [meta] carries the parsed `_folder.yaml`, if present.
+ *
+ * [rawName] is the final on-disk segment's exact byte-form, like [ContentFile.rawName] — the §A4
+ * slug-collision tie-break compares raw on-disk name bytes, so folders must retain theirs too.
  */
 data class ContentFolder(
     override val path: TreePath,
+    val rawName: String = path.name,
     val meta: FolderMeta? = null,
 ) : ContentEntry

@@ -61,10 +61,15 @@ sealed interface IdentityIssue {
         override val kind: Kind get() = Kind.REDIRECT_CONFLICT
     }
 
-    /** Two distinct content paths collide as the same indexed entry (chunk 5). */
+    /**
+     * Two distinct on-disk names normalize to the same indexed [keptPath] (the B3 NFC collision,
+     * chunk 5). [loserRawName] is the excluded sibling's raw on-disk filename, kept verbatim:
+     * normalizing it (e.g. into a [TreePath]) would collapse it back into [keptPath] — the two
+     * names differ ONLY in raw bytes, and that difference is what makes the issue actionable.
+     */
     data class PathCollision(
         val keptPath: TreePath,
-        val collidingPath: TreePath,
+        val loserRawName: String,
     ) : IdentityIssue {
         override val kind: Kind get() = Kind.PATH_COLLISION
     }

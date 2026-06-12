@@ -48,10 +48,12 @@ import com.vladsch.flexmark.ast.Heading as FlexmarkHeading
  *  - **Links:** an [AttributeProvider] rewrites each link/image `href`/`src` to its resolved
  *    `/docs`/`/assets` URL (§A2); a broken or blocked target is rendered **inert** — the href/src is
  *    dropped and a `data-pb-link-error="{class}"` attribute is added (markup detail, not frozen §A2).
- *  - **M2 bridging:** the authoritative [FrontmatterBlock] detector runs on the raw bytes FIRST;
- *    only the body region is handed to the Markdown parser and only the block region to
- *    [FrontmatterReader]. flexmark's yaml-front-matter extension never sees the raw file head, so it
- *    can never disagree with our grammar (trailing-space opener, `...` closer, BOM — all decided here).
+ *  - **M2 bridging:** the authoritative [FrontmatterBlock] detector runs on the raw bytes FIRST and
+ *    only the body region is handed to the Markdown parser — flexmark never sees the raw file head,
+ *    so it can never disagree with our grammar (trailing-space opener, `...` closer, BOM — all
+ *    decided here). Detection is the renderer's ONLY frontmatter involvement: VALUE extraction
+ *    (the §C2 parse) happens exactly once per page in the `IndexBuilder`'s `FrontmatterParser`
+ *    ([FrontmatterReader]), never re-run here.
  *  - **Sanitization (§C3):** `escapeHtml(true)` — raw HTML renders as visible literal text; every
  *    emitted tag derives from the AST. No sanitizer dependency.
  *
@@ -84,24 +86,19 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
 
     private val parser = Parser.builder(bodyOptions).build()
 
-    // The reader gets its OWN parser, the only one carrying the yaml-front-matter extension, and it is
-    // fed ONLY the detector-identified block region (re-wrapped in delimiters) — never the raw head.
-    private val frontmatterReader = FrontmatterReader()
-
     override fun render(sourcePath: TreePath, source: ByteArray): RenderedPage {
+        // M2: the detector decides the frontmatter boundary and only the body region reaches the
+        // Markdown parser. Where flexmark's lenient front-matter notion would differ, it never gets
+        // the chance — it sees a body that, by construction, has no front-matter head.
         val block = FrontmatterBlock.detect(source)
-        // M2: only the body region reaches the Markdown parser; only the block region reaches the
-        // value reader. Where flexmark's lenient front-matter notion would differ, it never gets the
-        // chance — it sees a body that, by construction, has no front-matter head.
         val bodyMarkdown = String(source, block.bodyStart, source.size - block.bodyStart, Charsets.UTF_8)
-        val frontmatter = frontmatterReader.read(source, block)
 
         val document = parser.parse(bodyMarkdown)
         val pass = ResolutionPass(sourcePath, resolver)
         pass.walk(document)
 
         val html = htmlRenderer(pass).render(document)
-        return RenderedPage(html = html, headings = pass.headings, links = pass.linkOutcomes, frontmatter = frontmatter)
+        return RenderedPage(html = html, headings = pass.headings, links = pass.linkOutcomes)
     }
 
     /** Builds a per-render [HtmlRenderer] bound to [pass]'s pre-computed ids and link outcomes. */

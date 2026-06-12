@@ -2,6 +2,7 @@ package com.plainbase.frameworks.markdown
 
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterBlock
+import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.FrontmatterValue
 import com.vladsch.flexmark.ext.yaml.front.matter.AbstractYamlFrontMatterVisitor
 import com.vladsch.flexmark.ext.yaml.front.matter.YamlFrontMatterExtension
@@ -36,7 +37,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * re-wrapped in `---`/`---` delimiters before parsing — the bridging guarantee holds because the
  * region itself came from our grammar, not flexmark's.
  */
-class FrontmatterReader {
+class FrontmatterReader : FrontmatterParser {
 
     // The ONLY parser in the tree carrying the yaml-front-matter extension — and it only ever sees the
     // detector's block region, re-wrapped in delimiters, never the raw file head (M2).
@@ -44,6 +45,9 @@ class FrontmatterReader {
         Parser.builder(
             MutableDataSet().set(Parser.EXTENSIONS, listOf(YamlFrontMatterExtension.create())).toImmutable(),
         ).build()
+
+    /** The [FrontmatterParser] port: detect (the single M2 grammar) then [read] — body untouched. */
+    override fun parse(source: ByteArray): Frontmatter = read(source, FrontmatterBlock.detect(source))
 
     /** Extracts [Frontmatter] from the block [detection] found in [source], or [Frontmatter.EMPTY] when absent. */
     fun read(source: ByteArray, detection: FrontmatterBlock.Detection): Frontmatter {

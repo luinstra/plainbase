@@ -9,3 +9,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | # | Decision | Status |
 |---|----------|--------|
 | [0001](0001-frontmatter-patcher-refuses-rather-than-parses-quoted-values.md) | The frontmatter patcher refuses ambiguous YAML rather than parsing it | Accepted |
+| [0002](0002-slug-collisions-are-same-role-only.md) | Same-parent slug collisions are same-role only (page-vs-page, folder-vs-folder) | Accepted |
