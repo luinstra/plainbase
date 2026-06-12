@@ -143,18 +143,3 @@ class IndexBuilderConcurrencyTest : FunSpec({
         }
     }
 })
-
-/** A small but realistic page: frontmatter, two headings, one internal link to a sibling. */
-private fun pageContent(n: Int): String = buildString {
-    appendLine("---")
-    appendLine("title: Page %03d".format(n))
-    appendLine("---")
-    appendLine()
-    appendLine("# Page %03d".format(n))
-    appendLine()
-    appendLine("Body text for page $n with a [sibling link](page-%03d.md).".format((n / 10) * 10))
-    appendLine()
-    appendLine("## Details")
-    appendLine()
-    appendLine("More text.")
-}

@@ -34,6 +34,9 @@ val indexModule = module {
             idMap = get(),
             aliasRegistry = get(),
             citations = get(),
+            // Every PublicationListener definition across the loaded modules (searchModule's sync
+            // now, S5's checkpoint replace later); empty when no listener module is loaded.
+            listeners = getAll(),
         )
     }
 }

@@ -69,3 +69,22 @@ fun writePage(root: Path, relativePath: String, content: String) {
     Files.createDirectories(target.parent)
     Files.writeString(target, content)
 }
+
+/**
+ * The Phase-1 generated-corpus page (the 1,000-page scale tests): small but realistic —
+ * frontmatter, two headings, one internal link to a sibling. Shared by the chunk-5 index-pass
+ * scale test and the S2 search-corpus perf test (which reuses this generator by plan).
+ */
+fun pageContent(n: Int): String = buildString {
+    appendLine("---")
+    appendLine("title: Page %03d".format(n))
+    appendLine("---")
+    appendLine()
+    appendLine("# Page %03d".format(n))
+    appendLine()
+    appendLine("Body text for page $n with a [sibling link](page-%03d.md).".format((n / 10) * 10))
+    appendLine()
+    appendLine("## Details")
+    appendLine()
+    appendLine("More text.")
+}

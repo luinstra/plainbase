@@ -1,6 +1,13 @@
 package com.plainbase.frameworks.spike
 
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.search.PageDocuments
+import com.plainbase.domain.search.SearchQuery
+import com.plainbase.domain.search.SectionDocument
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.search.Fts5SearchProvider
+import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.Argon2PasswordHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.vladsch.flexmark.ext.anchorlink.AnchorLinkExtension
@@ -43,7 +50,6 @@ import java.io.ByteArrayOutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.file.Files
-import java.sql.Connection
 import java.sql.DriverManager
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
@@ -58,10 +64,11 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerCon
  *  1. Ktor CIO HTTP round-trip (server + client) with kotlinx.serialization
  *  2. Koin constructor-DSL wiring resolution
  *  3. SQLDelight query against SQLite
- *  4. SQLite FTS5 against a temp-file DB over raw JDBC (the search.db access path,
- *     ADR-0004): WAL + busy_timeout, bm25 column weights flipping the ordering,
- *     snippet()/highlight() sentinel round-trips, prefix MATCH, and the trigram
- *     tokenizer leg (CJK rescue) with a recorded PASS/FAIL verdict
+ *  4. SQLite FTS5 through the PRODUCTION SearchDb + Fts5SearchProvider against a
+ *     temp-file DB (the search.db access path, ADR-0004): WAL, generation rebuild,
+ *     bm25 ordering, MATCH-builder prefix queries, snippet sentinels -> A3 offsets,
+ *     a direct highlight() round-trip (the S0-proven aux surface stays in the gate),
+ *     per-page replace + indexedState, and the trigram CJK-rescue fallback
  *  5. JGit init/commit/log/diff in a temp dir
  *  6. flexmark Markdown render (frontmatter + GFM + anchors)
  *  7. argon2 hash + verify (Bouncy Castle, pure Java)
@@ -177,120 +184,120 @@ object NativeSpike {
         return "generated typesafe query + upsert against sqlite-jdbc"
     }
 
-    // ---- 4. FTS5 auxiliary surface over raw JDBC (search.db access path, ADR-0004) --------
-
-    private fun fts5Match(): String {
-        val dbFile = Files.createTempFile("plainbase-spike-search", ".db")
-        try {
-            return DriverManager.getConnection("jdbc:sqlite:$dbFile").use { connection ->
-                val surface = fts5AuxiliarySurface(connection)
-                val trigram = trigramLegVerdict(connection)
-                "$surface; trigram=$trigram"
-            }
-        } finally {
-            listOf("-wal", "-shm").forEach { Files.deleteIfExists(dbFile.resolveSibling("${dbFile.fileName}$it")) }
-            Files.deleteIfExists(dbFile)
-        }
-    }
-
-    private const val SPIKE_BODY = "deploy everywhere: deploy with kubernetes, deploy with docker, deploy on metal"
-
-    private fun fts5AuxiliarySurface(connection: Connection): String {
-        val journalMode = connection.queryString("PRAGMA journal_mode=WAL")
-        require(journalMode.equals("wal", ignoreCase = true)) { "journal_mode=WAL not honored, got $journalMode" }
-        connection.execute("PRAGMA busy_timeout=5000")
-        val busyTimeout = connection.queryString("PRAGMA busy_timeout")
-        require(busyTimeout == "5000") { "busy_timeout not set, got $busyTimeout" }
-
-        connection.execute("CREATE VIRTUAL TABLE section_fts USING fts5(title, body, tokenize='unicode61 remove_diacritics 1')")
-        connection.insertInto("section_fts", "Deploy Guide" to "Introduction to the knowledge base", "Welcome" to SPIKE_BODY)
-
-        // bm25 column weights must actually steer the ordering: weight the title and the title-hit
-        // document wins; weight the body and the repeated-body-hit document overtakes it.
-        fun topTitle(weights: String) =
-            connection.queryString(
-                "SELECT title FROM section_fts WHERE section_fts MATCH 'deploy' ORDER BY bm25(section_fts, $weights) LIMIT 1",
-            )
-        val titleWeighted = topTitle("10.0, 1.0")
-        val bodyWeighted = topTitle("1.0, 10.0")
-        require(titleWeighted == "Deploy Guide") { "title-weighted bm25 top hit was $titleWeighted" }
-        require(bodyWeighted == "Welcome") { "body-weighted bm25 top hit was $bodyWeighted" }
-
-        val snippet = connection.queryString(
-            "SELECT snippet(section_fts, -1, char(1), char(2), '…', 8) FROM section_fts WHERE section_fts MATCH 'kubernetes'",
-        )
-        val (snippetText, snippetHits) = parseSentinels(snippet)
-        require(snippetHits == listOf("kubernetes")) { "snippet sentinels marked $snippetHits" }
-        require("kubernetes" in snippetText) { "snippet lost its match: $snippetText" }
-
-        val highlighted = connection.queryString(
-            "SELECT highlight(section_fts, 1, char(1), char(2)) FROM section_fts WHERE section_fts MATCH 'kubernetes'",
-        )
-        val (highlightText, highlightHits) = parseSentinels(highlighted)
-        require(highlightText == SPIKE_BODY) { "highlight round-trip mangled the body: $highlightText" }
-        require(highlightHits == listOf("kubernetes")) { "highlight sentinels marked $highlightHits" }
-
-        val prefixTitles = connection.queryStrings("SELECT title FROM section_fts WHERE section_fts MATCH '\"deplo\"*'").toSet()
-        require(prefixTitles == setOf("Deploy Guide", "Welcome")) { "prefix query matched $prefixTitles" }
-
-        return "temp-file DB via DriverManager: WAL + busy_timeout, bm25 weights flip ordering, snippet/highlight round-trip, prefix match"
-    }
+    // ---- 4. FTS5 via the production search stack (search.db access path, ADR-0004) -------
 
     /**
-     * Trigram tokenizer leg (Phase-2 S0, debate reinvestment): substring MATCH semantics plus the
-     * exact CJK rescue case unicode61 cannot satisfy. A FAIL here is recorded, never fatal —
-     * fallback ladder (c): ship without the rescue, the §5.6 CJK limitation note stands.
+     * Chunk-S2 retarget: the check exercises the PRODUCTION `SearchDb` + `Fts5SearchProvider`
+     * (raw JDBC over a temp-file DB) instead of inline SQL — proving inside the native image the
+     * exact classes the server runs: WAL open, generation rebuild, bm25 weights ranking a title
+     * hit over repeated body hits, the MATCH builder's quoting/prefix-star, snippet sentinels
+     * converted to A3 offsets, the `highlight()` round-trip (S0 surface, kept proven), per-page
+     * replace + indexedState, and the trigram CJK-rescue fallback (S0 verdict PASS, now
+     * production code). Check name kept (`sqlite-fts5-match`).
      */
-    private fun trigramLegVerdict(connection: Connection): String = try {
-        connection.execute("CREATE VIRTUAL TABLE trigram_fts USING fts5(body, tokenize='trigram')")
-        connection.insertInto("trigram_fts", "日本語ガイド", "kubernetes deployment notes")
-        val cjk = connection.queryStrings("SELECT body FROM trigram_fts WHERE trigram_fts MATCH '\"ガイド\"'")
-        require(cjk == listOf("日本語ガイド")) { "CJK rescue query matched $cjk" }
-        val substring = connection.queryStrings("SELECT body FROM trigram_fts WHERE trigram_fts MATCH '\"bernet\"'")
-        require(substring == listOf("kubernetes deployment notes")) { "substring query matched $substring" }
-        "PASS (ガイド found in 日本語ガイド; bernet found in kubernetes)"
-    } catch (t: Throwable) {
-        "FAIL (${t::class.simpleName}: ${t.message})"
-    }
+    private fun fts5Match(): String {
+        val dir = Files.createTempDirectory("plainbase-spike-search")
+        val dbPath = dir.resolve("search.db")
+        try {
+            SearchDb(dbPath).use { db ->
+                val provider = Fts5SearchProvider(db)
+                provider.rebuild(sequenceOf(spikeDeployPage(), spikeWelcomePage(), spikeCjkPage()))
 
-    private val sentinelSpan = Regex("\u0001([^\u0001\u0002]*)\u0002")
+                // bm25 column weights steer ordering: the title-hit page outranks the page whose
+                // BODY repeats the term; scores are finite (negated bm25), descending.
+                val deploy = provider.search(SearchQuery("deploy", limit = 10, offset = 0))
+                require(deploy.total == 2L) { "expected 2 'deploy' hits, got ${deploy.total}" }
+                require(deploy.hits.first().pageId.value == SPIKE_DEPLOY_ID) { "title weight did not win: ${deploy.hits}" }
+                require(deploy.hits.all { it.score.isFinite() }) { "non-finite score in ${deploy.hits}" }
+                require(deploy.hits.zipWithNext().all { (a, b) -> a.score >= b.score }) { "scores not descending: ${deploy.hits}" }
 
-    /** Strips char(1)/char(2) sentinel pairs out of [marked], returning the clean text and the spans they delimited. */
-    private fun parseSentinels(marked: String): Pair<String, List<String>> {
-        val highlights = sentinelSpan.findAll(marked).map { it.groupValues[1] }.toList()
-        val text = sentinelSpan.replace(marked) { it.groupValues[1] }
-        require('\u0001' !in text && '\u0002' !in text) { "unbalanced sentinels in: $marked" }
-        return text to highlights
-    }
+                // Prefix matching: the MATCH builder stars the final token ("deplo"*).
+                require(provider.search(SearchQuery("deplo", 10, 0)).total == 2L) { "prefix query missed" }
 
-    private fun Connection.execute(sql: String) {
-        createStatement().use { it.execute(sql) }
-    }
+                // Snippet sentinels -> A3 offsets: markers never escape, ranges extract the match.
+                val kube = provider.search(SearchQuery("kubernetes", 10, 0)).hits.single()
+                require('\u0001' !in kube.snippet && '\u0002' !in kube.snippet) { "sentinels leaked: ${kube.snippet}" }
+                require(kube.highlights.isNotEmpty()) { "no highlight offsets for the kubernetes hit" }
+                val marked = kube.highlights.map { kube.snippet.substring(it.start, it.end) }
+                require(marked.all { it.equals("kubernetes", ignoreCase = true) }) { "offsets marked $marked" }
 
-    private fun Connection.queryString(sql: String): String = queryStrings(sql).single()
+                // Trigram CJK rescue: unicode61 cannot match ガイド inside 日本語ガイド; the fallback can.
+                val cjk = provider.search(SearchQuery("ガイド", 10, 0))
+                require(cjk.hits.singleOrNull()?.pageId?.value == SPIKE_CJK_ID) { "CJK rescue missed: ${cjk.hits}" }
 
-    private fun Connection.queryStrings(sql: String): List<String> = createStatement().use { statement ->
-        statement.executeQuery(sql).use { rows ->
-            buildList { while (rows.next()) add(rows.getString(1)) }
-        }
-    }
+                // highlight() aux-function round-trip (the S0-proven surface stays in the gate even
+                // though the provider serves snippets via snippet() — plan §B5 names all three):
+                // a second WAL connection reads the same file the provider just populated.
+                val highlighted = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { probe ->
+                    probe.createStatement().use { statement ->
+                        val sql = "SELECT highlight(section_fts, 2, char(1), char(2)) FROM section_fts " +
+                            "WHERE section_fts MATCH '\"kubernetes\"'"
+                        statement.executeQuery(sql).use { rows ->
+                            rows.next()
+                            rows.getString(1)
+                        }
+                    }
+                }
+                require("\u0001kubernetes\u0002" in highlighted) { "highlight() marked $highlighted" }
+                require(highlighted.replace("\u0001", "").replace("\u0002", "") == spikeWelcomePage().sections.single().body) {
+                    "highlight() round-trip mangled the body: $highlighted"
+                }
 
-    private fun Connection.insertInto(table: String, vararg rows: Pair<String, String>) =
-        prepareStatement("INSERT INTO $table(title, body) VALUES (?, ?)").use { insert ->
-            rows.forEach { (title, body) ->
-                insert.setString(1, title)
-                insert.setString(2, body)
-                insert.executeUpdate()
+                // Per-page replace + indexedState (the engine-truth diff base).
+                provider.index(listOf(spikeWelcomePage(contentHash = "sha256:replaced", body = "deploy on metal only")))
+                require(provider.search(SearchQuery("kubernetes", 10, 0)).total == 0L) { "replaced section still matches" }
+                val state = provider.indexedState().mapKeys { it.key.value }
+                require(state[SPIKE_WELCOME_ID]?.contentHash == "sha256:replaced") { "indexedState stale: $state" }
             }
-        }
-
-    private fun Connection.insertInto(table: String, vararg bodies: String) =
-        prepareStatement("INSERT INTO $table(body) VALUES (?)").use { insert ->
-            bodies.forEach {
-                insert.setString(1, it)
-                insert.executeUpdate()
+            val journalMode = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { probe ->
+                probe.createStatement().use { statement ->
+                    statement.executeQuery("PRAGMA journal_mode").use { rows ->
+                        rows.next()
+                        rows.getString(1)
+                    }
+                }
             }
+            require(journalMode.equals("wal", ignoreCase = true)) { "journal_mode=WAL not persisted, got $journalMode" }
+            return "production SearchDb + Fts5SearchProvider on a temp-file DB: WAL, bm25 ordering, MATCH builder prefix, " +
+                "snippet->A3 offsets, highlight() round-trip, per-page replace, indexedState; " +
+                "trigram fallback=PASS (ガイド found in 日本語ガイド)"
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
+    }
+
+    private const val SPIKE_DEPLOY_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
+    private const val SPIKE_WELCOME_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
+    private const val SPIKE_CJK_ID = "0197c2d1-6f3b-7c45-8d2e-3a7b9f5c8e02"
+
+    private fun spikeDeployPage() =
+        spikePage(SPIKE_DEPLOY_ID, "guides/deploy-guide.md", "Deploy Guide", "sha256:deploy", "Introduction to the knowledge base")
+
+    private fun spikeWelcomePage(
+        contentHash: String = "sha256:welcome",
+        body: String = "deploy everywhere: deploy with kubernetes, deploy with docker, deploy on metal",
+    ) = spikePage(SPIKE_WELCOME_ID, "index.md", "Welcome", contentHash, body)
+
+    private fun spikeCjkPage() = spikePage(SPIKE_CJK_ID, "notes/cjk.md", "日本語ガイド", "sha256:cjk", "これは 日本語ガイド のサンプルページです")
+
+    private fun spikePage(id: String, path: String, title: String, contentHash: String, body: String): PageDocuments {
+        val pageId = PageId.require(id)
+        val treePath = TreePath.require(path)
+        val section = SectionDocument(
+            pageId = pageId,
+            headingId = null,
+            title = title,
+            heading = null,
+            headingPath = emptyList(),
+            body = body,
+            tags = emptyList(),
+            owner = null,
+            aliases = emptyList(),
+            path = treePath,
+            status = "active",
+        )
+        return PageDocuments(pageId = pageId, contentHash = contentHash, path = treePath, sections = listOf(section))
+    }
 
     // ---- 5. JGit -------------------------------------------------------------------------
 

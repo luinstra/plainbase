@@ -8,6 +8,7 @@ import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.repositoryModule
 import com.plainbase.frameworks.koin.restModule
+import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.spike.NativeSpike
@@ -33,7 +34,7 @@ fun main(args: Array<String>) {
 
 private fun serve() {
     val koin = startKoin {
-        modules(configModule, contentModule, repositoryModule, securityModule, indexModule, restModule)
+        modules(configModule, contentModule, repositoryModule, securityModule, indexModule, searchModule, restModule)
     }.koin
 
     val config = koin.get<PlainbaseConfig>()

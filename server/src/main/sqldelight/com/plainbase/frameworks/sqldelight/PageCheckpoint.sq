@@ -1,0 +1,27 @@
+-- §B3 down-time move-aliasing checkpoint: the previously PUBLISHED snapshot's id -> canonical
+-- URL path, persisted in the APP database — it feeds the alias registry (app state by Phase-1
+-- ruling), never disposable search.db. url_path is NULL for slug-collision losers.
+--
+-- Advisory, never load-bearing: a missing/stale/corrupt checkpoint degrades to exactly the
+-- pre-Phase-2 behavior (missed alias, recorded conflict at worst) — index correctness, URLs,
+-- and permalinks never depend on it. Created here in S2 (which owns the single Phase-2 app-DB
+-- migration, 2.sqm); written and consumed by S5's checkpoint listener + IndexBuilder.
+
+import com.plainbase.domain.content.TreePath;
+import com.plainbase.domain.page.PageId;
+
+CREATE TABLE page_checkpoint (
+  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  url_path TEXT AS TreePath
+);
+
+selectAll:
+SELECT *
+FROM page_checkpoint;
+
+deleteAll:
+DELETE FROM page_checkpoint;
+
+insertRow:
+INSERT INTO page_checkpoint(id, url_path)
+VALUES (:id, :urlPath);

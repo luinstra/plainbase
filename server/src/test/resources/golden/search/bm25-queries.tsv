@@ -1,0 +1,30 @@
+# BM25 weight-tuning golden query set (chunk S2) — TIER 2: PINNED-BUT-REVIEWABLE, explicitly
+# NOT FROZEN (§A6). These pins hold for the embedded engine (FTS5, unicode61 remove_diacritics 1)
+# with the Fts5SearchProvider column weights (title 10, heading 5, body 1, tags 2, aliases 2,
+# owner 2) on the pinned sqlite-jdbc version. A deliberate weight change or SQLite bump may move
+# them — that is a REVIEWABLE regeneration event (re-run the queries, eyeball each top-1 for
+# sensibleness, transcribe), never a forever break. NO CJK-sensitive terms (§A6 tokenizer
+# guidance — CJK behavior is asserted in the per-engine-tagged trigram test instead).
+#
+# What the set proves (S2 acceptance): a TITLE match beats a body mention (handbook, welcome,
+# monitoring); a HEADING match beats body text (rollback, prerequisites, postmortems, ingress);
+# TAG/ALIAS hits rank sensibly (quickstart, oncall, runbook); multi-token + prefix queries land
+# (deploy guide, getting started).
+#
+# Columns (tab-separated): query  expected-top1-path  expected-top1-heading_id ("-" = page-level)
+#
+kubernetes	infra/kubernetes.md	-
+deploy guide	guides/deploy-guide.md	-
+rollback	guides/deploy-guide.md	rollback
+prerequisites	guides/deploy-guide.md	prerequisites
+handbook	team/handbook.md	team-handbook
+monitoring	infra/monitoring.md	-
+terraform	infra/terraform.md	-
+quickstart	guides/getting-started.md	-
+oncall	infra/incident-runbook.md	-
+runbook	infra/incident-runbook.md	incident-runbook
+postmortems	infra/incident-runbook.md	postmortems
+ingress	infra/networking.md	ingress
+onboarding	team/onboarding.md	-
+getting started	guides/getting-started.md	-
+welcome	index.md	-

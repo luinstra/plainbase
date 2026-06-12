@@ -22,6 +22,13 @@ data class PlainbaseConfig(
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
 
     /**
+     * Path of the derived-state search database (§B5/ADR-0004): rebuildable from the published
+     * snapshot at any time, deletable with zero data loss — always a separate file from
+     * [appDatabasePath] (§4 hard rule).
+     */
+    val searchDatabasePath: Path get() = dataDir.resolve("search.db")
+
+    /**
      * Startup guard: fails fast with an operator-actionable message when the configured
      * CONTENT_DIR is missing or not a directory. Without it the first scan dies on a bare
      * `NoSuchFileException` that names nothing the operator can act on; silently serving an

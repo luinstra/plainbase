@@ -30,6 +30,7 @@ object DatabaseFactory {
         // are not valid TreePath/PageId values, so the repository maps them (see IssueRow).
         identity_issueAdapter = Identity_issue.Adapter(pathAdapter = TreePathColumnAdapter),
         url_aliasAdapter = Url_alias.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
+        page_checkpointAdapter = Page_checkpoint.Adapter(idAdapter = PageIdColumnAdapter, url_pathAdapter = TreePathColumnAdapter),
     )
 
     /** In-memory database for tests and the spike. */

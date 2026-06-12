@@ -1,0 +1,11 @@
+-- v2 -> v3: Phase 2, chunk S2 — the complete and ONLY Phase-2 app-DB migration.
+--
+-- The Phase-0 FTS5 spike table retires: production search lives in DATA_DIR/search.db over raw
+-- JDBC (ADR-0004), never in the app database. page_checkpoint is the §B3 down-time move-aliasing
+-- checkpoint (same DDL as PageCheckpoint.sq minus the Kotlin `AS` type annotations).
+DROP TABLE page_search;
+
+CREATE TABLE page_checkpoint (
+  id BLOB NOT NULL PRIMARY KEY,
+  url_path TEXT
+);
