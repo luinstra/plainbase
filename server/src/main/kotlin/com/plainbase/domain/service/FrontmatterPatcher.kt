@@ -115,6 +115,26 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
     }
 
     /**
+     * Reads the raw value of the column-0 `id` key in [original]'s frontmatter block, or null when
+     * there is no block, the block is not strict UTF-8, or no such key exists. This is the patcher's
+     * own case-5 line grammar — the single id-detection grammar in the tree — exposed for adoption
+     * (chunk 4b), which feeds the value through the §A4 shape gate itself (4a `resolve`).
+     *
+     * The colon must terminate like a mapping colon: an `id:value` line (no space after the colon)
+     * is a plain scalar a YAML parser cannot read an id from, so it is never honored as identity —
+     * the same reasoning that makes the P2 evaluation order refuse it rather than report
+     * [PatchResult.AlreadyPresent].
+     */
+    fun readIdValue(original: ByteArray): String? {
+        val detection = FrontmatterBlock.detect(original) as? FrontmatterBlock.Detection.Present ?: return null
+        val innerText = strictUtf8(original.copyOfRange(detection.innerStart, detection.innerEnd)) ?: return null
+        return innerText.lineSequence()
+            .firstOrNull { ID_VALUE_LINE.matches(it.trimEnd('\r')) }
+            ?.substringAfter(':')
+            ?.trim()
+    }
+
+    /**
      * Case 11 (§A3) — re-run the shared detector + id extraction over the OUTPUT and require: (1) a
      * valid block is still found; (2) the extracted id equals the inserted UUID text exactly; (3) the
      * body after the block is byte-identical to the input body. The backstop, not the fix.
@@ -398,6 +418,9 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
 
         /** Case-5/post-check column-0 `id` key: `^id[ \t]*:` — the `id` key terminated by an optional run then a colon. */
         val ID_KEY_LINE = Regex("^id[ \\t]*:.*")
+
+        /** [readIdValue]'s stricter form: the colon must be a MAPPING colon (whitespace/EOL after), so `id:value` is never identity. */
+        val ID_VALUE_LINE = Regex("^id[ \\t]*:([ \\t].*)?")
 
         /** The rule-naming case-9 refusal message (the §A3 frozen requirement: operators must learn what to change). */
         const val NOT_A_MAPPING_MESSAGE =

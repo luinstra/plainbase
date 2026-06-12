@@ -1,12 +1,17 @@
 package com.plainbase.frameworks.koin
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.UrlAliasRepository
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
-import com.plainbase.frameworks.sqldelight.PlainbaseDb
+import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import org.koin.dsl.module
 
 val repositoryModule = module {
     single<SqlDriver> { DatabaseFactory.createDriver(get<PlainbaseConfig>().appDatabasePath) }
     single { DatabaseFactory.createDatabase(get()) }
+    single<IdMapRepository> { SqlDelightIdMapRepository(get()) }
+    single<UrlAliasRepository> { SqlDelightUrlAliasRepository(get()) }
 }

@@ -3,7 +3,6 @@ package com.plainbase.frameworks.spike
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.security.Argon2PasswordHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
-import com.plainbase.frameworks.sqldelight.PlainbaseDb
 import com.vladsch.flexmark.ext.anchorlink.AnchorLinkExtension
 import com.vladsch.flexmark.ext.gfm.strikethrough.StrikethroughExtension
 import com.vladsch.flexmark.ext.tables.TablesExtension
@@ -164,7 +163,7 @@ object NativeSpike {
     private fun sqlDelightQuery(): String {
         val driver = DatabaseFactory.createInMemoryDriver()
         driver.use {
-            val db = PlainbaseDb(driver)
+            val db = DatabaseFactory.createDatabase(driver)
             db.appMetaQueries.upsert("spike.key", "spike-value")
             db.appMetaQueries.upsert("spike.key", "spike-value-2") // exercises ON CONFLICT
             val value = db.appMetaQueries.selectByKey("spike.key").executeAsOne()
@@ -178,7 +177,7 @@ object NativeSpike {
     private fun fts5Match(): String {
         val driver = DatabaseFactory.createInMemoryDriver()
         driver.use {
-            val db = PlainbaseDb(driver)
+            val db = DatabaseFactory.createDatabase(driver)
             db.pageSearchQueries.insertPage("Deploy Guide", "How to deploy plainbase with kubernetes and docker")
             db.pageSearchQueries.insertPage("Welcome", "Introduction to the knowledge base")
             val hits = db.pageSearchQueries.search("kubernetes").executeAsList().map { it.title }

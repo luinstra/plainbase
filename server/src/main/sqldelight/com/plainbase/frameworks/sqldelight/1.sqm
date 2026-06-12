@@ -1,0 +1,21 @@
+-- v1 -> v2: chunk 4b identity persistence (id_map, identity_issue, url_alias).
+-- Same DDL as IdMap.sq minus the Kotlin `AS` type annotations (migrations are plain SQL).
+CREATE TABLE id_map (
+  path TEXT NOT NULL PRIMARY KEY,
+  id BLOB NOT NULL UNIQUE,
+  materialized INTEGER NOT NULL
+);
+
+CREATE TABLE identity_issue (
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  other_path TEXT NOT NULL,
+  page_id BLOB NOT NULL,
+  message TEXT,
+  UNIQUE(kind, path, other_path, page_id)
+);
+
+CREATE TABLE url_alias (
+  path TEXT NOT NULL PRIMARY KEY,
+  id BLOB NOT NULL
+);

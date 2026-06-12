@@ -1,0 +1,107 @@
+-- Identity persistence (chunk 4b): id_map (path -> id binding + materialization state),
+-- identity_issue (the admin issues list), url_alias (old canonical URL path -> page id).
+--
+-- ID storage policy (master plan decision log #6): binary at rest, text at the boundary.
+-- Every id column is BLOB NOT NULL holding the UUID's 16 raw bytes, msb||lsb big-endian;
+-- the conversion lives in exactly one place — PageIdColumnAdapter. Operator note: ad-hoc
+-- inspection uses hex(id) / x'…' literals in the sqlite3 CLI (known, accepted cost).
+
+import com.plainbase.domain.content.TreePath;
+import com.plainbase.domain.page.PageId;
+import kotlin.Boolean;
+
+-- One binding per path AND per id: the §5.2 duplicate policy guarantees an id is never
+-- claimed by two live paths, and bind() supersedes a stale row when an id moves with its
+-- file, so UNIQUE(id) is an invariant the schema can enforce.
+CREATE TABLE id_map (
+  path TEXT AS TreePath NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL UNIQUE,
+  materialized INTEGER AS Boolean NOT NULL
+);
+
+-- A flattened IdentityIssue: kind discriminates the sealed variant; the remaining columns carry
+-- whichever context that variant defines (the per-kind mapping is documented in ONE place —
+-- SqlDelightIdMapRepository.IssueRow). The natural key is (kind, path, other_path, page_id) and
+-- the UNIQUE constraint makes record() idempotence schema-enforced, not application-level.
+-- Variants without a second path / an id store sentinels ('' / zero-length BLOB) instead of NULL:
+-- SQLite treats NULLs as DISTINCT inside a UNIQUE index, which would silently defeat the dedup.
+CREATE TABLE identity_issue (
+  kind TEXT NOT NULL,
+  path TEXT AS TreePath NOT NULL,
+  other_path TEXT NOT NULL,
+  page_id BLOB NOT NULL,
+  message TEXT,
+  UNIQUE(kind, path, other_path, page_id)
+);
+
+-- An old canonical URL path -> the page's id (§A4). The value is always the PAGE id, never
+-- another alias, so chains collapse by construction (one hop). Rows are written by chunk 5's
+-- IndexBuilder (move detection) and redirect_from registration. Documented derived-state
+-- exception: NOT rebuildable from the tree alone — losing DATA_DIR loses old-URL continuity.
+CREATE TABLE url_alias (
+  path TEXT AS TreePath NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL
+);
+
+selectBinding:
+SELECT *
+FROM id_map
+WHERE path = :path;
+
+selectPathById:
+SELECT path
+FROM id_map
+WHERE id = :id;
+
+selectAllBindings:
+SELECT *
+FROM id_map;
+
+-- bind() = unbindStale + upsertBinding in one repository transaction: an id moving to a new
+-- live path (a moved file) supersedes its stale row, keeping the UNIQUE(id) invariant. The
+-- domain duplicate policy guarantees a LIVE owner is never superseded this way.
+unbindStale:
+DELETE FROM id_map
+WHERE id = :id AND path != :path;
+
+upsertBinding:
+INSERT INTO id_map(path, id, materialized)
+VALUES (:path, :id, :materialized)
+ON CONFLICT(path) DO UPDATE SET id = excluded.id, materialized = excluded.materialized;
+
+markMaterialized:
+UPDATE id_map
+SET materialized = :materialized
+WHERE path = :path;
+
+-- Upsert against the UNIQUE natural key (no read-then-insert window): re-recording an issue
+-- never grows the list, but DOES refresh message — a refusal whose reason changed between
+-- adopt runs must surface the current guidance, not the first one recorded. The WHERE guard
+-- keeps the byte-identical re-record a true no-op (no row rewrite).
+insertIssue:
+INSERT INTO identity_issue(kind, path, other_path, page_id, message)
+VALUES (:kind, :path, :otherPath, :pageId, :message)
+ON CONFLICT(kind, path, other_path, page_id)
+DO UPDATE SET message = excluded.message WHERE message IS NOT excluded.message;
+
+selectAllIssues:
+SELECT *
+FROM identity_issue;
+
+upsertAlias:
+INSERT INTO url_alias(path, id)
+VALUES (:path, :id)
+ON CONFLICT(path) DO UPDATE SET id = excluded.id;
+
+selectAliasId:
+SELECT id
+FROM url_alias
+WHERE path = :path;
+
+selectAllAliases:
+SELECT *
+FROM url_alias;
+
+deleteAlias:
+DELETE FROM url_alias
+WHERE path = :path;

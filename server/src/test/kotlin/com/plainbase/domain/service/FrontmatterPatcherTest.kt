@@ -95,6 +95,28 @@ class FrontmatterPatcherTest : FunSpec({
             patcher.postCheckHolds(input, output, id) shouldBe true
         }
     }
+
+    // ---- readIdValue — the case-5 grammar exposed for adoption (chunk 4b) ------------------------
+
+    test("readIdValue reads the column-0 id key's raw value") {
+        patcher.readIdValue("---\nid: ${id.value}\ntitle: x\n---\nbody\n".toByteArray()) shouldBe id.value
+        // Raw means raw: validity is the 4a resolver's concern, not the reader's.
+        patcher.readIdValue("---\nid: not-a-uuid\n---\n".toByteArray()) shouldBe "not-a-uuid"
+        patcher.readIdValue("---\r\nid: ${id.value}\r\n---\r\n".toByteArray()) shouldBe id.value
+    }
+
+    test("readIdValue never honors id:value (a plain scalar no YAML parser reads an id from)") {
+        patcher.readIdValue("---\nid:${id.value}\n---\nbody\n".toByteArray()) shouldBe null
+    }
+
+    test("readIdValue is null without a block, without an id key, or on a non-UTF-8 block") {
+        patcher.readIdValue("just a body\n".toByteArray()) shouldBe null
+        patcher.readIdValue("---\ntitle: x\n---\nbody\n".toByteArray()) shouldBe null
+        patcher.readIdValue("---\nno closer".toByteArray()) shouldBe null
+        val invalidUtf8 = "---\n".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte(), '\n'.code.toByte()) +
+            "---\n".toByteArray()
+        patcher.readIdValue(invalidUtf8) shouldBe null
+    }
 })
 
 /** The length of the longest common byte prefix of [a] and [b] — the insertion offset `k`. */
