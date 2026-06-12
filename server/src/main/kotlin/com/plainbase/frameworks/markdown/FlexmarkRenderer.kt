@@ -9,6 +9,7 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.HeadingIdAllocator
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.service.LinkResolver
 import com.vladsch.flexmark.ast.AutoLink
 import com.vladsch.flexmark.ast.Image
@@ -99,7 +100,10 @@ class FlexmarkRenderer(private val index: PageIndexView) : MarkdownRenderer {
         pass.walk(document)
 
         val html = htmlRenderer(pass).render(document)
-        return RenderedPage(html = html, headings = pass.headings, links = pass.links)
+        // §B4 sections ride the SAME parse: the collector reuses the pass's allocated heading ids,
+        // so a section's headingId is byte-identical to the anchor the HTML carries.
+        val sections = SectionCollector(pass).collect(document)
+        return RenderedPage(html = html, headings = pass.headings, links = pass.links, sections = sections)
     }
 
     /** Builds a per-render [HtmlRenderer] bound to [pass]'s pre-computed ids and link outcomes. */
@@ -192,6 +196,52 @@ private class ResolutionPass(private val sourcePath: TreePath, private val resol
     fun idOf(node: Node): String? = (node as? FlexmarkHeading)?.let(idByHeading::get)
 
     fun outcomeOf(node: Node): LinkOutcome? = outcomeByNode[node]
+}
+
+/**
+ * The §B4 section walk, run over the SAME parsed document as the render (no second parser): plain
+ * text accumulates into the current section and a NEW section opens at every [FlexmarkHeading] —
+ * any level, any nesting — so every body character lands in exactly one section. Heading text is
+ * deliberately NOT collected (it is the section document's own `heading` field, §B4 engine note).
+ *
+ * Containers are split only when they must be: a block with no heading anywhere beneath it is
+ * collected whole (one [TextCollectingVisitor] pass, the same §A1 text semantics headings use),
+ * while a block that DOES contain one — a heading inside a blockquote or list item — is descended
+ * into so the boundary still falls exactly at the heading. Chunks are end-trimmed (the collected
+ * text carries the block's trailing source EOL) and join with `\n`; a chunk with no text at all
+ * (thematic breaks and the like) is dropped rather than joined as noise.
+ */
+private class SectionCollector(private val pass: ResolutionPass) {
+
+    private val sections = mutableListOf<RenderedSection>()
+    private val chunks = mutableListOf<String>()
+    private var openHeadingId: String? = null
+
+    fun collect(document: Document): List<RenderedSection> {
+        descend(document)
+        closeSection()
+        return sections
+    }
+
+    private fun descend(container: Node) {
+        container.children.forEach { child ->
+            when {
+                child is FlexmarkHeading -> {
+                    closeSection()
+                    openHeadingId = pass.idOf(child)
+                }
+                child.descendants.any { it is FlexmarkHeading } -> descend(child)
+                else -> TextCollectingVisitor().collectAndGetText(child).trimEnd().takeIf { it.isNotEmpty() }?.let(chunks::add)
+            }
+        }
+    }
+
+    /** A preamble (null id) section is emitted only when it has text; a heading's section always is. */
+    private fun closeSection() {
+        val text = chunks.joinToString("\n")
+        if (openHeadingId != null || text.isNotEmpty()) sections += RenderedSection(headingId = openHeadingId, text = text)
+        chunks.clear()
+    }
 }
 
 /**

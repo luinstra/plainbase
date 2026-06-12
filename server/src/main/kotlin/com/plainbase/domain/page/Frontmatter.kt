@@ -30,6 +30,18 @@ data class Frontmatter(val values: Map<String, FrontmatterValue>) {
     /** The scalar value for [key], or null when absent or a list. */
     fun scalar(key: String): String? = (values[key] as? FrontmatterValue.Scalar)?.value
 
+    /**
+     * The values of a LIST-TYPED [key] (`tags`, `aliases`, `redirect_from`), read scalar-OR-list
+     * per the §C2 collapse caveat above: a scalar is a one-item list, absent is empty. Every
+     * consumer of a list-typed key must read through this — assuming [FrontmatterValue.StringList]
+     * silently drops the single-item-block-list case.
+     */
+    fun strings(key: String): List<String> = when (val value = values[key]) {
+        is FrontmatterValue.Scalar -> listOf(value.value)
+        is FrontmatterValue.StringList -> value.values
+        null -> emptyList()
+    }
+
     companion object {
         /** The shared no-frontmatter / empty-block value (`{}` in the API). */
         val EMPTY: Frontmatter = Frontmatter(emptyMap())

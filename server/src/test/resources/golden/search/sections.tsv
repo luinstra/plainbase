@@ -1,0 +1,21 @@
+# §B4 sectioning golden — the exact search-section set of the two EDITORIALLY FROZEN fixture
+# pages (guides/deploy-guide.md, index.md; same frozen inputs as the PB-REST-1 goldens).
+#
+# Columns (tab-separated): page-path  heading_id  heading_path  body
+#   - heading_id "-"     = the page-level title/metadata document (§B4)
+#   - heading_path       = breadcrumb texts joined with "|" (ancestors first, own text last);
+#                          empty for the page-level document
+#   - body               = plain section text; newlines escaped as \u{A} (GoldenTsv unescapes)
+#
+# Regeneration discipline (Phase-1 fixture rules): these rows change ONLY with a deliberate,
+# reviewed edit of the fixture file or of the §B4 section policy itself. Regenerate by running
+# SectionSplitter over an IndexHarness rebuild of fixtures/demo-docs and transcribing the output
+# — then REVIEW each body against the fixture Markdown by eye before committing (no blind dump).
+#
+guides/deploy-guide.md	-		
+guides/deploy-guide.md	deploy-guide	Deploy Guide	How to deploy to production with zero downtime.
+guides/deploy-guide.md	prerequisites	Deploy Guide|Prerequisites	See Kubernetes setup and\u{A}networking.
+guides/deploy-guide.md	rolling-deploy	Deploy Guide|Rolling deploy	Use the standard rollout. Diagram: architecture
+guides/deploy-guide.md	rollback	Deploy Guide|Rollback	Revert the commit and redeploy. History is in Git.
+index.md	-		
+index.md	welcome-to-demo-docs	Welcome to Demo Docs	This fixture tree exercises Plainbase end to end: nested folders, assets,\u{A}relative links, frontmatter variety, and unicode edge cases.\u{A}Start with the Getting Started guide or browse\u{A}the API overview. Operations live under\u{A}infrastructure.

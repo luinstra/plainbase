@@ -11,10 +11,12 @@ import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
 
 /**
- * Acceptance criterion 2 (the MASTER criterion) — determinism. Every fixture page must render
- * byte-identical HTML. The renderer holds no mutable cross-render state (the parser/options are
- * immutable; per-page allocator and maps are allocated inside [FlexmarkRenderer.render]), so
- * identical input must yield identical output — the property the whole forever-API rests on.
+ * Acceptance criterion 2 (the MASTER criterion) — determinism. Every fixture page must render a
+ * byte-identical [com.plainbase.domain.render.RenderedPage] — html AND headings, links, and (since
+ * Phase 2/S1) the §B4 section stream, all compared via data-class equality. The renderer holds no
+ * mutable cross-render state (the parser/options are immutable; per-page allocator and maps are
+ * allocated inside [FlexmarkRenderer.render]), so identical input must yield identical output —
+ * the property the whole forever-API rests on.
  *
  * Critically this is a WARM-vs-FRESH comparison: a renderer reused across the whole suite
  * (`warmRenderer`) is compared against a renderer constructed FRESH inside each iteration. A shared
@@ -43,8 +45,9 @@ class RenderDeterminismTest : FunSpec({
             val source = Files.readAllBytes(file)
             val path = TreePath.require(rel)
             // A fresh renderer with no render history; warmRenderer has rendered the whole tree already.
+            // Whole-RenderedPage equality: html, headings, links, AND sections are all in scope.
             val fresh = FlexmarkRenderer(FixtureIndexStub(Fixtures.demoDocs))
-            warmRenderer.render(path, source).html shouldBe fresh.render(path, source).html
+            warmRenderer.render(path, source) shouldBe fresh.render(path, source)
         }
     }
 })

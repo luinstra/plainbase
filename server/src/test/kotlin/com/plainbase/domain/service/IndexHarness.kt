@@ -28,6 +28,7 @@ class IndexHarness(
     contentStore: ContentStore = LocalContentStore(root),
     frontmatterParser: FrontmatterParser = FrontmatterReader(),
     rendererFactory: (PageIndexView) -> MarkdownRenderer = { view -> FlexmarkRenderer(view) },
+    listeners: List<IndexBuilder.PublicationListener> = emptyList(),
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -45,6 +46,7 @@ class IndexHarness(
         idMap = idMap,
         aliasRegistry = registry,
         citations = CitationFactory(),
+        listeners = listeners,
     )
 
     override fun close() = driver.close()

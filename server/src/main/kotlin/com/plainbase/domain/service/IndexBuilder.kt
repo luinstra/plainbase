@@ -7,7 +7,6 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
-import com.plainbase.domain.page.FrontmatterValue
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
@@ -46,6 +45,15 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Identity binding mirrors `AdoptionPass` RECORD semantics over the in-hand bytes (zero content
  * writes): id_map rows plus issues, pages in path order so duplicate resolution is deterministic.
+ *
+ * **Publication listeners (§B4, the Phase-2/3 seam):** after the snapshot publishes, [rebuild] —
+ * still inside its serialized section — synchronously invokes every registered
+ * [PublicationListener], so listeners (checkpoint replace, search sync) can never interleave or
+ * run against a superseded snapshot. A throwing listener is caught and logged here: the publish
+ * has already happened and stands, the remaining listeners still run, and nothing propagates to
+ * any [rebuild] caller (a failed search sync is repaired for free by the next sync's engine-truth
+ * diff). Phase 3: the save path calls [rebuild], so a saved page is searchable before the save
+ * returns — this listener chain IS that hook; nothing else to build.
  */
 class IndexBuilder(
     private val contentStore: ContentStore,
@@ -56,7 +64,13 @@ class IndexBuilder(
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
     private val citations: CitationFactory,
+    private val listeners: List<PublicationListener> = emptyList(),
 ) {
+
+    /** Notified with each newly published snapshot — synchronously, inside the serialized rebuild (§B4). */
+    fun interface PublicationListener {
+        fun published(snapshot: PageIndex)
+    }
 
     private val holder = AtomicReference(PageIndex.EMPTY)
 
@@ -106,6 +120,7 @@ class IndexBuilder(
                 html = "",
                 headings = emptyList(),
                 links = emptyList(),
+                sections = emptyList(),
             )
         }
         val renderer = rendererFactory(PageIndex(provisional, scan.folders, assets))
@@ -118,6 +133,9 @@ class IndexBuilder(
                 html = rendered.html,
                 headings = rendered.headings.toList(),
                 links = rendered.links.toList(),
+                // The §B4 search sections, captured from the SAME single render — no extra read,
+                // no second parse (see the IndexedPage.sections doc for the accepted memory cost).
+                sections = rendered.sections.toList(),
             )
         }
 
@@ -128,7 +146,20 @@ class IndexBuilder(
             "indexed ${pages.size} page(s), ${assets.size} asset(s), ${scan.folders.size} folder(s); " +
                 "${pages.count { it.urlPath == null }} excluded from path space"
         }
+        notifyPublished(snapshot)
         return snapshot
+    }
+
+    /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
+    private fun notifyPublished(snapshot: PageIndex) {
+        listeners.forEach { listener ->
+            try {
+                listener.published(snapshot)
+            } catch (e: Exception) {
+                // Exception, not Throwable — narrower than §B4's literal "nothing propagates" so a JVM Error (OOM/SOE) still fails loudly.
+                logger.error(e) { "publication listener failed; the published snapshot stands" }
+            }
+        }
     }
 
     /** One page's in-flight state: read once, frontmatter parsed once, bytes kept for the single render. */
@@ -194,7 +225,7 @@ class IndexBuilder(
 
         // redirect_from registration: file-path values converted through the same URL construction.
         for (page in snapshot.pages) {
-            for (raw in page.frontmatter.redirectFromValues()) {
+            for (raw in page.frontmatter.strings("redirect_from")) {
                 val target = CanonicalUrlBuilder.redirectUrlPath(raw)
                 if (target == null) {
                     logger.warn { "ignoring unusable redirect_from '$raw' on ${page.path.value}" }
@@ -242,13 +273,6 @@ class IndexBuilder(
         // The loser's raw name passes through verbatim — building a TreePath from it would
         // NFC-normalize it back into keptPath, erasing the one value that distinguishes the loser.
         is ScanIssue.PathCollision -> IdentityIssue.PathCollision(keptPath = path, loserRawName = loserRawName)
-    }
-
-    /** `redirect_from` is list-typed but must be read scalar-OR-list (the §C2 collapse caveat). */
-    private fun Frontmatter.redirectFromValues(): List<String> = when (val value = this["redirect_from"]) {
-        is FrontmatterValue.Scalar -> listOf(value.value)
-        is FrontmatterValue.StringList -> value.values
-        null -> emptyList()
     }
 
     private val TreePath.stem: String get() = name.removeSuffix(".md")
