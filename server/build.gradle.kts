@@ -126,6 +126,12 @@ dependencies {
     testImplementation(libs.kotest.framework.engine)
     testImplementation(libs.kotest.property)
     testImplementation(libs.mockk)
+    // SnakeYAML — JVM-test-ONLY differential oracle for the FrontmatterPatcher fuzz test (the real
+    // YAML parser the strictest-subset recognizer is checked against). testImplementation-scoped, so
+    // it is absent from runtimeClasspath (allowlist unaffected). The nativeTest configurations below
+    // extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so this never reaches the
+    // native test image's classpath; the parser stays off the native gate. See FrontmatterPatcherOracleTest.
+    testImplementation(libs.snakeyaml)
 
     // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
     // GraalVM's native JUnit launcher, and the ktor test host ONLY — deliberately no Kotest/MockK, so

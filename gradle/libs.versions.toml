@@ -21,6 +21,7 @@ spotless = "8.6.0"
 ktlint = "1.8.0"
 kotest = "5.9.1"
 mockk = "1.14.3"
+snakeyaml = "2.4"
 
 [libraries]
 # Ktor server — CIO engine ONLY (Netty is banned: reflection-heavy, hostile to native image)
@@ -84,6 +85,14 @@ kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref 
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
 kotest-property = { module = "io.kotest:kotest-property", version.ref = "kotest" }
 mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+
+# SnakeYAML — DIFFERENTIAL-ORACLE ONLY (FrontmatterPatcher fuzz test). testImplementation-scoped on
+# the JVM `src/test` set ALONE: it is the reference parser the strictest-subset recognizer is fuzzed
+# against, never shipped. It must never reach runtimeClasspath (the dependency allowlist is scoped
+# there) and never the nativeTest classpath (2.x's reflection is native-image-hostile; the native gate
+# runs kotlin.test only). 2.x is safe-by-default (no unsafe global constructor) and only ever parses
+# test-generated input, so its CVE/reflection profile is irrelevant here — it does not see production.
+snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
