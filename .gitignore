@@ -21,6 +21,9 @@ frontend/playwright-report/
 .vscode/
 .kotlin/
 
+# Local git worktrees
+.worktrees/
+
 # OS
 .DS_Store
 
