@@ -15,46 +15,100 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
       <li
         data-pb-nav-item="folder"
       >
-        <details
-          open=""
+        <div
+          class="flex items-center"
         >
-          <summary
-            class="rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+          <button
+            aria-controls="pb-folder-children-guides"
+            aria-expanded="true"
+            aria-label="Collapse Guides"
+            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+            data-pb-folder-toggle="true"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="block w-3 text-center text-xs leading-none"
+            >
+              ▾
+            </span>
+          </button>
+          <a
+            class="block flex-1 rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+            href="/docs/guides"
           >
             Guides
-          </summary>
-          <div
-            class="ml-3 border-l border-edge pl-2"
+          </a>
+        </div>
+        <div
+          class="ml-3 border-l border-edge pl-2"
+          id="pb-folder-children-guides"
+        >
+          <ul
+            class="space-y-0.5"
           >
-            <ul
-              class="space-y-0.5"
+            <li
+              data-pb-nav-item="page"
             >
-              <li
-                data-pb-nav-item="page"
+              <a
+                aria-current="page"
+                class="block rounded bg-active px-2 py-1 font-medium text-ink"
+                data-pb-status="active"
+                href="/docs/guides/deploy-guide"
               >
-                <a
-                  aria-current="page"
-                  class="block rounded bg-active px-2 py-1 font-medium text-ink"
-                  data-pb-status="active"
-                  href="/docs/guides/deploy-guide"
-                >
-                  Deploy Guide
-                </a>
-              </li>
-            </ul>
-          </div>
-        </details>
+                Deploy Guide
+              </a>
+            </li>
+          </ul>
+        </div>
       </li>
       <li
-        data-pb-nav-item="page"
+        data-pb-nav-item="folder"
       >
-        <a
-          class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
-          data-pb-status="active"
-          href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+        <div
+          class="flex items-center"
         >
-          Shadowed Page
-        </a>
+          <button
+            aria-controls="pb-folder-children-shadowed-folder"
+            aria-expanded="true"
+            aria-label="Collapse shadowed-folder"
+            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+            data-pb-folder-toggle="true"
+            type="button"
+          >
+            <span
+              aria-hidden="true"
+              class="block w-3 text-center text-xs leading-none"
+            >
+              ▾
+            </span>
+          </button>
+          <span
+            class="block flex-1 px-2 py-1 font-medium text-muted"
+          >
+            shadowed-folder
+          </span>
+        </div>
+        <div
+          class="ml-3 border-l border-edge pl-2"
+          id="pb-folder-children-shadowed-folder"
+        >
+          <ul
+            class="space-y-0.5"
+          >
+            <li
+              data-pb-nav-item="page"
+            >
+              <a
+                class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
+                data-pb-status="active"
+                href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+              >
+                Shadowed Page
+              </a>
+            </li>
+          </ul>
+        </div>
       </li>
     </ul>
   </nav>

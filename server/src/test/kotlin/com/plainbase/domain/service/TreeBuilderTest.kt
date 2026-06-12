@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 
 /**
@@ -63,8 +64,28 @@ class TreeBuilderTest : FunSpec({
             for (name in listOf("deeply", "nested", "folder")) {
                 node = node.children.filterIsInstance<TreeNode.Folder>().single { it.name == name }
             }
+            node.url shouldBe "/docs/notes/deeply/nested/folder" // the folder's own landing prefix (ADR-0003)
             val treasure = node.children.filterIsInstance<TreeNode.Page>().single()
             treasure.url shouldBe "/docs/notes/deeply/nested/folder/treasure"
+        }
+    }
+
+    test("folder url is percent-encoded on emit; a collision-loser folder (and its subtree) carries null") {
+        withTempTree({ root ->
+            writePage(root, "café notes/page.md", "# Page\n")
+            // Sibling folders 'a b' and 'a-b' both slugify to 'a-b'; 'a b' (0x20) wins the segment.
+            writePage(root, "a b/page.md", "# Winner\n")
+            writePage(root, "a-b/deep/page.md", "# Loser\n")
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                val tree = TreeBuilder.build(harness.builder.rebuild())
+                val folders = tree.children.filterIsInstance<TreeNode.Folder>().associateBy { it.name }
+                folders.getValue("café notes").url shouldBe "/docs/caf%C3%A9-notes"
+                folders.getValue("a b").url shouldBe "/docs/a-b"
+                val loser = folders.getValue("a-b")
+                loser.url.shouldBeNull()
+                loser.children.filterIsInstance<TreeNode.Folder>().single().url.shouldBeNull()
+            }
         }
     }
 })
@@ -76,7 +97,8 @@ class TreeBuilderTest : FunSpec({
  */
 private fun shapeDump(node: TreeNode, indent: String = ""): String = when (node) {
     is TreeNode.Folder -> {
-        val line = "${indent}folder name='${node.name}' title=${quoted(node.title)} path=${quoted(node.path?.value)}"
+        val line = "${indent}folder name='${node.name}' title=${quoted(node.title)} " +
+            "path=${quoted(node.path?.value)} url=${quoted(node.url)}"
         val children = node.children.map { shapeDump(it, "$indent  ") }.sorted()
         (listOf(line) + children).joinToString("\n")
     }

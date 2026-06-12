@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
+import { useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder, TreeNode, TreePage } from "../api/types";
 import { pageHref } from "../lib/tree";
@@ -43,17 +44,56 @@ function NodeList({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathna
   );
 }
 
+/**
+ * A folder row: the label links to the folder's landing view (ADR-0003) while a separate
+ * disclosure button owns expand/collapse — split affordances, so navigating and toggling
+ * never contest one click (`aria-expanded` lives on the button). A collision-loser folder
+ * has no `url` and keeps an inert label.
+ */
 function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPathname: string }) {
+  const [open, setOpen] = useState(true);
+  const label = folder.title ?? folder.name;
+  const active = folder.url !== null && folder.url === currentPathname;
+  // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
+  // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
+  const childrenId = `pb-folder-children-${encodeURIComponent(folder.path)}`;
   return (
     <li data-pb-nav-item="folder">
-      <details open>
-        <summary className="rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink">
-          {folder.title ?? folder.name}
-        </summary>
-        <div className="ml-3 border-l border-edge pl-2">
+      <div className="flex items-center">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={childrenId}
+          aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
+          onClick={() => setOpen((value) => !value)}
+          className="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+          data-pb-folder-toggle
+        >
+          <span aria-hidden="true" className="block w-3 text-center text-xs leading-none">
+            {open ? "▾" : "▸"}
+          </span>
+        </button>
+        {folder.url ? (
+          <a
+            href={folder.url}
+            aria-current={active ? "page" : undefined}
+            className={
+              active
+                ? "block flex-1 rounded bg-active px-2 py-1 font-medium text-ink"
+                : "block flex-1 rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+            }
+          >
+            {label}
+          </a>
+        ) : (
+          <span className="block flex-1 px-2 py-1 font-medium text-muted">{label}</span>
+        )}
+      </div>
+      {open && (
+        <div id={childrenId} className="ml-3 border-l border-edge pl-2">
           <NodeList nodes={folder.children} currentPathname={currentPathname} />
         </div>
-      </details>
+      )}
     </li>
   );
 }

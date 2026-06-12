@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentFolder
+import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
@@ -10,8 +11,10 @@ import com.plainbase.domain.page.PageIndex
  * A node of the nav tree (§A4 `/api/v1/tree` shape, chunk 6 maps it to DTOs).
  *
  * Page nodes carry [Page.url] — the canonical path URL, null for a slug-collision loser (the UI
- * links those via `/p/{id}`). Folder [Folder.title] comes from `_folder.yaml`, else null (the UI
- * falls back to [Folder.name]); the root folder is the synthetic node with empty name and null path.
+ * links those via `/p/{id}`). Folder nodes carry [Folder.url] — the folder's `/docs` URL prefix,
+ * where the SPA renders the folder landing view (ADR-0003); null for a collision-loser subtree.
+ * Folder [Folder.title] comes from `_folder.yaml`, else null (the UI falls back to [Folder.name]);
+ * the root folder is the synthetic node with empty name and null path.
  */
 sealed interface TreeNode {
 
@@ -20,6 +23,8 @@ sealed interface TreeNode {
         val title: String?,
         /** The folder's content path; null only for the synthetic root node. */
         val path: TreePath?,
+        /** The folder's `/docs` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
+        val url: String?,
         val children: List<TreeNode>,
     ) : TreeNode
 
@@ -49,21 +54,36 @@ object TreeBuilder {
     fun build(index: PageIndex): TreeNode.Folder {
         val pagesByParent = index.pages.groupBy { it.path.parent }
         val foldersByParent = index.folders.groupBy { it.path.parent }
-        return TreeNode.Folder(name = "", title = null, path = null, children = childrenOf(null, pagesByParent, foldersByParent))
+        val folderUrls = CanonicalUrlBuilder.folderUrlPaths(index.folders)
+        // The synthetic root's URL prefix is bare `/docs` (its own route in the SPA, not a landing view).
+        return TreeNode.Folder(
+            name = "",
+            title = null,
+            path = null,
+            url = "/docs",
+            children = childrenOf(null, pagesByParent, foldersByParent, folderUrls),
+        )
     }
 
     private fun childrenOf(
         dir: TreePath?,
         pagesByParent: Map<TreePath?, List<IndexedPage>>,
         foldersByParent: Map<TreePath?, List<ContentFolder>>,
+        folderUrls: Map<TreePath, TreePath?>,
     ): List<TreeNode> {
         val folders = foldersByParent[dir].orEmpty().mapNotNull { folder ->
-            val children = childrenOf(folder.path, pagesByParent, foldersByParent)
+            val children = childrenOf(folder.path, pagesByParent, foldersByParent, folderUrls)
             if (children.isEmpty()) return@mapNotNull null // no pages anywhere beneath -> omitted
             Sortable(
                 order = folder.meta?.order,
                 sortTitle = folder.meta?.title ?: folder.path.name,
-                node = TreeNode.Folder(name = folder.path.name, title = folder.meta?.title, path = folder.path, children = children),
+                node = TreeNode.Folder(
+                    name = folder.path.name,
+                    title = folder.meta?.title,
+                    path = folder.path,
+                    url = folderUrls.getValue(folder.path)?.let { "/docs/" + PercentCoding.encodePath(it.value) },
+                    children = children,
+                ),
             )
         }
         val pages = pagesByParent[dir].orEmpty().map { page ->

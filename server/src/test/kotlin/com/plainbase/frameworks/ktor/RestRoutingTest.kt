@@ -82,6 +82,16 @@ class RestRoutingTest : FunSpec({
         }
     }
 
+    test("a folder's URL prefix stays out of by-path space (ADR-0003: landing views are client-rendered)") {
+        restTest(Fixtures.demoDocs, seed) {
+            // `guides` is a folder with a tree-node url of /docs/guides — but by-path semantics are
+            // unchanged: only PAGES resolve; the SPA's folder landing kicks in on this very 404.
+            client.get("/api/v1/pages/by-path/guides").status shouldBe HttpStatusCode.NotFound
+            // The routing matrix still serves the shell at the folder URL, like every /docs path.
+            client.get("/docs/guides").status shouldBe HttpStatusCode.OK
+        }
+    }
+
     test("tree JSON is memoized per snapshot and invalidated by a rescan (§C4)") {
         restTest(Fixtures.demoDocs, seed) { harness ->
             val first = harness.services.treeJson.current()

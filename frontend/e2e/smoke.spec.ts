@@ -32,8 +32,10 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   await expectNoReload(page);
 
-  // Breadcrumbs come from the page path, with the _folder.yaml folder title.
+  // Breadcrumbs come from the page path, with the _folder.yaml folder title — and the
+  // trail always opens with the root "docs" crumb linking to the root landing.
   await expect(page.locator(".pb-breadcrumbs")).toContainText("Guides");
+  await expect(page.locator('.pb-breadcrumbs a[href="/docs"]')).toHaveText("docs");
 });
 
 test("internal links inside server-rendered HTML navigate via the SPA router", async ({ page }) => {
@@ -63,6 +65,44 @@ test("a /p/{id} permalink 302s server-side to the canonical path (stale slug tol
 
   await page.goto(`/p/${id}/some-stale-slug`);
   await expect(page).toHaveURL("/docs/guides/deploy-guide");
+});
+
+test("a folder URL renders the generated landing view; breadcrumbs link back to it", async ({ page }) => {
+  // fixtures/demo-docs has no README/index children inside folders, so smoke exercises
+  // the listing fallback; the README-preference path is covered by the unit suite.
+  await page.goto("/docs/guides");
+  const listing = page.locator("[data-pb-folder]");
+  await expect(listing).toBeVisible();
+  await expect(listing.locator("h1")).toHaveText("Guides"); // _folder.yaml title
+  await expect(listing.locator('a[href="/docs/guides/advanced"]')).toBeVisible(); // subfolder link
+
+  await plantNoReloadMarker(page);
+  await listing.getByRole("link", { name: "Deploy Guide" }).click();
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
+  await expectNoReload(page);
+
+  // The breadcrumb ancestor is now a link back to the folder landing (ADR-0003).
+  await page.locator(".pb-breadcrumbs").getByRole("link", { name: "Guides" }).click();
+  await expect(page).toHaveURL("/docs/guides");
+  await expect(page.locator("[data-pb-folder]")).toBeVisible();
+  await expectNoReload(page);
+});
+
+test("sidebar folder labels navigate to the landing view; the chevron still collapses", async ({ page }) => {
+  await page.goto("/docs/welcome");
+  const sidebar = page.locator(".pb-sidebar");
+
+  await sidebar.getByRole("button", { name: "Collapse Guides" }).click();
+  await expect(sidebar.getByRole("link", { name: "Deploy Guide" })).toBeHidden();
+  await sidebar.getByRole("button", { name: "Expand Guides" }).click();
+  await expect(sidebar.getByRole("link", { name: "Deploy Guide" })).toBeVisible();
+
+  await plantNoReloadMarker(page);
+  await sidebar.getByRole("link", { name: "Guides", exact: true }).click();
+  await expect(page).toHaveURL("/docs/guides");
+  await expect(page.locator("[data-pb-folder]")).toBeVisible();
+  await expectNoReload(page);
 });
 
 test("an unknown path serves the shell and the SPA renders the 404 view", async ({ page }) => {
@@ -114,8 +154,17 @@ test("broken links carry the server marker and the broken-link token color", asy
   expect(brokenColor).not.toBe(liveColor); // styled via --pb-link-broken, distinct from live links
 });
 
-test("the root path redirects to the first tree page", async ({ page }) => {
+test("the root path lands on the root folder landing at /docs", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/docs\/.+/);
-  await expect(page.locator(".pb-prose h1")).toBeVisible();
+  await expect(page).toHaveURL("/docs");
+  // demo-docs has BOTH index.md and README.md at the root — index wins, so the root
+  // landing renders the welcome page's content at /docs (the listing branch is unit-covered).
+  await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
+
+  // A child link inside the landing content navigates via the SPA router.
+  await plantNoReloadMarker(page);
+  await page.locator(".pb-prose").getByRole("link", { name: "Getting Started guide" }).click();
+  await expect(page).toHaveURL("/docs/guides/getting-started");
+  await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
+  await expectNoReload(page);
 });

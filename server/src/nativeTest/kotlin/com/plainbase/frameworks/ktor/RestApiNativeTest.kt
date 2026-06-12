@@ -9,6 +9,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Tag
@@ -48,7 +49,11 @@ class RestApiNativeTest {
 
                 // Tree: the sealed polymorphic DTO serializer must survive the closed world.
                 val tree = Json.parseToJsonElement(client.get("/api/v1/tree").bodyAsText()).jsonObject
-                assertEquals("folder", tree["root"]?.jsonObject?.get("type")?.jsonPrimitive?.content)
+                val root = tree["root"]?.jsonObject
+                assertEquals("folder", root?.get("type")?.jsonPrimitive?.content)
+                // Folder nodes carry the additive url prefix (ADR-0003) — natively too.
+                val guides = root?.get("children")?.jsonArray?.first()?.jsonObject
+                assertEquals("/docs/guides", guides?.get("url")?.jsonPrimitive?.content)
 
                 // Error envelope: the §A4 shape gate (regex, not UUID.fromString) natively too.
                 val invalid = client.get("/api/v1/pages/1-1-1-1-1")

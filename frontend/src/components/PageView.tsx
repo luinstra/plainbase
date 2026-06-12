@@ -3,7 +3,8 @@ import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import { firstPage, pageHref } from "../lib/tree";
+import type { TreeFolder } from "../api/types";
+import { folderByUrl, landingPage, pageHref } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -40,8 +41,80 @@ export function DocsPage({ path }: { path: string }) {
   }, [resolved, pathname, resolvedFor, router, queryClient]);
 
   if (page.isPending) return <PagePending />;
-  if (page.isError) return <PageError error={page.error} />;
+  if (page.isError) {
+    // A by-path 404 may be a folder's URL prefix — folders aren't in by-path space (ADR-0003).
+    if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
+    return <PageError error={page.error} />;
+  }
   return <PageContent id={page.data.id} />;
+}
+
+/**
+ * The `/docs/$` 404 fallthrough (ADR-0003) AND the bare `/docs` route body: by-path said
+ * no page owns this location — but a folder might (bare `/docs` is always the root
+ * folder; no page can own it, so that route skips by-path entirely and passes `url`
+ * explicitly). The location is matched VERBATIM against the tree's folder `url`s (the
+ * server stays the single URL authority; nothing is slugified here). A README-preference
+ * child renders at the folder URL; otherwise the generated listing. On the splat route
+ * by-path ran FIRST, so a page owning the URL always shadows the folder view (the
+ * page-shadows-folder ordering, consistent with ADR-0002).
+ */
+export function FolderLanding({ url }: { url?: string }) {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const tree = useQuery(treeQuery);
+
+  if (tree.isPending) return <PagePending />;
+  if (tree.isError) return <PageError error={tree.error} />;
+
+  const folder = folderByUrl(tree.data.root, url ?? pathname);
+  if (!folder) return <NotFoundView />;
+
+  // The landing page renders AT the folder URL — no redirect; it stays independently
+  // reachable at its own canonical URL — fetched by id like a loser permalink.
+  const landing = landingPage(folder);
+  return landing ? <PageContent id={landing.id} /> : <FolderListing folder={folder} />;
+}
+
+/**
+ * The generated directory view: `_folder.yaml` title (else name) as heading, children in
+ * TREE ORDER — the order the tree response carries, never re-sorted. Pages link via their
+ * node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a loser subfolder
+ * has none and stays inert text). `data-pb-folder*` hooks are stable selectors.
+ */
+function FolderListing({ folder }: { folder: TreeFolder }) {
+  // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
+  const title = folder.title ?? (folder.name || "docs");
+  useEffect(() => {
+    document.title = `${title} · Plainbase`;
+  }, [title]);
+
+  return (
+    <div className="pb-folder" data-pb-folder>
+      <Breadcrumbs path={folder.path} title={title} />
+      <h1 className="text-3xl font-bold text-ink">{title}</h1>
+      <ul className="mt-6 space-y-1.5" data-pb-folder-children>
+        {folder.children.map((child) =>
+          child.type === "folder" ? (
+            <li key={child.path} data-pb-folder-child="folder">
+              {child.url ? (
+                <a href={child.url} className="font-medium text-link hover:text-link-hover hover:underline">
+                  {child.title ?? child.name}
+                </a>
+              ) : (
+                <span className="font-medium text-muted">{child.title ?? child.name}</span>
+              )}
+            </li>
+          ) : (
+            <li key={child.id} data-pb-folder-child="page">
+              <a href={pageHref(child)} data-pb-status={child.status} className="text-link hover:text-link-hover hover:underline">
+                {child.title}
+              </a>
+            </li>
+          ),
+        )}
+      </ul>
+    </div>
+  );
 }
 
 /**
@@ -69,21 +142,6 @@ export function PermalinkPage({ splat }: { splat: string }) {
   if (page.isPending) return <PagePending />;
   if (page.isError) return <PageError error={page.error} />;
   return <PageContent id={page.data.id} />;
-}
-
-/** The `/` (and bare `/docs`) target: send the visitor to the first page in tree order. */
-export function FirstPageRedirect() {
-  const router = useRouter();
-  const tree = useQuery(treeQuery);
-
-  const target = tree.data ? firstPage(tree.data.root) : null;
-  useEffect(() => {
-    if (target) router.history.replace(pageHref(target));
-  }, [target, router]);
-
-  if (tree.isError) return <PageError error={tree.error} />;
-  if (tree.data && !target) return <NotFoundView />;
-  return <PagePending />;
 }
 
 /** Breadcrumbs + server HTML + TOC for a resolved page id. */

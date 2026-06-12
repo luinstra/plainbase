@@ -3,18 +3,20 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  redirect,
   useRouterState,
   type RouterHistory,
 } from "@tanstack/react-router";
 import { NotFoundView } from "./components/NotFound";
-import { DocsPage, FirstPageRedirect, PermalinkPage } from "./components/PageView";
+import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
 import { Shell } from "./components/Shell";
 
 /**
  * Route table (chunk 7 + the chunk-6 amendment):
  *
- *   /          → redirect to the first tree page
- *   /docs      → same redirect (the server serves the shell for bare /docs)
+ *   /          → redirect to /docs
+ *   /docs      → the ROOT folder landing (the root node's `url` is /docs): root
+ *                index/readme child if present, else the top-level listing
  *   /docs/$    → canonical page route; the splat is the by-path key
  *   /p/$       → loser-permalink route. Winners never reach it (the server 302s
  *                /p/{id} → canonical), but a collision loser's permalink serves the
@@ -33,13 +35,15 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: FirstPageRedirect,
+  beforeLoad: () => {
+    throw redirect({ to: "/docs", replace: true });
+  },
 });
 
 const docsIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/docs",
-  component: FirstPageRedirect,
+  component: FolderLanding,
 });
 
 const docsRoute = createRoute({
@@ -65,7 +69,9 @@ function DocsSplat() {
   const encodedSlash = useHasEncodedSlash();
   if (encodedSlash) return <NotFoundView />;
   const path = _splat ?? "";
-  if (!path) return <FirstPageRedirect />;
+  // An empty splat ("/docs/") is the root landing too; the trailing-slash pathname would
+  // never match the root's verbatim `/docs` url, so it is passed explicitly.
+  if (!path) return <FolderLanding url="/docs" />;
   return <DocsPage path={path} />;
 }
 

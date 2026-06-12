@@ -50,6 +50,10 @@ kotlin {
 application {
     mainClass.set("com.plainbase.ApplicationKt")
     applicationName = "plainbase"
+    // sqlite-jdbc loads its bundled JNI library via System.load — sanctioned, allowlisted use.
+    // JEP 472 (JDK 24+) warns on restricted native access unless granted; this carries the grant
+    // on the `run`/installDist launchers. The native image bakes the same grant in via buildArgs.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 // Native-smoke tests live in their own source set so the native test image's classpath carries NO
@@ -244,11 +248,15 @@ graalvmNative {
             mainClass.set("com.plainbase.ApplicationKt")
             buildArgs.add("--no-fallback")
             buildArgs.add("--enable-url-protocols=http")
+            // JEP 472 grant for sqlite-jdbc's System.load, baked into the image at build time
+            // (mirrors applicationDefaultJvmArgs above; without it every start warns on stderr).
+            buildArgs.add("--enable-native-access=ALL-UNNAMED")
             buildArgs.add("-J-Xmx6g")
             resources.autodetect()
         }
         named("test") {
             buildArgs.add("--no-fallback")
+            buildArgs.add("--enable-native-access=ALL-UNNAMED")
             buildArgs.add("-J-Xmx6g")
             // The test image must also embed classpath resources (the SPA shell
             // under static/) or HealthRouteTest's root-route check 404s natively.

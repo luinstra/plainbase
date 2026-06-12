@@ -15,6 +15,11 @@ import org.koin.core.context.startKoin
 import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
+    // kotlin-logging 8.x prints a startup banner from KotlinLogging's class initializer unless
+    // KotlinLoggingConfiguration reads this property as false — and it reads it exactly once, at
+    // its own class init. Set it before anything touches a logger; both classes initialize at
+    // run time under JVM and native image alike, so one programmatic gate covers both binaries.
+    System.setProperty("kotlin-logging.logStartupMessage", "false")
     when (args.firstOrNull()) {
         "spike" -> exitProcess(NativeSpike.runAsMain())
         "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))

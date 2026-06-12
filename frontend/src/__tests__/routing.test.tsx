@@ -52,7 +52,20 @@ function htmlResponse(id: string, url: string | null, title: string): PageHtmlRe
   };
 }
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, path: "", children: [] } };
+const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, path: "", url: "/docs", children: [] } };
+
+// A root-level README child — the fixture-backed smoke suite can't isolate readme-only at
+// the root (demo-docs carries an index.md too), so the readme branch is mocked here.
+const rootReadmeTree: TreeResponse = {
+  root: {
+    type: "folder",
+    name: "",
+    title: null,
+    path: "",
+    url: "/docs",
+    children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/readme", status: "active" }],
+  },
+};
 
 function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -69,6 +82,25 @@ function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
 }
 
 describe("routing flows", () => {
+  it("redirects / to /docs and renders the root folder landing", async () => {
+    const { history, view } = renderAt("/", () => {});
+
+    await waitFor(() => expect(history.location.pathname).toBe("/docs"));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"); // root fallback heading
+  });
+
+  it("renders a root README child's content at bare /docs — README-preference applies to the root node too", async () => {
+    const { history, view } = renderAt("/docs", (qc) => {
+      qc.setQueryData(treeQuery.queryKey, rootReadmeTree);
+      qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, "/docs/readme", "Docs Home"));
+    });
+
+    await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Docs Home"));
+    expect(history.location.pathname).toBe("/docs"); // rendered AT the root url, no redirect
+    expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
+  });
+
   it("replaceStates an alias path to the canonical url from the by-path response", async () => {
     const canonical = "/docs/guides/deploy-guide";
     const { history } = renderAt("/docs/old/deployment", (qc) => {

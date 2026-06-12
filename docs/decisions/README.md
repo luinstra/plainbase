@@ -10,3 +10,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 |---|----------|--------|
 | [0001](0001-frontmatter-patcher-refuses-rather-than-parses-quoted-values.md) | The frontmatter patcher refuses ambiguous YAML rather than parsing it | Accepted |
 | [0002](0002-slug-collisions-are-same-role-only.md) | Same-parent slug collisions are same-role only (page-vs-page, folder-vs-folder) | Accepted |
+| [0003](0003-folder-landing-pages.md) | Folders gain client-rendered landing views at their URL prefix | Accepted |

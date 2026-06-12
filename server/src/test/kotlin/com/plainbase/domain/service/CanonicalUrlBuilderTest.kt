@@ -113,6 +113,25 @@ class CanonicalUrlBuilderTest : FunSpec({
         )
     }
 
+    test("folderUrlPaths: each folder's /docs prefix from its slugified segment chain, overrides honored (ADR-0003)") {
+        val urls = CanonicalUrlBuilder.folderUrlPaths(
+            listOf(folder("v2 docs", FolderMeta(slug = "Version Two")), folder("v2 docs/Deep Dive")),
+        )
+        urls.getValue(TreePath.require("v2 docs"))?.value shouldBe "version-two"
+        urls.getValue(TreePath.require("v2 docs/Deep Dive"))?.value shouldBe "version-two/deep-dive"
+    }
+
+    test("folderUrlPaths: a losing folder and its whole subtree have no URL prefix") {
+        val urls = CanonicalUrlBuilder.folderUrlPaths(
+            // Sibling folders 'a b' and 'a-b' both slugify to 'a-b'; 'a b' (0x20) wins.
+            listOf(folder("a b"), folder("a b/deep"), folder("a-b"), folder("a-b/deep")),
+        )
+        urls.getValue(TreePath.require("a b"))?.value shouldBe "a-b"
+        urls.getValue(TreePath.require("a b/deep"))?.value shouldBe "a-b/deep"
+        urls.getValue(TreePath.require("a-b")).shouldBeNull()
+        urls.getValue(TreePath.require("a-b/deep")).shouldBeNull()
+    }
+
     test("redirect_from values convert through the same construction: strip .md, slugify segments") {
         CanonicalUrlBuilder.redirectUrlPath("/old/Deployment Guide.md")?.value shouldBe "old/deployment-guide"
         CanonicalUrlBuilder.redirectUrlPath("old/deployment.md")?.value shouldBe "old/deployment"

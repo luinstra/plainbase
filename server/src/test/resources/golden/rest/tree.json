@@ -4,12 +4,14 @@
     "name": "",
     "title": null,
     "path": "",
+    "url": "/docs",
     "children": [
       {
         "type": "folder",
         "name": "api",
         "title": "API Reference",
         "path": "api",
+        "url": "/docs/api",
         "children": [
           {
             "type": "page",
@@ -72,6 +74,7 @@
         "name": "changelog",
         "title": null,
         "path": "changelog",
+        "url": "/docs/changelog",
         "children": [
           {
             "type": "page",
@@ -107,12 +110,14 @@
         "name": "guides",
         "title": "Guides",
         "path": "guides",
+        "url": "/docs/guides",
         "children": [
           {
             "type": "folder",
             "name": "advanced",
             "title": null,
             "path": "guides/advanced",
+            "url": "/docs/guides/advanced",
             "children": [
               {
                 "type": "page",
@@ -204,6 +209,7 @@
         "name": "infra",
         "title": null,
         "path": "infra",
+        "url": "/docs/infra",
         "children": [
           {
             "type": "page",
@@ -266,24 +272,28 @@
         "name": "notes",
         "title": null,
         "path": "notes",
+        "url": "/docs/notes",
         "children": [
           {
             "type": "folder",
             "name": "deeply",
             "title": null,
             "path": "notes/deeply",
+            "url": "/docs/notes/deeply",
             "children": [
               {
                 "type": "folder",
                 "name": "nested",
                 "title": null,
                 "path": "notes/deeply/nested",
+                "url": "/docs/notes/deeply/nested",
                 "children": [
                   {
                     "type": "folder",
                     "name": "folder",
                     "title": null,
                     "path": "notes/deeply/nested/folder",
+                    "url": "/docs/notes/deeply/nested/folder",
                     "children": [
                       {
                         "type": "page",
@@ -370,6 +380,7 @@
         "name": "scratch",
         "title": null,
         "path": "scratch",
+        "url": "/docs/scratch",
         "children": [
           {
             "type": "page",
@@ -396,12 +407,14 @@
         "name": "team",
         "title": null,
         "path": "team",
+        "url": "/docs/team",
         "children": [
           {
             "type": "folder",
             "name": "meetings",
             "title": null,
             "path": "team/meetings",
+            "url": "/docs/team/meetings",
             "children": [
               {
                 "type": "page",

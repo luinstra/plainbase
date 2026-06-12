@@ -115,6 +115,8 @@ sealed interface TreeNodeDto {
         val name: String,
         val title: String?,
         val path: String,
+        /** Additive amendment (ADR-0003): the folder's `/docs` URL prefix; null for a collision-loser subtree. */
+        val url: String?,
         val children: List<TreeNodeDto>,
     ) : TreeNodeDto
 
@@ -179,6 +181,7 @@ fun TreeNode.Folder.toDto(): TreeNodeDto.Folder = TreeNodeDto.Folder(
     title = title,
     // The synthetic root's domain path is null; the frozen wire shape spells it "" (§A4 example).
     path = path?.value ?: "",
+    url = url,
     children = children.map { child ->
         when (child) {
             is TreeNode.Folder -> child.toDto()

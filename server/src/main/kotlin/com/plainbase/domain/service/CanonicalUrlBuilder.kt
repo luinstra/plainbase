@@ -21,7 +21,8 @@ import com.plainbase.domain.render.HeadingSlugger
  * **Same-parent slug collisions are same-role only (ADR-0002):** sibling PAGES whose slugs are
  * equal contest the segment, and sibling FOLDERS likewise; a page and a folder sharing a segment
  * do NOT collide — they occupy distinct URLs (`setup.md` → `.../setup`, `setup/intro.md` →
- * `.../setup/intro`; a Phase-1 folder has no URL of its own). Within a role the deterministic
+ * `.../setup/intro`; the folder's own URL prefix is a client-rendered landing view that a page
+ * owning the URL always shadows — ADR-0003). Within a role the deterministic
  * winner is the entry whose raw on-disk name bytes sort first ([RawByteOrder] — the same rule as
  * the chunk-1 B3 NFC tie-break). Every loser is excluded from path space (a losing FOLDER takes
  * its whole subtree with it) and recorded as an [IdentityIssue.PathSlugCollision]; a loser page
@@ -85,6 +86,31 @@ object CanonicalUrlBuilder {
                 val ordered = group.sortedWith(compareBy(RawByteOrder) { it.rawName })
                 ordered.drop(1).map { IdentityIssue.PathSlugCollision(keptPath = ordered.first().path, loserPath = it.path) }
             }
+
+    /**
+     * Every folder's canonical URL path — the `/docs` prefix its descendants' URLs extend, which
+     * the folder landing view answers at (ADR-0003). Same §A4 construction as a page's ancestor
+     * segments, ending in the folder's own segment; null when the folder or any ancestor lost a
+     * same-role collision (a losing folder takes its whole subtree out of path space).
+     */
+    fun folderUrlPaths(folders: List<ContentFolder>): Map<TreePath, TreePath?> {
+        val segments = folders.associate { it.path to folderSegment(it) }
+        val losers = collisions(folders.map { Sibling(it.path, it.rawName, segments.getValue(it.path)) })
+            .map { it.loserPath }
+            .toSet()
+        return folders.associate { folder ->
+            val chain = ancestorsOf(folder.path) + folder.path
+            folder.path to when {
+                chain.any { it in losers } -> null
+                else -> TreePath.require(
+                    chain.joinToString("/") {
+                        segments[it]
+                            ?: HeadingSlugger.slugify(it.name, HeadingSlugger.FOLDER_FALLBACK)
+                    },
+                )
+            }
+        }
+    }
 
     /**
      * Converts a `redirect_from` frontmatter value (a file-path string like `/old/deployment.md`)

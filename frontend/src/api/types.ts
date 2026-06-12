@@ -9,6 +9,8 @@ export interface TreeFolder {
   name: string;
   title: string | null;
   path: string;
+  /** The folder's `/docs` URL prefix (percent-encoded, ready to use) — the landing-view address (ADR-0003); null for a collision-loser subtree. */
+  url: string | null;
   children: TreeNode[];
 }
 

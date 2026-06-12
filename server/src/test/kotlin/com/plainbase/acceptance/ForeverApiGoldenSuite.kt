@@ -30,6 +30,7 @@ import io.kotest.core.spec.style.FunSpec
  * be RELAXED into an acceptance by a documented revision — adding a `.out` for a today-refused
  * input is legal; flipping an existing `.out` is not. PB-LINK-1's scheme allowlist and broken-link
  * error classes are append-only; PB-REST-1 fields are never removed or retyped.
+ * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003).
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
