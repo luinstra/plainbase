@@ -44,6 +44,7 @@ class IndexHarness(
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = registry,
+        citations = CitationFactory(),
     )
 
     override fun close() = driver.close()

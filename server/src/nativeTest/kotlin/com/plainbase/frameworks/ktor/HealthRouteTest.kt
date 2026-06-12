@@ -21,26 +21,30 @@ import kotlin.test.assertEquals
 class HealthRouteTest {
 
     @Test
-    fun `healthz returns ok with version`() = testApplication {
-        application { plainbaseModule() }
+    fun `healthz returns ok with version`() = withRestServices { services ->
+        testApplication {
+            application { plainbaseModule(services) }
 
-        val response = client.get("/healthz")
+            val response = client.get("/healthz")
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals(ContentType.Application.Json, response.contentType()?.withoutParameters())
-        val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        assertEquals("ok", body["status"]?.jsonPrimitive?.content)
-        assertEquals("0.1.0", body["version"]?.jsonPrimitive?.content)
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(ContentType.Application.Json, response.contentType()?.withoutParameters())
+            val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            assertEquals("ok", body["status"]?.jsonPrimitive?.content)
+            assertEquals("0.1.0", body["version"]?.jsonPrimitive?.content)
+        }
     }
 
     @Test
-    fun `spa shell is served at root`() = testApplication {
-        application { plainbaseModule() }
+    fun `spa shell is served at root`() = withRestServices { services ->
+        testApplication {
+            application { plainbaseModule(services) }
 
-        val response = client.get("/")
+            val response = client.get("/")
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        val html = response.bodyAsText()
-        assertEquals(true, html.contains("<div id=\"root\">"), "expected SPA shell HTML, got: $html")
+            assertEquals(HttpStatusCode.OK, response.status)
+            val html = response.bodyAsText()
+            assertEquals(true, html.contains("<div id=\"root\">"), "expected SPA shell HTML, got: $html")
+        }
     }
 }

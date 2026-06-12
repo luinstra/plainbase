@@ -1,0 +1,26 @@
+{
+  "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+  "path": "guides/deploy-guide.md",
+  "slug": "deploy-guide",
+  "url": "/docs/guides/deploy-guide",
+  "title": "Deploy Guide",
+  "markdown": "---\ntitle: Deploy Guide\nslug: deploy-guide\nowner: ops\ntags: [infra, guide]\nredirect_from: [/old/deployment.md]\n---\n\n# Deploy Guide\n\nHow to deploy to production with zero downtime.\n\n## Prerequisites\n\nSee [Kubernetes setup](../infra/kubernetes.md) and\n[networking](../infra/networking.md).\n\n## Rolling deploy\n\nUse the standard rollout. Diagram: ![architecture](../infra/assets/diagram.svg)\n\n## Rollback\n\nRevert the commit and redeploy. History is in Git.\n",
+  "frontmatter": {
+    "title": "Deploy Guide",
+    "slug": "deploy-guide",
+    "owner": "ops",
+    "tags": ["infra", "guide"],
+    "redirect_from": ["/old/deployment.md"]
+  },
+  "content_hash": "{{content_hash}}",
+  "id_materialized": false,
+  "commit": null,
+  "citation": {
+    "page_id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+    "heading_id": null,
+    "path": "guides/deploy-guide.md",
+    "content_hash": "{{content_hash}}",
+    "commit": null,
+    "uri": "plainbase://0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a@{{content_hash}}"
+  }
+}

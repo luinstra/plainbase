@@ -85,13 +85,19 @@ class PageIndex(
 }
 
 /**
- * One indexed page: identity (chunk 4), canonical URL (§A4), and render metadata (chunk 3).
+ * One indexed page: identity (chunk 4), canonical URL (§A4), render metadata (chunk 3), and the
+ * read payload ([markdown] + [contentHash]) captured from the same bytes the render saw.
  *
  * [urlPath] is the canonical URL as a [TreePath] of DECODED slug segments (e.g.
  * `notes/release-notes-2026`) — the form the alias registry stores; null marks a same-parent
  * slug-collision loser, excluded from path space but fully reachable via its [permalink]. [url] is
  * the wire form: `/docs/` + the RFC 3986 percent-encoded segments (unicode slugs are legal and
  * encoded on emit).
+ *
+ * Carrying [markdown] and [contentHash] here is what makes every page response internally
+ * coherent: markdown, html, hash, and citation all come from ONE published snapshot, so an
+ * on-disk edit between rescans can never pair stale html with a fresh hash (the exact citation
+ * invariant Phase 5 heading-citations lean on).
  */
 data class IndexedPage(
     val id: PageId,
@@ -104,6 +110,14 @@ data class IndexedPage(
     val frontmatter: Frontmatter,
     /** True iff the id also lives in the file's frontmatter (§5.2). */
     val materialized: Boolean,
+    /**
+     * The §A4 `markdown` payload, VERBATIM: a plain (lenient) UTF-8 decode of the raw file bytes —
+     * BOM char included, frontmatter included, invalid sequences as U+FFFD. Deliberately unlike the
+     * patcher's strict decode: what an agent reads must be exactly what `base_hash` hashes, ever after.
+     */
+    val markdown: String,
+    /** The frozen §5.3 content hash (`CitationFactory.contentHash`) over the same raw bytes. */
+    val contentHash: String,
     val html: String,
     val headings: List<Heading>,
     val links: List<LinkOutcome>,

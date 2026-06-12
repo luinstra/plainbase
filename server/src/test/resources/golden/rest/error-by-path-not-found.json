@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "page_not_found",
+    "message": "No page at path no/such/page"
+  }
+}

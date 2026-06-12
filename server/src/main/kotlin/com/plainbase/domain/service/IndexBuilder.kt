@@ -25,13 +25,18 @@ import java.util.concurrent.atomic.AtomicReference
  * **One pass:** each file's bytes are read exactly once ([ContentStore.read]), each page's
  * frontmatter values are parsed exactly once ([FrontmatterParser], over the already-read bytes —
  * render only re-detects the block boundary, never the values), and each page is rendered exactly
- * once ([MarkdownRenderer.render]). The parse runs up front because URL construction needs every
- * page's `slug` BEFORE any page renders — rendered links embed other pages' canonical URLs — so
- * render happens against a URL-complete skeleton snapshot built first.
+ * once ([MarkdownRenderer.render]). The same in-hand bytes also yield the page's verbatim
+ * `markdown` and its content hash ([CitationFactory]), so the read path never touches disk for
+ * pages. The parse runs up front because URL construction needs every page's `slug` BEFORE any
+ * page renders — rendered links embed other pages' canonical URLs — so render happens against a
+ * URL-complete skeleton snapshot built first.
  *
- * **Safe publication, no `@Volatile`, no locks:** the new snapshot is built entirely off to the
- * side and published with a single [AtomicReference.set]; [current] readers always observe a
- * complete, internally consistent, deeply immutable [PageIndex] — old or new, never torn.
+ * **Safe publication, no `@Volatile`:** the new snapshot is built entirely off to the side and
+ * published with a single [AtomicReference.set]; [current] readers always observe a complete,
+ * internally consistent, deeply immutable [PageIndex] — old or new, never torn — and stay
+ * lock-free. [rebuild] itself is `@Synchronized` (rescans are rare): two concurrent rebuilds
+ * could otherwise publish out of order — the earlier-scanned one finishing later would regress
+ * [current] to a stale world (a classic lost update).
  *
  * **Move aliases (§A4, deferred from 4b):** a known id whose canonical URL path changed since the
  * previously published snapshot leaves its old path behind as a `url_alias` row; the registry maps
@@ -50,6 +55,7 @@ class IndexBuilder(
     private val patcher: FrontmatterPatcher,
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
+    private val citations: CitationFactory,
 ) {
 
     private val holder = AtomicReference(PageIndex.EMPTY)
@@ -57,7 +63,8 @@ class IndexBuilder(
     /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
     val current: PageIndex get() = holder.get()
 
-    /** Runs the full pass and atomically publishes (and returns) the new snapshot. */
+    /** Runs the full pass and atomically publishes (and returns) the new snapshot (serialized — see class doc). */
+    @Synchronized
     fun rebuild(): PageIndex {
         val previous = holder.get()
         val scan = contentStore.scan()
@@ -92,6 +99,10 @@ class IndexBuilder(
                 title = draft.file.path.stem,
                 frontmatter = draft.frontmatter,
                 materialized = identityOf.materialized,
+                // Captured from the one read, alongside everything else the page serves: the
+                // payload a request answers with is coherent BY CONSTRUCTION (see IndexedPage doc).
+                markdown = String(draft.bytes, Charsets.UTF_8),
+                contentHash = citations.contentHash(draft.bytes),
                 html = "",
                 headings = emptyList(),
                 links = emptyList(),

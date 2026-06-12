@@ -1,0 +1,24 @@
+{
+  "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+  "path": "guides/deploy-guide.md",
+  "slug": "deploy-guide",
+  "url": "/docs/guides/deploy-guide",
+  "title": "Deploy Guide",
+  "html": "{{html}}",
+  "content_hash": "{{content_hash}}",
+  "commit": null,
+  "headings": [
+    { "id": "deploy-guide", "level": 1, "text": "Deploy Guide" },
+    { "id": "prerequisites", "level": 2, "text": "Prerequisites" },
+    { "id": "rolling-deploy", "level": 2, "text": "Rolling deploy" },
+    { "id": "rollback", "level": 2, "text": "Rollback" }
+  ],
+  "citation": {
+    "page_id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+    "heading_id": null,
+    "path": "guides/deploy-guide.md",
+    "content_hash": "{{content_hash}}",
+    "commit": null,
+    "uri": "plainbase://0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a@{{content_hash}}"
+  }
+}

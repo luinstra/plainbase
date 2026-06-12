@@ -2,6 +2,7 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.UuidV7
+import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
@@ -22,6 +23,7 @@ val indexModule = module {
     single { PageIdentityService(UuidV7()) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }
+    single { CitationFactory() }
     single {
         IndexBuilder(
             contentStore = get(),
@@ -31,6 +33,7 @@ val indexModule = module {
             patcher = get(),
             idMap = get(),
             aliasRegistry = get(),
+            citations = get(),
         )
     }
 }

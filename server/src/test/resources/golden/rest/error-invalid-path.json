@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_path",
+    "message": "Not a valid asset path: '%2e%2e/secrets'"
+  }
+}

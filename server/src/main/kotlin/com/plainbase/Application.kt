@@ -7,6 +7,7 @@ import com.plainbase.frameworks.koin.configModule
 import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.repositoryModule
+import com.plainbase.frameworks.koin.restModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.spike.NativeSpike
@@ -27,14 +28,14 @@ fun main(args: Array<String>) {
 
 private fun serve() {
     val koin = startKoin {
-        modules(configModule, contentModule, repositoryModule, securityModule, indexModule)
+        modules(configModule, contentModule, repositoryModule, securityModule, indexModule, restModule)
     }.koin
 
     val config = koin.get<PlainbaseConfig>()
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
-    // Full scan at startup builds the snapshot (§C4); the chunk-6 rescan route rebuilds on demand.
+    // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand.
     koin.get<IndexBuilder>().rebuild()
-    KtorServer(config).start(wait = true)
+    KtorServer(config, koin.get()).start(wait = true)
 }

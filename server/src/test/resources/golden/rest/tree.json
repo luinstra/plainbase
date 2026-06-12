@@ -1,0 +1,475 @@
+{
+  "root": {
+    "type": "folder",
+    "name": "",
+    "title": null,
+    "path": "",
+    "children": [
+      {
+        "type": "folder",
+        "name": "api",
+        "title": "API Reference",
+        "path": "api",
+        "children": [
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Authentication",
+            "slug": "authentication",
+            "path": "api/authentication.md",
+            "url": "/docs/api/authentication",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Changelog Policy",
+            "slug": "changelog-policy",
+            "path": "api/changelog-policy.md",
+            "url": "/docs/api/changelog-policy",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "API Errors",
+            "slug": "errors",
+            "path": "api/errors.md",
+            "url": "/docs/api/errors",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "MCP Server",
+            "slug": "mcp",
+            "path": "api/mcp.md",
+            "url": "/docs/api/mcp",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "API Overview",
+            "slug": "api-overview",
+            "path": "api/overview.md",
+            "url": "/docs/api/api-overview",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "REST API",
+            "slug": "rest",
+            "path": "api/rest.md",
+            "url": "/docs/api/rest",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "changelog",
+        "title": null,
+        "path": "changelog",
+        "children": [
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Changelog 2026-01",
+            "slug": "2026-01",
+            "path": "changelog/2026-01.md",
+            "url": "/docs/changelog/2026-01",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Changelog 2026-02",
+            "slug": "2026-02",
+            "path": "changelog/2026-02.md",
+            "url": "/docs/changelog/2026-02",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Changelog 2026-03",
+            "slug": "2026-03",
+            "path": "changelog/2026-03.md",
+            "url": "/docs/changelog/2026-03",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "guides",
+        "title": "Guides",
+        "path": "guides",
+        "children": [
+          {
+            "type": "folder",
+            "name": "advanced",
+            "title": null,
+            "path": "guides/advanced",
+            "children": [
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Backup and Restore",
+                "slug": "backup-restore",
+                "path": "guides/advanced/backup-restore.md",
+                "url": "/docs/guides/advanced/backup-restore",
+                "status": "active"
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Scaling",
+                "slug": "scaling",
+                "path": "guides/advanced/scaling.md",
+                "url": "/docs/guides/advanced/scaling",
+                "status": "active"
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Performance Tuning",
+                "slug": "tuning",
+                "path": "guides/advanced/tuning.md",
+                "url": "/docs/guides/advanced/tuning",
+                "status": "draft"
+              }
+            ]
+          },
+          {
+            "type": "page",
+            "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+            "title": "Deploy Guide",
+            "slug": "deploy-guide",
+            "path": "guides/deploy-guide.md",
+            "url": "/docs/guides/deploy-guide",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Using the Editor",
+            "slug": "editor",
+            "path": "guides/editor.md",
+            "url": "/docs/guides/editor",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Getting Started",
+            "slug": "getting-started",
+            "path": "guides/getting-started.md",
+            "url": "/docs/guides/getting-started",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Searching the Docs",
+            "slug": "search",
+            "path": "guides/search.md",
+            "url": "/docs/guides/search",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Setup",
+            "slug": "setup",
+            "path": "guides/setup.md",
+            "url": "/docs/guides/setup",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Writing Style Guide",
+            "slug": "writing-style",
+            "path": "guides/writing-style.md",
+            "url": "/docs/guides/writing-style",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "infra",
+        "title": null,
+        "path": "infra",
+        "children": [
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Incident Runbook",
+            "slug": "incident-runbook",
+            "path": "infra/incident-runbook.md",
+            "url": "/docs/infra/incident-runbook",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Kubernetes",
+            "slug": "kubernetes",
+            "path": "infra/kubernetes.md",
+            "url": "/docs/infra/kubernetes",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Monitoring",
+            "slug": "monitoring",
+            "path": "infra/monitoring.md",
+            "url": "/docs/infra/monitoring",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Networking",
+            "slug": "networking",
+            "path": "infra/networking.md",
+            "url": "/docs/infra/networking",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Setup",
+            "slug": "setup",
+            "path": "infra/setup.md",
+            "url": "/docs/infra/setup",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Terraform",
+            "slug": "terraform",
+            "path": "infra/terraform.md",
+            "url": "/docs/infra/terraform",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "notes",
+        "title": null,
+        "path": "notes",
+        "children": [
+          {
+            "type": "folder",
+            "name": "deeply",
+            "title": null,
+            "path": "notes/deeply",
+            "children": [
+              {
+                "type": "folder",
+                "name": "nested",
+                "title": null,
+                "path": "notes/deeply/nested",
+                "children": [
+                  {
+                    "type": "folder",
+                    "name": "folder",
+                    "title": null,
+                    "path": "notes/deeply/nested/folder",
+                    "children": [
+                      {
+                        "type": "page",
+                        "id": "{{uuid}}",
+                        "title": "Deeply Nested Page",
+                        "slug": "treasure",
+                        "path": "notes/deeply/nested/folder/treasure.md",
+                        "url": "/docs/notes/deeply/nested/folder/treasure",
+                        "status": "active"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Broken Links Sample",
+            "slug": "broken-links",
+            "path": "notes/broken-links.md",
+            "url": "/docs/notes/broken-links",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Café Notes",
+            "slug": "café-notes",
+            "path": "notes/café-notes.md",
+            "url": "/docs/notes/caf%C3%A9-notes",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "just-text",
+            "slug": "just-text",
+            "path": "notes/just-text.md",
+            "url": "/docs/notes/just-text",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "A Page With No Frontmatter",
+            "slug": "no-frontmatter",
+            "path": "notes/no-frontmatter.md",
+            "url": "/docs/notes/no-frontmatter",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Release Notes 2026",
+            "slug": "release-notes-2026",
+            "path": "notes/release notes 2026.md",
+            "url": "/docs/notes/release-notes-2026",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Réunion Notes",
+            "slug": "réunion",
+            "path": "notes/réunion.md",
+            "url": "/docs/notes/r%C3%A9union",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "日本語ガイド",
+            "slug": "日本語ガイド",
+            "path": "notes/日本語ガイド.md",
+            "url": "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "scratch",
+        "title": null,
+        "path": "scratch",
+        "children": [
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Ideas",
+            "slug": "ideas",
+            "path": "scratch/ideas.md",
+            "url": "/docs/scratch/ideas",
+            "status": "draft"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "TODO",
+            "slug": "todo",
+            "path": "scratch/todo.md",
+            "url": "/docs/scratch/todo",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "folder",
+        "name": "team",
+        "title": null,
+        "path": "team",
+        "children": [
+          {
+            "type": "folder",
+            "name": "meetings",
+            "title": null,
+            "path": "team/meetings",
+            "children": [
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "January 2026 Retro",
+                "slug": "2026-01-retro",
+                "path": "team/meetings/2026-01-retro.md",
+                "url": "/docs/team/meetings/2026-01-retro",
+                "status": "archived"
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "February 2026 Planning",
+                "slug": "2026-02-planning",
+                "path": "team/meetings/2026-02-planning.md",
+                "url": "/docs/team/meetings/2026-02-planning",
+                "status": "archived"
+              }
+            ]
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Team Handbook",
+            "slug": "handbook",
+            "path": "team/handbook.md",
+            "url": "/docs/team/handbook",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Onboarding",
+            "slug": "onboarding",
+            "path": "team/onboarding.md",
+            "url": "/docs/team/onboarding",
+            "status": "active"
+          },
+          {
+            "type": "page",
+            "id": "{{uuid}}",
+            "title": "Roles and Responsibilities",
+            "slug": "roles",
+            "path": "team/roles.md",
+            "url": "/docs/team/roles",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "type": "page",
+        "id": "{{uuid}}",
+        "title": "About this tree",
+        "slug": "readme",
+        "path": "README.md",
+        "url": "/docs/readme",
+        "status": "active"
+      },
+      {
+        "type": "page",
+        "id": "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01",
+        "title": "Welcome to Demo Docs",
+        "slug": "welcome",
+        "path": "index.md",
+        "url": "/docs/welcome",
+        "status": "active"
+      }
+    ]
+  }
+}

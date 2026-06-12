@@ -1,0 +1,59 @@
+# Served child ORDERING of /api/v1/tree over fixtures/demo-docs, as a depth-first pre-order walk
+# (`type:path`; the root folder is `folder:`). Documented-NOT-frozen (§A4/M4): within a folder,
+# children sort by (`_folder.yaml` order if present else MAX, then lowercased title-or-name by code
+# point). A diff here is a reviewable collation event, not a forever-API break — unlike tree.json,
+# which is the frozen SHAPE golden and deliberately blind to ordering.
+folder:
+folder:guides
+folder:guides/advanced
+page:guides/advanced/backup-restore.md
+page:guides/advanced/tuning.md
+page:guides/advanced/scaling.md
+page:guides/deploy-guide.md
+page:guides/getting-started.md
+page:guides/search.md
+page:guides/setup.md
+page:guides/editor.md
+page:guides/writing-style.md
+folder:api
+page:api/errors.md
+page:api/overview.md
+page:api/authentication.md
+page:api/changelog-policy.md
+page:api/mcp.md
+page:api/rest.md
+page:README.md
+folder:changelog
+page:changelog/2026-01.md
+page:changelog/2026-02.md
+page:changelog/2026-03.md
+folder:infra
+page:infra/incident-runbook.md
+page:infra/kubernetes.md
+page:infra/monitoring.md
+page:infra/networking.md
+page:infra/setup.md
+page:infra/terraform.md
+folder:notes
+page:notes/no-frontmatter.md
+page:notes/broken-links.md
+page:notes/café-notes.md
+folder:notes/deeply
+folder:notes/deeply/nested
+folder:notes/deeply/nested/folder
+page:notes/deeply/nested/folder/treasure.md
+page:notes/just-text.md
+page:notes/release notes 2026.md
+page:notes/réunion.md
+page:notes/日本語ガイド.md
+folder:scratch
+page:scratch/ideas.md
+page:scratch/todo.md
+folder:team
+folder:team/meetings
+page:team/meetings/2026-02-planning.md
+page:team/meetings/2026-01-retro.md
+page:team/onboarding.md
+page:team/roles.md
+page:team/handbook.md
+page:index.md

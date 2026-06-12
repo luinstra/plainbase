@@ -68,6 +68,7 @@ dependencies {
     // Ktor server — CIO engine only (native-image constraint; Netty banned)
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.server.status.pages)
     implementation(libs.ktor.serialization.kotlinx.json)
 
     // kotlinx — the only serializer in the tree

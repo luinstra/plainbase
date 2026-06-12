@@ -50,6 +50,7 @@ class IndexBuilderNativeTest {
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
+                    citations = CitationFactory(),
                 )
 
                 val first = builder.rebuild()
