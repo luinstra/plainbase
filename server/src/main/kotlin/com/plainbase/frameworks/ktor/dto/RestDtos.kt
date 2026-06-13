@@ -25,6 +25,10 @@ import kotlinx.serialization.json.put
  */
 val RestJson: Json = Json {
     explicitNulls = true
+    // PB-SEARCH-1 §A2 (phase-2 plan line 97): "encodeDefaults likewise" — a frozen field may never
+    // vanish from the wire because some future DTO revision gives it a default value. No frozen DTO
+    // carries a default today, so this changes nothing now (the golden corpora in the build prove it).
+    encodeDefaults = true
 }
 
 /** The frozen error-code vocabulary (§A4, append-only). */
@@ -43,6 +47,16 @@ object ErrorCodes {
 
     /** 500: an uncaught server error (appended to the vocabulary; codes are append-only). */
     const val INTERNAL_ERROR: String = "internal_error"
+
+    /** 400: any PB-SEARCH-1 §A1 grammar violation (missing/blank/oversized `q`, bad `limit`/`offset`); message names the rule. */
+    const val INVALID_QUERY: String = "invalid_query"
+
+    /**
+     * 503: the configured search engine cannot be reached at request time. Registered now but
+     * emitted by NO Phase-2 code path — the embedded engine is in-process and can never be
+     * unreachable; reserved per §A5 so a future out-of-process engine appends no new vocabulary.
+     */
+    const val SEARCH_UNAVAILABLE: String = "search_unavailable"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

@@ -4,26 +4,31 @@ import com.plainbase.domain.render.HeadingIdsGoldenTest
 import com.plainbase.domain.service.FrontmatterPatcherGoldenTest
 import com.plainbase.domain.service.LinkResolutionGoldenTest
 import com.plainbase.frameworks.ktor.RestGoldenTest
+import com.plainbase.frameworks.ktor.SearchGoldenTest
 import io.kotest.core.spec.style.FunSpec
 
 /**
- * The four forever-API golden corpora, run as ONE named suite (chunk 8, acceptance criterion 3).
- * Selection, not duplication: each corpus test class below remains the single source of truth and
- * still runs standalone; this suite re-executes them by class selection with an executed-test
- * floor, so the named gate can never be vacuously green.
+ * The five forever-API golden corpora, run as ONE named suite (chunk 8, acceptance criterion 3;
+ * PB-SEARCH-1 joined with Phase-2 chunk S4). Selection, not duplication: each corpus test class
+ * below remains the single source of truth and still runs standalone; this suite re-executes them
+ * by class selection with an executed-test floor, so the named gate can never be vacuously green.
  *
  * ============================== NEVER-CHANGE POLICY ==============================
  * These corpora pin Plainbase's FROZEN forever-APIs (master plan §2; phase-1 plan §A,
- * `.crew/plans/phase-1-implementation-plan-task-breakdown-forever.md`):
+ * `.crew/plans/phase-1-implementation-plan-task-breakdown-forever.md`; phase-2 plan §A,
+ * `.crew/plans/phase-2-search-implementation-plan-pb-search-1-con.md`):
  *
- *   - PB-SLUG-1  (heading-id algorithm)      -> `golden/heading-ids.tsv`
- *   - PB-LINK-1  (link resolution + scheme allowlist) -> `golden/link-resolution.tsv`
- *   - PB-PATCH-1 (surgical frontmatter patcher)       -> `golden/patcher/` byte-pairs
- *   - PB-REST-1  (REST shapes + error envelope)       -> `golden/rest/` snapshots
+ *   - PB-SLUG-1   (heading-id algorithm)      -> `golden/heading-ids.tsv`
+ *   - PB-LINK-1   (link resolution + scheme allowlist) -> `golden/link-resolution.tsv`
+ *   - PB-PATCH-1  (surgical frontmatter patcher)       -> `golden/patcher/` byte-pairs
+ *   - PB-REST-1   (REST shapes + error envelope)       -> `golden/rest/` snapshots
+ *   - PB-SEARCH-1 (search shape + grammar + error envelopes) -> `golden/rest/search-*.json`,
+ *                 `golden/rest/error-invalid-query-*.json`
  *
  * A change that breaks ANY row of these corpora is a forever-API break, not a fix. Corrections to
  * golden rows were FREE only during the chunk-2 authoring window, which closed when chunk 2 landed
- * (commit 4c16a79, 2026-06-10); they are FROZEN ever since.
+ * (commit 4c16a79, 2026-06-10); they are FROZEN ever since. The PB-SEARCH-1 snapshots froze when
+ * chunk S4 landed (2026-06-12).
  *
  * One deliberate asymmetry — PB-PATCH-1 (§A3): ACCEPTANCE behavior is permanently frozen (every
  * `.in`/`.out` byte-pair and `.alreadypresent` case can never change), but a REFUSED case may later
@@ -31,6 +36,23 @@ import io.kotest.core.spec.style.FunSpec
  * input is legal; flipping an existing `.out` is not. PB-LINK-1's scheme allowlist and broken-link
  * error classes are append-only; PB-REST-1 fields are never removed or retyped.
  * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003).
+ *
+ * PB-SEARCH-1 freeze-tier notes (phase-2 §A6 — what these goldens do and do NOT freeze):
+ *   - `score` VALUES are deliberately NOT frozen (§A4: engine-scaled, never comparable across
+ *     engines or releases) — the comparison normalizes each hit's `score` to the `{{score}}`
+ *     placeholder AFTER type-checking it as a finite JSON number. Everything else in the parsed
+ *     tree IS frozen, `content_hash` recomputed from fixture bytes like every Phase-1 golden.
+ *   - These snapshots are tier-1 FOREVER; the broader pinned query set (exact snippet text and
+ *     hit ordering across many queries, the BM25 weight-tuning pins) is tier-2
+ *     pinned-but-reviewable — regenerable with documented review, e.g. on a deliberate SQLite
+ *     bump — and lives OUTSIDE this suite. Do not promote tier-2 pins in here.
+ *   - Pinned golden queries must avoid CJK-sensitive terms (CJK tokenization is engine- and
+ *     tokenizer-specific); deliberate CJK assertions are tagged per-engine/per-tokenizer in the
+ *     engine suites, never placed in a forever golden. The sentinel term is proven unique in the
+ *     fixture corpus by a self-validating precondition inside the test itself.
+ *   - `search_unavailable` is registered-but-unused vocabulary (§A5): no Phase-2 code path can
+ *     emit it (the embedded engine is in-process), so no golden exists for it yet — its envelope
+ *     freezes when the first out-of-process engine ships.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -53,5 +75,9 @@ class ForeverApiGoldenSuite : FunSpec({
 
     test("PB-REST-1: the REST snapshot corpus (8 frozen-shape tests)") {
         SelectedSuite.run(RestGoldenTest::class).shouldHavePassed("RestGoldenTest", atLeastTests = 8)
+    }
+
+    test("PB-SEARCH-1: the search snapshot corpus (5 frozen-shape tests, score-normalized)") {
+        SelectedSuite.run(SearchGoldenTest::class).shouldHavePassed("SearchGoldenTest", atLeastTests = 5)
     }
 })

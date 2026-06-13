@@ -8,12 +8,15 @@ import com.plainbase.frameworks.ktor.routes.assetRoute
 import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
 import com.plainbase.frameworks.ktor.routes.docsRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
+import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
 import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.respondError
+import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.treeRoute
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.URLDecodeException
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -67,6 +70,15 @@ fun Application.plainbaseModule(services: RestServices) {
             logger.debug(cause) { "rejected undecodable request ${call.request.local.uri}" }
             call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Malformed percent-encoding in request path")
         }
+        // The QUERY-STRING decode is NOT covered by that wrapping (ktor#2559): once a route
+        // matches, RoutingCall eagerly merges query+path parameters, so a malformed escape in
+        // the query (`?q=%`, `?q=100%`) throws a bare URLDecodeException before ANY handler runs
+        // — which used to fall to the catch-all as a 500, exactly what §A6's adversarial corpus
+        // (lone `%`) bans. A request undecodable as delivered is the client's 400.
+        exception<URLDecodeException> { call, cause ->
+            logger.debug(cause) { "rejected undecodable query string ${call.request.local.uri}" }
+            call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, malformedQueryMessage(call.request.rawQueryParameters))
+        }
         // Uncaught failures still answer in the frozen envelope; the code is an append to the
         // §A4 vocabulary (codes are append-only). Details go to the log, never the wire.
         exception<Throwable> { call, cause ->
@@ -82,6 +94,7 @@ fun Application.plainbaseModule(services: RestServices) {
         healthRoute()
         pageRoutes(services)
         treeRoute(services)
+        searchRoute(services)
         adminRoute(services)
         // Tailcard under /api: loses to every real API route by specificity, beats the static
         // fallback — an unknown API path must 404 in the envelope, never 200 the shell.

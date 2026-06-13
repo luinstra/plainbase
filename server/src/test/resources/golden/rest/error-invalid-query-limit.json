@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_query",
+    "message": "limit must be an integer between 1 and 100"
+  }
+}

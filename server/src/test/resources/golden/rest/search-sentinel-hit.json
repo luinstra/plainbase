@@ -1,0 +1,29 @@
+{
+  "query": "blameless",
+  "engine": "embedded",
+  "limit": 20,
+  "offset": 0,
+  "total": 1,
+  "hits": [
+    {
+      "page_id": "0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d",
+      "path": "infra/incident-runbook.md",
+      "url": "/docs/infra/incident-runbook",
+      "title": "Incident Runbook",
+      "heading_id": "postmortems",
+      "heading_text": "Postmortems",
+      "heading_path": ["Incident Runbook", "Postmortems"],
+      "snippet": "Blameless, within 5 working days. Template in meetings.",
+      "highlights": [{ "start": 0, "end": 9 }],
+      "score": "{{score}}",
+      "citation": {
+        "page_id": "0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d",
+        "heading_id": "postmortems",
+        "path": "infra/incident-runbook.md",
+        "content_hash": "{{content_hash}}",
+        "commit": null,
+        "uri": "plainbase://0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d#postmortems@{{content_hash}}"
+      }
+    }
+  ]
+}

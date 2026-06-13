@@ -1,0 +1,8 @@
+{
+  "query": "xyzzyplugh",
+  "engine": "embedded",
+  "limit": 20,
+  "offset": 0,
+  "total": 0,
+  "hits": []
+}

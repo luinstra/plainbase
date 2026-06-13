@@ -4,6 +4,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.TreeBuilder
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.frameworks.ktor.dto.RestJson
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference
 class RestServices(
     val indexBuilder: IndexBuilder,
     val pageService: PageService,
+    val searchService: SearchService,
     val aliasRegistry: UrlAliasRegistry,
     val contentStore: ContentStore,
 ) {

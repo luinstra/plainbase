@@ -6,23 +6,31 @@ import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.SearchIndexer
+import com.plainbase.domain.service.SearchService
+import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.search.Fts5SearchProvider
+import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * The full production wiring of the REST read path over a runtime temp tree, for the native-smoke
- * tests: real [LocalContentStore], real renderer, real in-memory SQLite repos — `restModule`'s
- * graph minus Koin. kotlin.test-compatible (no Kotest/MockK; this source set feeds the native test
- * image).
+ * tests: real [LocalContentStore], real renderer, real in-memory SQLite repos, and (since S4) the
+ * real search stack — a file-backed [SearchDb] synced through the same publication listener
+ * `searchModule` registers — `restModule`'s graph minus Koin. kotlin.test-compatible (no
+ * Kotest/MockK; this source set feeds the native test image).
  */
 fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServices) -> Unit) {
     val content = Files.createTempDirectory("pb-native-rest")
+    val data = Files.createTempDirectory("pb-native-rest-data")
     try {
         for ((relativePath, body) in pages) {
             val target = content.resolve(relativePath)
@@ -33,26 +41,36 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
             val database = DatabaseFactory.createDatabase(driver)
             val store = LocalContentStore(content)
             val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
-            val builder = IndexBuilder(
-                contentStore = store,
-                frontmatterParser = FrontmatterReader(),
-                rendererFactory = { view -> FlexmarkRenderer(view) },
-                identity = PageIdentityService(UuidV7()),
-                patcher = FrontmatterPatcher(),
-                idMap = SqlDelightIdMapRepository(database),
-                aliasRegistry = registry,
-                citations = CitationFactory(),
-            )
-            builder.rebuild()
-            val services = RestServices(
-                indexBuilder = builder,
-                pageService = PageService(builder, registry, CitationFactory()),
-                aliasRegistry = registry,
-                contentStore = store,
-            )
-            block(services)
+            SearchDb(data.resolve("search.db")).use { searchDb ->
+                val searchProvider = Fts5SearchProvider(searchDb)
+                val builder = IndexBuilder(
+                    contentStore = store,
+                    frontmatterParser = FrontmatterReader(),
+                    rendererFactory = { view -> FlexmarkRenderer(view) },
+                    identity = PageIdentityService(UuidV7()),
+                    patcher = FrontmatterPatcher(),
+                    idMap = SqlDelightIdMapRepository(database),
+                    aliasRegistry = registry,
+                    citations = CitationFactory(),
+                    listeners = listOf(IndexBuilder.PublicationListener(SearchIndexer(searchProvider, SectionSplitter())::sync)),
+                )
+                builder.rebuild()
+                val services = RestServices(
+                    indexBuilder = builder,
+                    pageService = PageService(builder, registry, CitationFactory()),
+                    searchService = SearchService(provider = searchProvider, indexBuilder = builder),
+                    aliasRegistry = registry,
+                    contentStore = store,
+                )
+                block(services)
+            }
         }
     } finally {
-        Files.walk(content).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        deleteRecursively(content)
+        deleteRecursively(data)
     }
+}
+
+private fun deleteRecursively(root: Path) {
+    Files.walk(root).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
 }

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_query",
+    "message": "q contains malformed percent-encoding"
+  }
+}

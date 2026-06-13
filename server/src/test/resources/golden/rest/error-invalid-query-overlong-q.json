@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_query",
+    "message": "q exceeds 512 UTF-16 code units"
+  }
+}

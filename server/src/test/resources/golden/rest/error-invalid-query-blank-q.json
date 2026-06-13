@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_query",
+    "message": "q is required and must be non-empty after trimming"
+  }
+}

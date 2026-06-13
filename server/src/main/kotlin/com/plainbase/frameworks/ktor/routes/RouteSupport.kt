@@ -8,7 +8,9 @@ import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.RestJson
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
 import io.ktor.http.charset
+import io.ktor.http.decodeURLQueryComponent
 import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.uri
@@ -24,6 +26,21 @@ internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>,
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
 internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) {
     respondRest(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(code, message)), status)
+}
+
+/**
+ * The FROZEN PB-SEARCH-1 message for a malformed percent-escape in the query string (`?q=%`,
+ * `?q=100%`), naming the offending §A1 parameter when one of them is the culprit (the realistic
+ * case the golden pins) and the query string itself otherwise (a malformed UNKNOWN parameter —
+ * §A1 would ignore its value, but Ktor's routing decodes the whole query string eagerly, so the
+ * request is undecodable as delivered and 400 is the only honest answer). One source for the
+ * literal: the search route's defensive decode and the `StatusPages` net both answer with it.
+ */
+internal fun malformedQueryMessage(raw: Parameters): String {
+    val parameter = listOf("q", "limit", "offset").firstOrNull { name ->
+        raw.getAll(name).orEmpty().any { runCatching { it.decodeURLQueryComponent(plusIsSpace = true) }.isFailure }
+    }
+    return "${parameter ?: "query string"} contains malformed percent-encoding"
 }
 
 /**
