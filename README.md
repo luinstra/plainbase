@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/plainbase-logo-dark.svg" />
-  <img src="assets/brand/plainbase-logo.svg" alt="Plainbase" width="360" />
+  <img src="assets/brand/plainbase-logo.svg" alt="Plainbase" width="450" />
 </picture>
 
 _Internal docs humans enjoy and agents can actually work with._
