@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalUuidApi::class)
+
 package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.page.PageId
@@ -7,7 +9,8 @@ import io.kotest.property.Arb
 import io.kotest.property.arbitrary.long
 import io.kotest.property.checkAll
 import java.nio.ByteBuffer
-import java.util.UUID
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * ID storage policy (decision log #6) at the conversion point: a [PageId] encodes to exactly its 16
@@ -27,7 +30,7 @@ class PageIdColumnAdapterTest : FunSpec({
 
     test("encode equals msb||lsb for arbitrary UUIDs and decode(encode) is the identity") {
         checkAll(Arb.long(), Arb.long()) { msb, lsb ->
-            val id = PageId.of(UUID(msb, lsb))
+            val id = PageId.of(Uuid.fromLongs(msb, lsb))
             val bytes = PageIdColumnAdapter.encode(id)
             bytes shouldBe ByteBuffer.allocate(16).putLong(msb).putLong(lsb).array()
             PageIdColumnAdapter.decode(bytes) shouldBe id
