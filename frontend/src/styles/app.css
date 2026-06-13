@@ -343,3 +343,51 @@ body {
 .pb-prose .hljs-deletion {
   color: var(--pb-syntax-attr);
 }
+
+/* ---- deep-link landing pulse (Resolution 1; .pb-deeplink-pulse applied in lib/deepLink.ts) -- */
+@keyframes pb-deeplink-pulse-kf {
+  from {
+    background-color: var(--pb-deeplink-pulse);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.pb-deeplink-pulse {
+  animation: pb-deeplink-pulse-kf 1s ease-out;
+  border-radius: 0.25rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* belt-and-suspenders: the JS already skips adding the class under reduced motion */
+  .pb-deeplink-pulse {
+    animation: none;
+  }
+}
+
+/* ---- search palette (.pb-search is a stable selector; data-pb-search-* are public hooks) ---- */
+.pb-search mark {
+  background: var(--pb-selection-bg);
+  color: inherit;
+  border-radius: 0.125rem;
+  padding: 0 0.05em;
+}
+
+.pb-search-spinner {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--pb-border);
+  border-top-color: var(--pb-accent);
+  border-radius: 50%;
+  animation: pb-search-spin 0.6s linear infinite;
+}
+@keyframes pb-search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pb-search-spinner {
+    animation: none;
+  }
+}

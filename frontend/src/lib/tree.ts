@@ -12,6 +12,15 @@ function* walk(nodes: TreeNode[]): Generator<TreeNode> {
   }
 }
 
+/** Every page node under `root`, depth-first in tree order — the quick-switcher's candidate set. */
+export function pages(root: TreeFolder): TreePage[] {
+  const result: TreePage[] = [];
+  for (const node of walk(root.children)) {
+    if (node.type === "page") result.push(node);
+  }
+  return result;
+}
+
 /**
  * Folder nodes keyed by content-relative folder path ("guides/advanced") — breadcrumb
  * titles (null title → callers fall back to the directory name) and landing urls.

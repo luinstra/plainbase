@@ -77,3 +77,33 @@ export interface PageHtmlResponse {
 export interface ErrorEnvelope {
   error: { code: string; message: string };
 }
+
+/**
+ * PB-SEARCH-1 §A2 wire shapes (frozen) — transcribed from the server DTO
+ * (server: frameworks/ktor/dto/SearchDtos.kt). Present-null fields are typed `| null`.
+ * The SPA consumes `url`/`heading_id`/`heading_text`/`heading_path`/`snippet`/`highlights`
+ * verbatim — no client re-derivation (§A4).
+ */
+export interface SearchHit {
+  page_id: string;
+  path: string;
+  url: string | null;
+  title: string;
+  heading_id: string | null;
+  heading_text: string | null;
+  heading_path: string[];
+  snippet: string;
+  /** §A3: UTF-16 code-unit offsets into `snippet`, half-open `[start, end)`. */
+  highlights: { start: number; end: number }[];
+  score: number;
+  citation: CitationDto;
+}
+
+export interface SearchResponse {
+  query: string;
+  engine: string;
+  limit: number;
+  offset: number;
+  total: number;
+  hits: SearchHit[];
+}

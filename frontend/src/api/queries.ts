@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { getJson } from "./client";
-import type { PageHtmlResponse, PageResponse, TreeResponse } from "./types";
+import type { PageHtmlResponse, PageResponse, SearchResponse, TreeResponse } from "./types";
 
 /**
  * Re-encodes a decoded `/docs/`-relative path for the by-path endpoint. The router hands
@@ -38,3 +38,24 @@ export const pageHtmlQuery = (id: string) =>
     queryFn: () => getJson<PageHtmlResponse>(`/api/v1/pages/${id}/html`),
     staleTime: 30_000,
   });
+
+/** §A1: `limit` is 1–100; S7 always sends a fixed page of 20 (no user-controlled limit). */
+export const SEARCH_LIMIT = 20;
+/** §A1: `q` is ≤ 512 UTF-16 code units; the client clamps so `invalid_query` is unreachable. */
+export const SEARCH_MAX_QUERY = 512;
+
+/**
+ * Full-text query (Resolution 3). Keyed on the TRIMMED `q` (plus limit/offset): TanStack
+ * Query attaches each response to its key, so a slow earlier response lands on its own
+ * no-longer-observed key and can never paint over the active `q` — the out-of-order race
+ * fix. `enabled: q.length > 0` means a blank query never fires, so §A1 `invalid_query` is
+ * impossible by construction.
+ */
+export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0) {
+  return queryOptions({
+    queryKey: ["search", q, limit, offset],
+    queryFn: () => getJson<SearchResponse>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}`),
+    enabled: q.length > 0,
+    staleTime: 30_000,
+  });
+}

@@ -1,5 +1,6 @@
 import hljs from "highlight.js/lib/common";
 import { useEffect, useRef } from "react";
+import { useDeepLinkHighlight } from "../lib/deepLink";
 
 /**
  * Server-rendered page HTML inside the stable `.pb-prose` selector. The server is the
@@ -9,7 +10,7 @@ import { useEffect, useRef } from "react";
  *    falls back to hljs auto-detection; either way styling flows through the
  *    `--pb-syntax-*` semantic tokens, never a bundled hljs theme)
  *  - heading anchor links on the ids the server emitted
- *  - deep-link `#fragment` scroll once the content is in the DOM
+ *  - deep-link `#fragment` scroll + pulse once the content is in the DOM (Resolution 1)
  */
 export function Prose({ html }: { html: string }) {
   const ref = useRef<HTMLElement>(null);
@@ -19,8 +20,12 @@ export function Prose({ html }: { html: string }) {
     if (!container) return;
     highlightCodeBlocks(container);
     injectHeadingAnchors(container);
-    scrollToLocationHash();
   }, [html]);
+
+  // `ready` is a synchronous derived value (NOT useState): the content for THIS html is
+  // committed by the time the hook's own effect runs, so the scroll lands on first commit.
+  // `html` identity drives a re-scroll on a cross-page nav that keeps the same fragment.
+  useDeepLinkHighlight(html.length > 0, html);
 
   // dangerouslySetInnerHTML is safe here: the html is server-sanitized (§C3, escapeHtml)
   return <article ref={ref} className="pb-prose" data-pb-prose dangerouslySetInnerHTML={{ __html: html }} />;
@@ -51,11 +56,4 @@ export function injectHeadingAnchors(container: HTMLElement): void {
     anchor.setAttribute("aria-label", `Link to ${heading.textContent ?? heading.id}`);
     heading.appendChild(anchor);
   });
-}
-
-function scrollToLocationHash(): void {
-  const hash = window.location.hash;
-  if (!hash) return;
-  const id = decodeURIComponent(hash.slice(1));
-  document.getElementById(id)?.scrollIntoView();
 }

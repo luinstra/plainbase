@@ -87,6 +87,8 @@
   --pb-link-broken: var(--pb-red-600);
   --pb-focus-ring: var(--pb-blue-500);
   --pb-selection-bg: var(--pb-blue-200);
+  /* transient deep-link landing pulse (Resolution 1) — mirrors the selection highlight */
+  --pb-deeplink-pulse: var(--pb-blue-200);
 
   /* code */
   --pb-code-bg: var(--pb-gray-50);
@@ -133,6 +135,7 @@
   --pb-link-broken: var(--pb-red-400);
   --pb-focus-ring: var(--pb-blue-400);
   --pb-selection-bg: var(--pb-blue-900);
+  --pb-deeplink-pulse: var(--pb-blue-900);
 
   /* code */
   --pb-code-bg: var(--pb-gray-950);

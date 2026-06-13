@@ -1,8 +1,26 @@
 import { Outlet, useRouter } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
 import { interceptableHref } from "../lib/links";
+import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
+
+/** Opens the (always-mounted) palette via its custom event — the click counterpart to Cmd/Ctrl+K. */
+function SearchTrigger() {
+  return (
+    <button
+      type="button"
+      onClick={() => document.dispatchEvent(new CustomEvent("pb:search-open"))}
+      className="pb-search-trigger flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+      data-pb-search-trigger
+      aria-label="Search"
+    >
+      <span aria-hidden="true">⌕</span>
+      <span className="max-sm:hidden">Search</span>
+      <kbd className="ml-2 rounded border border-edge px-1.5 text-xs text-faint max-sm:hidden">⌘K</kbd>
+    </button>
+  );
+}
 
 /**
  * App shell: header + tree sidebar + content outlet. One delegated click handler routes
@@ -31,7 +49,10 @@ export function Shell() {
           <img className="pb-logo pb-logo-light" src="/plainbase-logo.svg" alt="" aria-hidden="true" />
           <img className="pb-logo pb-logo-dark" src="/plainbase-logo-dark.svg" alt="" aria-hidden="true" />
         </a>
-        <ThemeToggle />
+        <div className="flex items-center gap-3">
+          <SearchTrigger />
+          <ThemeToggle />
+        </div>
       </header>
       <div className="mx-auto flex w-full max-w-screen-2xl">
         <Sidebar />
@@ -39,6 +60,7 @@ export function Shell() {
           <Outlet />
         </main>
       </div>
+      <SearchPalette />
     </div>
   );
 }
