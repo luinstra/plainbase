@@ -10,6 +10,27 @@
 @import "./tokens.css";
 
 /*
+ * Header wordmark. The light/dark logo SVGs (teal slash, ink letters baked per variant)
+ * are swapped by the manual theme toggle's `data-theme` attribute — display only, so no
+ * color literal lives here. Pre-paint bootstrap sets `data-theme` before first paint, so
+ * the correct variant shows without a flash.
+ */
+.pb-logo {
+  display: block;
+  height: 1.5rem;
+  width: auto;
+}
+.pb-logo-dark {
+  display: none;
+}
+[data-theme="dark"] .pb-logo-light {
+  display: none;
+}
+[data-theme="dark"] .pb-logo-dark {
+  display: block;
+}
+
+/*
  * Tailwind v4 bridge: utilities compile to var() references into the SEMANTIC tier
  * (`inline` keeps the var() indirection in the emitted utility, so runtime token
  * overrides — dark mode, theme: block, custom.css — flow through utilities too).

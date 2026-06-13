@@ -27,8 +27,9 @@ export function Shell() {
         className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-raised px-5"
         data-pb-header
       >
-        <a href="/" className="text-base font-bold tracking-tight text-ink">
-          Plainbase
+        <a href="/" className="pb-logo-home flex items-center" aria-label="Plainbase" data-pb-home>
+          <img className="pb-logo pb-logo-light" src="/plainbase-logo.svg" alt="" aria-hidden="true" />
+          <img className="pb-logo pb-logo-dark" src="/plainbase-logo-dark.svg" alt="" aria-hidden="true" />
         </a>
         <ThemeToggle />
       </header>
