@@ -7,7 +7,7 @@ _Internal docs humans enjoy and agents can actually work with._
 
 Filesystem-native, agent-native: the source of truth is a plain tree of Markdown
 files, Git is an optional layer, and every index is derived, rebuildable state.
-See [DESIGN_SUMMARY.md](DESIGN_SUMMARY.md).
+See the [design summary](docs/DESIGN_SUMMARY.md).
 
 ## Quickstart (Docker Compose) — 2 commands
 
