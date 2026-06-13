@@ -36,3 +36,18 @@ Filesystem-native, agent-native internal docs product. Master plan:
   = the native gate (8/8 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
+
+### Frontend tests — always go through Gradle, never raw `vitest`/`playwright`
+
+The Gradle node plugin owns the hermetic Node/npm toolchain; a raw `./node_modules/.bin/vitest`
+(or `cd frontend && …`) runs against the wrong toolchain and is an unwhitelistable, prompt-spamming
+command string. Use these stable `./gradlew :*` invocations instead:
+
+- `./gradlew :frontend:vitestFile -PtestFile=src/__tests__/<file>` — one file, fast iteration
+  (omit `-PtestFile` to run all). No token-discipline gate.
+- `./gradlew :frontend:npmTest` — full vitest suite + the §5.9 token-discipline gate. Always runs
+  (not up-to-date-cached).
+- `./gradlew :frontend:build` — adds `tsc --noEmit` + `vite build`; run this to catch type errors
+  `npmTest` alone misses.
+- `./gradlew :frontend:smokeTest` — Playwright against the real server (downloads Chromium first run;
+  not part of `build`).
