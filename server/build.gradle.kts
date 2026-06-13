@@ -147,6 +147,10 @@ dependencies {
     // (suite-without-duplication, with executed-test floors against vacuous green). Already in the
     // catalog for nativeTest; testImplementation-scoped, so the runtime allowlist is unaffected.
     testImplementation(libs.junit.platform.launcher)
+    // Logback at TEST-COMPILE scope (it is already the runtime backend above): the S5 watcher test
+    // asserts the DATA_DIR-nested-in-CONTENT_DIR startup warning by attaching a ListAppender, which
+    // needs the logback classes at compile time. Runtime allowlist unaffected (same artifact).
+    testImplementation(libs.logback.classic)
 
     // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
     // GraalVM's native JUnit launcher, and the ktor test host ONLY — deliberately no Kotest/MockK, so

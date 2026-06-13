@@ -14,5 +14,11 @@ import org.koin.dsl.module
  */
 val contentModule = module {
     single { IgnoreRules() }
-    single<ContentStore> { LocalContentStore(root = get<PlainbaseConfig>().contentDir, ignoreRules = get()) }
+    single<ContentStore> {
+        val config = get<PlainbaseConfig>()
+        // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside CONTENT_DIR, the
+        // app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
+        // and its writes would re-trigger every rebuild.
+        LocalContentStore(root = config.contentDir, ignoreRules = get(), exclusions = listOf(config.dataDir))
+    }
 }

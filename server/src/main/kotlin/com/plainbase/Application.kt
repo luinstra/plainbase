@@ -1,8 +1,11 @@
 package com.plainbase
 
+import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.frameworks.cli.AdoptCommand
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.configModule
 import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.indexModule
@@ -34,14 +37,25 @@ fun main(args: Array<String>) {
 
 private fun serve() {
     val koin = startKoin {
-        modules(configModule, contentModule, repositoryModule, securityModule, indexModule, searchModule, restModule)
+        modules(configModule, contentModule, repositoryModule, securityModule, indexModule, checkpointModule, searchModule, restModule)
     }.koin
 
     val config = koin.get<PlainbaseConfig>()
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
-    // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand.
-    koin.get<IndexBuilder>().rebuild()
-    KtorServer(config, koin.get()).start(wait = true)
+    val builder = koin.get<IndexBuilder>()
+    // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
+    // Events arriving while the initial build is in flight coalesce into at most one follow-up
+    // rebuild via the scheduler's single-flight dirty flag.
+    val scheduler = RebuildScheduler(rebuild = { builder.rebuild() })
+    val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
+    try {
+        // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand.
+        builder.rebuild()
+        KtorServer(config, koin.get()).start(wait = true)
+    } finally {
+        watch.close()
+        scheduler.close()
+    }
 }

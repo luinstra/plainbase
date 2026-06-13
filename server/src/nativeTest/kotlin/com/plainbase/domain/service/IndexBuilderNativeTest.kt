@@ -7,6 +7,7 @@ import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
@@ -50,6 +51,7 @@ class IndexBuilderNativeTest {
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
+                    checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
                 )
 

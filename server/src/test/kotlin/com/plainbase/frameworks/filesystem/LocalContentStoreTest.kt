@@ -73,6 +73,23 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("a nested DATA_DIR is excluded from the scan: app-owned databases are never indexed or served") {
+        val tmp = Files.createTempDirectory("pb-nested-data")
+        try {
+            Files.writeString(tmp.resolve("page.md"), "# page")
+            val data = Files.createDirectory(tmp.resolve("data"))
+            Files.writeString(data.resolve("plainbase.db"), "not for the index")
+            Files.writeString(data.resolve("search.db"), "not for the index")
+
+            val result = LocalContentStore(tmp, exclusions = listOf(data)).scan()
+
+            result.files.map { it.path.value } shouldContainExactly listOf("page.md")
+            result.folders shouldHaveSize 0
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
     test("content.ignore globs exclude matching paths") {
         val tmp = Files.createTempDirectory("pb-glob")
         try {

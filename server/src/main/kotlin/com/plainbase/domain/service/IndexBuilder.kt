@@ -13,6 +13,7 @@ import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.PageCheckpointRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.atomic.AtomicReference
 
@@ -37,11 +38,14 @@ import java.util.concurrent.atomic.AtomicReference
  * could otherwise publish out of order — the earlier-scanned one finishing later would regress
  * [current] to a stale world (a classic lost update).
  *
- * **Move aliases (§A4, deferred from 4b):** a known id whose canonical URL path changed since the
- * previously published snapshot leaves its old path behind as a `url_alias` row; the registry maps
- * paths straight to page ids, so chains collapse on write (one hop after any number of moves).
- * `redirect_from` frontmatter registers through the same construction; a live canonical path
- * always shadows an alias (dropped, with a recorded `redirect_conflict` issue).
+ * **Move aliases (§A4; down-time moves closed by the Phase-2 §B3 checkpoint):** a known id whose
+ * canonical URL path changed since the previously published snapshot leaves its old path behind as
+ * a `url_alias` row; the registry maps paths straight to page ids, so chains collapse on write
+ * (one hop after any number of moves). On the FIRST rebuild after startup the previous paths come
+ * from the persisted [PageCheckpointRepository] instead of the (empty) holder, so a materialized
+ * page moved while the server was down still records its alias. `redirect_from` frontmatter
+ * registers through the same construction; a live canonical path always shadows an alias (dropped,
+ * with a recorded `redirect_conflict` issue).
  *
  * Identity binding mirrors `AdoptionPass` RECORD semantics over the in-hand bytes (zero content
  * writes): id_map rows plus issues, pages in path order so duplicate resolution is deterministic.
@@ -63,6 +67,7 @@ class IndexBuilder(
     private val patcher: FrontmatterPatcher,
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
+    private val checkpoint: PageCheckpointRepository,
     private val citations: CitationFactory,
     private val listeners: List<PublicationListener> = emptyList(),
 ) {
@@ -81,6 +86,16 @@ class IndexBuilder(
     @Synchronized
     fun rebuild(): PageIndex {
         val previous = holder.get()
+        // §B3 checkpoint-as-previous: the first rebuild after startup (holder still the EMPTY
+        // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
+        // move performed while the server was down still records its alias. Every later rebuild
+        // compares against the previous published snapshot, exactly as before.
+        val previousUrlPaths =
+            if (previous === PageIndex.EMPTY) {
+                checkpoint.load()
+            } else {
+                previous.pages.associate { it.id to it.urlPath }
+            }
         val scan = contentStore.scan()
         scan.issues.forEach { idMap.record(it.toIdentityIssue()) }
 
@@ -140,7 +155,7 @@ class IndexBuilder(
         }
 
         val snapshot = PageIndex(pages, scan.folders, assets)
-        recordAliases(previous, snapshot)
+        recordAliases(previousUrlPaths, snapshot)
         holder.set(snapshot)
         logger.info {
             "indexed ${pages.size} page(s), ${assets.size} asset(s), ${scan.folders.size} folder(s); " +
@@ -197,19 +212,20 @@ class IndexBuilder(
     }
 
     /** §A4 alias semantics for one rebuild: move detection, `redirect_from`, then the shadow sweep. */
-    private fun recordAliases(previous: PageIndex, snapshot: PageIndex) {
+    private fun recordAliases(previousUrlPaths: Map<PageId, TreePath?>, snapshot: PageIndex) {
         val liveCanonicals = snapshot.byUrlPath.keys
 
         // Move/rename/slug-change detection: a known id whose canonical URL path changed since the
         // previous snapshot leaves the old path behind as an alias — unless a live canonical now
         // claims it (live always wins; nothing to register, the conflict is recorded instead).
         //
-        // Deliberate Phase-1 limitation (§A4, owner-ratified): only IN-PROCESS rescans see a move.
-        // A move performed while the server is down compares against PageIndex.EMPTY at the next
-        // startup — no previous urlPath, and bind() supersedes the old id_map row — so the old URL
-        // 404s with no alias. Deferred to the Phase 2 watcher, which sees move events directly.
+        // The previous paths come from the previous published snapshot — or, on the first rebuild
+        // after startup, from the persisted §B3 checkpoint, which closes the Phase-1 down-time-move
+        // gap for MATERIALIZED pages (the id travels in the file). An unmaterialized page moved
+        // while down still gets a fresh id and no alias: the accepted §5.2 path-keyed-identity
+        // trade-off, restated, not fixed here.
         for (page in snapshot.pages) {
-            val oldUrlPath = previous.byId[page.id]?.urlPath ?: continue
+            val oldUrlPath = previousUrlPaths[page.id] ?: continue
             if (oldUrlPath == page.urlPath) continue
             if (oldUrlPath in liveCanonicals) {
                 idMap.record(

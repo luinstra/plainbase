@@ -13,6 +13,7 @@ import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -83,6 +84,7 @@ class Phase1AcceptanceNativeTest {
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
+            checkpoint = SqlDelightPageCheckpointRepository(database),
             citations = CitationFactory(),
         )
     }

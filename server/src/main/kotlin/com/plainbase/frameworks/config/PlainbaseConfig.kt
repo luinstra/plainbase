@@ -33,9 +33,21 @@ data class PlainbaseConfig(
      * CONTENT_DIR is missing or not a directory. Without it the first scan dies on a bare
      * `NoSuchFileException` that names nothing the operator can act on; silently serving an
      * empty tree would be worse (§4 — the content tree is the product).
+     *
+     * Also rejects DATA_DIR == CONTENT_DIR: that config violates §4's user-owned/app-owned
+     * separation, and concretely puts plainbase.db/search.db (plus their -wal/-journal siblings —
+     * none of them dotfiles) INSIDE the watched content root, where every checkpoint write would
+     * re-trigger the watcher: a silent, self-sustaining rebuild loop. Strict nesting either way
+     * stays legal — the watcher excludes a strictly-nested DATA_DIR, and under a strict ancestor
+     * the app's writes land outside the watched tree.
      */
     fun requireContentDir(): Path {
         require(Files.isDirectory(contentDir)) { "CONTENT_DIR does not exist or is not a directory: $contentDir" }
+        require(dataDir.toAbsolutePath().normalize() != contentDir.toAbsolutePath().normalize()) {
+            "DATA_DIR and CONTENT_DIR must be different directories (both are $contentDir): app-owned state " +
+                "(plainbase.db, search.db) inside the user-owned content root would re-trigger the watcher " +
+                "after every rebuild — a self-sustaining rebuild loop (§4 separation)"
+        }
         return contentDir
     }
 

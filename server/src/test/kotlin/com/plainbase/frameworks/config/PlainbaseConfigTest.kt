@@ -52,4 +52,16 @@ class PlainbaseConfigTest : FunSpec({
             Files.deleteIfExists(dir)
         }
     }
+
+    test("DATA_DIR equal to CONTENT_DIR fails fast: app-owned state inside the watched root is a rebuild loop") {
+        val dir = Files.createTempDirectory("pb-config-shared")
+        try {
+            val config = PlainbaseConfig(contentDir = dir, dataDir = dir, host = "127.0.0.1", port = PlainbaseConfig.DEFAULT_PORT)
+            val failure = shouldThrow<IllegalArgumentException> { config.requireContentDir() }
+            failure.message shouldContain "DATA_DIR and CONTENT_DIR must be different directories"
+            failure.message shouldContain dir.toString()
+        } finally {
+            Files.deleteIfExists(dir)
+        }
+    }
 })

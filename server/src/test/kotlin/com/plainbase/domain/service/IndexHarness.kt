@@ -5,11 +5,13 @@ import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.render.MarkdownRenderer
+import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import java.nio.file.Files
 import java.nio.file.Path
@@ -37,6 +39,7 @@ class IndexHarness(
     val idMap = SqlDelightIdMapRepository(database)
     val aliases = SqlDelightUrlAliasRepository(database)
     val registry = UrlAliasRegistry(aliases)
+    val checkpoints = SqlDelightPageCheckpointRepository(database)
     val builder = IndexBuilder(
         contentStore = contentStore,
         frontmatterParser = frontmatterParser,
@@ -45,8 +48,11 @@ class IndexHarness(
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = registry,
+        checkpoint = checkpoints,
         citations = CitationFactory(),
-        listeners = listeners,
+        // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
+        // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
+        listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
     )
 
     override fun close() = driver.close()

@@ -50,13 +50,21 @@ interface ContentStore {
     fun write(path: TreePath, bytes: ByteArray)
 
     /**
-     * Watches the content tree for changes, invoking [onChange] per change.
+     * Watches the content tree for changes, invoking [onChange] with each changed path until the
+     * returned handle is closed. Ignored entries (the same rules as [scan]) never produce a call.
      *
-     * **Stubbed for Phase 2** (the file watcher lands with incremental indexing). The default
-     * implementation does nothing; the signature is present so the port shape is frozen now.
+     * Deliberate, documented internal-port change (Phase 2 §B2): the Phase-1 no-op stub gained a
+     * lifecycle handle — domain ports are not wire contracts. The path argument exists for logging;
+     * consumers are path-blind by design — an event's ONLY effect is scheduling the serialized full
+     * rebuild, never a direct state mutation. An event-queue overflow is delivered as the synthetic
+     * [OVERFLOW] path: the convergence operation is already a full pass, so overflow needs nothing
+     * beyond scheduling one.
      */
-    fun watch(onChange: (TreePath) -> Unit) {
-        // Phase 2: file-watch driven incremental updates. Intentionally a no-op for Phase 1.
+    fun watch(onChange: (TreePath) -> Unit): AutoCloseable
+
+    companion object {
+        /** The synthetic path [watch] delivers on an event-queue overflow (consumers just schedule — §B2). */
+        val OVERFLOW: TreePath = TreePath.require("(overflow)")
     }
 }
 

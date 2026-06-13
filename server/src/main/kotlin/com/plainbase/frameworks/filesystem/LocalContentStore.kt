@@ -21,6 +21,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.atomic.AtomicReference
 
 /** The on-disk name of a folder's metadata sidecar (§A4). */
 private const val FOLDER_META_NAME = "_folder.yaml"
@@ -56,7 +57,13 @@ private const val FOLDER_META_NAME = "_folder.yaml"
 class LocalContentStore(
     private val root: Path,
     private val ignoreRules: IgnoreRules = IgnoreRules(),
+    exclusions: List<Path> = emptyList(),
 ) : ContentStore {
+
+    // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
+    // must never be indexed — plainbase.db/search.db would otherwise be served as /assets/... —
+    // and never re-trigger rebuilds from the app's own writes. One exclusion policy, two consumers.
+    private val excludedDirs: List<Path> = exclusions.map { it.toAbsolutePath().normalize() }
 
     /**
      * Immutable snapshot of the most recent [scan]: the indexed files/folders (the membership
@@ -65,13 +72,12 @@ class LocalContentStore(
      * the non-NFC byte-form (and an NFD-named ancestor directory) is reached correctly; an entry the
      * scan skipped is simply absent, so it cannot be read, stat-ed, or listed.
      *
-     * Held in a plain `var` deliberately: Phase 1 is a single startup [scan] with no concurrent
-     * readers ([watch] is a no-op). When the Phase 2 watcher introduces concurrency, replace this
-     * with a safe-publication primitive (e.g. [java.util.concurrent.atomic.AtomicReference]) so
-     * the snapshot swap is correctly published to reader threads — that is a deliberate decision
-     * to make when concurrency first exists, not a speculative one to bake in now.
+     * Safe publication, no `@Volatile` (S5.0): the Phase-2 watcher rescans on another thread, so
+     * each [scan] builds the snapshot entirely off to the side and swaps it in with one
+     * [AtomicReference.set] — the house pattern (`IndexBuilder`). Every read captures ONE snapshot
+     * and answers entirely from it: complete and consistent, old or new, never torn, no locks.
      */
-    private var snapshot: IndexSnapshot = IndexSnapshot.EMPTY
+    private val snapshot = AtomicReference(IndexSnapshot.EMPTY)
 
     /**
      * An immutable snapshot of one [scan]: the indexed entries (membership authority) and the
@@ -149,7 +155,7 @@ class LocalContentStore(
         val result = ScanResult(files = acc.files.toList(), folders = acc.folders.toList(), issues = acc.issues.toList())
         // Retain the raw directory names too so resolveOnDisk reaches an NFD-named ancestor (P4);
         // ContentFolder carries no rawName, so the dir map is sourced from the scan accumulator.
-        snapshot = IndexSnapshot.of(result, acc.dirNames.toMap())
+        snapshot.set(IndexSnapshot.of(result, acc.dirNames.toMap()))
         logger.info {
             "Scanned $root: ${acc.files.size} file(s), ${acc.folders.size} folder(s), ${acc.issues.size} issue(s)"
         }
@@ -193,6 +199,10 @@ class LocalContentStore(
             if (rawName == FOLDER_META_NAME) return@mapNotNull null // metadata sidecar, not a content entry
             val relativePath = childRelativePath(dirPath, rawName)
             if (ignoreRules.isIgnored(rawName, relativePath)) return@mapNotNull null
+            if (child.toAbsolutePath().normalize() in excludedDirs) {
+                logger.debug { "Skipping excluded app-owned subtree: $relativePath" }
+                return@mapNotNull null
+            }
             // Skip symlinks: a symlink cycle is a startup stack overflow and an out-of-root target is
             // a content-root escape. NOFOLLOW_LINKS keeps the type checks honest about the link itself.
             if (Files.isSymbolicLink(child)) {
@@ -255,9 +265,10 @@ class LocalContentStore(
     }
 
     override fun read(path: TreePath): ByteArray? {
+        val snap = snapshot.get()
         // Indexed-only gate (see class header): a path the scan skipped is unreadable.
-        if (!snapshot.isIndexedFile(path)) return null
-        val osPath = resolveOnDisk(path)
+        if (!snap.isIndexedFile(path)) return null
+        val osPath = resolveOnDisk(path, snap)
         if (!Files.isRegularFile(osPath, LinkOption.NOFOLLOW_LINKS)) return null
         // Defense-in-depth (belt-and-suspenders behind the membership gate): re-verify the resolved
         // file stays inside the content root even against a TOCTOU symlink swapped in between scan
@@ -270,9 +281,10 @@ class LocalContentStore(
     }
 
     override fun stat(path: TreePath): ContentStat? {
+        val snap = snapshot.get()
         // Indexed-only gate (see class header), file OR directory; unindexed -> null per the contract.
-        if (!snapshot.isIndexedEntry(path)) return null
-        val osPath = resolveOnDisk(path)
+        if (!snap.isIndexedEntry(path)) return null
+        val osPath = resolveOnDisk(path, snap)
         // One filesystem hit, no-follow: a missing target throws and is reported as null (port contract).
         val attrs = try {
             Files.readAttributes(osPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -291,10 +303,11 @@ class LocalContentStore(
     }
 
     override fun list(dir: TreePath?): List<ContentEntry> {
+        val snap = snapshot.get()
         // Indexed-only gate (see class header): children come purely from the snapshot. The root
         // (null) is always listable; any other directory must itself be indexed, else empty list.
-        if (dir != null && !snapshot.isIndexedDir(dir)) return emptyList()
-        return snapshot.childrenOf(dir)
+        if (dir != null && !snap.isIndexedDir(dir)) return emptyList()
+        return snap.childrenOf(dir)
     }
 
     /**
@@ -308,10 +321,10 @@ class LocalContentStore(
      * This is **total**: the `?: path.name` fallback makes every segment resolvable, so the
      * function never returns null. Callers check existence on the result themselves.
      */
-    private fun resolveOnDisk(path: TreePath): Path {
-        val rawLeaf = snapshot.files[path]?.rawName ?: snapshot.dirRawNames[path] ?: path.name
+    private fun resolveOnDisk(path: TreePath, snap: IndexSnapshot): Path {
+        val rawLeaf = snap.files[path]?.rawName ?: snap.dirRawNames[path] ?: path.name
         val parent = path.parent ?: return root.resolve(rawLeaf)
-        return resolveOnDisk(parent).resolve(rawLeaf)
+        return resolveOnDisk(parent, snap).resolve(rawLeaf)
     }
 
     override fun write(path: TreePath, bytes: ByteArray) {
@@ -319,7 +332,7 @@ class LocalContentStore(
         // normalization-preserving filesystem an existing NFD-named file is REPLACED rather than
         // shadowed by a new NFC-named sibling. resolveOnDisk is total — a genuinely-new segment
         // falls back to its NFC name, which is the correct on-disk form for a fresh file.
-        val target = resolveOnDisk(path)
+        val target = resolveOnDisk(path, snapshot.get())
         Files.createDirectories(target.parent)
         // Log the intended write BEFORE performing it so an interrupted run is detectable
         // (chunk 4b adopt durability). Intentionally logs the path only, never content.
@@ -339,6 +352,12 @@ class LocalContentStore(
             Files.deleteIfExists(tmp)
         }
     }
+
+    override fun watch(onChange: (TreePath) -> Unit): AutoCloseable =
+        // The watcher shares the scan's IgnoreRules (one ignore policy, §B1) and skips the
+        // configured exclusions — DATA_DIR when it is nested inside the content root, so the app's
+        // own search-index/database writes can never re-trigger the watcher.
+        FileWatcher(root = root, ignoreRules = ignoreRules, excluded = excludedDirs, onChange = onChange)
 
     /** The `/`-joined content-relative path of a child named [rawName] under [dirPath]. */
     private fun childRelativePath(dirPath: TreePath?, rawName: String): String =

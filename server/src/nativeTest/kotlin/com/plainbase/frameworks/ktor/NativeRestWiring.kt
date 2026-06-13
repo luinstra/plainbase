@@ -17,6 +17,7 @@ import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import java.nio.file.Files
 import java.nio.file.Path
@@ -51,6 +52,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     patcher = FrontmatterPatcher(),
                     idMap = SqlDelightIdMapRepository(database),
                     aliasRegistry = registry,
+                    checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
                     listeners = listOf(IndexBuilder.PublicationListener(SearchIndexer(searchProvider, SectionSplitter())::sync)),
                 )
