@@ -3,9 +3,9 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -44,7 +44,7 @@ class IndexHarness(
         contentStore = contentStore,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
-        identity = PageIdentityService(UuidV7()),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = registry,

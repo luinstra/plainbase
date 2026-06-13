@@ -1,7 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.UuidV7
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -47,7 +47,7 @@ class IndexBuilderNativeTest {
                     contentStore = LocalContentStore(content),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7()),
+                    identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,

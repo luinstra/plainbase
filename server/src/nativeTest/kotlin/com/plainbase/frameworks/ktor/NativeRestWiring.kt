@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.ktor
 
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
@@ -10,6 +9,7 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -48,7 +48,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     contentStore = store,
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7()),
+                    identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
                     idMap = SqlDelightIdMapRepository(database),
                     aliasRegistry = registry,

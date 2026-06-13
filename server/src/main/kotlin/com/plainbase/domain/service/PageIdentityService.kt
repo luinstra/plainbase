@@ -3,7 +3,6 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.page.UuidV7
 
 /**
  * Pure precedence + duplicate-policy logic for assigning a page its identity (§5.2 made executable).
@@ -25,7 +24,7 @@ import com.plainbase.domain.page.UuidV7
  *
  * Pure domain code: only chunk 1.5/4a domain types appear.
  */
-class PageIdentityService(private val uuidV7: UuidV7) {
+class PageIdentityService(private val idProvider: IdProvider) {
 
     /** How a page's resolved [id] was chosen — provenance the caller persists / surfaces in `adopt`. */
     enum class Source {
@@ -67,7 +66,7 @@ class PageIdentityService(private val uuidV7: UuidV7) {
             // but a rescan reuses this path's own id_map binding so the copy's /p/{id} stays stable.
             if (owner != null && owner != path) {
                 return Assignment(
-                    id = mappedId ?: uuidV7.next(),
+                    id = mappedId ?: idProvider.next(),
                     source = if (mappedId != null) Source.ID_MAP else Source.MINTED,
                     issue = IdentityIssue.DuplicateId(id = frontmatterId, keptPath = owner, reassignedPath = path),
                 )
@@ -77,7 +76,7 @@ class PageIdentityService(private val uuidV7: UuidV7) {
 
         // No valid frontmatter id: keep the id_map entry if one exists, else mint a fresh UUIDv7.
         return when (mappedId) {
-            null -> Assignment(uuidV7.next(), Source.MINTED)
+            null -> Assignment(idProvider.next(), Source.MINTED)
             else -> Assignment(mappedId, Source.ID_MAP)
         }
     }

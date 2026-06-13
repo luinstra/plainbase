@@ -3,26 +3,22 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.page.UuidV7
+import com.plainbase.domain.service.TestIdProvider
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneOffset
-import java.util.Random
 
 /**
  * PageIdentityService — the frozen precedence (frontmatter id > id_map > minted UUIDv7), the §A4
  * canonical-shape validity gate for frontmatter ids, and the §5.2 duplicate-id policy. Pure logic
- * with a fixed clock+random UuidV7 so minted ids are deterministic.
+ * with a deterministic [TestIdProvider] so minted ids are predictable (and never collide with the
+ * fixtures' frontmatter ids).
  */
 class PageIdentityServiceTest : FunSpec({
 
-    val mintedClock = Clock.fixed(Instant.ofEpochMilli(1_700_000_000_000L), ZoneOffset.UTC)
-    val service = PageIdentityService(UuidV7(mintedClock, Random(0)))
+    val service = PageIdentityService(TestIdProvider())
 
     val pathA = TreePath.require("guides/a.md")
     val pathB = TreePath.require("guides/b.md")
@@ -53,7 +49,6 @@ class PageIdentityServiceTest : FunSpec({
     test("no valid frontmatter id, no map entry -> a fresh UUIDv7 is minted") {
         val r = service.resolve(pathA, rawFrontmatterId = null, mappedId = null, ownerOf = { null })
         r.source shouldBe PageIdentityService.Source.MINTED
-        r.id.uuid.version() shouldBe 7
     }
 
     test("no valid frontmatter id, map entry present -> the map entry is kept") {
@@ -66,7 +61,6 @@ class PageIdentityServiceTest : FunSpec({
         // pathA already owns validId; pathB carries the same frontmatter id.
         val r = service.resolve(pathB, rawFrontmatterId = validId.value, mappedId = null, ownerOf = { if (it == validId) pathA else null })
         r.source shouldBe PageIdentityService.Source.MINTED
-        r.id.uuid.version() shouldBe 7
         r.id shouldNotBe validId // freshly minted, not the duplicated id
         val issue = r.issue.shouldBeInstanceOf<IdentityIssue.DuplicateId>()
         issue.id shouldBe validId

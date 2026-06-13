@@ -1,13 +1,13 @@
 package com.plainbase.acceptance
 
 import app.cash.sqldelight.db.SqlDriver
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LinkChecker
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -80,7 +80,7 @@ class Phase1AcceptanceNativeTest {
             contentStore = store,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7()),
+            identity = PageIdentityService(UuidV7IdProvider()),
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),

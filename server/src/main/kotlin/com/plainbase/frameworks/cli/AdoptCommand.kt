@@ -1,10 +1,10 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.model.IdentityIssue
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -42,7 +42,7 @@ object AdoptCommand {
             val pass = AdoptionPass(
                 contentStore = LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules()),
                 idMap = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)),
-                identity = PageIdentityService(UuidV7()),
+                identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
             )
             val report = pass.run(mode) { path, id -> println("intent: write id $id -> ${path.value}") }

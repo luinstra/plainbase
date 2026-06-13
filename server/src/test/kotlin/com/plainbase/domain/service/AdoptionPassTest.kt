@@ -6,7 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.page.UuidV7
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -248,7 +248,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
     val idMap = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
 
     fun pass(store: ContentStore = LocalContentStore(root)): AdoptionPass =
-        AdoptionPass(store, idMap, PageIdentityService(UuidV7()), FrontmatterPatcher())
+        AdoptionPass(store, idMap, PageIdentityService(UuidV7IdProvider()), FrontmatterPatcher())
 }
 
 /** Counts (and reports) delegated writes — the zero-writes-on-second-run and pairing probe. */

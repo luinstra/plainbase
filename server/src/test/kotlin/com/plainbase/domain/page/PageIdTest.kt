@@ -34,7 +34,7 @@ class PageIdTest : FunSpec({
         val v4 = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
         val id = PageId.of(v4).shouldNotBeNull()
         // The version nibble is 4 — accepted regardless; uniqueness is the contract, version is provenance.
-        id.uuid.version() shouldBe 4
+        id.value[14] shouldBe '4'
     }
 
     test("a value UUID.fromString accepts but the canonical shape rejects is treated as absent (§A4)") {

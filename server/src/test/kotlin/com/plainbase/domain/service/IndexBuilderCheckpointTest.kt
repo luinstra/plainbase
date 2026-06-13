@@ -2,8 +2,8 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.plainbaseModule
@@ -160,7 +160,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             contentStore = store,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7()),
+            identity = PageIdentityService(UuidV7IdProvider()),
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = registry,

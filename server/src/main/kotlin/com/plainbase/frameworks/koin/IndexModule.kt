@@ -1,12 +1,12 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.page.FrontmatterParser
-import com.plainbase.domain.page.UuidV7
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import org.koin.dsl.module
@@ -20,7 +20,7 @@ import org.koin.dsl.module
  */
 val indexModule = module {
     single<FrontmatterParser> { FrontmatterReader() }
-    single { PageIdentityService(UuidV7()) }
+    single { PageIdentityService(UuidV7IdProvider()) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }
     single { CitationFactory() }
