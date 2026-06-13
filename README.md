@@ -1,11 +1,13 @@
-# Plainbase
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/plainbase-logo-dark.svg" />
+  <img src="assets/brand/plainbase-logo.svg" alt="Plainbase" width="360" />
+</picture>
 
-> Internal docs that humans enjoy using and agents can actually work with.
+_Internal docs humans enjoy and agents can actually work with._
 
-Plainbase is a filesystem-native, agent-native internal documentation product.
-The canonical source of truth is a plain tree of Markdown files; Git is an
-optional layer; all indexes are derived, rebuildable state. See
-[DESIGN_SUMMARY.md](DESIGN_SUMMARY.md).
+Filesystem-native, agent-native: the source of truth is a plain tree of Markdown
+files, Git is an optional layer, and every index is derived, rebuildable state.
+See [DESIGN_SUMMARY.md](DESIGN_SUMMARY.md).
 
 ## Quickstart (Docker Compose) — 2 commands
 
