@@ -12,3 +12,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0002](0002-slug-collisions-are-same-role-only.md) | Same-parent slug collisions are same-role only (page-vs-page, folder-vs-folder) | Accepted |
 | [0003](0003-folder-landing-pages.md) | Folders gain client-rendered landing views at their URL prefix | Accepted |
 | [0004](0004-raw-jdbc-for-derived-search-db.md) | Raw JDBC for the derived-state search.db (app DB stays SQLDelight-only) | Accepted |
+| [0005](0005-two-stage-search-palette.md) | Two-stage search palette (jump-to first, full-text on demand) | Accepted |
