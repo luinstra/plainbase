@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentStore
@@ -10,7 +12,8 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.TreeResponse
 import com.plainbase.frameworks.ktor.dto.toDto
-import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * The one dependency bundle the routing layer needs — built by Koin's `restModule` in production
@@ -45,9 +48,9 @@ class TreeJsonCache(private val indexBuilder: IndexBuilder) {
     /** The tree JSON for the currently published snapshot. */
     fun current(): String {
         val snapshot = indexBuilder.current
-        memo.get()?.takeIf { it.snapshot === snapshot }?.let { return it.json }
+        memo.load()?.takeIf { it.snapshot === snapshot }?.let { return it.json }
         val json = RestJson.encodeToString(TreeResponse.serializer(), TreeResponse(TreeBuilder.build(snapshot).toDto()))
-        memo.set(Entry(snapshot, json))
+        memo.store(Entry(snapshot, json))
         return json
     }
 }

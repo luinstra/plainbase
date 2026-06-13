@@ -3,7 +3,6 @@ package com.plainbase.domain.service
 import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.IndexedPage
 import java.security.MessageDigest
-import java.util.HexFormat
 
 /**
  * Owns the one [contentHash] definition (frozen: `sha256:` + 64 lowercase hex over the EXACT raw
@@ -16,7 +15,7 @@ class CitationFactory {
 
     /** The frozen content-hash form over [rawBytes]: `sha256:` + 64 lowercase hex. */
     fun contentHash(rawBytes: ByteArray): String =
-        "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rawBytes))
+        "sha256:" + MessageDigest.getInstance("SHA-256").digest(rawBytes).toHexString()
 
     /** A page-level citation ([Citation.headingId] null); `commit` is always null until the Phase-3 Git layer. */
     fun pageLevel(page: IndexedPage, contentHash: String): Citation =

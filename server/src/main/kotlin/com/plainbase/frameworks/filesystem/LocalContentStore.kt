@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.ContentEntry
@@ -14,14 +16,14 @@ import com.plainbase.domain.content.TreePath
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.charset.MalformedInputException
-import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
-import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /** The on-disk name of a folder's metadata sidecar (§A4). */
 private const val FOLDER_META_NAME = "_folder.yaml"
@@ -74,7 +76,7 @@ class LocalContentStore(
      *
      * Safe publication, no `@Volatile` (S5.0): the Phase-2 watcher rescans on another thread, so
      * each [scan] builds the snapshot entirely off to the side and swaps it in with one
-     * [AtomicReference.set] — the house pattern (`IndexBuilder`). Every read captures ONE snapshot
+     * [AtomicReference.store] — the house pattern (`IndexBuilder`). Every read captures ONE snapshot
      * and answers entirely from it: complete and consistent, old or new, never torn, no locks.
      */
     private val snapshot = AtomicReference(IndexSnapshot.EMPTY)
@@ -155,7 +157,7 @@ class LocalContentStore(
         val result = ScanResult(files = acc.files.toList(), folders = acc.folders.toList(), issues = acc.issues.toList())
         // Retain the raw directory names too so resolveOnDisk reaches an NFD-named ancestor (P4);
         // ContentFolder carries no rawName, so the dir map is sourced from the scan accumulator.
-        snapshot.set(IndexSnapshot.of(result, acc.dirNames.toMap()))
+        snapshot.store(IndexSnapshot.of(result, acc.dirNames.toMap()))
         logger.info {
             "Scanned $root: ${acc.files.size} file(s), ${acc.folders.size} folder(s), ${acc.issues.size} issue(s)"
         }
@@ -256,7 +258,7 @@ class LocalContentStore(
         }
         if (!Files.isRegularFile(metaFile, LinkOption.NOFOLLOW_LINKS)) return null
         val body = try {
-            Files.readString(metaFile, StandardCharsets.UTF_8)
+            Files.readString(metaFile, Charsets.UTF_8)
         } catch (_: MalformedInputException) {
             logger.warn { "Ignoring non-UTF-8 $FOLDER_META_NAME at '${dirPath.value}': treating folder meta as absent" }
             return null
@@ -265,7 +267,7 @@ class LocalContentStore(
     }
 
     override fun read(path: TreePath): ByteArray? {
-        val snap = snapshot.get()
+        val snap = snapshot.load()
         // Indexed-only gate (see class header): a path the scan skipped is unreadable.
         if (!snap.isIndexedFile(path)) return null
         val osPath = resolveOnDisk(path, snap)
@@ -281,7 +283,7 @@ class LocalContentStore(
     }
 
     override fun stat(path: TreePath): ContentStat? {
-        val snap = snapshot.get()
+        val snap = snapshot.load()
         // Indexed-only gate (see class header), file OR directory; unindexed -> null per the contract.
         if (!snap.isIndexedEntry(path)) return null
         val osPath = resolveOnDisk(path, snap)
@@ -303,7 +305,7 @@ class LocalContentStore(
     }
 
     override fun list(dir: TreePath?): List<ContentEntry> {
-        val snap = snapshot.get()
+        val snap = snapshot.load()
         // Indexed-only gate (see class header): children come purely from the snapshot. The root
         // (null) is always listable; any other directory must itself be indexed, else empty list.
         if (dir != null && !snap.isIndexedDir(dir)) return emptyList()
@@ -332,7 +334,7 @@ class LocalContentStore(
         // normalization-preserving filesystem an existing NFD-named file is REPLACED rather than
         // shadowed by a new NFC-named sibling. resolveOnDisk is total — a genuinely-new segment
         // falls back to its NFC name, which is the correct on-disk form for a fresh file.
-        val target = resolveOnDisk(path, snapshot.get())
+        val target = resolveOnDisk(path, snapshot.load())
         Files.createDirectories(target.parent)
         // Log the intended write BEFORE performing it so an interrupted run is detectable
         // (chunk 4b adopt durability). Intentionally logs the path only, never content.

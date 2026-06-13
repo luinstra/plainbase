@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentFile
@@ -15,7 +17,8 @@ import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * Chunk 5's index pass (caching decision §C4): scan → frontmatter → identity → URLs → render
@@ -32,7 +35,7 @@ import java.util.concurrent.atomic.AtomicReference
  * URL-complete skeleton snapshot built first.
  *
  * **Safe publication, no `@Volatile`:** the new snapshot is built entirely off to the side and
- * published with a single [AtomicReference.set]; [current] readers always observe a complete,
+ * published with a single [AtomicReference.store]; [current] readers always observe a complete,
  * internally consistent, deeply immutable [PageIndex] — old or new, never torn — and stay
  * lock-free. [rebuild] itself is `@Synchronized` (rescans are rare): two concurrent rebuilds
  * could otherwise publish out of order — the earlier-scanned one finishing later would regress
@@ -80,12 +83,12 @@ class IndexBuilder(
     private val holder = AtomicReference(PageIndex.EMPTY)
 
     /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
-    val current: PageIndex get() = holder.get()
+    val current: PageIndex get() = holder.load()
 
     /** Runs the full pass and atomically publishes (and returns) the new snapshot (serialized — see class doc). */
     @Synchronized
     fun rebuild(): PageIndex {
-        val previous = holder.get()
+        val previous = holder.load()
         // §B3 checkpoint-as-previous: the first rebuild after startup (holder still the EMPTY
         // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
         // move performed while the server was down still records its alias. Every later rebuild
@@ -156,7 +159,7 @@ class IndexBuilder(
 
         val snapshot = PageIndex(pages, scan.folders, assets)
         recordAliases(previousUrlPaths, snapshot)
-        holder.set(snapshot)
+        holder.store(snapshot)
         logger.info {
             "indexed ${pages.size} page(s), ${assets.size} asset(s), ${scan.folders.size} folder(s); " +
                 "${pages.count { it.urlPath == null }} excluded from path space"

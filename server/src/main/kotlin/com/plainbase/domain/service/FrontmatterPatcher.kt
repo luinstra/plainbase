@@ -4,7 +4,6 @@ import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.PageId
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
-import java.nio.charset.StandardCharsets
 
 /**
  * PB-PATCH-1 (§A3) — the surgical frontmatter patcher: the **only** code path that ever writes
@@ -385,7 +384,7 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
 
     /** Strict UTF-8 decode (REPORT on malformed/unmappable), or null — never emits U+FFFD. */
     private fun strictUtf8(bytes: ByteArray): String? {
-        val decoder = StandardCharsets.UTF_8.newDecoder()
+        val decoder = Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
         return try {

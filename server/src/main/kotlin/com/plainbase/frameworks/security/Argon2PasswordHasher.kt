@@ -5,9 +5,8 @@ import org.bouncycastle.crypto.generators.Argon2BytesGenerator
 import org.bouncycastle.crypto.params.Argon2Parameters
 import org.bouncycastle.util.Arrays
 import java.nio.CharBuffer
-import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
-import java.util.Base64
+import kotlin.io.encoding.Base64
 
 /**
  * Argon2id via Bouncy Castle's pure-Java implementation.
@@ -24,12 +23,15 @@ class Argon2PasswordHasher(
     private val random: SecureRandom = SecureRandom(),
 ) : PasswordHasher {
 
+    // PHC argon2 uses unpadded standard base64; ABSENT_OPTIONAL omits padding on
+    // encode and tolerates it on decode (matching the prior java getEncoder().withoutPadding()).
+    private val base64 = Base64.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
+
     override fun hash(plain: CharArray): String {
         val salt = ByteArray(saltLength).also(random::nextBytes)
         val hash = compute(plain, salt, memoryKb, iterations, parallelism, hashLength)
-        val b64 = Base64.getEncoder().withoutPadding()
         return "\$argon2id\$v=$PHC_VERSION\$m=$memoryKb,t=$iterations,p=$parallelism" +
-            "\$${b64.encodeToString(salt)}\$${b64.encodeToString(hash)}"
+            "\$${base64.encode(salt)}\$${base64.encode(hash)}"
     }
 
     override fun verify(plain: CharArray, encoded: String): Boolean {
@@ -75,7 +77,7 @@ class Argon2PasswordHasher(
 
     private fun decodeBase64(value: String): ByteArray? =
         try {
-            Base64.getDecoder().decode(value)
+            base64.decode(value)
         } catch (_: IllegalArgumentException) {
             null
         }
@@ -101,7 +103,7 @@ class Argon2PasswordHasher(
         // Encode the password CharArray to UTF-8 without going through a String:
         // Strings are immutable and unzeroable, so a copy would linger on the heap
         // until GC. Both intermediate byte buffers are zeroed in `finally`.
-        val encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(plain))
+        val encoded = Charsets.UTF_8.encode(CharBuffer.wrap(plain))
         val bytes = ByteArray(encoded.remaining())
         encoded.get(bytes)
         try {

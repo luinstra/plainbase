@@ -12,7 +12,6 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -127,7 +126,7 @@ class LocalContentStoreTest : FunSpec({
             // P4: read via the NFC TreePath reaches the bytes through the RETAINED raw name.
             val bytes = store.read(TreePath.require(nfcName))
             bytes.shouldNotBeNull()
-            String(bytes, StandardCharsets.UTF_8) shouldBe "RÉUNION-CONTENT"
+            String(bytes, Charsets.UTF_8) shouldBe "RÉUNION-CONTENT"
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -164,7 +163,7 @@ class LocalContentStoreTest : FunSpec({
                 // P4: the winner's CONTENT is served via raw-name read-back.
                 val bytes = store.read(TreePath.require(nfcName)).shouldNotBeNull()
                 val expectedContent = if (expectedWinner == nfdActual) "NFD-CONTENT" else "NFC-CONTENT"
-                String(bytes, StandardCharsets.UTF_8) shouldBe expectedContent
+                String(bytes, Charsets.UTF_8) shouldBe expectedContent
 
                 val collision = result.issues.filterIsInstance<ScanIssue.PathCollision>().single()
                 collision.path.value shouldBe nfcName
@@ -233,9 +232,9 @@ class LocalContentStoreTest : FunSpec({
         try {
             val store = LocalContentStore(tmp)
             val path = TreePath.require("a/b/note.md")
-            store.write(path, "hello".toByteArray(StandardCharsets.UTF_8))
+            store.write(path, "hello".toByteArray(Charsets.UTF_8))
             store.scan()
-            String(store.read(path).shouldNotBeNull(), StandardCharsets.UTF_8) shouldBe "hello"
+            String(store.read(path).shouldNotBeNull(), Charsets.UTF_8) shouldBe "hello"
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -255,14 +254,14 @@ class LocalContentStoreTest : FunSpec({
 
             // PROBE the FS regime: on a normalization-preserving FS the on-disk name stays NFD;
             // on APFS/HFS+ it landed NFC. Either way there is exactly ONE file before and after.
-            store.write(TreePath.require(nfcName), "REPLACED".toByteArray(StandardCharsets.UTF_8))
+            store.write(TreePath.require(nfcName), "REPLACED".toByteArray(Charsets.UTF_8))
 
             val onDisk = Files.newDirectoryStream(tmp).use { stream -> stream.map { it.fileName.toString() }.toSet() }
             onDisk shouldHaveSize 1 // exactly one file remains — no NFC sibling was created
 
             // read() (still backed by the pre-write snapshot) returns the NEW bytes: write replaced
             // the indexed file in place rather than creating an unreachable sibling.
-            String(store.read(TreePath.require(nfcName)).shouldNotBeNull(), StandardCharsets.UTF_8) shouldBe "REPLACED"
+            String(store.read(TreePath.require(nfcName)).shouldNotBeNull(), Charsets.UTF_8) shouldBe "REPLACED"
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -282,7 +281,7 @@ class LocalContentStoreTest : FunSpec({
             store.scan()
 
             val bytes = store.read(TreePath.require("$nfcDir/note.md")).shouldNotBeNull()
-            String(bytes, StandardCharsets.UTF_8) shouldBe "NESTED-CONTENT"
+            String(bytes, Charsets.UTF_8) shouldBe "NESTED-CONTENT"
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -478,7 +477,7 @@ class LocalContentStoreTest : FunSpec({
             store.read(TreePath.require("link.md")).shouldBeNull()
             store.stat(TreePath.require("link.md")).shouldBeNull()
             // Sanity: the real in-root file IS readable, proving the gate is selective.
-            String(store.read(TreePath.require("real.md")).shouldNotBeNull(), StandardCharsets.UTF_8) shouldBe "real"
+            String(store.read(TreePath.require("real.md")).shouldNotBeNull(), Charsets.UTF_8) shouldBe "real"
         } finally {
             tmp.toFile().deleteRecursively()
             outside.toFile().deleteRecursively()

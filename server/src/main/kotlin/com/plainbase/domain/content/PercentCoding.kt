@@ -5,7 +5,6 @@ import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
-import java.nio.charset.StandardCharsets
 
 /**
  * Strict RFC 3986 percent-coding for path/segment data — the SINGLE percent
@@ -95,7 +94,7 @@ object PercentCoding {
      * caller joins already-encoded segments). UTF-8 byte basis; never emits `+`.
      */
     fun encodeSegment(value: String): String = buildString(value.length) {
-        for (byte in value.toByteArray(StandardCharsets.UTF_8)) {
+        for (byte in value.toByteArray(Charsets.UTF_8)) {
             val ch = byte.toInt() and 0xFF
             if (ch.toChar() in UNRESERVED) {
                 append(ch.toChar())
@@ -120,7 +119,7 @@ object PercentCoding {
      * literal side too.
      */
     private fun strictUtf8Encode(s: String): ByteArray? {
-        val encoder = StandardCharsets.UTF_8.newEncoder()
+        val encoder = Charsets.UTF_8.newEncoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
         return try {
@@ -133,7 +132,7 @@ object PercentCoding {
 
     /** Strict UTF-8 decode: returns null on any malformed or unmappable input. */
     private fun strictUtf8Decode(bytes: ByteArray): String? {
-        val decoder = StandardCharsets.UTF_8.newDecoder()
+        val decoder = Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
         return try {

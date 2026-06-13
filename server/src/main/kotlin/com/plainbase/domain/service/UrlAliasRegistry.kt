@@ -1,10 +1,13 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.UrlAlias
 import com.plainbase.domain.repository.UrlAliasRepository
-import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.atomics.AtomicReference
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
  * The in-memory view over the persisted url_alias registry (§A4): old canonical URL path → page id.
@@ -25,15 +28,15 @@ class UrlAliasRegistry(private val repository: UrlAliasRepository) {
     private val aliases = AtomicReference(repository.aliases().associate { it.path to it.id })
 
     /** The page aliased at [path], or null when no alias claims it. */
-    fun find(path: TreePath): PageId? = aliases.get()[path]
+    fun find(path: TreePath): PageId? = aliases.load()[path]
 
     /** Every registered alias, as the current immutable view. */
-    fun all(): Map<TreePath, PageId> = aliases.get()
+    fun all(): Map<TreePath, PageId> = aliases.load()
 
     /** Registers [path] as an alias of the page [id], replacing any alias previously at that path. */
     fun register(path: TreePath, id: PageId) {
         repository.register(path, id)
-        aliases.updateAndGet { it + (path to id) }
+        aliases.store(aliases.load() + (path to id))
     }
 
     /**
@@ -42,9 +45,9 @@ class UrlAliasRegistry(private val repository: UrlAliasRepository) {
      * memory probe makes the per-canonical sweep free; the repository is touched only on a hit.
      */
     fun dropShadowed(canonicalPath: TreePath): UrlAlias? {
-        if (canonicalPath !in aliases.get()) return null
+        if (canonicalPath !in aliases.load()) return null
         val dropped = repository.dropShadowed(canonicalPath) ?: return null
-        aliases.updateAndGet { it - canonicalPath }
+        aliases.store(aliases.load() - canonicalPath)
         return dropped
     }
 }

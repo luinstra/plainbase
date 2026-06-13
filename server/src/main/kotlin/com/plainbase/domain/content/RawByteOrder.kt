@@ -1,6 +1,5 @@
 package com.plainbase.domain.content
 
-import java.nio.charset.StandardCharsets
 import java.util.Arrays
 
 /**
@@ -17,7 +16,7 @@ object RawByteOrder : Comparator<String> {
 
     override fun compare(a: String, b: String): Int =
         Arrays.compareUnsigned(
-            a.toByteArray(StandardCharsets.UTF_8),
-            b.toByteArray(StandardCharsets.UTF_8),
+            a.toByteArray(Charsets.UTF_8),
+            b.toByteArray(Charsets.UTF_8),
         )
 }
