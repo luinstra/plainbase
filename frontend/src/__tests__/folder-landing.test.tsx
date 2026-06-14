@@ -19,20 +19,25 @@ const README_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b01";
 const INDEX_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b02";
 const LOSER_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99";
 
-function pageNode(id: string, path: string, title: string, url: string | null): TreePage {
+function pageNode(id: string, path: string, title: string, url: string | null, updated: string | null = null): TreePage {
   const slug = path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
-  return { type: "page", id, title, slug, path, url, status: "active" };
+  return { type: "page", id, title, slug, path, url, status: "active", updated };
 }
 
 function tree(guidesChildren: TreeFolder["children"]): TreeResponse {
+  const pageCount = guidesChildren.filter((c) => c.type === "page").length;
   return {
     root: {
       type: "folder",
       name: "",
       title: null,
+      description: null,
       path: "",
       url: "/docs",
-      children: [{ type: "folder", name: "guides", title: "Guides", path: "guides", url: "/docs/guides", children: guidesChildren }],
+      page_count: 0,
+      children: [
+        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: pageCount, children: guidesChildren },
+      ],
     },
   };
 }
@@ -136,20 +141,24 @@ describe("folder landing views (ADR-0003)", () => {
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Index Title"));
   });
 
-  it("renders the generated listing in TREE ORDER when no README/index child exists", async () => {
+  it("renders the generated listing in TREE ORDER within groups when no README/index child exists", async () => {
     stubNotFound();
-    // Deliberately not alphabetical: the listing must follow the tree response order.
+    // Deliberately not alphabetical: the listing must follow the tree response order WITHIN each
+    // group. The card/list rebuild groups subfolders (cards) ahead of pages (rows); each group's
+    // own sequence is the tree order — so 'advanced' (the lone folder) leads, then the two pages
+    // in their tree order (Zeta before the shadowed loser).
     const listingTree = tree([
       pageNode(PAGE_ID, "guides/zeta.md", "Zeta Page", "/docs/guides/zeta"),
-      { type: "folder", name: "advanced", title: null, path: "guides/advanced", url: "/docs/guides/advanced", children: [] },
+      { type: "folder", name: "advanced", title: null, description: null, path: "guides/advanced", url: "/docs/guides/advanced", page_count: 0, children: [] },
       pageNode(LOSER_ID, "guides/shadowed.md", "Shadowed Page", null),
     ]);
     const { view } = renderAt("/docs/guides", listingTree);
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("Guides"); // _folder.yaml title
+    // Read each child's primary label (folder name `.fn`, page title `.pt`), not the full card text.
     const items = [...view.container.querySelectorAll("[data-pb-folder-child]")];
-    expect(items.map((li) => li.textContent?.trim())).toEqual(["Zeta Page", "advanced", "Shadowed Page"]);
+    expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["advanced", "Zeta Page", "Shadowed Page"]);
     expect(view.container.querySelector('a[href="/docs/guides/zeta"]')).not.toBeNull();
     expect(view.container.querySelector('a[href="/docs/guides/advanced"]')).not.toBeNull();
     expect(view.container.querySelector(`a[href="/p/${LOSER_ID}"]`)).not.toBeNull(); // loser via permalink
@@ -157,17 +166,54 @@ describe("folder landing views (ADR-0003)", () => {
     expect(view.container.querySelector('.pb-breadcrumbs a[href="/docs"]')?.textContent).toBe("docs");
   });
 
-  it("renders the ROOT listing at bare /docs — 'docs' fallback heading, tree order, non-link root crumb", async () => {
+  it("renders a folder card's description + `path · N pages` meta, and a page row's date only when present", async () => {
+    stubNotFound();
+    const richTree = tree([
+      { type: "folder", name: "advanced", title: "Advanced", description: "Deep operational topics.", path: "guides/advanced", url: "/docs/guides/advanced", page_count: 3, children: [] },
+      pageNode(PAGE_ID, "guides/dated.md", "Dated Page", "/docs/guides/dated", "2026-05-30"),
+      pageNode(LOSER_ID, "guides/undated.md", "Undated Page", "/docs/guides/undated"),
+    ]);
+    const { view } = renderAt("/docs/guides", richTree);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    // Scope to the listing — the sidebar nav renders the same page links without listing markup.
+    const listing = view.container.querySelector("[data-pb-folder]")!;
+    // Folder card: description line + the page_count-driven meta.
+    const card = listing.querySelector('[data-pb-folder-child="folder"]')!;
+    expect(card.querySelector(".fm")?.textContent).toContain("Deep operational topics.");
+    expect(card.querySelector(".fc")?.textContent).toContain("guides/advanced");
+    expect(card.querySelector(".fc")?.textContent).toContain("3 pages");
+    // Page rows: the dated row shows its verbatim date; the undated row has no date element.
+    const dated = listing.querySelector(`a[href="/docs/guides/dated"]`)!;
+    expect(dated.querySelector(".pdate")?.textContent).toBe("2026-05-30");
+    const undated = listing.querySelector(`a[href="/docs/guides/undated"]`)!;
+    expect(undated.querySelector(".pdate")).toBeNull();
+  });
+
+  it("a folder with a single direct page renders `· 1 page` (singular)", async () => {
+    stubNotFound();
+    const singularTree = tree([
+      { type: "folder", name: "solo", title: null, description: null, path: "guides/solo", url: "/docs/guides/solo", page_count: 1, children: [] },
+    ]);
+    const { view } = renderAt("/docs/guides", singularTree);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    const listing = view.container.querySelector("[data-pb-folder]")!;
+    expect(listing.querySelector('[data-pb-folder-child="folder"] .fc')?.textContent).toContain("1 page");
+  });
+
+  it("renders the ROOT listing at bare /docs — 'docs' fallback heading, grouped tree order, non-link root crumb", async () => {
     const rootTree: TreeResponse = {
       root: {
         type: "folder",
         name: "",
         title: null,
+        description: null,
         path: "",
         url: "/docs",
+        page_count: 1,
         children: [
           pageNode(PAGE_ID, "welcome.md", "Welcome", "/docs/welcome"),
-          { type: "folder", name: "guides", title: "Guides", path: "guides", url: "/docs/guides", children: [] },
+          { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
         ],
       },
     };
@@ -175,8 +221,9 @@ describe("folder landing views (ADR-0003)", () => {
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs");
+    // Folders (cards) group ahead of pages (rows): 'Guides' card then 'Welcome' row.
     const items = [...view.container.querySelectorAll("[data-pb-folder-child]")];
-    expect(items.map((li) => li.textContent?.trim())).toEqual(["Welcome", "Guides"]);
+    expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["Guides", "Welcome"]);
     expect(view.container.querySelector('a[href="/docs/welcome"]')).not.toBeNull();
     expect(view.container.querySelector('a[href="/docs/guides"]')).not.toBeNull();
     // On the root landing the trail is JUST the non-link "docs" crumb.

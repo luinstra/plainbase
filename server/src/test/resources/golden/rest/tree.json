@@ -3,15 +3,19 @@
     "type": "folder",
     "name": "",
     "title": null,
+    "description": null,
     "path": "",
     "url": "/docs",
+    "page_count": 2,
     "children": [
       {
         "type": "folder",
         "name": "api",
         "title": "API Reference",
+        "description": null,
         "path": "api",
         "url": "/docs/api",
+        "page_count": 6,
         "children": [
           {
             "type": "page",
@@ -20,7 +24,8 @@
             "slug": "authentication",
             "path": "api/authentication.md",
             "url": "/docs/api/authentication",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -29,7 +34,8 @@
             "slug": "changelog-policy",
             "path": "api/changelog-policy.md",
             "url": "/docs/api/changelog-policy",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -38,7 +44,8 @@
             "slug": "errors",
             "path": "api/errors.md",
             "url": "/docs/api/errors",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -47,7 +54,8 @@
             "slug": "mcp",
             "path": "api/mcp.md",
             "url": "/docs/api/mcp",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -56,7 +64,8 @@
             "slug": "api-overview",
             "path": "api/overview.md",
             "url": "/docs/api/api-overview",
-            "status": "active"
+            "status": "active",
+            "updated": "2026-05-30"
           },
           {
             "type": "page",
@@ -65,7 +74,8 @@
             "slug": "rest",
             "path": "api/rest.md",
             "url": "/docs/api/rest",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -73,8 +83,10 @@
         "type": "folder",
         "name": "changelog",
         "title": null,
+        "description": null,
         "path": "changelog",
         "url": "/docs/changelog",
+        "page_count": 3,
         "children": [
           {
             "type": "page",
@@ -83,7 +95,8 @@
             "slug": "2026-01",
             "path": "changelog/2026-01.md",
             "url": "/docs/changelog/2026-01",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -92,7 +105,8 @@
             "slug": "2026-02",
             "path": "changelog/2026-02.md",
             "url": "/docs/changelog/2026-02",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -101,7 +115,8 @@
             "slug": "2026-03",
             "path": "changelog/2026-03.md",
             "url": "/docs/changelog/2026-03",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -109,15 +124,19 @@
         "type": "folder",
         "name": "guides",
         "title": "Guides",
+        "description": "Step-by-step guides for deploying and operating Plainbase.",
         "path": "guides",
         "url": "/docs/guides",
+        "page_count": 6,
         "children": [
           {
             "type": "folder",
             "name": "advanced",
             "title": null,
+            "description": null,
             "path": "guides/advanced",
             "url": "/docs/guides/advanced",
+            "page_count": 3,
             "children": [
               {
                 "type": "page",
@@ -126,7 +145,8 @@
                 "slug": "backup-restore",
                 "path": "guides/advanced/backup-restore.md",
                 "url": "/docs/guides/advanced/backup-restore",
-                "status": "active"
+                "status": "active",
+                "updated": null
               },
               {
                 "type": "page",
@@ -135,7 +155,8 @@
                 "slug": "scaling",
                 "path": "guides/advanced/scaling.md",
                 "url": "/docs/guides/advanced/scaling",
-                "status": "active"
+                "status": "active",
+                "updated": null
               },
               {
                 "type": "page",
@@ -144,7 +165,8 @@
                 "slug": "tuning",
                 "path": "guides/advanced/tuning.md",
                 "url": "/docs/guides/advanced/tuning",
-                "status": "draft"
+                "status": "draft",
+                "updated": null
               }
             ]
           },
@@ -155,7 +177,8 @@
             "slug": "deploy-guide",
             "path": "guides/deploy-guide.md",
             "url": "/docs/guides/deploy-guide",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -164,7 +187,8 @@
             "slug": "editor",
             "path": "guides/editor.md",
             "url": "/docs/guides/editor",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -173,7 +197,8 @@
             "slug": "getting-started",
             "path": "guides/getting-started.md",
             "url": "/docs/guides/getting-started",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -182,7 +207,8 @@
             "slug": "search",
             "path": "guides/search.md",
             "url": "/docs/guides/search",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -191,7 +217,8 @@
             "slug": "setup",
             "path": "guides/setup.md",
             "url": "/docs/guides/setup",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -200,7 +227,8 @@
             "slug": "writing-style",
             "path": "guides/writing-style.md",
             "url": "/docs/guides/writing-style",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -208,8 +236,10 @@
         "type": "folder",
         "name": "infra",
         "title": null,
+        "description": null,
         "path": "infra",
         "url": "/docs/infra",
+        "page_count": 6,
         "children": [
           {
             "type": "page",
@@ -218,7 +248,8 @@
             "slug": "incident-runbook",
             "path": "infra/incident-runbook.md",
             "url": "/docs/infra/incident-runbook",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -227,7 +258,8 @@
             "slug": "kubernetes",
             "path": "infra/kubernetes.md",
             "url": "/docs/infra/kubernetes",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -236,7 +268,8 @@
             "slug": "monitoring",
             "path": "infra/monitoring.md",
             "url": "/docs/infra/monitoring",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -245,7 +278,8 @@
             "slug": "networking",
             "path": "infra/networking.md",
             "url": "/docs/infra/networking",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -254,7 +288,8 @@
             "slug": "setup",
             "path": "infra/setup.md",
             "url": "/docs/infra/setup",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -263,7 +298,8 @@
             "slug": "terraform",
             "path": "infra/terraform.md",
             "url": "/docs/infra/terraform",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -271,29 +307,37 @@
         "type": "folder",
         "name": "notes",
         "title": null,
+        "description": null,
         "path": "notes",
         "url": "/docs/notes",
+        "page_count": 7,
         "children": [
           {
             "type": "folder",
             "name": "deeply",
             "title": null,
+            "description": null,
             "path": "notes/deeply",
             "url": "/docs/notes/deeply",
+            "page_count": 0,
             "children": [
               {
                 "type": "folder",
                 "name": "nested",
                 "title": null,
+                "description": null,
                 "path": "notes/deeply/nested",
                 "url": "/docs/notes/deeply/nested",
+                "page_count": 0,
                 "children": [
                   {
                     "type": "folder",
                     "name": "folder",
                     "title": null,
+                    "description": null,
                     "path": "notes/deeply/nested/folder",
                     "url": "/docs/notes/deeply/nested/folder",
+                    "page_count": 1,
                     "children": [
                       {
                         "type": "page",
@@ -302,7 +346,8 @@
                         "slug": "treasure",
                         "path": "notes/deeply/nested/folder/treasure.md",
                         "url": "/docs/notes/deeply/nested/folder/treasure",
-                        "status": "active"
+                        "status": "active",
+                        "updated": null
                       }
                     ]
                   }
@@ -317,7 +362,8 @@
             "slug": "broken-links",
             "path": "notes/broken-links.md",
             "url": "/docs/notes/broken-links",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -326,7 +372,8 @@
             "slug": "café-notes",
             "path": "notes/café-notes.md",
             "url": "/docs/notes/caf%C3%A9-notes",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -335,7 +382,8 @@
             "slug": "just-text",
             "path": "notes/just-text.md",
             "url": "/docs/notes/just-text",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -344,7 +392,8 @@
             "slug": "no-frontmatter",
             "path": "notes/no-frontmatter.md",
             "url": "/docs/notes/no-frontmatter",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -353,7 +402,8 @@
             "slug": "release-notes-2026",
             "path": "notes/release notes 2026.md",
             "url": "/docs/notes/release-notes-2026",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -362,7 +412,8 @@
             "slug": "réunion",
             "path": "notes/réunion.md",
             "url": "/docs/notes/r%C3%A9union",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -371,7 +422,8 @@
             "slug": "日本語ガイド",
             "path": "notes/日本語ガイド.md",
             "url": "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -379,8 +431,10 @@
         "type": "folder",
         "name": "scratch",
         "title": null,
+        "description": null,
         "path": "scratch",
         "url": "/docs/scratch",
+        "page_count": 2,
         "children": [
           {
             "type": "page",
@@ -389,7 +443,8 @@
             "slug": "ideas",
             "path": "scratch/ideas.md",
             "url": "/docs/scratch/ideas",
-            "status": "draft"
+            "status": "draft",
+            "updated": null
           },
           {
             "type": "page",
@@ -398,7 +453,8 @@
             "slug": "todo",
             "path": "scratch/todo.md",
             "url": "/docs/scratch/todo",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -406,15 +462,19 @@
         "type": "folder",
         "name": "team",
         "title": null,
+        "description": null,
         "path": "team",
         "url": "/docs/team",
+        "page_count": 3,
         "children": [
           {
             "type": "folder",
             "name": "meetings",
             "title": null,
+            "description": null,
             "path": "team/meetings",
             "url": "/docs/team/meetings",
+            "page_count": 2,
             "children": [
               {
                 "type": "page",
@@ -423,7 +483,8 @@
                 "slug": "2026-01-retro",
                 "path": "team/meetings/2026-01-retro.md",
                 "url": "/docs/team/meetings/2026-01-retro",
-                "status": "archived"
+                "status": "archived",
+                "updated": null
               },
               {
                 "type": "page",
@@ -432,7 +493,8 @@
                 "slug": "2026-02-planning",
                 "path": "team/meetings/2026-02-planning.md",
                 "url": "/docs/team/meetings/2026-02-planning",
-                "status": "archived"
+                "status": "archived",
+                "updated": null
               }
             ]
           },
@@ -443,7 +505,8 @@
             "slug": "handbook",
             "path": "team/handbook.md",
             "url": "/docs/team/handbook",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -452,7 +515,8 @@
             "slug": "onboarding",
             "path": "team/onboarding.md",
             "url": "/docs/team/onboarding",
-            "status": "active"
+            "status": "active",
+            "updated": null
           },
           {
             "type": "page",
@@ -461,7 +525,8 @@
             "slug": "roles",
             "path": "team/roles.md",
             "url": "/docs/team/roles",
-            "status": "active"
+            "status": "active",
+            "updated": null
           }
         ]
       },
@@ -472,7 +537,8 @@
         "slug": "readme",
         "path": "README.md",
         "url": "/docs/readme",
-        "status": "active"
+        "status": "active",
+        "updated": null
       },
       {
         "type": "page",
@@ -481,7 +547,8 @@
         "slug": "welcome",
         "path": "index.md",
         "url": "/docs/welcome",
-        "status": "active"
+        "status": "active",
+        "updated": null
       }
     ]
   }

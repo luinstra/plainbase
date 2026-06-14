@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import kotlinx.datetime.LocalDate
 
 /**
  * A node of the nav tree (§A4 `/api/v1/tree` shape, chunk 6 maps it to DTOs).
@@ -15,16 +16,25 @@ import com.plainbase.domain.page.PageIndex
  * where the SPA renders the folder landing view (ADR-0003); null for a collision-loser subtree.
  * Folder [Folder.title] comes from `_folder.yaml`, else null (the UI falls back to [Folder.name]);
  * the root folder is the synthetic node with empty name and null path.
+ *
+ * Folder [Folder.description] is the `_folder.yaml` plaintext summary (else null); [Folder.pageCount]
+ * is the count of DIRECT child pages only (not recursive descendants). Page [Page.updated] is the
+ * **editorial** frontmatter `updated` date, validated to `YYYY-MM-DD` (else null) — NOT a
+ * filesystem/Git last-modified (that arrives as a distinct field in Phase 3).
  */
 sealed interface TreeNode {
 
     data class Folder(
         val name: String,
         val title: String?,
+        /** The `_folder.yaml` plaintext summary surfaced on the landing card; null when absent/blank. */
+        val description: String?,
         /** The folder's content path; null only for the synthetic root node. */
         val path: TreePath?,
         /** The folder's `/docs` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
         val url: String?,
+        /** Count of DIRECT child pages only (not recursive); drives the landing card's `path/ · N pages` meta. */
+        val pageCount: Int,
         val children: List<TreeNode>,
     ) : TreeNode
 
@@ -35,6 +45,8 @@ sealed interface TreeNode {
         val path: TreePath,
         val url: String?,
         val status: String,
+        /** The editorial frontmatter `updated` date, validated `YYYY-MM-DD` (else null); NOT Git last-modified. */
+        val updated: String?,
     ) : TreeNode
 }
 
@@ -56,12 +68,15 @@ object TreeBuilder {
         val foldersByParent = index.folders.groupBy { it.path.parent }
         val folderUrls = CanonicalUrlBuilder.folderUrlPaths(index.folders)
         // The synthetic root's URL prefix is bare `/docs` (its own route in the SPA, not a landing view).
+        val children = childrenOf(null, pagesByParent, foldersByParent, folderUrls)
         return TreeNode.Folder(
             name = "",
             title = null,
+            description = null,
             path = null,
             url = "/docs",
-            children = childrenOf(null, pagesByParent, foldersByParent, folderUrls),
+            pageCount = children.count { it is TreeNode.Page },
+            children = children,
         )
     }
 
@@ -80,8 +95,10 @@ object TreeBuilder {
                 node = TreeNode.Folder(
                     name = folder.path.name,
                     title = folder.meta?.title,
+                    description = folder.meta?.description,
                     path = folder.path,
                     url = folderUrls.getValue(folder.path)?.let { "/docs/" + PercentCoding.encodePath(it.value) },
+                    pageCount = children.count { it is TreeNode.Page }, // DIRECT child pages only
                     children = children,
                 ),
             )
@@ -97,11 +114,28 @@ object TreeBuilder {
                     path = page.path,
                     url = page.url,
                     status = page.frontmatter.scalar("status") ?: "active",
+                    updated = validatedUpdated(page.frontmatter.scalar("updated")), // ISO YYYY-MM-DD or null
                 ),
             )
         }
         return (folders + pages).sortedWith(ORDERING).map { it.node }
     }
+
+    /** Fixed-width `YYYY-MM-DD` shape gate — pins the contract width before [LocalDate.parse] (which on
+     * its own would accept expanded/signed ISO years like `+12020-08-30`). */
+    private val ISO_DATE = Regex("""\d{4}-\d{2}-\d{2}""")
+
+    /**
+     * The frontmatter `updated` scalar, accepted only as a fixed-width ISO `YYYY-MM-DD` calendar date,
+     * else null. Editorial (author-declared), validated server-side so a malformed value never reaches
+     * the UI date element. Two gates: the [ISO_DATE] shape gate pins the exact `YYYY-MM-DD` width — it
+     * rejects the expanded/signed years `LocalDate.parse` accepts on its own (`+12020-08-30`,
+     * `-2026-01-01`), which would otherwise round-trip through `toString()` and break the documented
+     * contract — and `LocalDate.parse` then rejects an impossible date (`2026-02-30`) the shape gate
+     * lets through. Phase-3 Git last-modified is a DISTINCT field, never a repoint.
+     */
+    private fun validatedUpdated(raw: String?): String? =
+        raw?.takeIf(ISO_DATE::matches)?.let { runCatching { LocalDate.parse(it).toString() }.getOrNull() }
 
     private data class Sortable(
         val order: Int?,

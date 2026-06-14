@@ -5,7 +5,7 @@ import { fuzzyRank, fuzzyScore, type FuzzyCandidate } from "../lib/fuzzy";
 /** Fuzzy quick-switcher scorer goldens (criterion 17). Non-contract UI — pins behavior only. */
 
 function page(title: string, path: string): TreePage {
-  return { type: "page", id: title, title, slug: title, path, url: `/docs/${path}`, status: "active" };
+  return { type: "page", id: title, title, slug: title, path, url: `/docs/${path}`, status: "active", updated: null };
 }
 function candidate(title: string, path = `${title.toLowerCase().replace(/\s+/g, "-")}.md`): FuzzyCandidate {
   const node = page(title, path);

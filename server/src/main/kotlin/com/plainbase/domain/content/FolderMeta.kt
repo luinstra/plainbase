@@ -5,26 +5,28 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 /**
  * Parsed `_folder.yaml` metadata for a content folder (§A4).
  *
- * Three keys are known and honored:
+ * Four keys are known and honored:
  *  - [title] — the human display title for the folder in the nav tree.
  *  - [order] — an explicit sort key among siblings (lower sorts first); null = order by title.
  *  - [slug]  — a URL-segment override for this folder's canonical URL path; null = derive
  *              the segment from the folder name via the slugger (chunk 5).
+ *  - [description] — a one-line plaintext summary surfaced on the folder's landing card.
  *
  * Unknown keys are ignored **with a warning log** — `_folder.yaml` is a deliberately tiny,
- * three-key file, not a general YAML document; an unknown key is almost always a typo or a
+ * four-key file, not a general YAML document; an unknown key is almost always a typo or a
  * future feature, and silently dropping it would hide both.
  */
 data class FolderMeta(
     val title: String? = null,
     val order: Int? = null,
     val slug: String? = null,
+    val description: String? = null,
 ) {
     companion object {
         private val logger = KotlinLogging.logger {}
 
         /**
-         * Parses the three known keys from a `_folder.yaml` body with a deliberately tiny
+         * Parses the four known keys from a `_folder.yaml` body with a deliberately tiny
          * line grammar — NOT a YAML engine (the native-image bet bans Jackson/SnakeYAML and
          * `_folder.yaml` only ever carries flat `key: value` scalars).
          *
@@ -38,6 +40,7 @@ data class FolderMeta(
             var title: String? = null
             var order: Int? = null
             var slug: String? = null
+            var description: String? = null
 
             for (rawLine in body.lineSequence()) {
                 val line = rawLine.trim()
@@ -52,14 +55,15 @@ data class FolderMeta(
                 when (key) {
                     "title" -> title = value
                     "slug" -> slug = value
+                    "description" -> description = value.ifBlank { null }
                     "order" -> when (val parsed = value.toIntOrNull()) {
                         null -> logger.warn { "Ignoring non-integer 'order' in $source: '$value'" }
                         else -> order = parsed
                     }
-                    else -> logger.warn { "Ignoring unknown key '$key' in $source (known keys: title, order, slug)" }
+                    else -> logger.warn { "Ignoring unknown key '$key' in $source (known keys: title, order, slug, description)" }
                 }
             }
-            return FolderMeta(title = title, order = order, slug = slug)
+            return FolderMeta(title = title, order = order, slug = slug, description = description)
         }
 
         /** Strips one layer of matching surrounding single or double quotes, if present. */

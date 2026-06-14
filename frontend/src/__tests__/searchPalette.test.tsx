@@ -19,14 +19,16 @@ const tree: TreeResponse = {
     type: "folder",
     name: "",
     title: null,
+    description: null,
     path: "",
     url: "/docs",
+    page_count: 4,
     children: [
-      { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/guides/deploy-guide", status: "active" },
-      { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/guides/getting-started", status: "active" },
-      { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/guides/developer-setup", status: "active" },
+      { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/guides/deploy-guide", status: "active", updated: null },
+      { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/guides/getting-started", status: "active", updated: null },
+      { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/guides/developer-setup", status: "active", updated: null },
       // A collision loser: url null → navigates via /p/{id}.
-      { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active" },
+      { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
     ],
   },
 };

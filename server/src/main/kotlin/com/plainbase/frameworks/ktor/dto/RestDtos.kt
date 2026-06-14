@@ -135,9 +135,13 @@ sealed interface TreeNodeDto {
     data class Folder(
         val name: String,
         val title: String?,
+        // provisional (Chunk-3 landing): the `_folder.yaml` plaintext summary; null when absent/blank.
+        val description: String?,
         val path: String,
         /** Additive amendment (ADR-0003): the folder's `/docs` URL prefix; null for a collision-loser subtree. */
         val url: String?,
+        // provisional (Chunk-3 landing): page_count is DIRECT child pages only (not recursive).
+        @SerialName("page_count") val pageCount: Int,
         val children: List<TreeNodeDto>,
     ) : TreeNodeDto
 
@@ -150,6 +154,9 @@ sealed interface TreeNodeDto {
         val path: String,
         val url: String?,
         val status: String,
+        // editorial author-declared date, validated YYYY-MM-DD; provisional — Phase-3 Git may add a
+        // distinct last_modified (never a repoint of updated).
+        val updated: String?,
     ) : TreeNodeDto
 }
 
@@ -208,9 +215,11 @@ fun Heading.toDto(): HeadingDto = HeadingDto(id = id, level = level, text = text
 fun TreeNode.Folder.toDto(): TreeNodeDto.Folder = TreeNodeDto.Folder(
     name = name,
     title = title,
+    description = description,
     // The synthetic root's domain path is null; the frozen wire shape spells it "" (§A4 example).
     path = path?.value ?: "",
     url = url,
+    pageCount = pageCount,
     children = children.map { child ->
         when (child) {
             is TreeNode.Folder -> child.toDto()
@@ -226,6 +235,7 @@ fun TreeNode.Page.toDto(): TreeNodeDto.Page = TreeNodeDto.Page(
     path = path.value,
     url = url,
     status = status,
+    updated = updated,
 )
 
 /**

@@ -136,6 +136,13 @@
   /* prose furniture */
   --pb-blockquote-border: var(--pb-gray-300);
   --pb-table-header-bg: var(--pb-gray-50);
+
+  /* status dots (folder-landing page rows; the dot consumes the semantic tier, never a primitive) */
+  --pb-status-active: var(--pb-green-600);
+  --pb-status-draft: var(--pb-amber-600);
+  --pb-status-review: var(--pb-blue-600);
+  --pb-status-archived: var(--pb-gray-400);
+  --pb-status-deprecated: var(--pb-red-600);
 }
 
 [data-theme="dark"] {
@@ -184,4 +191,11 @@
   /* prose furniture */
   --pb-blockquote-border: var(--pb-gray-700);
   --pb-table-header-bg: var(--pb-gray-900);
+
+  /* status dots */
+  --pb-status-active: var(--pb-green-400);
+  --pb-status-draft: var(--pb-amber-400);
+  --pb-status-review: var(--pb-blue-400);
+  --pb-status-archived: var(--pb-gray-500);
+  --pb-status-deprecated: var(--pb-red-400);
 }

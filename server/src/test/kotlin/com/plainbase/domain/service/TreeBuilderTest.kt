@@ -70,6 +70,53 @@ class TreeBuilderTest : FunSpec({
         }
     }
 
+    test("pageCount counts DIRECT child pages only — guides=6 excludes advanced's 3, advanced=3") {
+        withFixtureTree { root ->
+            val guides = root.children.filterIsInstance<TreeNode.Folder>().single { it.name == "guides" }
+            // guides holds 6 direct pages; its 3 nested 'advanced' pages must NOT be counted (direct, not recursive).
+            guides.pageCount shouldBe 6
+            val advanced = guides.children.filterIsInstance<TreeNode.Folder>().single { it.name == "advanced" }
+            advanced.pageCount shouldBe 3
+        }
+    }
+
+    test("updated: a valid frontmatter date passes verbatim; absent or malformed yields null; no other frontmatter leaks") {
+        withTempTree({ root ->
+            writePage(root, "valid.md", "---\ntitle: Valid\nupdated: 2026-05-30\n---\n# Valid\n")
+            writePage(root, "absent.md", "---\ntitle: Absent\n---\n# Absent\n")
+            writePage(root, "garbage.md", "---\ntitle: Garbage\nupdated: not-a-date\n---\n# Garbage\n")
+            writePage(root, "range.md", "---\ntitle: Range\nupdated: 2026-13-45\n---\n# Range\n")
+            // Impossible calendar date (Feb 30) — real calendar validation must reject it.
+            writePage(root, "impossible.md", "---\ntitle: Impossible\nupdated: 2026-02-30\n---\n# Impossible\n")
+            // Expanded/signed ISO years LocalDate.parse accepts on its own — the fixed-width shape gate must reject them.
+            writePage(root, "expanded.md", "---\ntitle: Expanded\nupdated: +12020-08-30\n---\n# Expanded\n")
+            writePage(root, "signed.md", "---\ntitle: Signed\nupdated: -2026-01-01\n---\n# Signed\n")
+            // Arbitrary frontmatter that must never surface on a tree node.
+            writePage(root, "extras.md", "---\ntitle: Extras\nowner: alice\ntags: [a, b]\nreview: pending\n---\n# Extras\n")
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                val tree = TreeBuilder.build(harness.builder.rebuild())
+                val pages = tree.children.filterIsInstance<TreeNode.Page>().associateBy { it.path.name }
+                pages.getValue("valid.md").updated shouldBe "2026-05-30"
+                pages.getValue("absent.md").updated.shouldBeNull()
+                pages.getValue("garbage.md").updated.shouldBeNull() // wrong shape -> null
+                pages.getValue("range.md").updated.shouldBeNull() // out-of-range month/day -> null
+                pages.getValue("impossible.md").updated.shouldBeNull() // 2026-02-30 is not a real calendar date
+                pages.getValue("expanded.md").updated.shouldBeNull() // +12020-08-30 violates fixed-width YYYY-MM-DD
+                pages.getValue("signed.md").updated.shouldBeNull() // -2026-01-01 violates fixed-width YYYY-MM-DD
+                pages.getValue("extras.md").updated.shouldBeNull() // owner/tags/review never become 'updated'
+            }
+        }
+    }
+
+    test("the api/overview fixture carries its editorial updated date verbatim") {
+        withFixtureTree { root ->
+            val api = root.children.filterIsInstance<TreeNode.Folder>().single { it.name == "api" }
+            val overview = api.children.filterIsInstance<TreeNode.Page>().single { it.path.name == "overview.md" }
+            overview.updated shouldBe "2026-05-30"
+        }
+    }
+
     test("folder url is percent-encoded on emit; a collision-loser folder (and its subtree) carries null") {
         withTempTree({ root ->
             writePage(root, "café notes/page.md", "# Page\n")
@@ -98,13 +145,14 @@ class TreeBuilderTest : FunSpec({
 private fun shapeDump(node: TreeNode, indent: String = ""): String = when (node) {
     is TreeNode.Folder -> {
         val line = "${indent}folder name='${node.name}' title=${quoted(node.title)} " +
-            "path=${quoted(node.path?.value)} url=${quoted(node.url)}"
+            "description=${quoted(node.description)} path=${quoted(node.path?.value)} url=${quoted(node.url)} " +
+            "pageCount=${node.pageCount}"
         val children = node.children.map { shapeDump(it, "$indent  ") }.sorted()
         (listOf(line) + children).joinToString("\n")
     }
     is TreeNode.Page ->
         "${indent}page path='${node.path.value}' title='${node.title}' slug='${node.slug}' " +
-            "url=${quoted(node.url)} status='${node.status}'"
+            "url=${quoted(node.url)} status='${node.status}' updated=${quoted(node.updated)}"
 }
 
 private fun quoted(value: String?): String = if (value == null) "-" else "'$value'"

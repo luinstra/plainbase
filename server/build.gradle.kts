@@ -83,6 +83,9 @@ dependencies {
     // kotlinx — the only serializer in the tree
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
+    // kotlinx-datetime — real ISO calendar validation of the editorial page `updated` field
+    // (LocalDate.parse rejects 2026-02-30; reflection-free / native-image safe).
+    implementation(libs.kotlinx.datetime)
 
     // Persistence — SQLDelight on xerial sqlite-jdbc (FTS5 included)
     implementation(libs.sqldelight.sqlite.driver)

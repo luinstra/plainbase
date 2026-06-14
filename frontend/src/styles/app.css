@@ -423,3 +423,152 @@ body {
     animation: none;
   }
 }
+
+/* ---- generated folder listing (folders → cards, pages → list) ----------------------------------
+ * Ported from the design reference (reference/plainbase.css:261-290) onto the live semantic tier.
+ * `.pb-folder`, `.pb-folder-children`, `.pb-folder-card`, `.pb-page-row`, `.pb-listing-label` and
+ * the `data-pb-folder*` / `data-pb-status` hooks are a public customization API — never rename. */
+.pb-listing {
+  margin-top: 2.25rem;
+}
+.pb-listing-group {
+  margin-top: 2.125rem;
+}
+.pb-listing-group:first-child {
+  margin-top: 0;
+}
+.pb-listing-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 0.9375rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--pb-text-muted);
+}
+.pb-listing-label::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  width: 11px;
+  height: 13px;
+  background: var(--pb-accent);
+  clip-path: polygon(42% 0, 100% 0, 58% 100%, 0 100%);
+}
+.pb-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
+  gap: 12px;
+}
+.pb-folder-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px 15px;
+  border: 1px solid var(--pb-border);
+  border-radius: 0.625rem;
+  background: var(--pb-surface-raised);
+  text-decoration: none;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
+}
+.pb-folder-card:hover {
+  border-color: var(--pb-border-strong);
+  background: var(--pb-surface-hover);
+  transform: translateY(-1px);
+}
+.pb-folder-card-inert {
+  cursor: default;
+}
+.pb-folder-card-inert:hover {
+  transform: none;
+}
+.pb-folder-card .ficon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--pb-accent);
+}
+.pb-folder-card .ficon svg {
+  display: block;
+  width: 19px;
+  height: 19px;
+}
+.pb-folder-card > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.pb-folder-card .fn {
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--pb-text);
+}
+.pb-folder-card .fm {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--pb-text-muted);
+}
+.pb-folder-card .fc {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--pb-text-faint);
+}
+.pb-page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 1px 26px;
+}
+.pb-page-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 9px;
+  border-radius: 6px;
+  text-decoration: none;
+}
+.pb-page-row:hover {
+  background: var(--pb-surface-hover);
+}
+.pb-page-row .pt {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  color: var(--pb-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-page-row:hover .pt {
+  color: var(--pb-accent);
+}
+.pb-page-row .pdate {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--pb-text-faint);
+}
+.pb-pdot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pb-status-active);
+}
+.pb-pdot[data-pb-status="draft"] {
+  background: var(--pb-status-draft);
+}
+.pb-pdot[data-pb-status="review"] {
+  background: var(--pb-status-review);
+}
+.pb-pdot[data-pb-status="archived"] {
+  background: var(--pb-status-archived);
+}
+.pb-pdot[data-pb-status="deprecated"] {
+  background: var(--pb-status-deprecated);
+}

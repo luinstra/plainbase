@@ -8,9 +8,13 @@ export interface TreeFolder {
   type: "folder";
   name: string;
   title: string | null;
+  /** The `_folder.yaml` plaintext summary on the landing card — null when absent/blank (provisional, Chunk-3). */
+  description: string | null;
   path: string;
   /** The folder's `/docs` URL prefix (percent-encoded, ready to use) — the landing-view address (ADR-0003); null for a collision-loser subtree. */
   url: string | null;
+  /** Count of DIRECT child pages only (not recursive) — drives the `path/ · N pages` meta (provisional, Chunk-3). */
+  page_count: number;
   children: TreeNode[];
 }
 
@@ -24,6 +28,8 @@ export interface TreePage {
   /** Canonical `/docs/...` URL (percent-encoded, ready to use) — null for a collision loser. */
   url: string | null;
   status: string;
+  /** Editorial frontmatter date, server-validated to `YYYY-MM-DD` — null when absent/invalid (provisional, Chunk-3). */
+  updated: string | null;
 }
 
 export type TreeNode = TreeFolder | TreePage;

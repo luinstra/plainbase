@@ -9,6 +9,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -22,6 +23,11 @@ import kotlin.test.assertNotNull
  * never compile the routes, the sealed tree-DTO serializers, or the scoped `RestJson` encode path
  * — HTTP + serialization is the classic native reflection trap, so the automated native gate must
  * cover it the way it covers adopt and the index pass. kotlin.test + @Tag("native") only.
+ *
+ * Also the native-runtime gate for the chunk-3 `updated` validator: the tree build runs
+ * `kotlinx.datetime.LocalDate.parse` only when a page actually carries an `updated` frontmatter, so
+ * one fixture page holds a valid date (must round-trip) and one holds an impossible date (must reject
+ * to null) — proving `LocalDate.parse` *executes* under the closed-world image, not merely links.
  */
 @Tag("native")
 class RestApiNativeTest {
@@ -32,8 +38,10 @@ class RestApiNativeTest {
 
     @Test
     fun `rest surface serves page json, tree, error envelope, and permalink natively`() {
-        val page = "---\nid: $pageId\ntitle: Native Page\n---\n\n# Native Page\n\nBody.\n"
-        withRestServices(pages = mapOf("guides/native.md" to page)) { services ->
+        val page = "---\nid: $pageId\ntitle: Native Page\nupdated: 2026-05-30\n---\n\n# Native Page\n\nBody.\n"
+        // Impossible calendar date — LocalDate.parse must reject it to null, natively.
+        val stale = "---\ntitle: Stale\nupdated: 2026-02-30\n---\n\n# Stale\n\nBody.\n"
+        withRestServices(pages = mapOf("guides/native.md" to page, "guides/stale.md" to stale)) { services ->
             testApplication {
                 application { plainbaseModule(services) }
                 val client = noRedirectClient()
@@ -54,6 +62,16 @@ class RestApiNativeTest {
                 // Folder nodes carry the additive url prefix (ADR-0003) — natively too.
                 val guides = root?.get("children")?.jsonArray?.first()?.jsonObject
                 assertEquals("/docs/guides", guides?.get("url")?.jsonPrimitive?.content)
+
+                // chunk-3 `updated` validator runs `LocalDate.parse` HERE, inside the native image:
+                // a valid date round-trips; an impossible one (2026-02-30) is rejected to explicit null.
+                val pagesByTitle = guides?.get("children")?.jsonArray
+                    ?.map { it.jsonObject }
+                    ?.filter { it["type"]?.jsonPrimitive?.content == "page" }
+                    ?.associateBy { it["title"]?.jsonPrimitive?.content }
+                    .orEmpty()
+                assertEquals("2026-05-30", pagesByTitle["Native Page"]?.get("updated")?.jsonPrimitive?.content)
+                assertEquals(JsonNull, pagesByTitle["Stale"]?.get("updated"))
 
                 // Error envelope: the §A4 shape gate (regex, not UUID.fromString) natively too.
                 val invalid = client.get("/api/v1/pages/1-1-1-1-1")

@@ -6,20 +6,22 @@ import io.kotest.matchers.shouldBe
 
 /**
  * Acceptance (chunk 1, criterion 4 — parser half): the `_folder.yaml` line parser reads the
- * three known keys (title, order, slug), strips quotes, and ignores unknown keys / malformed
- * lines without throwing. Pure logic — JVM-only Kotest, not @Tag("native").
+ * four known keys (title, order, slug, description), strips quotes, collapses a blank description
+ * to null, and ignores unknown keys / malformed lines without throwing. Pure logic — JVM-only
+ * Kotest, not @Tag("native").
  */
 class FolderMetaTest : FunSpec({
 
-    test("parses the three known keys") {
+    test("parses the four known keys") {
         val meta = FolderMeta.parse(
             """
             title: Guides
             order: 1
             slug: guide
+            description: Folder summary
             """.trimIndent(),
         )
-        meta shouldBe FolderMeta(title = "Guides", order = 1, slug = "guide")
+        meta shouldBe FolderMeta(title = "Guides", order = 1, slug = "guide", description = "Folder summary")
     }
 
     test("missing keys default to null") {
@@ -32,8 +34,14 @@ class FolderMetaTest : FunSpec({
     test("strips matching surrounding quotes from values") {
         FolderMeta.parse("title: \"Quoted Title\"").title shouldBe "Quoted Title"
         FolderMeta.parse("slug: 'release-notes'").slug shouldBe "release-notes"
+        FolderMeta.parse("description: \"Quoted desc\"").description shouldBe "Quoted desc"
         // A single embedded quote is not a matching pair: left intact.
         FolderMeta.parse("""title: it's fine""").title shouldBe "it's fine"
+    }
+
+    test("a blank description collapses to null") {
+        FolderMeta.parse("description:   ").description.shouldBeNull()
+        FolderMeta.parse("description: \"\"").description.shouldBeNull()
     }
 
     test("ignores unknown keys without throwing") {

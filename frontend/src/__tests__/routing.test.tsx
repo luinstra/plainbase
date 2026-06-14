@@ -52,7 +52,7 @@ function htmlResponse(id: string, url: string | null, title: string): PageHtmlRe
   };
 }
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, path: "", url: "/docs", children: [] } };
+const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
 
 // A root-level README child — the fixture-backed smoke suite can't isolate readme-only at
 // the root (demo-docs carries an index.md too), so the readme branch is mocked here.
@@ -61,9 +61,11 @@ const rootReadmeTree: TreeResponse = {
     type: "folder",
     name: "",
     title: null,
+    description: null,
     path: "",
     url: "/docs",
-    children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/readme", status: "active" }],
+    page_count: 1,
+    children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/readme", status: "active", updated: null }],
   },
 };
 

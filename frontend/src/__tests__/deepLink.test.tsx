@@ -51,7 +51,7 @@ function htmlResponse(url: string): PageHtmlResponse {
   };
 }
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, path: "", url: "/docs", children: [] } };
+const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
 
 function renderAt(initialPath: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

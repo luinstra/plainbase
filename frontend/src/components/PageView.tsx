@@ -76,10 +76,11 @@ export function FolderLanding({ url }: { url?: string }) {
 }
 
 /**
- * The generated directory view: `_folder.yaml` title (else name) as heading, children in
- * TREE ORDER — the order the tree response carries, never re-sorted. Pages link via their
- * node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a loser subfolder
- * has none and stays inert text). `data-pb-folder*` hooks are stable selectors.
+ * The generated directory view: `_folder.yaml` title (else name) as heading, then the children
+ * grouped — subfolders into a card grid, pages into a compact list — each group preserving the
+ * tree response's order (never re-sorted; a stable partition, not a sort). Pages link via their
+ * node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a loser subfolder has
+ * none and stays an inert card). `data-pb-folder*` hooks are stable selectors.
  */
 function FolderListing({ folder }: { folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
@@ -88,32 +89,87 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
     document.title = `${title} · Plainbase`;
   }, [title]);
 
+  // Stable partition: subsequence order within each group is the tree order.
+  const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
+  const pages = folder.children.filter((c) => c.type === "page");
+
   return (
     <div className="pb-folder" data-pb-folder>
       <Breadcrumbs path={folder.path} title={title} />
       <h1 className="text-3xl font-bold text-ink">{title}</h1>
-      <ul className="mt-6 space-y-1.5" data-pb-folder-children>
-        {folder.children.map((child) =>
-          child.type === "folder" ? (
-            <li key={child.path} data-pb-folder-child="folder">
-              {child.url ? (
-                <a href={child.url} className="font-medium text-link hover:text-link-hover hover:underline">
-                  {child.title ?? child.name}
-                </a>
-              ) : (
-                <span className="font-medium text-muted">{child.title ?? child.name}</span>
-              )}
-            </li>
-          ) : (
-            <li key={child.id} data-pb-folder-child="page">
-              <a href={pageHref(child)} data-pb-status={child.status} className="text-link hover:text-link-hover hover:underline">
-                {child.title}
-              </a>
-            </li>
-          ),
+      <div className="pb-listing" data-pb-folder-children>
+        {subfolders.length > 0 && (
+          <section className="pb-listing-group">
+            <div className="pb-listing-label">Folders</div>
+            <div className="pb-folder-grid">
+              {subfolders.map((child) => (
+                <FolderCard key={child.path} folder={child} />
+              ))}
+            </div>
+          </section>
         )}
-      </ul>
+        {pages.length > 0 && (
+          <section className="pb-listing-group">
+            <div className="pb-listing-label">Pages</div>
+            <div className="pb-page-grid">
+              {pages.map((child) => (
+                <a
+                  key={child.id}
+                  href={pageHref(child)}
+                  data-pb-folder-child="page"
+                  data-pb-status={child.status}
+                  className="pb-page-row"
+                >
+                  <span className="pb-pdot" data-pb-status={child.status} aria-hidden="true" />
+                  <span className="pt">{child.title}</span>
+                  {child.updated && <span className="pdate">{child.updated}</span>}
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
+  );
+}
+
+/** A subfolder landing card: icon + name + optional description + `path/ · N pages` meta. A
+ * collision-loser subfolder has `url === null` and renders inert (no link). */
+function FolderCard({ folder }: { folder: TreeFolder }) {
+  const name = folder.title ?? folder.name;
+  const pageLabel = folder.page_count === 1 ? "1 page" : `${folder.page_count} pages`;
+  const body = (
+    <>
+      <span className="ficon" aria-hidden="true">
+        <FolderIcon />
+      </span>
+      <span>
+        <span className="fn">{name}</span>
+        {folder.description && <span className="fm">{folder.description}</span>}
+        <span className="fc">
+          {folder.path}/ · {pageLabel}
+        </span>
+      </span>
+    </>
+  );
+  return folder.url ? (
+    <a href={folder.url} data-pb-folder-child="folder" className="pb-folder-card">
+      {body}
+    </a>
+  ) : (
+    <div data-pb-folder-child="folder" className="pb-folder-card pb-folder-card-inert">
+      {body}
+    </div>
+  );
+}
+
+/** The landing-card folder icon — `currentColor` stroke SVG (the design accepts this icon, unlike
+ * the sidebar's rejected ones); matches the ThemeToggle icon idiom. */
+function FolderIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+    </svg>
   );
 }
 

@@ -12,15 +12,19 @@ const tree: TreeFolder = {
   type: "folder",
   name: "",
   title: null,
+  description: null,
   path: "",
   url: "/docs",
+  page_count: 0,
   children: [
     {
       type: "folder",
       name: "guides",
       title: "Guides",
+      description: null,
       path: "guides",
       url: "/docs/guides",
+      page_count: 1,
       children: [
         {
           type: "page",
@@ -30,6 +34,7 @@ const tree: TreeFolder = {
           path: "guides/deploy-guide.md",
           url: "/docs/guides/deploy-guide",
           status: "active",
+          updated: null,
         },
       ],
     },
@@ -38,8 +43,10 @@ const tree: TreeFolder = {
       type: "folder",
       name: "shadowed-folder",
       title: null,
+      description: null,
       path: "shadowed-folder",
       url: null,
+      page_count: 1,
       children: [
         {
           // A path-space collision loser: url null → the link must fall back to /p/{id}.
@@ -50,6 +57,7 @@ const tree: TreeFolder = {
           path: "shadowed-folder/shadowed.md",
           url: null,
           status: "active",
+          updated: null,
         },
       ],
     },
