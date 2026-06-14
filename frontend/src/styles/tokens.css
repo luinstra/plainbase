@@ -15,24 +15,41 @@
 
 :root {
   /* ---- Tier 1: primitives ------------------------------------------------------------- */
-  /* The hue list (white|black|gray|blue|red|green|amber|violet) is mirrored in the
+  /* The hue list (white|black|gray|warm|teal|blue|red|green|amber|violet) is mirrored in the
      discipline test's PRIMITIVE_TOKEN regex — keep in sync when adding a hue. */
   --pb-white: #ffffff;
 
-  --pb-gray-50: #fafafa;
-  --pb-gray-100: #f4f4f5;
-  --pb-gray-200: #e4e4e7;
-  --pb-gray-300: #d4d4d8;
-  --pb-gray-400: #a1a1aa;
-  --pb-gray-500: #71717a;
-  --pb-gray-600: #52525b;
-  --pb-gray-700: #3f3f46;
-  --pb-gray-750: #303036;
-  --pb-gray-800: #27272a;
-  --pb-gray-850: #1f1f23;
-  --pb-gray-900: #18181b;
-  --pb-gray-925: #141416;
-  --pb-gray-950: #0f0f11;
+  --pb-warmth: 5%; /* barely-there warm-paper blend applied to every consumed gray step */
+
+  --pb-warm-50: #faf8f3;
+  --pb-warm-100: #f3f0e9;
+  --pb-warm-200: #e7e2d8;
+  --pb-warm-300: #d8d1c4;
+  --pb-warm-400: #a8a092;
+  --pb-warm-500: #767065;
+  --pb-warm-600: #565049;
+  --pb-warm-700: #423d37;
+  --pb-warm-750: #322e29;
+  --pb-warm-800: #292520;
+  --pb-warm-850: #211d18;
+  --pb-warm-900: #1a1611;
+  --pb-warm-925: #15120e;
+  --pb-warm-950: #100d09;
+
+  --pb-gray-50: color-mix(in srgb, #fafafa, var(--pb-warm-50) var(--pb-warmth));
+  --pb-gray-100: color-mix(in srgb, #f4f4f5, var(--pb-warm-100) var(--pb-warmth));
+  --pb-gray-200: color-mix(in srgb, #e4e4e7, var(--pb-warm-200) var(--pb-warmth));
+  --pb-gray-300: color-mix(in srgb, #d4d4d8, var(--pb-warm-300) var(--pb-warmth));
+  --pb-gray-400: color-mix(in srgb, #a1a1aa, var(--pb-warm-400) var(--pb-warmth));
+  --pb-gray-500: color-mix(in srgb, #71717a, var(--pb-warm-500) var(--pb-warmth));
+  --pb-gray-600: color-mix(in srgb, #52525b, var(--pb-warm-600) var(--pb-warmth));
+  --pb-gray-700: color-mix(in srgb, #3f3f46, var(--pb-warm-700) var(--pb-warmth));
+  --pb-gray-750: color-mix(in srgb, #303036, var(--pb-warm-750) var(--pb-warmth));
+  --pb-gray-800: color-mix(in srgb, #27272a, var(--pb-warm-800) var(--pb-warmth));
+  --pb-gray-850: color-mix(in srgb, #1f1f23, var(--pb-warm-850) var(--pb-warmth));
+  --pb-gray-900: color-mix(in srgb, #18181b, var(--pb-warm-900) var(--pb-warmth));
+  --pb-gray-925: color-mix(in srgb, #141416, var(--pb-warm-925) var(--pb-warmth));
+  --pb-gray-950: color-mix(in srgb, #0f0f11, var(--pb-warm-950) var(--pb-warmth));
 
   --pb-blue-200: #bfdbfe;
   --pb-blue-300: #93c5fd;
@@ -41,6 +58,17 @@
   --pb-blue-600: #2563eb;
   --pb-blue-700: #1d4ed8;
   --pb-blue-900: #1e3a8a;
+
+  --pb-teal-50: #f0fdfa;
+  --pb-teal-100: #ccfbf1;
+  --pb-teal-200: #99f6e4;
+  --pb-teal-300: #5eead4;
+  --pb-teal-400: #2dd4bf;
+  --pb-teal-500: #14b8a6;
+  --pb-teal-600: #0d9488;
+  --pb-teal-700: #0f766e;
+  --pb-teal-800: #115e59;
+  --pb-teal-900: #134e4a;
 
   --pb-red-300: #fca5a5;
   --pb-red-400: #f87171;
@@ -80,15 +108,16 @@
   --pb-border-strong: var(--pb-gray-300);
 
   /* interactive */
-  --pb-accent: var(--pb-blue-600);
+  --pb-accent: var(--pb-teal-700);
   --pb-accent-contrast: var(--pb-white);
-  --pb-link: var(--pb-blue-600);
-  --pb-link-hover: var(--pb-blue-700);
+  --pb-accent-soft: color-mix(in srgb, var(--pb-accent) 13%, transparent);
+  --pb-link: var(--pb-teal-700);
+  --pb-link-hover: color-mix(in srgb, var(--pb-accent), #000 24%);
   --pb-link-broken: var(--pb-red-600);
-  --pb-focus-ring: var(--pb-blue-500);
-  --pb-selection-bg: var(--pb-blue-200);
+  --pb-focus-ring: var(--pb-teal-600);
+  --pb-selection-bg: var(--pb-teal-100);
   /* transient deep-link landing pulse (Resolution 1) — mirrors the selection highlight */
-  --pb-deeplink-pulse: var(--pb-blue-200);
+  --pb-deeplink-pulse: var(--pb-teal-100);
 
   /* code */
   --pb-code-bg: var(--pb-gray-50);
@@ -113,10 +142,10 @@
   color-scheme: dark;
 
   /* surfaces */
-  --pb-surface: var(--pb-gray-925);
-  --pb-surface-raised: var(--pb-gray-900);
-  --pb-surface-hover: var(--pb-gray-850);
-  --pb-surface-active: var(--pb-gray-800);
+  --pb-surface: var(--pb-gray-850);
+  --pb-surface-raised: var(--pb-gray-800);
+  --pb-surface-hover: var(--pb-gray-750);
+  --pb-surface-active: var(--pb-gray-700);
 
   /* text */
   --pb-text: var(--pb-gray-100);
@@ -124,24 +153,25 @@
   --pb-text-faint: var(--pb-gray-500);
 
   /* edges */
-  --pb-border: var(--pb-gray-800);
-  --pb-border-strong: var(--pb-gray-750);
+  --pb-border: var(--pb-gray-750);
+  --pb-border-strong: var(--pb-gray-600);
 
   /* interactive */
-  --pb-accent: var(--pb-blue-400);
+  --pb-accent: var(--pb-teal-400);
   --pb-accent-contrast: var(--pb-gray-950);
-  --pb-link: var(--pb-blue-400);
-  --pb-link-hover: var(--pb-blue-300);
+  --pb-accent-soft: color-mix(in srgb, var(--pb-accent) 18%, transparent);
+  --pb-link: var(--pb-teal-400);
+  --pb-link-hover: color-mix(in srgb, var(--pb-accent), #fff 26%);
   --pb-link-broken: var(--pb-red-400);
-  --pb-focus-ring: var(--pb-blue-400);
-  --pb-selection-bg: var(--pb-blue-900);
-  --pb-deeplink-pulse: var(--pb-blue-900);
+  --pb-focus-ring: var(--pb-teal-400);
+  --pb-selection-bg: var(--pb-teal-900);
+  --pb-deeplink-pulse: var(--pb-teal-900);
 
   /* code */
-  --pb-code-bg: var(--pb-gray-950);
-  --pb-code-border: var(--pb-gray-800);
+  --pb-code-bg: var(--pb-gray-900);
+  --pb-code-border: var(--pb-gray-750);
   --pb-code-text: var(--pb-gray-200);
-  --pb-inline-code-bg: var(--pb-gray-850);
+  --pb-inline-code-bg: var(--pb-gray-750);
 
   /* syntax highlighting */
   --pb-syntax-keyword: var(--pb-violet-400);

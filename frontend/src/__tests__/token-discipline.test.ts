@@ -22,7 +22,7 @@ const TOKENS_FILE = path.join("src", "styles", "tokens.css");
 const HEX_COLOR = /(^|[^0-9A-Za-z&-])#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![0-9A-Za-z])/;
 const COLOR_FUNCTION = /\b(?:rgba?|hsla?|oklch|oklab|lab|lch|hwb)\(\s*[\d.]/i;
 // Hue list mirrored from tokens.css tier 1 — keep in sync when adding a hue.
-const PRIMITIVE_TOKEN = /--pb-(?:white|black|gray|blue|red|green|amber|violet)\b/;
+const PRIMITIVE_TOKEN = /--pb-(?:white|black|gray|warm|teal|blue|red|green|amber|violet)\b/;
 
 // Named colors are only flagged in color-bearing property positions (`color: red` in CSS,
 // `fill: "red"` in an inline-style object) — prose and identifiers that merely contain a
@@ -103,5 +103,16 @@ describe("token discipline (§5.9)", () => {
     for (const semantic of ["--pb-surface:", "--pb-text:", "--pb-link:", "--pb-link-broken:", "--pb-code-bg:"]) {
       expect(tokens).toContain(semantic);
     }
+  });
+
+  it("tokens.css anchors the teal accent + warmth-knob foundation", () => {
+    const tokens = readFileSync(path.join(frontendRoot, TOKENS_FILE), "utf8");
+    // The two load-bearing identity decisions: a teal-derived light accent and the single
+    // warmth knob that blends every consumed gray. Substring guards (no resolved-value
+    // snapshot) so the suite stays a text scan, matching the "dark override" test above.
+    expect(tokens).toContain("--pb-accent: var(--pb-teal-700)");
+    expect(tokens).toContain("--pb-warmth: 5%");
+    expect(tokens).toContain("--pb-teal-700:");
+    expect(tokens).toContain("--pb-warm-50:");
   });
 });
