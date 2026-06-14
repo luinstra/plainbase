@@ -51,3 +51,35 @@ command string. Use these stable `./gradlew :*` invocations instead:
   `npmTest` alone misses.
 - `./gradlew :frontend:smokeTest` — Playwright against the real server (downloads Chromium first run;
   not part of `build`).
+
+## Build workflow (how chunks get built)
+
+**Default per-chunk loop — run this without being asked:**
+
+1. **Tighten the plan** — `/crew:measure-twice` on the chunk: an advisor drafts an executor-ready
+   addendum bound to the *built* reality (cite real files/lines, not the master plan's prose), a
+   second advisor reviews until APPROVED (fix BLOCKING, accept MINOR). Resolve genuine owner-forks
+   with ONE `AskUserQuestion` before drafting; never relitigate a settled decision. Phase plans get
+   measure-twice before their chunk loops begin.
+2. **Build** — `/crew:build`: an executor implements (read the addendum + cited code, match the
+   cleanest surrounding idiom). Verify via an advisor; **fix MINOR findings by default**, re-delegate
+   BLOCKING.
+3. **Verify** — always through Gradle (§Verification): JVM floor `./gradlew build`; **server changes
+   also run the native gate** (`:server:nativeTest` → `:server:nativeCompile` → `plainbase spike`,
+   8/8). Run the full floor, not just the native gate — a cross-cutting refactor can break a
+   JVM-only test the native subset never compiles.
+4. **Commit on the owner's explicit word only** — logical commits (one concern each: decision /
+   feature+its tests / tooling), conventional style, on `main`. Gitignored `.crew/` addenda stay
+   local. Push when asked.
+
+**Escalations — proactively RECOMMEND, run on the owner's go-ahead** (they're token-heavy; flag the
+moment + the reason, don't auto-run). Trigger for **frozen-contract, concurrency-heavy, or
+phase-closing** chunks:
+
+- **Before building:** a four-model `/octo:debate` on design soundness. (S7/S8: caught a silent
+  data-correctness bug that measure-twice had approved.)
+- **After building:** a `/codex:review` cross-model pass. (S8: caught a misleading operator doc and a
+  CLI exit-code bug.)
+
+The owner can say "always debate"/"always review" to make either automatic. **When a debate or
+review finds a hole the spec missed, widen the spec AND its tests — not just the code.**
