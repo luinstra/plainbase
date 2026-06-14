@@ -44,6 +44,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
             val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
+                val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
                 val builder = IndexBuilder(
                     contentStore = store,
                     frontmatterParser = FrontmatterReader(),
@@ -54,7 +55,8 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
-                    listeners = listOf(IndexBuilder.PublicationListener(SearchIndexer(searchProvider, SectionSplitter())::sync)),
+                    listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+                    searchIndexer = searchIndexer,
                 )
                 builder.rebuild()
                 val services = RestServices(

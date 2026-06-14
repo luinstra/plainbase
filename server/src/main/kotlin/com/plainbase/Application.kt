@@ -4,7 +4,9 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.frameworks.cli.AdoptCommand
+import com.plainbase.frameworks.cli.ReindexCommand
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.configModule
 import com.plainbase.frameworks.koin.contentModule
@@ -27,9 +29,10 @@ fun main(args: Array<String>) {
     when (args.firstOrNull()) {
         "spike" -> exitProcess(NativeSpike.runAsMain())
         "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))
+        "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1)))
         null, "serve" -> serve()
         else -> {
-            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt)")
+            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex)")
             exitProcess(2)
         }
     }
@@ -44,6 +47,14 @@ private fun serve() {
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
+    // Resolution 1b: hold the DATA_DIR advisory lock for the server's whole lifetime, acquired
+    // BEFORE any rebuild/watcher registration. A second server on the same DATA_DIR — or an offline
+    // `plainbase reindex` while this one runs — is refused, never silently racing search.db writes.
+    val lock = DataDirLock.tryAcquire(config.dataDir)
+    if (lock == null) {
+        System.err.println("serve: another Plainbase process is holding ${config.dataDir} — stop it before starting a second instance")
+        exitProcess(1)
+    }
     val builder = koin.get<IndexBuilder>()
     // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
     // Events arriving while the initial build is in flight coalesce into at most one follow-up
@@ -57,5 +68,6 @@ private fun serve() {
     } finally {
         watch.close()
         scheduler.close()
+        lock.close()
     }
 }

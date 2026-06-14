@@ -5,6 +5,7 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -38,6 +39,10 @@ val indexModule = module {
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),
+            // The S8 reindex path: rebuildSearchIndex() rebuilds the engine under the rebuild
+            // monitor. Present only when searchModule is loaded (serve()); null otherwise, so the
+            // index-only module sets still resolve IndexBuilder.
+            searchIndexer = getOrNull(),
         )
     }
 }

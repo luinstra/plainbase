@@ -73,6 +73,7 @@ class IndexBuilder(
     private val checkpoint: PageCheckpointRepository,
     private val citations: CitationFactory,
     private val listeners: List<PublicationListener> = emptyList(),
+    private val searchIndexer: SearchIndexer? = null,
 ) {
 
     /** Notified with each newly published snapshot — synchronously, inside the serialized rebuild (§B4). */
@@ -166,6 +167,25 @@ class IndexBuilder(
         }
         notifyPublished(snapshot)
         return snapshot
+    }
+
+    /**
+     * Search-only full rebuild (the S8 reindex path): reads the CURRENT published snapshot AND
+     * rebuilds the search engine from it, both inside the SAME monitor [rebuild]/[notifyPublished]
+     * use. So a concurrent watcher rebuild either fully precedes this (the reindex sees its
+     * snapshot) or fully follows it (its own [SearchIndexer.sync] runs afterward) — it can never
+     * interleave to roll the engine back to a stale generation (the debate-caught regression a
+     * naive read-`current`-then-`rebuild` would reopen). This is NOT a page rescan: no scan, no
+     * checkpoint listener re-fire — just a clean generation swap of the engine over the snapshot
+     * already published. Both the reindex endpoint and the `plainbase reindex` CLI route through
+     * here. Returns the page count rebuilt into the engine (the §C4 reindex-response figure).
+     */
+    @Synchronized
+    fun rebuildSearchIndex(): Int {
+        val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
+        val snapshot = holder.load()
+        indexer.rebuild(snapshot)
+        return snapshot.pages.size
     }
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */

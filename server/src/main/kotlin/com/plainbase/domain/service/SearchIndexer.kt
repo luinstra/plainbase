@@ -40,6 +40,20 @@ class SearchIndexer(
         logger.info { "search sync: ${changed.size} page(s) upserted, ${stale.size} deleted" }
     }
 
+    /**
+     * The full-corpus counterpart to [sync] (the S8 reindex path): a single generation-swap
+     * [SearchProvider.rebuild] of the engine from [snapshot] — NOT a per-page diff. Where [sync]
+     * incrementally reconciles against engine truth, [rebuild] discards the engine's current
+     * generation and re-derives the whole index from the snapshot, which is what an explicit
+     * `reindex` asks for. It is driven only from `IndexBuilder.rebuildSearchIndex()`, which reads
+     * the snapshot and calls this under the same monitor a watcher [sync] runs under — so the two
+     * can never interleave to regress the engine to a stale generation (§B4 / the S8 atomicity fix).
+     */
+    fun rebuild(snapshot: PageIndex) {
+        provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
+        logger.info { "search reindex: rebuilt the engine for ${snapshot.pages.size} page(s)" }
+    }
+
     companion object {
         private val logger = KotlinLogging.logger {}
     }

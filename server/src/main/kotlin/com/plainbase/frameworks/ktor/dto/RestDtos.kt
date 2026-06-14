@@ -57,6 +57,13 @@ object ErrorCodes {
      * unreachable; reserved per §A5 so a future out-of-process engine appends no new vocabulary.
      */
     const val SEARCH_UNAVAILABLE: String = "search_unavailable"
+
+    /**
+     * 409: POST /api/v1/admin/reindex while a reindex is already running (admin surface; the
+     * response body shape itself is NOT frozen, like RescanResponse). Already reserved in the
+     * frozen §A5 vocabulary; appended here as a constant (codes are append-only).
+     */
+    const val REINDEX_IN_FLIGHT: String = "reindex_in_flight"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */
@@ -149,6 +156,14 @@ sealed interface TreeNodeDto {
 /** `POST /api/v1/admin/rescan` response — a §C4 convenience, NOT a frozen PB-REST-1 shape. */
 @Serializable
 data class RescanResponse(val status: String, val pages: Int)
+
+/**
+ * `POST /api/v1/admin/reindex` response — a convenience like [RescanResponse], NOT a frozen PB-*
+ * shape (§A5 says the reindex body is not frozen). Parallels [RescanResponse]: `status` ("ok") and
+ * `pages` (the count of pages rebuilt into the search engine). No forever golden pins it.
+ */
+@Serializable
+data class ReindexResponse(val status: String, val pages: Int)
 
 // ---- domain -> DTO mapping (the only place domain types meet the wire shapes) -----------------
 

@@ -31,6 +31,7 @@ class IndexHarness(
     frontmatterParser: FrontmatterParser = FrontmatterReader(),
     rendererFactory: (PageIndexView) -> MarkdownRenderer = { view -> FlexmarkRenderer(view) },
     listeners: List<IndexBuilder.PublicationListener> = emptyList(),
+    searchIndexer: SearchIndexer? = null,
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -53,6 +54,7 @@ class IndexHarness(
         // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
+        searchIndexer = searchIndexer,
     )
 
     override fun close() = driver.close()

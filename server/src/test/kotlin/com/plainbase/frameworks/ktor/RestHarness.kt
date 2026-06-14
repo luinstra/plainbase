@@ -36,10 +36,12 @@ class RestHarness(
     private val searchDir = Files.createTempDirectory("plainbase-rest-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
+    private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
     private val harness = IndexHarness(
         root,
         contentStore = store,
-        listeners = listOf(IndexBuilder.PublicationListener(SearchIndexer(searchProvider, SectionSplitter())::sync)),
+        listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+        searchIndexer = searchIndexer,
     )
 
     val idMap: IdMapRepository get() = harness.idMap

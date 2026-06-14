@@ -53,6 +53,14 @@ import io.kotest.core.spec.style.FunSpec
  *   - `search_unavailable` is registered-but-unused vocabulary (§A5): no Phase-2 code path can
  *     emit it (the embedded engine is in-process), so no golden exists for it yet — its envelope
  *     freezes when the first out-of-process engine ships.
+ *
+ * Phase 2 freeze ledger (finalized at S8): tier-1 forever goldens are exactly the five corpora
+ * above — PB-SEARCH-1 added no tier-1 golden beyond SearchGoldenTest's 5 (sentinel single-hit,
+ * zero-hit, three error envelopes). The BM25 weight pins, the per-query snippet/ordering set, the
+ * reindex-equivalence sequences, and any CJK/trigram assertion are tier-2 pinned-but-reviewable or
+ * per-tokenizer-tagged — they live OUTSIDE this suite and may be regenerated under documented
+ * review. The S8 reindex endpoint/CLI carry a non-frozen ReindexResponse body (like RescanResponse,
+ * §A5) that no golden pins. No S8 work adds or moves a tier-1 golden.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
