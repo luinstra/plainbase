@@ -13,4 +13,5 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0003](0003-folder-landing-pages.md) | Folders gain client-rendered landing views at their URL prefix | Accepted |
 | [0004](0004-raw-jdbc-for-derived-search-db.md) | Raw JDBC for the derived-state search.db (app DB stays SQLDelight-only) | Accepted |
 | [0005](0005-two-stage-search-palette.md) | Two-stage search palette (jump-to first, full-text on demand) | Accepted |
+| [0006](0006-git-via-system-binary-not-jgit.md) | Git history via the system `git` binary (not JGit), behind a hermetic executor | Accepted |
 | [0007](0007-tree-node-metadata-editorial-dates-provisional-fields.md) | Tree-node metadata: editorial dates now, provisional wire fields, Git last-modified stays distinct | Accepted |
