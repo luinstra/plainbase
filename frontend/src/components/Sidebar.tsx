@@ -69,9 +69,7 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
           className="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
           data-pb-folder-toggle
         >
-          <span aria-hidden="true" className="block w-3 text-center text-xs leading-none">
-            {open ? "▾" : "▸"}
-          </span>
+          <span aria-hidden="true" className="pb-folder-caret" />
         </button>
         {folder.url ? (
           <a
@@ -79,14 +77,14 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
             aria-current={active ? "page" : undefined}
             className={
               active
-                ? "block flex-1 rounded bg-active px-2 py-1 font-medium text-ink"
-                : "block flex-1 rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+                ? "block flex-1 rounded px-2 py-1 font-semibold text-ink"
+                : "block flex-1 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
             }
           >
             {label}
           </a>
         ) : (
-          <span className="block flex-1 px-2 py-1 font-medium text-muted">{label}</span>
+          <span className="block flex-1 px-2 py-1 font-semibold text-ink">{label}</span>
         )}
       </div>
       {open && (
@@ -109,7 +107,7 @@ function PageItem({ page, currentPathname }: { page: TreePage; currentPathname: 
         aria-current={active ? "page" : undefined}
         className={
           active
-            ? "block rounded bg-active px-2 py-1 font-medium text-ink"
+            ? "block rounded px-2 py-1 text-ink"
             : "block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
         }
       >

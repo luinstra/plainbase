@@ -17,7 +17,7 @@ function SearchTrigger() {
     >
       <span aria-hidden="true">⌕</span>
       <span className="max-sm:hidden">Search</span>
-      <kbd className="ml-2 rounded border border-edge px-1.5 text-xs text-faint max-sm:hidden">⌘K</kbd>
+      <kbd className="ml-2 rounded border border-edge px-1.5 font-mono text-xs text-faint max-sm:hidden">⌘K</kbd>
     </button>
   );
 }

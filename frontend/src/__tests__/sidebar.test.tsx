@@ -107,6 +107,20 @@ describe("SidebarNav", () => {
     expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
   });
 
+  it("marks exactly the active row with aria-current (the slash-bar/tint hook)", () => {
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const active = container.querySelectorAll('[aria-current="page"]');
+    expect(active).toHaveLength(1);
+    expect(active[0].getAttribute("href")).toBe("/docs/guides/deploy-guide");
+    expect(active[0].className).not.toContain("bg-active"); // tint now comes from the .pb-* rule
+  });
+
+  it("renders the caret as an empty host, with no text glyph", () => {
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    expect(container.textContent).not.toMatch(/[▾▸]/);
+    expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
+  });
+
   it("matches the stable-markup snapshot", () => {
     const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
     expect(container.firstChild).toMatchSnapshot();

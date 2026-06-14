@@ -76,31 +76,59 @@ body {
   outline-offset: 2px;
 }
 
-/* ---- sidebar tree (.pb-sidebar is a stable selector) ---------------------------------- */
+/* ---- sidebar tree (.pb-sidebar, .pb-folder-caret are stable selectors) ----------------- */
 
-.pb-sidebar summary {
-  cursor: pointer;
-  list-style: none;
+/* Sidebar disclosure caret. Drawn with borders on ::before; rotation is driven by the
+   toggle button's aria-expanded (the React tree's single open/closed signal). */
+.pb-folder-caret {
+  position: relative;
+  display: block;
+  width: 0.875rem;
+  height: 0.875rem;
 }
-
-.pb-sidebar summary::-webkit-details-marker {
-  display: none;
-}
-
-.pb-sidebar summary::before {
+.pb-folder-caret::before {
   content: "";
-  display: inline-block;
-  width: 0.5em;
-  height: 0.5em;
-  margin-right: 0.45em;
-  border-right: 1.5px solid var(--pb-text-faint);
-  border-bottom: 1.5px solid var(--pb-text-faint);
-  transform: rotate(-45deg) translateY(-0.1em);
+  position: absolute;
+  left: 2px;
+  top: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--pb-text-muted);
+  border-bottom: 2px solid var(--pb-text-muted);
+  transform: rotate(-45deg);
   transition: transform 120ms ease;
 }
+[data-pb-folder-toggle]:hover .pb-folder-caret::before {
+  border-color: var(--pb-text);
+}
+[data-pb-folder-toggle][aria-expanded="true"] .pb-folder-caret::before {
+  transform: rotate(45deg);
+  left: 1px;
+  top: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pb-folder-caret::before {
+    transition: none;
+  }
+}
 
-.pb-sidebar details[open] > summary::before {
-  transform: rotate(45deg) translateY(-0.15em);
+/* Active nav row: accent-soft tint + the teal slash "you are here" bar (the slash motif).
+   Keyed on aria-current="page"; position:relative anchors the ::before (Tailwind won't supply it). */
+.pb-sidebar [aria-current="page"] {
+  position: relative;
+  background: var(--pb-accent-soft);
+  color: var(--pb-text);
+}
+.pb-sidebar [aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  background: var(--pb-accent);
+  border-radius: 2px;
+  transform: skewX(-12deg);
 }
 
 /* ---- prose (.pb-prose is a stable selector; markup comes from the server renderer) ---- */

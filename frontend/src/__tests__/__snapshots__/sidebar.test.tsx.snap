@@ -28,13 +28,11 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           >
             <span
               aria-hidden="true"
-              class="block w-3 text-center text-xs leading-none"
-            >
-              ▾
-            </span>
+              class="pb-folder-caret"
+            />
           </button>
           <a
-            class="block flex-1 rounded px-2 py-1 font-medium text-muted hover:bg-hovered hover:text-ink"
+            class="block flex-1 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
             href="/docs/guides"
           >
             Guides
@@ -52,7 +50,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             >
               <a
                 aria-current="page"
-                class="block rounded bg-active px-2 py-1 font-medium text-ink"
+                class="block rounded px-2 py-1 text-ink"
                 data-pb-status="active"
                 href="/docs/guides/deploy-guide"
               >
@@ -78,13 +76,11 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           >
             <span
               aria-hidden="true"
-              class="block w-3 text-center text-xs leading-none"
-            >
-              ▾
-            </span>
+              class="pb-folder-caret"
+            />
           </button>
           <span
-            class="block flex-1 px-2 py-1 font-medium text-muted"
+            class="block flex-1 px-2 py-1 font-semibold text-ink"
           >
             shadowed-folder
           </span>
