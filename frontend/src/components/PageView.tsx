@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeFolder, TreePage } from "../api/types";
-import { folderByUrl, landingPage, pageHref } from "../lib/tree";
+import { folderByUrl, folderForLanding, landingPage, pageHref } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -21,6 +21,7 @@ export function DocsPage({ path }: { path: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const page = useQuery(pageByPathQuery(path));
+  const tree = useQuery(treeQuery);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   // The URL this component was resolved FOR. The replace must only fire while the address
@@ -28,9 +29,20 @@ export function DocsPage({ path }: { path: string }) {
   // incoming pathname, and an unguarded compare would snap the URL straight back.
   const resolvedFor = `/docs/${encodeTreePath(path)}`;
   const resolved = page.data;
+  // A folder's landing page (index/README) has ONE canonical home: the folder URL. Reaching it at
+  // its own bare-page URL redirects to the folder (the lookup needs the tree, kept warm by the
+  // Sidebar). Otherwise the canonical target is the page's own `url` (alias → canonical).
+  const landingFolder = resolved && tree.data ? folderForLanding(tree.data.root, resolved.id) : null;
   useEffect(() => {
-    const canonicalUrl = resolved?.url;
-    if (canonicalUrl && pathname === resolvedFor && canonicalUrl !== resolvedFor) {
+    if (!resolved || pathname !== resolvedFor) return;
+    if (landingFolder) {
+      if (landingFolder.url && landingFolder.url !== resolvedFor) {
+        router.history.replace(landingFolder.url + window.location.search + window.location.hash);
+      }
+      return;
+    }
+    const canonicalUrl = resolved.url;
+    if (canonicalUrl && canonicalUrl !== resolvedFor) {
       // The alias response IS the canonical page — seed its by-path key so the
       // post-replace render hits cache instead of refetching the same page.
       if (canonicalUrl.startsWith("/docs/")) {
@@ -39,7 +51,7 @@ export function DocsPage({ path }: { path: string }) {
       }
       router.history.replace(canonicalUrl + window.location.search + window.location.hash);
     }
-  }, [resolved, pathname, resolvedFor, router, queryClient]);
+  }, [resolved, landingFolder, pathname, resolvedFor, router, queryClient]);
 
   if (page.isPending) return <PagePending />;
   if (page.isError) {
@@ -47,6 +59,8 @@ export function DocsPage({ path }: { path: string }) {
     if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
     return <PageError error={page.error} />;
   }
+  // A landing page renders AS its folder (prose + child listing); the effect canonicalizes the URL.
+  if (landingFolder?.url) return <FolderLanding url={landingFolder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
   return <PageContent id={page.data.id} page={page.data} />;
@@ -72,10 +86,11 @@ export function FolderLanding({ url }: { url?: string }) {
   const folder = folderByUrl(tree.data.root, url ?? pathname);
   if (!folder) return <NotFoundView />;
 
-  // The landing renders AT the folder URL — no redirect; it stays independently reachable at its
-  // own canonical URL. With an index/README the authored content renders as a real page (prose +
-  // rail) and the generated listing follows BELOW it (the index itself excluded). With no index,
-  // it's a purely-generated listing — full width, no rail.
+  // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
+  // page URL redirects here; see DocsPage). With an index/README the authored content renders as a
+  // real page (prose + rail) and the generated listing follows BELOW it (the index itself excluded).
+  // With no index, it's a purely-generated listing — no rail, but the rail column stays reserved so
+  // the content width matches a page (see FolderListing).
   const landing = landingPage(folder);
   return landing ? (
     <PageContent id={landing.id} below={<FolderListingGroups folder={folder} excludeId={landing.id} />} />
@@ -87,6 +102,10 @@ export function FolderLanding({ url }: { url?: string }) {
 /**
  * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
  * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
+ *
+ * It has no rail or TOC, but mirrors PageContent's column shell — reading column centered at 72ch,
+ * an (empty) rail column held open beside it — so the content lands at the same width as a page.
+ * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
 function FolderListing({ folder }: { folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
@@ -96,10 +115,16 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
   }, [title]);
 
   return (
-    <div className="pb-folder" data-pb-folder>
-      <Breadcrumbs path={folder.path} title={title} />
-      <h1 className="text-3xl font-bold text-ink">{title}</h1>
-      <FolderListingGroups folder={folder} />
+    <div className="pb-folder flex gap-12" data-pb-folder>
+      <div className="min-w-0 flex-1">
+        <div className="mx-auto max-w-[72ch]">
+          <Breadcrumbs path={folder.path} title={title} />
+          <h1 className="text-3xl font-bold text-ink">{title}</h1>
+          <FolderListingGroups folder={folder} />
+        </div>
+      </div>
+      {/* Rail column reserved (empty) — no rail/TOC here, but the reading column keeps a page's width. */}
+      <div className="hidden w-[clamp(14rem,18vw,20rem)] shrink-0 xl:block" aria-hidden="true" />
     </div>
   );
 }

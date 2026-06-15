@@ -3,7 +3,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder, TreeNode, TreePage } from "../api/types";
-import { pageHref, sidebarOrder } from "../lib/tree";
+import { landingPage, nonLandingChildren, pageHref } from "../lib/tree";
 
 /** Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. */
 export function Sidebar() {
@@ -18,13 +18,21 @@ export function Sidebar() {
  * selectors (public customization API) — guarded by the snapshot test.
  */
 export function SidebarNav({ root, currentPathname }: { root: TreeFolder; currentPathname: string }) {
+  // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
+  // home link AT THE TOP — pointing at the folder URL (`/docs`), never the page's bare URL.
+  const home = landingPage(root);
   return (
     <aside
       className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
       data-pb-sidebar
     >
       <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
-        <NodeList nodes={root.children} currentPathname={currentPathname} />
+        <ul className="space-y-0.5">
+          {home && root.url && (
+            <PageRow href={root.url} status={home.status} label={home.title} currentPathname={currentPathname} />
+          )}
+          <NodeRows nodes={nonLandingChildren(root)} currentPathname={currentPathname} />
+        </ul>
       </nav>
     </aside>
   );
@@ -33,14 +41,18 @@ export function SidebarNav({ root, currentPathname }: { root: TreeFolder; curren
 function NodeList({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathname: string }) {
   return (
     <ul className="space-y-0.5">
-      {sidebarOrder(nodes).map((node) =>
-        node.type === "folder" ? (
-          <FolderItem key={node.path} folder={node} currentPathname={currentPathname} />
-        ) : (
-          <PageItem key={node.id} page={node} currentPathname={currentPathname} />
-        ),
-      )}
+      <NodeRows nodes={nodes} currentPathname={currentPathname} />
     </ul>
+  );
+}
+
+function NodeRows({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathname: string }) {
+  return nodes.map((node) =>
+    node.type === "folder" ? (
+      <FolderItem key={node.path} folder={node} currentPathname={currentPathname} />
+    ) : (
+      <PageItem key={node.id} page={node} currentPathname={currentPathname} />
+    ),
   );
 }
 
@@ -97,13 +109,31 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
 }
 
 function PageItem({ page, currentPathname }: { page: TreePage; currentPathname: string }) {
-  const href = pageHref(page);
+  return <PageRow href={pageHref(page)} status={page.status} label={page.title} currentPathname={currentPathname} />;
+}
+
+/**
+ * A leaf nav link. `href` is usually the page's own url, but the root landing passes the folder
+ * url (`/docs`) so a folder's index/README has exactly one path. `data-pb-status` stays a stable
+ * selector for the active-tint/slash-bar rule.
+ */
+function PageRow({
+  href,
+  status,
+  label,
+  currentPathname,
+}: {
+  href: string;
+  status?: string;
+  label: string;
+  currentPathname: string;
+}) {
   const active = href === currentPathname;
   return (
     <li data-pb-nav-item="page">
       <a
         href={href}
-        data-pb-status={page.status}
+        data-pb-status={status}
         aria-current={active ? "page" : undefined}
         className={
           active
@@ -111,7 +141,7 @@ function PageItem({ page, currentPathname }: { page: TreePage; currentPathname: 
             : "block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
         }
       >
-        {page.title}
+        {label}
       </a>
     </li>
   );

@@ -186,6 +186,28 @@ describe("folder landing views (ADR-0003)", () => {
     expect(listing.querySelector('a[href="/docs/guides/index"]')).toBeNull();
   });
 
+  it("redirects a landing page's own bare URL to its folder URL — one canonical path", async () => {
+    stubNotFound();
+    const withIndex = tree([
+      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/guides/index"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+    ]);
+    // Land directly on the index page's OWN url — the second path the design used to allow.
+    const { history, view } = renderAt("/docs/guides/index", withIndex, (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/index").queryKey, pageResponse(INDEX_ID, "/docs/guides/index", "Guides Home"));
+      qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Guides Home"));
+      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
+    });
+
+    // The address bar canonicalizes to the folder URL, and the folder landing renders (index
+    // prose + the generated listing) — not a bare page.
+    await waitFor(() => {
+      expect(history.location.pathname).toBe("/docs/guides");
+      expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Home");
+      expect(view.container.querySelector("[data-pb-folder-children]")).not.toBeNull();
+    });
+  });
+
   it("renders the generated listing in TREE ORDER within groups when no README/index child exists", async () => {
     stubNotFound();
     // Deliberately not alphabetical: the listing must follow the tree response order WITHIN each

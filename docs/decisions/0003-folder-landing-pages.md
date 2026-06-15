@@ -1,11 +1,28 @@
 # 3. Folders gain client-rendered landing views at their URL prefix
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-06-14 — see Amendment)
 - **Date:** 2026-06-12
 - **Deciders:** luinstra
 - **Context:** Post-Phase-1 mini-chunk — `TreeBuilder`/`CanonicalUrlBuilder.folderUrlPaths`
   (server), `FolderLanding`/`FolderListing` in `frontend/src/components/PageView.tsx` (SPA),
   amending §A4's Phase-1 "no directory-URL" rule additively (plan line 300).
+
+## Amendment (2026-06-14, UI Identity Revamp)
+
+The original decision rendered a folder's index/README *either* as prose *or* as a generated
+listing, and kept the landing page **independently reachable at its own bare-page URL** (no
+redirect). Owner review during the revamp changed both:
+
+- **Prose THEN listing.** A folder with an index/README now renders the authored prose AND the
+  generated child listing below it (the index itself excluded from the listing), so a curated
+  intro and the directory contents coexist. A folder with no index stays a pure listing.
+- **One canonical path.** A landing page no longer has a second life at its own bare-page URL —
+  that URL now redirects to the folder URL (`DocsPage` → `folderForLanding`). The sidebar surfaces
+  a folder's index through the folder link (the root through a home link to `/docs`), never as a
+  duplicate bare-page row. The §A4 server contract is unchanged; this is SPA-only routing.
+
+The bullets below are kept as originally written; where they say "no redirect / independently
+reachable," read the Amendment as governing.
 
 ## Context
 

@@ -69,12 +69,24 @@ export function landingPage(folder: TreeFolder): TreePage | null {
 }
 
 /**
- * Children reordered for the SIDEBAR: the landing page (index/README) floats to the TOP, the
- * rest keep server tree order. The folder's view IS that page, so listing it first makes the
- * overview the obvious entry — most visibly the root, whose index would otherwise sort to the
- * bottom among its siblings. Presentation only; the server tree order is untouched.
+ * A folder's children with its landing page (index/README) removed — server tree order otherwise
+ * intact. A folder's landing IS the folder URL, so it's never repeated as a child row: a subfolder
+ * surfaces it through its own label link, and the root through the home link rendered above the
+ * tree. One path per page (the folder URL), never a second bare-page entry.
  */
-export function sidebarOrder(children: TreeNode[]): TreeNode[] {
-  const landing = landingChild(children);
-  return landing ? [landing, ...children.filter((child) => child !== landing)] : children;
+export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
+  const landing = landingChild(folder.children);
+  return landing ? folder.children.filter((child) => child !== landing) : folder.children;
+}
+
+/**
+ * The folder whose landing page (index/README) is the page `pageId`, if any. A landing page has
+ * one canonical home — the folder URL — so its own bare-page URL is redirected there; this is the
+ * lookup that recognizes such a URL. The root is included (its landing answers `/docs`).
+ */
+export function folderForLanding(root: TreeFolder, pageId: string): TreeFolder | null {
+  for (const node of walk([root])) {
+    if (node.type === "folder" && landingChild(node.children)?.id === pageId) return node;
+  }
+  return null;
 }

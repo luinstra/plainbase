@@ -129,7 +129,7 @@ describe("SidebarNav", () => {
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
   });
 
-  it("floats the index/README child to the TOP, ahead of siblings, despite tree order", () => {
+  it("surfaces the root landing as a home link to the folder URL at the TOP, not the page's bare URL", () => {
     const withIndex: TreeFolder = {
       type: "folder",
       name: "",
@@ -141,7 +141,7 @@ describe("SidebarNav", () => {
       children: [
         { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
         { type: "page", id: "id-zeta", title: "Zeta", slug: "zeta", path: "zeta.md", url: "/docs/zeta", status: "active", updated: null },
-        // index.md is LAST in tree order but is the root's landing page — it must render first.
+        // index.md is LAST in tree order but is the root's landing — it surfaces first, as the home link.
         { type: "page", id: "id-home", title: "Home", slug: "index", path: "index.md", url: "/docs/index", status: "active", updated: null },
       ],
     };
@@ -149,6 +149,12 @@ describe("SidebarNav", () => {
     const first = container.querySelector("nav [data-pb-nav-item]")!;
     expect(first.getAttribute("data-pb-nav-item")).toBe("page");
     expect(first.textContent).toContain("Home");
+    // It points at the FOLDER url (one canonical path), is active on the root landing…
+    const home = first.querySelector("a")!;
+    expect(home.getAttribute("href")).toBe("/docs");
+    expect(home.getAttribute("aria-current")).toBe("page");
+    // …and the index page is never ALSO listed at its own bare url.
+    expect(container.querySelector('a[href="/docs/index"]')).toBeNull();
   });
 
   it("matches the stable-markup snapshot", () => {
