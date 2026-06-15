@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { TreeFolder } from "../api/types";
+import type { PageResponse, TreeFolder } from "../api/types";
 import { folderByUrl, landingPage, pageHref } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
@@ -46,7 +47,9 @@ export function DocsPage({ path }: { path: string }) {
     if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
     return <PageError error={page.error} />;
   }
-  return <PageContent id={page.data.id} />;
+  // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
+  // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
+  return <PageContent id={page.data.id} page={page.data} />;
 }
 
 /**
@@ -197,12 +200,24 @@ export function PermalinkPage({ splat }: { splat: string }) {
 
   if (page.isPending) return <PagePending />;
   if (page.isError) return <PageError error={page.error} />;
-  return <PageContent id={page.data.id} />;
+  // The permalink response is the page's PageResponse — hand it to the Rail, no redundant fetch.
+  return <PageContent id={page.data.id} page={page.data} />;
 }
 
-/** Breadcrumbs + server HTML + TOC for a resolved page id. */
-function PageContent({ id }: { id: string }) {
+/**
+ * Breadcrumbs + server HTML + doc footer in the main column, with a metadata Rail + TOC in
+ * the right rail. HTML is the primary content and gates the view (pending/error → the whole
+ * page); the Rail/footer read the page's frontmatter. Callers that already hold the page's
+ * `PageResponse` (the `/docs/*` by-path route, the permalink route) pass it in via [seeded], so
+ * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
+ * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
+ * slow or failed fetch degrades the Rail to its always-present File row, never blanking the doc.
+ */
+function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) {
   const html = useQuery(pageHtmlQuery(id));
+  // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
+  const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
+  const page = seeded ?? fetched.data;
 
   const title = html.data?.title;
   useEffect(() => {
@@ -212,13 +227,126 @@ function PageContent({ id }: { id: string }) {
   if (html.isPending) return <PagePending />;
   if (html.isError) return <PageError error={html.error} />;
 
+  const frontmatter = page?.frontmatter;
   return (
     <div className="flex gap-12">
       <div className="min-w-0 flex-1">
         <Breadcrumbs path={html.data.path} title={html.data.title} />
         <Prose html={html.data.html} />
+        <DocFooter frontmatter={frontmatter} />
       </div>
-      <Toc headings={html.data.headings} />
+      <aside className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-56 shrink-0 overflow-y-auto xl:block" data-pb-rail>
+        <DocRail frontmatter={frontmatter} path={html.data.path} />
+        <Toc headings={html.data.headings} />
+      </aside>
+    </div>
+  );
+}
+
+/** Coerce an untrusted frontmatter scalar to a non-blank string, else null. */
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/** Coerce frontmatter `tags` to a string list: a `string[]` keeps its strings, a bare string
+ * becomes a singleton, anything else is empty. */
+function asTags(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((tag): tag is string => typeof tag === "string");
+  const single = asString(value);
+  return single ? [single] : [];
+}
+
+/** Up-to-two avatar initials, uppercased: the leading char of each of the first two words
+ * (`Ada Lovelace` → `AL`), or — for a single-word owner — its first two characters
+ * (`ops` → `OP`). */
+function ownerInitials(owner: string): string {
+  const words = owner.trim().split(/\s+/);
+  const initials = words.length > 1 ? words.slice(0, 2).map((word) => word.charAt(0)).join("") : words[0].slice(0, 2);
+  return initials.toUpperCase();
+}
+
+/**
+ * The right-rail metadata list — a de-chromed quiet list of frontmatter fields (owner /
+ * status / tags / updated / review) plus the always-present source File path. Missing keys
+ * drop their row. This is app chrome: it renders in the rail `<aside>`, never inside
+ * `.pb-prose`.
+ */
+function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>; path: string }) {
+  const owner = asString(frontmatter?.owner);
+  const status = asString(frontmatter?.status);
+  const tags = asTags(frontmatter?.tags);
+  const updated = asString(frontmatter?.updated);
+  const review = asString(frontmatter?.review);
+
+  return (
+    <div className="pb-rail-card" data-pb-rail-meta>
+      <div className="pb-rail-head">Page info</div>
+      <div className="pb-meta">
+        {owner && (
+          <MetaRow label="Owner">
+            <span className="pb-avatar" aria-hidden="true">
+              {ownerInitials(owner)}
+            </span>
+            {owner}
+          </MetaRow>
+        )}
+        {status && (
+          <MetaRow label="Status">
+            <span className="pb-chip" data-pb-chip-status={status}>
+              <span className="pb-chip-dot" aria-hidden="true" />
+              {status}
+            </span>
+          </MetaRow>
+        )}
+        {tags.length > 0 && (
+          <MetaRow label="Tags">
+            {tags.map((tag) => (
+              <span key={tag} className="pb-tag">
+                {tag}
+              </span>
+            ))}
+          </MetaRow>
+        )}
+        {updated && (
+          <MetaRow label="Updated">
+            <span className="pb-mono-val">{updated}</span>
+          </MetaRow>
+        )}
+        {review && (
+          <MetaRow label="Review">
+            <span className="pb-mono-val">{review}</span>
+          </MetaRow>
+        )}
+        <MetaRow label="File">
+          <span className="pb-mono-val">{path}</span>
+        </MetaRow>
+      </div>
+    </div>
+  );
+}
+
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="pb-meta-row">
+      <span className="pb-meta-key">{label}</span>
+      <span className="pb-meta-val">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The doc footer below `<Prose>` (a sibling, never inside it): a mono "Last updated {date} by
+ * {owner}" line, sourced from frontmatter. Absent `updated` omits the line entirely; absent
+ * `owner` drops the "by …" clause. "Edit this page" and the prev/next pager are deferred (no
+ * write backend / repo-base-URL config; no tree fetch here) — see the chunk-4 addendum §4.
+ */
+function DocFooter({ frontmatter }: { frontmatter?: Record<string, unknown> }) {
+  const updated = asString(frontmatter?.updated);
+  if (!updated) return null;
+  const owner = asString(frontmatter?.owner);
+  return (
+    <div className="pb-docfoot" data-pb-docfoot>
+      <div className="pb-docfoot-updated">Last updated {updated}{owner ? ` by ${owner}` : ""}</div>
     </div>
   );
 }

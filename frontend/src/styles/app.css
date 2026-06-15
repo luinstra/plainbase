@@ -572,3 +572,144 @@ body {
 .pb-pdot[data-pb-status="deprecated"] {
   background: var(--pb-status-deprecated);
 }
+
+/* ---- doc reading metadata rail + footer (chunk-4) -----------------------------------------------
+ * Ported from the design reference (reference/plainbase.css:206-237) onto the live semantic tier.
+ * The shipped Rail is the de-chromed handoff default (reference:257-259) — no card border/background,
+ * the head loses its bottom rule. `.pb-rail`, `.pb-rail-card`, `.pb-meta-*`, `.pb-chip`, `.pb-avatar`,
+ * `.pb-tag`, `.pb-docfoot` and the `data-pb-rail*` / `data-pb-chip-status` hooks are a public
+ * customization API — never rename. The Rail is app chrome and never lives inside `.pb-prose`. */
+.pb-rail {
+  font-size: 13px;
+}
+.pb-rail-card {
+  margin-bottom: 1.75rem;
+}
+.pb-rail-head {
+  margin-bottom: 9px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pb-text-muted);
+}
+.pb-meta {
+  font-size: 13px;
+}
+.pb-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--pb-border);
+}
+.pb-meta-row:first-child {
+  border-top: 0;
+}
+.pb-meta-key {
+  flex: none;
+  width: 62px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--pb-text-faint);
+}
+.pb-meta-val {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  color: var(--pb-text);
+}
+.pb-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--pb-accent-soft);
+  color: var(--pb-accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+.pb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 7px;
+  border: 1px solid var(--pb-border);
+  border-radius: 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--pb-text-muted);
+}
+.pb-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.pb-chip[data-pb-chip-status="active"] {
+  color: var(--pb-status-active);
+  border-color: color-mix(in srgb, var(--pb-status-active) 35%, transparent);
+}
+.pb-chip[data-pb-chip-status="active"] .pb-chip-dot {
+  background: var(--pb-status-active);
+}
+.pb-chip[data-pb-chip-status="draft"] {
+  color: var(--pb-status-draft);
+  border-color: color-mix(in srgb, var(--pb-status-draft) 35%, transparent);
+}
+.pb-chip[data-pb-chip-status="draft"] .pb-chip-dot {
+  background: var(--pb-status-draft);
+}
+.pb-chip[data-pb-chip-status="review"] {
+  color: var(--pb-status-review);
+  border-color: color-mix(in srgb, var(--pb-status-review) 35%, transparent);
+}
+.pb-chip[data-pb-chip-status="review"] .pb-chip-dot {
+  background: var(--pb-status-review);
+}
+.pb-chip[data-pb-chip-status="archived"] {
+  color: var(--pb-status-archived);
+  border-color: color-mix(in srgb, var(--pb-status-archived) 35%, transparent);
+}
+.pb-chip[data-pb-chip-status="archived"] .pb-chip-dot {
+  background: var(--pb-status-archived);
+}
+.pb-chip[data-pb-chip-status="deprecated"] {
+  color: var(--pb-status-deprecated);
+  border-color: color-mix(in srgb, var(--pb-status-deprecated) 35%, transparent);
+}
+.pb-chip[data-pb-chip-status="deprecated"] .pb-chip-dot {
+  background: var(--pb-status-deprecated);
+}
+.pb-tag {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--pb-surface-hover);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--pb-text-muted);
+}
+.pb-tag::before {
+  content: "#";
+  color: var(--pb-text-faint);
+}
+.pb-mono-val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--pb-text);
+}
+.pb-docfoot {
+  margin-top: 44px;
+  padding-top: 20px;
+  border-top: 1px solid var(--pb-border);
+}
+.pb-docfoot-updated {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--pb-text-faint);
+}

@@ -123,6 +123,9 @@ describe("routing flows", () => {
       const { history, view } = renderAt("/docs/old/deployment", (qc) => {
         qc.setQueryData(pageByPathQuery("old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
         qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
+        // PageContent now also subscribes pageQuery(id) for the metadata Rail — prime it so the
+        // new fetch hits cache and the "no refetch" assertion below stays honest.
+        qc.setQueryData(pageQuery(WINNER_ID).queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
       });
 
       await waitFor(() => expect(history.location.pathname).toBe(canonical));

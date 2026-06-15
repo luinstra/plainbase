@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeFolder, TreePage, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
@@ -106,6 +106,7 @@ describe("folder landing views (ADR-0003)", () => {
     ]);
     const { history, view } = renderAt("/docs/guides", readmeTree, (qc) => {
       qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
+      qc.setQueryData(pageQuery(README_ID).queryKey, pageResponse(README_ID, null, "Guides Overview"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
@@ -121,11 +122,30 @@ describe("folder landing views (ADR-0003)", () => {
     ]);
     const { history, view } = renderAt("/docs/guides", loserReadmeTree, (qc) => {
       qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
+      qc.setQueryData(pageQuery(README_ID).queryKey, pageResponse(README_ID, null, "Guides Overview"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
     expect(history.location.pathname).toBe("/docs/guides");
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull(); // README content, not the listing
+  });
+
+  it("a landing child whose frontmatter fetch fails still renders — rail degrades, doc never blanks", async () => {
+    // The landing child is the one path where PageContent fetches the page by id itself; a 404 on
+    // that frontmatter fetch must degrade the rail (no chip), never error the whole document.
+    stubNotFound(); // both the by-path probe AND the un-primed pageQuery(README_ID) 404
+    const readmeTree = tree([
+      pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/guides/readme"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+    ]);
+    // Prime ONLY html (gates the view); leave pageQuery(README_ID) un-primed so its fetch 404s.
+    const { view } = renderAt("/docs/guides", readmeTree, (qc) => {
+      qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
+    });
+
+    await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
+    expect(view.container.querySelector("[data-pb-rail]")).not.toBeNull(); // doc rendered, rail present
+    expect(view.container.querySelector(".pb-chip")).toBeNull(); // …but no status: frontmatter never loaded
   });
 
   it("prefers index over readme when both exist — web-native beats repo-native", async () => {
@@ -136,6 +156,7 @@ describe("folder landing views (ADR-0003)", () => {
     ]);
     const { view } = renderAt("/docs/guides", bothTree, (qc) => {
       qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Index Title"));
+      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Index Title"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Index Title"));
@@ -240,6 +261,7 @@ describe("folder landing views (ADR-0003)", () => {
     const { view } = renderAt("/docs/guides", shadowedTree, (qc) => {
       qc.setQueryData(pageByPathQuery("guides").queryKey, pageResponse(PAGE_ID, "/docs/guides", "Guides The Page"));
       qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, htmlResponse(PAGE_ID, "Guides The Page"));
+      qc.setQueryData(pageQuery(PAGE_ID).queryKey, pageResponse(PAGE_ID, "/docs/guides", "Guides The Page"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides The Page"));
@@ -263,6 +285,7 @@ describe("folder landing views (ADR-0003)", () => {
         path: "guides/deploy-guide.md",
       });
       qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, { ...htmlResponse(PAGE_ID, "Deploy Guide"), path: "guides/deploy-guide.md" });
+      qc.setQueryData(pageQuery(PAGE_ID).queryKey, { ...pageResponse(PAGE_ID, "/docs/guides/deploy-guide", "Deploy Guide"), path: "guides/deploy-guide.md" });
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-breadcrumbs")).not.toBeNull());
