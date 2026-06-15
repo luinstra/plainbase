@@ -47,13 +47,13 @@ export function folderByUrl(root: TreeFolder, pathname: string): TreeFolder | nu
 }
 
 /**
- * README-preference (ADR-0003): the folder's direct child page whose filename stem is
- * `index` or `readme`, case-insensitive — `index` wins when both exist (web-native beats
- * repo-native). Stems come from the tree node's `path`, never from re-slugification.
+ * README-preference (ADR-0003): the direct child page whose filename stem is `index` or
+ * `readme`, case-insensitive — `index` wins when both exist (web-native beats repo-native).
+ * Stems come from the tree node's `path`, never from re-slugification.
  */
-export function landingPage(folder: TreeFolder): TreePage | null {
+function landingChild(children: TreeNode[]): TreePage | null {
   let readme: TreePage | null = null;
-  for (const child of folder.children) {
+  for (const child of children) {
     if (child.type !== "page") continue;
     const name = child.path.slice(child.path.lastIndexOf("/") + 1);
     const stem = name.replace(/\.md$/, "").toLowerCase();
@@ -61,4 +61,20 @@ export function landingPage(folder: TreeFolder): TreePage | null {
     if (stem === "readme") readme ??= child;
   }
   return readme;
+}
+
+/** The folder's landing page (index/README), if any — the child rendered at the folder URL. */
+export function landingPage(folder: TreeFolder): TreePage | null {
+  return landingChild(folder.children);
+}
+
+/**
+ * Children reordered for the SIDEBAR: the landing page (index/README) floats to the TOP, the
+ * rest keep server tree order. The folder's view IS that page, so listing it first makes the
+ * overview the obvious entry — most visibly the root, whose index would otherwise sort to the
+ * bottom among its siblings. Presentation only; the server tree order is untouched.
+ */
+export function sidebarOrder(children: TreeNode[]): TreeNode[] {
+  const landing = landingChild(children);
+  return landing ? [landing, ...children.filter((child) => child !== landing)] : children;
 }

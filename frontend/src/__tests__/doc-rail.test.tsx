@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, pageQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse } from "../api/types";
@@ -131,6 +131,20 @@ describe("doc reading metadata rail (chunk-4)", () => {
     const noUpdated = renderRail({ owner: "ops" });
     await waitFor(() => expect(noUpdated.container.querySelector(".pb-prose h1")).not.toBeNull());
     expect(noUpdated.container.querySelector("[data-pb-docfoot]")).toBeNull();
+  });
+
+  it("renders the file path as a truncatable button — full path in the title and as text, click toggles expand", async () => {
+    const { container } = renderRail({ owner: "ops" });
+    await waitFor(() => expect(container.querySelector("[data-pb-path]")).not.toBeNull());
+    const pathEl = container.querySelector("[data-pb-path]") as HTMLButtonElement;
+    // The full path is the source of truth — available on hover (title) and as text content even
+    // though CSS truncates the visible line; collapsed by default.
+    expect(pathEl.getAttribute("title")).toBe("infra/kubernetes.md");
+    expect(pathEl.textContent).toBe("infra/kubernetes.md");
+    expect(pathEl.getAttribute("aria-expanded")).toBe("false");
+    // Clicking expands to the full wrapped path.
+    fireEvent.click(pathEl);
+    expect(pathEl.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("keeps all chrome OUT of the rendered markdown (.pb-prose), and the rail a non-descendant", async () => {

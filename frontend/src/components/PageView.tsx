@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, TreeFolder } from "../api/types";
+import type { PageResponse, TreeFolder, TreePage } from "../api/types";
 import { folderByUrl, landingPage, pageHref } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
@@ -72,18 +72,21 @@ export function FolderLanding({ url }: { url?: string }) {
   const folder = folderByUrl(tree.data.root, url ?? pathname);
   if (!folder) return <NotFoundView />;
 
-  // The landing page renders AT the folder URL — no redirect; it stays independently
-  // reachable at its own canonical URL — fetched by id like a loser permalink.
+  // The landing renders AT the folder URL — no redirect; it stays independently reachable at its
+  // own canonical URL. With an index/README the authored content renders as a real page (prose +
+  // rail) and the generated listing follows BELOW it (the index itself excluded). With no index,
+  // it's a purely-generated listing — full width, no rail.
   const landing = landingPage(folder);
-  return landing ? <PageContent id={landing.id} /> : <FolderListing folder={folder} />;
+  return landing ? (
+    <PageContent id={landing.id} below={<FolderListingGroups folder={folder} excludeId={landing.id} />} />
+  ) : (
+    <FolderListing folder={folder} />
+  );
 }
 
 /**
- * The generated directory view: `_folder.yaml` title (else name) as heading, then the children
- * grouped — subfolders into a card grid, pages into a compact list — each group preserving the
- * tree response's order (never re-sorted; a stable partition, not a sort). Pages link via their
- * node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a loser subfolder has
- * none and stays an inert card). `data-pb-folder*` hooks are stable selectors.
+ * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
+ * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
  */
 function FolderListing({ folder }: { folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
@@ -92,16 +95,29 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
     document.title = `${title} · Plainbase`;
   }, [title]);
 
-  // Stable partition: subsequence order within each group is the tree order.
-  const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
-  const pages = folder.children.filter((c) => c.type === "page");
-
   return (
     <div className="pb-folder" data-pb-folder>
       <Breadcrumbs path={folder.path} title={title} />
       <h1 className="text-3xl font-bold text-ink">{title}</h1>
-      <div className="pb-listing" data-pb-folder-children>
-        {subfolders.length > 0 && (
+      <FolderListingGroups folder={folder} />
+    </div>
+  );
+}
+
+/**
+ * The generated child groups — subfolders into a card grid, pages into a compact list — each
+ * group preserving the tree response's order (never re-sorted; a stable partition, not a sort).
+ * Pages link via their node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a
+ * loser subfolder has none and stays an inert card). `excludeId` drops one child (the index/README
+ * already rendered as prose above). `data-pb-folder*` hooks are stable selectors.
+ */
+function FolderListingGroups({ folder, excludeId }: { folder: TreeFolder; excludeId?: string }) {
+  const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
+  const pages = folder.children.filter((c): c is TreePage => c.type === "page" && c.id !== excludeId);
+
+  return (
+    <div className="pb-listing" data-pb-folder-children>
+      {subfolders.length > 0 && (
           <section className="pb-listing-group">
             <div className="pb-listing-label">Folders</div>
             <div className="pb-folder-grid">
@@ -132,7 +148,6 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
           </section>
         )}
       </div>
-    </div>
   );
 }
 
@@ -212,8 +227,12 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
  * slow or failed fetch degrades the Rail to its always-present File row, never blanking the doc.
+ *
+ * [below] is optional content rendered under the prose in the reading column — the generated
+ * child listing when this page IS a folder's index/README landing (the rail still belongs here
+ * because there's authored content; a purely-generated folder view has no rail — see FolderLanding).
  */
-function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) {
+function PageContent({ id, page: seeded, below }: { id: string; page?: PageResponse; below?: ReactNode }) {
   const html = useQuery(pageHtmlQuery(id));
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
@@ -230,12 +249,20 @@ function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) 
   const frontmatter = page?.frontmatter;
   return (
     <div className="flex gap-12">
+      {/* The reading column takes the middle and centers at a readable width; the side columns
+          (sidebar + this rail) grow/shrink with the window up to their clamp caps. */}
       <div className="min-w-0 flex-1">
-        <Breadcrumbs path={html.data.path} title={html.data.title} />
-        <Prose html={html.data.html} />
-        <DocFooter frontmatter={frontmatter} />
+        <div className="mx-auto max-w-[72ch]">
+          <Breadcrumbs path={html.data.path} title={html.data.title} />
+          <Prose html={html.data.html} />
+          {below}
+          <DocFooter frontmatter={frontmatter} />
+        </div>
       </div>
-      <aside className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-56 shrink-0 overflow-y-auto xl:block" data-pb-rail>
+      <aside
+        className="pb-rail sticky top-20 hidden max-h-[calc(100vh-6rem)] w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block"
+        data-pb-rail
+      >
         <DocRail frontmatter={frontmatter} path={html.data.path} />
         <Toc headings={html.data.headings} />
       </aside>
@@ -318,10 +345,31 @@ function DocRail({ frontmatter, path }: { frontmatter?: Record<string, unknown>;
           </MetaRow>
         )}
         <MetaRow label="File">
-          <span className="pb-mono-val">{path}</span>
+          <FilePath path={path} />
         </MetaRow>
       </div>
     </div>
+  );
+}
+
+/**
+ * The source path. A deep path is truncated with a LEADING ellipsis (the filename end stays
+ * visible) so it always fits the rail instead of forcing a horizontal scrollbar; the full path
+ * is available on hover (`title`) and by clicking to expand it inline (wrapped).
+ */
+function FilePath({ path }: { path: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <button
+      type="button"
+      className={expanded ? "pb-path-val pb-path-val-full" : "pb-path-val"}
+      data-pb-path=""
+      aria-expanded={expanded}
+      title={path}
+      onClick={() => setExpanded((v) => !v)}
+    >
+      {path}
+    </button>
   );
 }
 

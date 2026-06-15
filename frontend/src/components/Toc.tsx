@@ -6,11 +6,7 @@ export function Toc({ headings }: { headings: HeadingDto[] }) {
   if (items.length < 2) return null;
 
   return (
-    <nav
-      className="pb-toc sticky top-20 hidden max-h-[calc(100vh-6rem)] w-56 shrink-0 overflow-y-auto text-sm xl:block"
-      data-pb-toc
-      aria-label="On this page"
-    >
+    <nav className="pb-toc mt-8 text-sm" data-pb-toc aria-label="On this page">
       <p className="mb-2 font-semibold text-ink">On this page</p>
       <ul className="space-y-1 border-l border-edge">
         {items.map((heading) => (

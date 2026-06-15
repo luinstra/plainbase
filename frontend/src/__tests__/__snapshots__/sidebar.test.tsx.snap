@@ -2,7 +2,7 @@
 
 exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
 <aside
-  class="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-72 shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+  class="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
   data-pb-sidebar="true"
 >
   <nav

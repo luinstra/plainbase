@@ -129,6 +129,28 @@ describe("SidebarNav", () => {
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
   });
 
+  it("floats the index/README child to the TOP, ahead of siblings, despite tree order", () => {
+    const withIndex: TreeFolder = {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: "/docs",
+      page_count: 0,
+      children: [
+        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
+        { type: "page", id: "id-zeta", title: "Zeta", slug: "zeta", path: "zeta.md", url: "/docs/zeta", status: "active", updated: null },
+        // index.md is LAST in tree order but is the root's landing page — it must render first.
+        { type: "page", id: "id-home", title: "Home", slug: "index", path: "index.md", url: "/docs/index", status: "active", updated: null },
+      ],
+    };
+    const { container } = render(<SidebarNav root={withIndex} currentPathname="/docs" />);
+    const first = container.querySelector("nav [data-pb-nav-item]")!;
+    expect(first.getAttribute("data-pb-nav-item")).toBe("page");
+    expect(first.textContent).toContain("Home");
+  });
+
   it("matches the stable-markup snapshot", () => {
     const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
     expect(container.firstChild).toMatchSnapshot();

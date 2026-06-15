@@ -656,6 +656,7 @@ body {
   align-items: center;
   gap: 7px;
   flex-wrap: wrap;
+  min-width: 0; /* let a long child (the file path) shrink + truncate instead of overflowing the rail */
   color: var(--pb-text);
 }
 .pb-avatar {
@@ -738,6 +739,33 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--pb-text);
+}
+
+/* Source file path. Collapsed: a single line truncated with a LEADING ellipsis (direction:rtl clips
+   the START so the filename end stays visible) — fits the rail, no horizontal scrollbar. Click to
+   expand to the full path wrapped; the full path is also the title tooltip. De-chromed button. */
+.pb-path-val {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--pb-text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+}
+.pb-path-val-full {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  direction: ltr;
 }
 .pb-docfoot {
   margin-top: 44px;

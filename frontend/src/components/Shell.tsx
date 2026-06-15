@@ -42,7 +42,7 @@ export function Shell() {
   return (
     <div className="pb-shell min-h-screen bg-surface text-ink" data-pb-shell onClick={onClick}>
       <header
-        className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-raised px-5"
+        className="pb-header sticky top-0 z-10 flex h-14 items-center justify-between border-b border-edge bg-raised px-4"
         data-pb-header
       >
         <a href="/" className="pb-logo-home flex items-center" aria-label="Plainbase" data-pb-home>
@@ -54,7 +54,7 @@ export function Shell() {
           <ThemeToggle />
         </div>
       </header>
-      <div className="mx-auto flex w-full max-w-screen-2xl">
+      <div className="flex w-full">
         <Sidebar />
         <main className="pb-main min-w-0 flex-1 px-6 py-8 lg:px-12" data-pb-main>
           <Outlet />

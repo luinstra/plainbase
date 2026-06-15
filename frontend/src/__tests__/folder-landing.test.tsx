@@ -162,6 +162,30 @@ describe("folder landing views (ADR-0003)", () => {
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Index Title"));
   });
 
+  it("a folder WITH an index renders the index prose AND the generated listing below it, excluding the index", async () => {
+    stubNotFound();
+    const withIndex = tree([
+      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/guides/index"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+      { type: "folder", name: "advanced", title: "Advanced", description: null, path: "guides/advanced", url: "/docs/guides/advanced", page_count: 0, children: [] },
+    ]);
+    const { view } = renderAt("/docs/guides", withIndex, (qc) => {
+      qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Guides Home"));
+      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
+    });
+
+    // The authored index renders as prose…
+    await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Home"));
+    // …with the generated listing BELOW it (scope queries to the listing — the sidebar lists the
+    // index too, legitimately). The sibling page + subfolder appear…
+    const listing = view.container.querySelector("[data-pb-folder-children]")!;
+    expect(listing).not.toBeNull();
+    expect(listing.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
+    expect(listing.querySelector('a[href="/docs/guides/advanced"]')).not.toBeNull();
+    // …but the index itself is NOT a row in the listing (it's the prose, not a card).
+    expect(listing.querySelector('a[href="/docs/guides/index"]')).toBeNull();
+  });
+
   it("renders the generated listing in TREE ORDER within groups when no README/index child exists", async () => {
     stubNotFound();
     // Deliberately not alphabetical: the listing must follow the tree response order WITHIN each

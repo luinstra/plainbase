@@ -3,13 +3,13 @@ import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder, TreeNode, TreePage } from "../api/types";
-import { pageHref } from "../lib/tree";
+import { pageHref, sidebarOrder } from "../lib/tree";
 
 /** Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. */
 export function Sidebar() {
   const { data } = useQuery(treeQuery);
   const currentPathname = useRouterState({ select: (s) => s.location.pathname });
-  if (!data) return <aside className="pb-sidebar w-72 shrink-0" data-pb-sidebar />;
+  if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
   return <SidebarNav root={data.root} currentPathname={currentPathname} />;
 }
 
@@ -20,7 +20,7 @@ export function Sidebar() {
 export function SidebarNav({ root, currentPathname }: { root: TreeFolder; currentPathname: string }) {
   return (
     <aside
-      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-72 shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
       data-pb-sidebar
     >
       <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
@@ -33,7 +33,7 @@ export function SidebarNav({ root, currentPathname }: { root: TreeFolder; curren
 function NodeList({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathname: string }) {
   return (
     <ul className="space-y-0.5">
-      {nodes.map((node) =>
+      {sidebarOrder(nodes).map((node) =>
         node.type === "folder" ? (
           <FolderItem key={node.path} folder={node} currentPathname={currentPathname} />
         ) : (
