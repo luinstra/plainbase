@@ -398,10 +398,46 @@ body {
 
 /* ---- search palette (.pb-search is a stable selector; data-pb-search-* are public hooks) ---- */
 .pb-search mark {
-  background: var(--pb-selection-bg);
-  color: inherit;
-  border-radius: 0.125rem;
-  padding: 0 0.05em;
+  background: transparent;
+  color: var(--pb-accent);
+  font-weight: 600;
+}
+
+/* Keyboard-selected row: accent-soft tint + the teal slash bar — the same "you are here"
+   motif as the sidebar (see .pb-sidebar [aria-current="page"] above). Keyed on the stable
+   data-pb-search-active hook so all three row types (hit, jump, bridge) get it for free;
+   position:relative anchors the ::before (Tailwind's rounded px-3 py-2 won't supply it). */
+.pb-search [data-pb-search-active] {
+  position: relative;
+  background: var(--pb-accent-soft);
+}
+.pb-search [data-pb-search-active]::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  background: var(--pb-accent);
+  border-radius: 2px;
+  transform: skewX(-12deg);
+}
+
+/* Group label above the empty-query (Stage-1) rows — presentational framing only. */
+.pb-search-grouplabel {
+  padding: 0.375rem 0.75rem 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--pb-text-faint);
+}
+
+/* Footer hint bar (data-pb-search-foot) — non-interactive affordance legend. */
+.pb-search-foot b {
+  color: var(--pb-text-muted);
+  font-weight: 500;
 }
 
 .pb-search-spinner {

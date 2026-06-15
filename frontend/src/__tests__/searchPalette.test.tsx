@@ -292,13 +292,35 @@ describe("two-stage search palette", () => {
       fireEvent.change(getInput(), { target: { value: "rollback" } });
       fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-stage="search"]')).not.toBeNull());
+      // The footer hint tracks what Esc actually does: in Stage 2 it goes BACK, not close.
+      expect(document.querySelector("[data-pb-search-foot]")?.textContent).toContain("back");
 
       fireEvent.keyDown(getInput(), { key: "Escape" }); // Stage 2 → Stage 1, still open
       await waitFor(() => expect(document.querySelector('[data-pb-search-stage="jump"]')).not.toBeNull());
       expect(document.querySelector("[data-pb-search]")).not.toBeNull();
+      expect(document.querySelector("[data-pb-search-foot]")?.textContent).toContain("close"); // Stage 1: Esc closes
 
       fireEvent.keyDown(getInput(), { key: "Escape" }); // Stage 1 → closed
       await waitFor(() => expect(document.querySelector("[data-pb-search]")).toBeNull());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("no-match copy names the SEARCHED query (the server's echo), not the live input", async () => {
+    // The empty-state label reads the response's echoed query, so it always matches the results it
+    // describes — it can't run ahead of the debounced search the way the live input can.
+    const empty: SearchResponse = { query: "zzz", engine: "embedded", limit: 20, offset: 0, total: 0, hits: [] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(empty), { status: 200, headers: { "content-type": "application/json" } })));
+    try {
+      setup();
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      fireEvent.change(getInput(), { target: { value: "zzz" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelector("[data-pb-search-empty]")).not.toBeNull());
+      expect(document.querySelector("[data-pb-search-empty]")?.textContent).toContain("No matches for");
+      expect(document.querySelector("[data-pb-search-empty]")?.textContent).toContain("zzz");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -409,5 +431,19 @@ describe("two-stage search palette", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("marks exactly the selected row with data-pb-search-active (the slash-marker hook)", async () => {
+    setup();
+    await openPalette();
+    await waitFor(() => expect(getInput()).not.toBeNull());
+    const input = getInput();
+    // Nothing selected at rest → no row carries the marker hook.
+    expect(document.querySelectorAll("[data-pb-search-active]")).toHaveLength(0);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" }); // lands on row 0
+    const active = document.querySelectorAll("[data-pb-search-active]");
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe("pb-search-opt-jump-0");
   });
 });

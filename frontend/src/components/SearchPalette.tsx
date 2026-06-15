@@ -281,12 +281,28 @@ function PaletteBody({
           bridgeIndex={bridgeIndex}
           hits={hits}
           status={status}
+          searchedQuery={fullText.data?.query}
           errorMessage={errorMessage}
           selectedIndex={selectedIndex}
           onSelect={setSelectedIndex}
           onActivate={enterAt}
           onActivateBridge={activateBridge}
         />
+        <div
+          className="pb-search-foot flex items-center gap-[18px] border-t border-edge px-4 py-2 font-mono text-[10.5px] text-faint"
+          data-pb-search-foot=""
+          aria-hidden="true"
+        >
+          <span>
+            <b>↑↓</b> move
+          </span>
+          <span>
+            <b>↵</b> open
+          </span>
+          <span>
+            <b>esc</b> {stage === "search" ? "back" : "close"}
+          </span>
+        </div>
       </div>
     </div>
   );

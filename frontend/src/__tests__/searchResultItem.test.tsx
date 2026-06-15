@@ -48,10 +48,21 @@ describe("SearchResultItem", () => {
     expect(mark!.textContent).toBe("rolling");
   });
 
-  it("joins the heading_path breadcrumb verbatim", () => {
+  it("joins the heading_path breadcrumb verbatim, in mono", () => {
     const { container } = render(
       <SearchResultItem hit={{ ...hit("s", []), heading_path: ["Deploy Guide", "Prerequisites"] }} id="opt" active={false} onActivate={noop} onHover={noop} />,
     );
     expect(container.textContent).toContain("Deploy Guide › Prerequisites");
+    // The breadcrumb is a structural path → mono (presentational contract, §1c).
+    expect(container.querySelector("span.font-mono")?.textContent).toBe("Deploy Guide › Prerequisites");
+  });
+
+  it("carries the data-pb-search-active marker hook only when active (slash-marker contract)", () => {
+    const props = { hit: hit("s", []), id: "opt", onActivate: noop, onHover: noop };
+    const inactive = render(<SearchResultItem {...props} active={false} />);
+    expect(inactive.container.querySelector("[data-pb-search-active]")).toBeNull();
+
+    const activeRow = render(<SearchResultItem {...props} active={true} />);
+    expect(activeRow.container.querySelector('[data-pb-search-item="hit"]')!.getAttribute("data-pb-search-active")).toBe("");
   });
 });

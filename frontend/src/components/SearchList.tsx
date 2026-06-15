@@ -24,6 +24,7 @@ export function SearchList({
   // Stage 2
   hits,
   status,
+  searchedQuery,
   errorMessage,
   // shared
   selectedIndex,
@@ -38,6 +39,9 @@ export function SearchList({
   bridgeIndex?: number;
   hits?: SearchHit[];
   status?: "loading" | "empty" | "error" | "ready";
+  /** The query the current Stage-2 results are FOR (the server's echoed query) — not the live
+   *  input, which can run ahead during the debounce window. Used only for the no-match copy. */
+  searchedQuery?: string;
   errorMessage?: string;
   selectedIndex: number;
   onSelect: (index: number) => void;
@@ -48,6 +52,13 @@ export function SearchList({
     <ul id={LISTBOX_ID} role="listbox" aria-label="Search results" className="max-h-80 overflow-y-auto p-1.5" data-pb-search-list>
       {stage === "jump" ? (
         <>
+          {/* Presentational framing only — the rows below are the existing jumpPages slice,
+              not a recency store. The label appears for the empty-query (Recent) framing. */}
+          {!query && (jumpPages?.length ?? 0) > 0 && (
+            <li className="pb-search-grouplabel" aria-hidden="true">
+              Recent
+            </li>
+          )}
           {(jumpPages ?? []).map((page, index) => (
             <JumpToItem
               key={page.id}
@@ -72,7 +83,7 @@ export function SearchList({
             onMouseMove={() => onSelect(bridgeIndex ?? 0)}
             className={
               (bridgeIndex ?? -1) === selectedIndex
-                ? "mt-1.5 flex cursor-pointer items-center gap-2 rounded border-t border-edge bg-active px-3 py-2 pt-3 text-sm text-ink"
+                ? "mt-1.5 flex cursor-pointer items-center gap-2 rounded border-t border-edge px-3 py-2 pt-3 text-sm text-ink"
                 : "mt-1.5 flex cursor-pointer items-center gap-2 rounded border-t border-edge px-3 py-2 pt-3 text-sm text-muted hover:bg-hovered"
             }
           >
@@ -91,8 +102,8 @@ export function SearchList({
             </li>
           )}
           {status === "empty" && (
-            <li data-pb-search-empty="" className="px-3 py-2 text-sm text-muted">
-              No matches
+            <li data-pb-search-empty="" className="px-5 py-[34px] text-center text-sm text-muted">
+              {searchedQuery ? <>No matches for “{searchedQuery}”</> : <>No matches</>}
             </li>
           )}
           {status === "error" && (

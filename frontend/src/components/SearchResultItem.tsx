@@ -34,11 +34,11 @@ export function SearchResultItem({
         onActivate();
       }}
       onMouseMove={onHover}
-      className={active ? "cursor-pointer rounded bg-active px-3 py-2" : "cursor-pointer rounded px-3 py-2 hover:bg-hovered"}
+      className={active ? "cursor-pointer rounded px-3 py-2" : "cursor-pointer rounded px-3 py-2 hover:bg-hovered"}
     >
       <div className="flex items-baseline gap-2">
         <span className="font-medium text-ink">{hit.title}</span>
-        {breadcrumb && <span className="truncate text-xs text-muted">{breadcrumb}</span>}
+        {breadcrumb && <span className="truncate font-mono text-xs text-muted">{breadcrumb}</span>}
       </div>
       <p className="mt-0.5 text-sm text-muted" data-pb-search-snippet>
         {fragments.map((frag, i) => (frag.mark ? <mark key={i}>{frag.text}</mark> : <span key={i}>{frag.text}</span>))}

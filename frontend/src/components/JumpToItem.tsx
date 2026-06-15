@@ -32,12 +32,12 @@ export function JumpToItem({
       onMouseMove={onHover}
       className={
         active
-          ? "flex cursor-pointer items-baseline justify-between gap-3 rounded bg-active px-3 py-2"
+          ? "flex cursor-pointer items-baseline justify-between gap-3 rounded px-3 py-2"
           : "flex cursor-pointer items-baseline justify-between gap-3 rounded px-3 py-2 hover:bg-hovered"
       }
     >
       <span className="font-medium text-ink">{page.title}</span>
-      <span className="truncate text-xs text-faint">{page.path}</span>
+      <span className="truncate font-mono text-xs text-faint">{page.path}</span>
     </li>
   );
 }
