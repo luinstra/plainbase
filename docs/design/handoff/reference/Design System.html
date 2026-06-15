@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plainbase — Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+<style>
+/* ===========================================================================
+   PRIMITIVES — the only place raw color literals live
+   =========================================================================== */
+:root {
+  /* neutral primitives — zinc (cool) and a warm paper-toned counterpart.
+     The consumed --gray-* ramp is a LIVE blend of the two, driven by --warmth,
+     so the whole interface warms from one knob (Tweaks → Warmth). */
+  --warmth:40%;
+  --z-50:#fafafa; --z-100:#f4f4f5; --z-200:#e4e4e7; --z-300:#d4d4d8;
+  --z-400:#a1a1aa; --z-500:#71717a; --z-600:#52525b; --z-700:#3f3f46;
+  --z-750:#303036; --z-800:#27272a; --z-850:#1f1f23; --z-900:#18181b;
+  --z-925:#141416; --z-950:#0f0f11;
+  --w-50:#faf8f3; --w-100:#f3f0e9; --w-200:#e7e2d8; --w-300:#d8d1c4;
+  --w-400:#a8a092; --w-500:#767065; --w-600:#565049; --w-700:#423d37;
+  --w-750:#322e29; --w-800:#292520; --w-850:#211d18; --w-900:#1a1611;
+  --w-925:#15120e; --w-950:#100d09;
+  --gray-50:color-mix(in srgb,var(--z-50),var(--w-50) var(--warmth));
+  --gray-100:color-mix(in srgb,var(--z-100),var(--w-100) var(--warmth));
+  --gray-200:color-mix(in srgb,var(--z-200),var(--w-200) var(--warmth));
+  --gray-300:color-mix(in srgb,var(--z-300),var(--w-300) var(--warmth));
+  --gray-400:color-mix(in srgb,var(--z-400),var(--w-400) var(--warmth));
+  --gray-500:color-mix(in srgb,var(--z-500),var(--w-500) var(--warmth));
+  --gray-600:color-mix(in srgb,var(--z-600),var(--w-600) var(--warmth));
+  --gray-700:color-mix(in srgb,var(--z-700),var(--w-700) var(--warmth));
+  --gray-750:color-mix(in srgb,var(--z-750),var(--w-750) var(--warmth));
+  --gray-800:color-mix(in srgb,var(--z-800),var(--w-800) var(--warmth));
+  --gray-850:color-mix(in srgb,var(--z-850),var(--w-850) var(--warmth));
+  --gray-900:color-mix(in srgb,var(--z-900),var(--w-900) var(--warmth));
+  --gray-925:color-mix(in srgb,var(--z-925),var(--w-925) var(--warmth));
+  --gray-950:color-mix(in srgb,var(--z-950),var(--w-950) var(--warmth));
+
+  /* accent base (overridable by Tweaks → Accent) — light slash & dark slash */
+  --accent-l:#0f766e; --accent-d:#2dd4bf;
+
+  /* teal — lifted straight from the logo (#0f766e light slash, #14b8a6 dark slash) */
+  --teal-50:#f0fdfa; --teal-100:#ccfbf1; --teal-200:#99f6e4; --teal-300:#5eead4;
+  --teal-400:#2dd4bf; --teal-500:#14b8a6; --teal-600:#0d9488; --teal-700:#0f766e;
+  --teal-800:#115e59; --teal-900:#134e4a;
+
+  /* functional status hues — low-saturation, used as dots/chips only */
+  --green-500:#16a34a; --green-400:#4ade80;
+  --amber-500:#d97706; --amber-400:#fbbf24;
+  --blue-500:#2563eb;  --blue-400:#60a5fa;
+  --red-500:#dc2626;   --red-400:#f87171;
+
+  /* board chrome (this page) — warms gently in step with --warmth */
+  --board:color-mix(in srgb,#ececed,#e9e4da var(--warmth));
+  --board-card:color-mix(in srgb,#ffffff,#fdfbf6 var(--warmth));
+  --board-line:color-mix(in srgb,#e0e0e2,#e6e0d4 var(--warmth));
+  --board-ink:#1c1c1f;
+  --board-muted:#6b6b73;
+  --board-label:#0d9488;
+
+  --r-sm:4px; --r-md:6px; --r-lg:9px;
+  --sans:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --serif:"Source Serif 4", Georgia, serif;
+}
+
+/* ===========================================================================
+   SEMANTIC THEMES — applied by wrapping a region in .theme-light / .theme-dark
+   so light & dark can sit side-by-side on the same board.
+   =========================================================================== */
+.theme-light {
+  --surface:var(--gray-50); --raised:color-mix(in srgb,#ffffff,var(--w-50) var(--warmth)); --sunken:var(--gray-100);
+  --hover:var(--gray-100); --active:var(--gray-200);
+  --ink:var(--gray-900); --muted:var(--gray-600); --faint:var(--gray-400);
+  --border:var(--gray-200); --border-strong:var(--gray-300);
+  --accent:var(--accent-l); --accent-soft:color-mix(in srgb,var(--accent) 13%,transparent); --accent-ink:#ffffff;
+  --link:var(--accent); --link-hover:color-mix(in srgb,var(--accent),#000 24%);
+  --code-bg:var(--gray-50); --code-border:var(--gray-200); --inline-code:var(--gray-100);
+  --status-active:var(--green-500); --status-draft:var(--amber-500);
+  --status-review:var(--blue-500); --status-deprecated:var(--gray-400);
+  --shadow:0 1px 2px rgba(24,24,27,.06), 0 1px 1px rgba(24,24,27,.04);
+}
+.theme-dark {
+  --surface:var(--gray-925); --raised:var(--gray-900); --sunken:var(--gray-950);
+  --hover:var(--gray-850); --active:var(--gray-800);
+  --ink:var(--gray-100); --muted:var(--gray-400); --faint:var(--gray-500);
+  --border:var(--gray-800); --border-strong:var(--gray-750);
+  --accent:var(--accent-d); --accent-soft:color-mix(in srgb,var(--accent) 18%,transparent); --accent-ink:var(--gray-950);
+  --link:var(--accent); --link-hover:color-mix(in srgb,var(--accent),#fff 26%);
+  --code-bg:var(--gray-950); --code-border:var(--gray-800); --inline-code:var(--gray-850);
+  --status-active:var(--green-400); --status-draft:var(--amber-400);
+  --status-review:var(--blue-400); --status-deprecated:var(--gray-500);
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+
+/* ===========================================================================
+   BOARD CHROME
+   =========================================================================== */
+* { box-sizing:border-box; }
+html,body { margin:0; padding:0; }
+body { background:var(--board); color:var(--board-ink); font-family:var(--sans);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+a { color:inherit; }
+
+.board-header {
+  position:sticky; top:0; z-index:20;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 40px; background:rgba(236,236,237,.86); backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--board-line);
+}
+.wordmark { display:flex; align-items:center; gap:10px; }
+.wordmark .slash { width:17px; height:26px; display:block; }
+.wordmark .name { font-family:var(--mono); font-weight:500; font-size:19px; letter-spacing:-.01em; color:#0f172a; }
+.wordmark .sep { width:1px; height:20px; background:var(--board-line); margin:0 4px; }
+.wordmark .doctype { font-family:var(--mono); font-size:12px; letter-spacing:.04em; color:var(--board-muted); text-transform:uppercase; }
+.board-header .legend { display:flex; align-items:center; gap:16px; font-family:var(--mono); font-size:11.5px; letter-spacing:.03em; color:var(--board-muted); }
+.legend .dot { display:inline-flex; align-items:center; gap:6px; }
+.legend .sw { width:11px; height:11px; border-radius:3px; border:1px solid var(--board-line); }
+
+.wrap { max-width:1140px; margin:0 auto; padding:0 40px 120px; }
+
+section.block { margin-top:64px; }
+.block-head { margin-bottom:22px; }
+.eyebrow { font-family:var(--mono); font-size:12px; font-weight:500; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--board-label); display:flex; align-items:center; gap:9px; }
+.eyebrow::before { content:""; width:13px; height:14px; background:var(--teal-600);
+  clip-path:polygon(42% 0,100% 0,58% 100%,0 100%); display:inline-block; }
+.block-head h2 { margin:12px 0 6px; font-size:27px; font-weight:600; letter-spacing:-.02em; color:var(--board-ink); }
+.block-head p { margin:0; max-width:62ch; font-size:15px; line-height:1.6; color:var(--board-muted); }
+
+.card { background:var(--board-card); border:1px solid var(--board-line); border-radius:12px;
+  box-shadow:0 1px 2px rgba(24,24,27,.05); }
+.card-pad { padding:26px 28px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.pair-label { font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--board-muted); margin-bottom:9px; display:block; }
+
+/* ---- intro / brief ---- */
+.brief { display:grid; grid-template-columns:1.1fr 1fr; gap:0; overflow:hidden; }
+.brief .lede { padding:34px 36px; border-right:1px solid var(--board-line); }
+.brief .lede h1 { margin:0 0 16px; font-size:30px; font-weight:600; letter-spacing:-.02em; line-height:1.18; }
+.brief .lede p { margin:0 0 14px; font-size:15.5px; line-height:1.65; color:#33333a; max-width:46ch; }
+.brief .lede p:last-child { margin-bottom:0; }
+.brief .moves { padding:30px 34px; background:var(--gray-50); }
+.brief .moves .pair-label { margin-bottom:16px; }
+.move { display:flex; gap:14px; padding:13px 0; border-top:1px solid var(--board-line); }
+.move:first-of-type { border-top:0; }
+.move .n { font-family:var(--mono); font-size:12px; font-weight:500; color:var(--teal-700);
+  width:22px; height:22px; flex:none; border:1px solid var(--teal-200); background:var(--teal-50);
+  border-radius:5px; display:flex; align-items:center; justify-content:center; }
+.move .t { font-size:13.5px; line-height:1.5; color:#33333a; }
+.move .t b { color:var(--board-ink); font-weight:600; }
+
+/* ---- directions ---- */
+.dir { overflow:hidden; position:relative; display:flex; flex-direction:column; }
+.dir .swatchbar { height:7px; display:flex; }
+.dir .swatchbar span { flex:1; }
+.dir .dir-body { padding:22px 22px 24px; flex:1; display:flex; flex-direction:column; }
+.dir .dir-name { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:24px; }
+.dir .dir-name h3 { margin:0; font-size:17px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
+.dir .rec { font-family:var(--mono); font-size:10px; font-weight:500; letter-spacing:.05em;
+  text-transform:uppercase; color:var(--teal-700); background:var(--teal-50);
+  border:1px solid var(--teal-200); padding:3px 7px; border-radius:20px; }
+.dir .tag { font-family:var(--mono); font-size:11px; color:var(--board-muted); margin-top:3px; }
+.dir .desc { font-size:13px; line-height:1.55; color:#44444c; margin:13px 0 16px; }
+.dir .preview { margin-top:auto; border:1px solid var(--board-line); border-radius:8px; padding:14px 15px; }
+.dir .preview .ttl { font-size:15px; font-weight:600; letter-spacing:-.01em; margin-bottom:5px; }
+.dir .preview .bd { font-size:12.5px; line-height:1.55; color:#55555c; }
+.dir .preview .meta { margin-top:10px; display:flex; gap:6px; align-items:center; font-family:var(--mono); font-size:10.5px; color:var(--board-muted); }
+
+/* ---- swatches ---- */
+.ramp { display:flex; border-radius:9px; overflow:hidden; border:1px solid var(--board-line); }
+.ramp .step { flex:1; height:62px; display:flex; align-items:flex-end; padding:6px 7px; }
+.ramp .step span { font-family:var(--mono); font-size:9.5px; line-height:1.3; }
+.ramp-labels { display:flex; margin-top:7px; }
+.ramp-labels span { flex:1; text-align:center; font-family:var(--mono); font-size:10px; color:var(--board-muted); }
+
+.tokens { display:grid; grid-template-columns:1fr; gap:0; }
+.tok { display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid var(--border); }
+.tok:first-child { border-top:0; }
+.tok .chip { width:34px; height:22px; border-radius:5px; border:1px solid var(--border-strong); flex:none; }
+.tok .nm { font-family:var(--mono); font-size:12px; color:var(--ink); }
+.tok .role { margin-left:auto; font-size:12px; color:var(--muted); }
+
+.status-row { display:flex; flex-wrap:wrap; gap:10px; }
+
+/* ---- type ---- */
+.face { padding:22px 24px; }
+.face .big { font-size:40px; letter-spacing:-.02em; line-height:1; }
+.face .nm { display:flex; align-items:baseline; justify-content:space-between; margin-top:18px; }
+.face .nm b { font-size:15px; font-weight:600; }
+.face .nm span { font-family:var(--mono); font-size:11px; color:var(--board-muted); }
+.face .role { margin-top:8px; font-size:13px; line-height:1.5; color:#55555c; }
+.face .glyphs { margin-top:14px; font-size:13px; color:var(--board-muted); letter-spacing:.02em; }
+
+.scale-row { display:flex; align-items:baseline; gap:18px; padding:13px 0; border-top:1px solid var(--border); }
+.scale-row:first-child { border-top:0; }
+.scale-row .spec { font-family:var(--mono); font-size:11px; color:var(--muted); width:135px; flex:none; }
+.scale-row .samp { color:var(--ink); }
+
+/* ---- foundations ---- */
+.spacing { display:flex; align-items:flex-end; gap:16px; }
+.spacing .u { text-align:center; }
+.spacing .bar { background:var(--teal-200); border:1px solid var(--teal-300); border-radius:3px; width:34px; }
+.spacing .lab { font-family:var(--mono); font-size:10.5px; color:var(--board-muted); margin-top:7px; }
+.radii { display:flex; gap:18px; }
+.radii .rb { width:78px; height:62px; background:var(--teal-50); border:1.5px solid var(--teal-300); }
+.radii .cap { font-family:var(--mono); font-size:10.5px; color:var(--board-muted); margin-top:7px; text-align:center; }
+.motif { display:flex; gap:26px; align-items:center; flex-wrap:wrap; }
+.motif .demo { display:flex; align-items:center; gap:10px; font-size:13.5px; color:#44444c; }
+.slash-mark { width:4px; height:20px; background:var(--teal-600); transform:skewX(-12deg); display:inline-block; border-radius:1px; }
+.slash-mark.lg { height:34px; width:6px; }
+
+/* ===========================================================================
+   COMPONENT RENDERS — live in .theme-* surfaces
+   =========================================================================== */
+.surface-card { border-radius:11px; border:1px solid var(--border); background:var(--surface);
+  color:var(--ink); overflow:hidden; }
+.surface-card .sc-pad { padding:22px 24px; }
+.surface-card .sc-head { padding:11px 16px; background:var(--raised); border-bottom:1px solid var(--border);
+  font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
+
+/* buttons */
+.btn-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.btn { font-family:var(--sans); font-size:13.5px; font-weight:500; border-radius:var(--r-md);
+  padding:7px 14px; border:1px solid transparent; cursor:pointer; display:inline-flex; align-items:center; gap:7px;
+  transition:background .12s, border-color .12s, color .12s; }
+.btn-primary { background:var(--accent); color:var(--accent-ink); }
+.btn-primary:hover { background:var(--link-hover); }
+.btn-secondary { background:var(--raised); color:var(--ink); border-color:var(--border-strong); }
+.btn-secondary:hover { background:var(--hover); }
+.btn-ghost { background:transparent; color:var(--muted); }
+.btn-ghost:hover { background:var(--hover); color:var(--ink); }
+.btn-danger { background:transparent; color:var(--status-deprecated); border-color:var(--border); }
+
+/* search trigger */
+.search-trigger { display:flex; align-items:center; gap:9px; width:100%;
+  border:1px solid var(--border); background:var(--raised); border-radius:var(--r-md);
+  padding:8px 12px; font-size:13.5px; color:var(--muted); cursor:text; }
+.search-trigger .gl { font-size:15px; }
+.search-trigger kbd { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint);
+  border:1px solid var(--border); border-radius:4px; padding:1px 6px; }
+
+/* search palette */
+.palette { border:1px solid var(--border-strong); background:var(--raised); border-radius:var(--r-lg);
+  overflow:hidden; box-shadow:var(--shadow); }
+.palette .pq { display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--border); }
+.palette .pq .gl { color:var(--muted); font-size:16px; }
+.palette .pq input { border:0; background:transparent; outline:none; flex:1; font-family:var(--sans);
+  font-size:15px; color:var(--ink); }
+.palette .pq input::placeholder { color:var(--faint); }
+.palette .presult { padding:9px 15px; display:flex; align-items:center; gap:11px; }
+.palette .presult.sel { background:var(--accent-soft); }
+.palette .presult .pi { font-family:var(--mono); font-size:11px; color:var(--muted); width:54px; flex:none; }
+.palette .presult .pt { font-size:13.5px; color:var(--ink); }
+.palette .presult .pt mark { background:var(--accent-soft); color:var(--accent); border-radius:2px; padding:0 1px; }
+.palette .presult .pp { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint); }
+.palette .pfoot { padding:8px 15px; border-top:1px solid var(--border); display:flex; gap:16px;
+  font-family:var(--mono); font-size:10.5px; color:var(--faint); }
+
+/* chips & tags */
+.chips { display:flex; flex-wrap:wrap; gap:9px; align-items:center; }
+.chip { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:11.5px;
+  padding:3px 9px 3px 7px; border-radius:20px; border:1px solid var(--border); background:var(--raised); color:var(--muted); }
+.chip .d { width:6px; height:6px; border-radius:50%; }
+.chip.active { color:var(--status-active); border-color:color-mix(in srgb,var(--status-active) 35%,transparent); }
+.chip.active .d { background:var(--status-active); }
+.chip.draft { color:var(--status-draft); border-color:color-mix(in srgb,var(--status-draft) 35%,transparent); }
+.chip.draft .d { background:var(--status-draft); }
+.chip.review { color:var(--status-review); border-color:color-mix(in srgb,var(--status-review) 35%,transparent); }
+.chip.review .d { background:var(--status-review); }
+.chip.deprecated { color:var(--status-deprecated); border-color:var(--border); }
+.chip.deprecated .d { background:var(--status-deprecated); }
+.tag { font-family:var(--mono); font-size:11.5px; color:var(--muted); background:var(--hover);
+  border-radius:4px; padding:2px 8px; }
+.tag::before { content:"#"; color:var(--faint); }
+
+/* sidebar */
+.mini-tree { font-size:13.5px; }
+.mini-tree .row { display:flex; align-items:center; gap:8px; padding:6px 10px 6px 12px; border-radius:6px;
+  color:var(--muted); position:relative; cursor:default; }
+.mini-tree .row .tw { color:var(--faint); font-size:10px; width:10px; }
+.mini-tree .row.folder { font-weight:500; color:var(--ink); }
+.mini-tree .row.hover { background:var(--hover); color:var(--ink); }
+.mini-tree .row.active { background:var(--accent-soft); color:var(--ink); font-weight:500; }
+.mini-tree .row.active::before { content:""; position:absolute; left:1px; top:7px; bottom:7px; width:3px;
+  background:var(--accent); border-radius:2px; transform:skewX(-12deg); }
+.mini-tree .nest { margin-left:13px; padding-left:10px; border-left:1px solid var(--border); }
+.mini-tree .fname { font-family:var(--mono); font-size:12.5px; }
+
+/* breadcrumbs */
+.crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:13px; }
+.crumbs a { color:var(--muted); text-decoration:none; }
+.crumbs a:hover { color:var(--ink); }
+.crumbs .bsl { color:var(--accent); font-family:var(--mono); transform:skewX(-12deg); display:inline-block; }
+.crumbs .cur { color:var(--ink); font-weight:500; }
+
+/* metadata panel */
+.meta-panel { font-size:13px; }
+.meta-panel .mrow { display:flex; align-items:center; gap:12px; padding:9px 0; border-top:1px solid var(--border); }
+.meta-panel .mrow:first-child { border-top:0; }
+.meta-panel .mk { font-family:var(--mono); font-size:11px; letter-spacing:.03em; text-transform:uppercase;
+  color:var(--faint); width:96px; flex:none; }
+.meta-panel .mv { color:var(--ink); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.meta-panel .avatar { width:20px; height:20px; border-radius:50%; background:var(--accent-soft);
+  color:var(--accent); font-size:10px; font-weight:600; display:flex; align-items:center; justify-content:center; font-family:var(--mono); }
+
+/* code */
+.codeblock { background:var(--code-bg); border:1px solid var(--code-border); border-radius:var(--r-lg);
+  padding:14px 16px; font-family:var(--mono); font-size:12.5px; line-height:1.65; color:var(--ink); overflow-x:auto; }
+.codeblock .cmt { color:var(--muted); font-style:italic; }
+.codeblock .kw { color:var(--accent); }
+.codeblock .str { color:var(--status-active); }
+.codeblock .num { color:var(--status-draft); }
+
+/* prose + callout */
+.prose-mini { font-size:14.5px; line-height:1.7; color:var(--ink); }
+.prose-mini h3 { margin:0 0 8px; font-size:17px; font-weight:600; letter-spacing:-.01em; }
+.prose-mini p { margin:0 0 11px; }
+.prose-mini a { color:var(--link); text-decoration:underline; text-decoration-color:color-mix(in srgb,var(--link) 35%,transparent); text-underline-offset:.18em; }
+.prose-mini code { font-family:var(--mono); font-size:.86em; background:var(--inline-code); border-radius:4px; padding:.1em .35em; }
+.callout { border:1px solid var(--border); border-radius:var(--r-lg); padding:12px 14px 12px 13px;
+  background:var(--raised); display:flex; gap:11px; font-size:13.5px; line-height:1.55; color:var(--muted); }
+.callout .cs { width:3px; align-self:stretch; background:var(--accent); border-radius:2px; transform:skewX(-12deg); flex:none; }
+.callout b { color:var(--ink); font-weight:600; }
+
+/* footer */
+.next { margin-top:60px; }
+.next .card-pad { display:grid; grid-template-columns:auto 1fr; gap:22px; align-items:center; }
+.next h3 { margin:0 0 4px; font-size:18px; font-weight:600; }
+.next p { margin:0; font-size:14px; color:var(--board-muted); line-height:1.6; }
+.next .num { font-family:var(--mono); font-size:34px; color:var(--teal-600); font-weight:500; }
+.next ul { margin:10px 0 0; padding-left:0; list-style:none; display:flex; flex-wrap:wrap; gap:8px; }
+.next ul li { font-family:var(--mono); font-size:12px; color:var(--teal-800); background:var(--teal-50);
+  border:1px solid var(--teal-200); border-radius:20px; padding:4px 11px; }
+
+@media (max-width:900px){
+  .grid2,.grid3,.brief,.next .card-pad { grid-template-columns:1fr; }
+  .brief .lede { border-right:0; border-bottom:1px solid var(--board-line); }
+}
+
+/* reading-column font swap (Tweaks → Body font) */
+body.read-serif .prose-mini,
+body.read-serif .prose-mini h3 { font-family:var(--serif); }
+body.read-serif .prose-mini { font-size:15px; line-height:1.72; }
+</style>
+</head>
+<body>
+<header class="board-header">
+  <div class="wordmark">
+    <svg class="slash" viewBox="0 0 40 60" aria-hidden="true"><path fill="#0f766e" d="M0,54 27,0 h11.8 L11.8,54 z"/></svg>
+    <span class="name">plainbase</span>
+    <span class="sep"></span>
+    <span class="doctype">Design System</span>
+  </div>
+  <div class="legend">
+    <span class="dot"><span class="sw" style="background:#fafafa"></span>Light</span>
+    <span class="dot"><span class="sw" style="background:#141416"></span>Dark</span>
+    <span style="opacity:.6">shown in parallel</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- BRIEF -->
+  <section class="block" style="margin-top:40px;">
+    <div class="card brief">
+      <div class="lede">
+        <h1>The look should grow from the&nbsp;logo, not ignore it.</h1>
+        <p>The current build is a solid skeleton, but its personality is generic: a blue accent and system fonts that could belong to any tool. Meanwhile the strongest asset you already made — the wordmark — is going unused as a design language.</p>
+        <p>So this system does one thing deliberately: it takes the logo's <b>teal slash</b> and its <b>JetBrains&nbsp;Mono</b> voice and lets them set the rules for everything else. Calm, content-first, and honest about being made of plain files.</p>
+      </div>
+      <div class="moves">
+        <span class="pair-label">The five moves</span>
+        <div class="move"><span class="n">1</span><span class="t"><b>Teal is the accent.</b> The logo's teal replaces blue everywhere a person points, hovers, or lands.</span></div>
+        <div class="move"><span class="n">2</span><span class="t"><b>Mono gets a job.</b> JetBrains Mono becomes the voice of structure — paths, tags, status, keys, code — echoing the wordmark.</span></div>
+        <div class="move"><span class="n">3</span><span class="t"><b>IBM Plex Sans for humans.</b> One warm, technical sans for all UI and reading. (No Inter.)</span></div>
+        <div class="move"><span class="n">4</span><span class="t"><b>The slash is a motif.</b> The skewed teal mark signals "you are here" — active nav, breadcrumbs, callouts.</span></div>
+        <div class="move"><span class="n">5</span><span class="t"><b>Restraint by default.</b> Type and spacing carry the design; decoration is rare and earned.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DIRECTIONS -->
+  <section class="block">
+    <div class="block-head">
+      <span class="eyebrow">Explore · three directions</span>
+      <h2>Three ways the same bones could feel</h2>
+      <p>Same tokens, same components — different temperature. The default below is <b>Plainfile dialed slightly warm</b> — open <b>Tweaks</b> in the toolbar and drag the <b>Warmth</b> slider to feel exactly where “a touch” should sit.</p>
+    </div>
+    <div class="grid3">
+      <div class="card dir">
+        <div class="swatchbar"><span style="background:#0f766e"></span><span style="background:#fafafa"></span><span style="background:#18181b"></span></div>
+        <div class="dir-body">
+          <div class="dir-name"><h3>Quiet Editorial</h3></div>
+          <div class="tag">serif body · airy · teal used sparingly</div>
+          <div class="desc">Reading-first. A typeset serif for prose, generous line-height, accents whispered. Closest to Notion's calm and a well-set documentation site.</div>
+          <div class="preview">
+            <div class="ttl" style="font-family:var(--serif);">Kubernetes</div>
+            <div class="bd" style="font-family:var(--serif);">The cluster runs three control-plane nodes behind an internal load balancer.</div>
+            <div class="meta"><span style="color:#0f766e">●</span> active · owner kevin</div>
+          </div>
+        </div>
+      </div>
+      <div class="card dir" style="outline:2px solid var(--teal-500); outline-offset:-2px;">
+        <div class="swatchbar"><span style="background:#0d9488"></span><span style="background:#f4f4f5"></span><span style="background:#141416"></span></div>
+        <div class="dir-body">
+          <div class="dir-name"><h3>Plainfile</h3><span class="rec">Recommended</span></div>
+          <div class="tag">sans + mono structure · balanced · slash motif</div>
+          <div class="desc">Honest about the filesystem. IBM Plex Sans reads cleanly; JetBrains Mono labels every piece of structure. Obsidian's clarity with Outline's polish.</div>
+          <div class="preview">
+            <div class="ttl">Kubernetes</div>
+            <div class="bd">The cluster runs three control-plane nodes behind an internal load balancer.</div>
+            <div class="meta"><span class="slash-mark" style="height:13px;width:3px;"></span> infra / kubernetes.md · active</div>
+          </div>
+        </div>
+      </div>
+      <div class="card dir">
+        <div class="swatchbar"><span style="background:#115e59"></span><span style="background:#faf9f6"></span><span style="background:#1f1d1a"></span></div>
+        <div class="dir-body">
+          <div class="dir-name"><h3>Warm Library</h3></div>
+          <div class="tag">warm paper neutrals · cozy · a little character</div>
+          <div class="desc">The same system nudged warmer — paper-toned surfaces, slightly cozier density, a touch more decoration. Feels like a maintained internal handbook.</div>
+          <div class="preview" style="background:#faf9f6; border-color:#eae6dd;">
+            <div class="ttl">Kubernetes</div>
+            <div class="bd">The cluster runs three control-plane nodes behind an internal load balancer.</div>
+            <div class="meta"><span style="color:#115e59">●</span> updated 3 days ago</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COLOR -->
+  <section class="block">
+    <div class="block-head">
+      <span class="eyebrow">Foundation · color</span>
+      <h2>Teal from the logo, zinc for everything quiet</h2>
+      <p>Two primitive ramps. The neutrals carry the interface; teal appears only on what's interactive or current. Semantic tokens map to both — dark mode is a pure swap, no component knows a color.</p>
+    </div>
+    <div class="card card-pad" style="margin-bottom:20px;">
+      <span class="pair-label">Accent — Teal (the wordmark slash is teal-700 / teal-500)</span>
+      <div class="ramp">
+        <div class="step" style="background:#f0fdfa"><span style="color:#0f766e">50</span></div>
+        <div class="step" style="background:#ccfbf1"><span style="color:#0f766e">100</span></div>
+        <div class="step" style="background:#99f6e4"><span style="color:#0f766e">200</span></div>
+        <div class="step" style="background:#5eead4"><span style="color:#115e59">300</span></div>
+        <div class="step" style="background:#2dd4bf"><span style="color:#134e4a">400</span></div>
+        <div class="step" style="background:#14b8a6"><span style="color:#f0fdfa">500</span></div>
+        <div class="step" style="background:#0d9488"><span style="color:#f0fdfa">600</span></div>
+        <div class="step" style="background:#0f766e"><span style="color:#ccfbf1">700</span></div>
+        <div class="step" style="background:#115e59"><span style="color:#ccfbf1">800</span></div>
+        <div class="step" style="background:#134e4a"><span style="color:#99f6e4">900</span></div>
+      </div>
+      <span class="pair-label" style="margin-top:20px;">Neutral — Zinc</span>
+      <div class="ramp">
+        <div class="step" style="background:#fafafa"><span style="color:#52525b">50</span></div>
+        <div class="step" style="background:#f4f4f5"><span style="color:#52525b">100</span></div>
+        <div class="step" style="background:#e4e4e7"><span style="color:#52525b">200</span></div>
+        <div class="step" style="background:#d4d4d8"><span style="color:#3f3f46">300</span></div>
+        <div class="step" style="background:#a1a1aa"><span style="color:#18181b">400</span></div>
+        <div class="step" style="background:#71717a"><span style="color:#fafafa">500</span></div>
+        <div class="step" style="background:#52525b"><span style="color:#fafafa">600</span></div>
+        <div class="step" style="background:#3f3f46"><span style="color:#e4e4e7">700</span></div>
+        <div class="step" style="background:#27272a"><span style="color:#e4e4e7">800</span></div>
+        <div class="step" style="background:#18181b"><span style="color:#a1a1aa">900</span></div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="theme-light surface-card">
+        <div class="sc-head">Semantic tokens — Light</div>
+        <div class="sc-pad">
+          <div class="tokens">
+            <div class="tok"><span class="chip" style="background:var(--surface)"></span><span class="nm">--surface</span><span class="role">page background</span></div>
+            <div class="tok"><span class="chip" style="background:var(--raised)"></span><span class="nm">--raised</span><span class="role">header, cards, sidebar</span></div>
+            <div class="tok"><span class="chip" style="background:var(--ink)"></span><span class="nm">--ink</span><span class="role">primary text</span></div>
+            <div class="tok"><span class="chip" style="background:var(--muted)"></span><span class="nm">--muted</span><span class="role">secondary text</span></div>
+            <div class="tok"><span class="chip" style="background:var(--border)"></span><span class="nm">--border</span><span class="role">hairlines</span></div>
+            <div class="tok"><span class="chip" style="background:var(--accent)"></span><span class="nm">--accent</span><span class="role">teal-700</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="theme-dark surface-card">
+        <div class="sc-head">Semantic tokens — Dark</div>
+        <div class="sc-pad">
+          <div class="tokens">
+            <div class="tok"><span class="chip" style="background:var(--surface)"></span><span class="nm">--surface</span><span class="role">page background</span></div>
+            <div class="tok"><span class="chip" style="background:var(--raised)"></span><span class="nm">--raised</span><span class="role">header, cards, sidebar</span></div>
+            <div class="tok"><span class="chip" style="background:var(--ink)"></span><span class="nm">--ink</span><span class="role">primary text</span></div>
+            <div class="tok"><span class="chip" style="background:var(--muted)"></span><span class="nm">--muted</span><span class="role">secondary text</span></div>
+            <div class="tok"><span class="chip" style="background:var(--border)"></span><span class="nm">--border</span><span class="role">hairlines</span></div>
+            <div class="tok"><span class="chip" style="background:var(--accent)"></span><span class="nm">--accent</span><span class="role">teal-400</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-pad" style="margin-top:20px;">
+      <span class="pair-label">Status — drawn from frontmatter, shown as dots not fills</span>
+      <div class="grid2" style="gap:20px;">
+        <div class="theme-light surface-card"><div class="sc-pad"><div class="status-row">
+          <span class="chip active"><span class="d"></span>active</span>
+          <span class="chip draft"><span class="d"></span>draft</span>
+          <span class="chip review"><span class="d"></span>in review</span>
+          <span class="chip deprecated"><span class="d"></span>deprecated</span>
+        </div></div></div>
+        <div class="theme-dark surface-card"><div class="sc-pad"><div class="status-row">
+          <span class="chip active"><span class="d"></span>active</span>
+          <span class="chip draft"><span class="d"></span>draft</span>
+          <span class="chip review"><span class="d"></span>in review</span>
+          <span class="chip deprecated"><span class="d"></span>deprecated</span>
+        </div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TYPE -->
+  <section class="block">
+    <div class="block-head">
+      <span class="eyebrow">Foundation · type</span>
+      <h2>One sans for people, one mono for structure</h2>
+      <p>IBM Plex Sans is warm, neutral and technically rooted — it reads beautifully at body size and never feels like default UI. JetBrains Mono is already in your wordmark, so it does all the structural work: paths, metadata, code, keys.</p>
+    </div>
+    <div class="grid2" style="margin-bottom:20px;">
+      <div class="card face">
+        <div class="big" style="font-family:var(--sans);">Aa Gg</div>
+        <div class="nm"><b>IBM Plex Sans</b><span>400 · 500 · 600 · 700</span></div>
+        <div class="role">UI text, headings, and the docs reading column. Pleasant for long-form, precise at small sizes.</div>
+        <div class="glyphs" style="font-family:var(--sans);">The quick brown fox — 0123456789 — &amp;?!@#</div>
+      </div>
+      <div class="card face">
+        <div class="big" style="font-family:var(--mono);">Aa Gg</div>
+        <div class="nm"><b>JetBrains Mono</b><span>400 · 500 · 700</span></div>
+        <div class="role">Paths, tags, status, keyboard keys, breadcrumb slashes, and all code. The structural voice.</div>
+        <div class="glyphs" style="font-family:var(--mono);">infra/kubernetes.md — 0123456789 — &amp;?!@#</div>
+      </div>
+    </div>
+    <div class="theme-light surface-card">
+      <div class="sc-head">Type scale</div>
+      <div class="sc-pad">
+        <div class="scale-row"><span class="spec">Display / 34 · 650</span><span class="samp" style="font-size:34px; font-weight:650; letter-spacing:-.02em;">Welcome to Demo Docs</span></div>
+        <div class="scale-row"><span class="spec">H2 / 24 · 600</span><span class="samp" style="font-size:24px; font-weight:600; letter-spacing:-.01em;">Running the cluster</span></div>
+        <div class="scale-row"><span class="spec">H3 / 19 · 600</span><span class="samp" style="font-size:19px; font-weight:600;">Control-plane nodes</span></div>
+        <div class="scale-row"><span class="spec">Body / 16 · 1.75</span><span class="samp" style="font-size:16px;">Plain Markdown files, rendered for people to read comfortably.</span></div>
+        <div class="scale-row"><span class="spec">UI / 14 · 500</span><span class="samp" style="font-size:14px; font-weight:500;">Sidebar items, buttons, breadcrumbs</span></div>
+        <div class="scale-row"><span class="spec">Meta / mono 12</span><span class="samp" style="font-family:var(--mono); font-size:12px; color:var(--muted);">infra/kubernetes.md · updated 2026-06-11</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOUNDATIONS -->
+  <section class="block">
+    <div class="block-head">
+      <span class="eyebrow">Foundation · form</span>
+      <h2>Spacing, radius, and the slash</h2>
+      <p>A 4-px base step keeps rhythm predictable. Radii stay small — this is a precise tool, not a soft one. And the slash earns its keep as the single recurring mark.</p>
+    </div>
+    <div class="grid3">
+      <div class="card card-pad">
+        <span class="pair-label">Spacing · 4px base</span>
+        <div class="spacing">
+          <div class="u"><div class="bar" style="height:8px;"></div><div class="lab">8</div></div>
+          <div class="u"><div class="bar" style="height:12px;"></div><div class="lab">12</div></div>
+          <div class="u"><div class="bar" style="height:16px;"></div><div class="lab">16</div></div>
+          <div class="u"><div class="bar" style="height:24px;"></div><div class="lab">24</div></div>
+          <div class="u"><div class="bar" style="height:32px;"></div><div class="lab">32</div></div>
+          <div class="u"><div class="bar" style="height:48px;"></div><div class="lab">48</div></div>
+        </div>
+      </div>
+      <div class="card card-pad">
+        <span class="pair-label">Radius</span>
+        <div class="radii">
+          <div><div class="rb" style="border-radius:4px;"></div><div class="cap">sm · 4</div></div>
+          <div><div class="rb" style="border-radius:6px;"></div><div class="cap">md · 6</div></div>
+          <div><div class="rb" style="border-radius:9px;"></div><div class="cap">lg · 9</div></div>
+        </div>
+      </div>
+      <div class="card card-pad">
+        <span class="pair-label">Slash motif</span>
+        <div class="motif">
+          <div class="demo"><span class="slash-mark lg"></span> active marker</div>
+          <div class="demo"><span style="font-family:var(--mono); color:var(--teal-600); transform:skewX(-12deg); display:inline-block;">/</span> crumb separator</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPONENTS -->
+  <section class="block">
+    <div class="block-head">
+      <span class="eyebrow">Applied · components</span>
+      <h2>The system, assembled</h2>
+      <p>Every piece below is the recommended direction in both themes. These are the parts that make up the sidebar, the reading page, search, and the editor's metadata.</p>
+    </div>
+
+    <!-- buttons + search -->
+    <div class="grid2">
+      <div class="theme-light surface-card"><div class="sc-head">Buttons &amp; search — Light</div><div class="sc-pad">
+        <div class="btn-row" style="margin-bottom:16px;">
+          <button class="btn btn-primary">Save changes</button>
+          <button class="btn btn-secondary">Preview</button>
+          <button class="btn btn-ghost">Cancel</button>
+          <button class="btn btn-danger">Discard</button>
+        </div>
+        <div class="search-trigger"><span class="gl">⌕</span>Search docs<kbd>⌘K</kbd></div>
+      </div></div>
+      <div class="theme-dark surface-card"><div class="sc-head">Buttons &amp; search — Dark</div><div class="sc-pad">
+        <div class="btn-row" style="margin-bottom:16px;">
+          <button class="btn btn-primary">Save changes</button>
+          <button class="btn btn-secondary">Preview</button>
+          <button class="btn btn-ghost">Cancel</button>
+          <button class="btn btn-danger">Discard</button>
+        </div>
+        <div class="search-trigger"><span class="gl">⌕</span>Search docs<kbd>⌘K</kbd></div>
+      </div></div>
+    </div>
+
+    <!-- search palette -->
+    <div class="grid2" style="margin-top:20px;">
+      <div class="theme-light"><span class="pair-label" style="color:var(--board-muted)">Search palette — Light</span>
+        <div class="palette">
+          <div class="pq"><span class="gl">⌕</span><input value="cluster" readonly /></div>
+          <div class="presult sel"><span class="pi">infra</span><span class="pt"><mark>Cluster</mark> networking</span><span class="pp">kubernetes.md</span></div>
+          <div class="presult"><span class="pi">infra</span><span class="pt">Scaling the <mark>cluster</mark></span><span class="pp">scaling.md</span></div>
+          <div class="presult"><span class="pi">guides</span><span class="pt">Deploy to a <mark>cluster</mark></span><span class="pp">deploy-guide.md</span></div>
+          <div class="pfoot"><span>↑↓ navigate</span><span>↵ open</span><span>esc close</span></div>
+        </div>
+      </div>
+      <div class="theme-dark"><span class="pair-label" style="color:var(--board-muted)">Search palette — Dark</span>
+        <div class="palette">
+          <div class="pq"><span class="gl">⌕</span><input value="cluster" readonly /></div>
+          <div class="presult sel"><span class="pi">infra</span><span class="pt"><mark>Cluster</mark> networking</span><span class="pp">kubernetes.md</span></div>
+          <div class="presult"><span class="pi">infra</span><span class="pt">Scaling the <mark>cluster</mark></span><span class="pp">scaling.md</span></div>
+          <div class="presult"><span class="pi">guides</span><span class="pt">Deploy to a <mark>cluster</mark></span><span class="pp">deploy-guide.md</span></div>
+          <div class="pfoot"><span>↑↓ navigate</span><span>↵ open</span><span>esc close</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- sidebar + breadcrumbs/meta -->
+    <div class="grid2" style="margin-top:20px;">
+      <div class="theme-light surface-card"><div class="sc-head">Sidebar tree — Light</div><div class="sc-pad">
+        <div class="mini-tree">
+          <div class="row folder"><span class="tw">▾</span>API Reference</div>
+          <div class="nest">
+            <div class="row hover">API Overview</div>
+            <div class="row">REST API</div>
+          </div>
+          <div class="row folder"><span class="tw">▾</span>infra</div>
+          <div class="nest">
+            <div class="row active">Kubernetes</div>
+            <div class="row">Networking</div>
+            <div class="row">Monitoring</div>
+          </div>
+          <div class="row folder"><span class="tw">▸</span>team</div>
+        </div>
+      </div></div>
+      <div class="theme-dark surface-card"><div class="sc-head">Sidebar tree — Dark</div><div class="sc-pad">
+        <div class="mini-tree">
+          <div class="row folder"><span class="tw">▾</span>API Reference</div>
+          <div class="nest">
+            <div class="row">API Overview</div>
+            <div class="row hover">REST API</div>
+          </div>
+          <div class="row folder"><span class="tw">▾</span>infra</div>
+          <div class="nest">
+            <div class="row active">Kubernetes</div>
+            <div class="row">Networking</div>
+            <div class="row">Monitoring</div>
+          </div>
+          <div class="row folder"><span class="tw">▸</span>team</div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- breadcrumbs + metadata -->
+    <div class="grid2" style="margin-top:20px;">
+      <div class="theme-light surface-card"><div class="sc-head">Breadcrumbs &amp; metadata — Light</div><div class="sc-pad">
+        <div class="crumbs" style="margin-bottom:18px;"><a href="#">docs</a><span class="bsl">/</span><a href="#">infra</a><span class="bsl">/</span><span class="cur">Kubernetes</span></div>
+        <div class="meta-panel">
+          <div class="mrow"><span class="mk">Owner</span><span class="mv"><span class="avatar">KV</span>kevin</span></div>
+          <div class="mrow"><span class="mk">Status</span><span class="mv"><span class="chip active"><span class="d"></span>active</span></span></div>
+          <div class="mrow"><span class="mk">Tags</span><span class="mv"><span class="tag">infra</span><span class="tag">k8s</span><span class="tag">ops</span></span></div>
+          <div class="mrow"><span class="mk">Updated</span><span class="mv" style="font-family:var(--mono); font-size:12.5px;">2026-06-11</span></div>
+          <div class="mrow"><span class="mk">Review by</span><span class="mv" style="font-family:var(--mono); font-size:12.5px;">2026-09-01</span></div>
+        </div>
+      </div></div>
+      <div class="theme-dark surface-card"><div class="sc-head">Breadcrumbs &amp; metadata — Dark</div><div class="sc-pad">
+        <div class="crumbs" style="margin-bottom:18px;"><a href="#">docs</a><span class="bsl">/</span><a href="#">infra</a><span class="bsl">/</span><span class="cur">Kubernetes</span></div>
+        <div class="meta-panel">
+          <div class="mrow"><span class="mk">Owner</span><span class="mv"><span class="avatar">KV</span>kevin</span></div>
+          <div class="mrow"><span class="mk">Status</span><span class="mv"><span class="chip active"><span class="d"></span>active</span></span></div>
+          <div class="mrow"><span class="mk">Tags</span><span class="mv"><span class="tag">infra</span><span class="tag">k8s</span><span class="tag">ops</span></span></div>
+          <div class="mrow"><span class="mk">Updated</span><span class="mv" style="font-family:var(--mono); font-size:12.5px;">2026-06-11</span></div>
+          <div class="mrow"><span class="mk">Review by</span><span class="mv" style="font-family:var(--mono); font-size:12.5px;">2026-09-01</span></div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- prose + code + callout -->
+    <div class="grid2" style="margin-top:20px;">
+      <div class="theme-light surface-card"><div class="sc-head">Prose, code &amp; callout — Light</div><div class="sc-pad">
+        <div class="prose-mini">
+          <h3>Control-plane nodes</h3>
+          <p>The cluster runs three control-plane nodes behind an internal load balancer. Scale workers with <code>kubectl scale</code> or edit the <a href="#">Terraform module</a>.</p>
+        </div>
+        <div class="codeblock" style="margin:14px 0;"><span class="cmt"># scale the worker pool</span><br /><span class="kw">kubectl</span> scale deploy/web <span class="num">--replicas=6</span></div>
+        <div class="callout"><span class="cs"></span><span><b>Note</b> — control-plane changes require a maintainer review before merge.</span></div>
+      </div></div>
+      <div class="theme-dark surface-card"><div class="sc-head">Prose, code &amp; callout — Dark</div><div class="sc-pad">
+        <div class="prose-mini">
+          <h3>Control-plane nodes</h3>
+          <p>The cluster runs three control-plane nodes behind an internal load balancer. Scale workers with <code>kubectl scale</code> or edit the <a href="#">Terraform module</a>.</p>
+        </div>
+        <div class="codeblock" style="margin:14px 0;"><span class="cmt"># scale the worker pool</span><br /><span class="kw">kubectl</span> scale deploy/web <span class="num">--replicas=6</span></div>
+        <div class="callout"><span class="cs"></span><span><b>Note</b> — control-plane changes require a maintainer review before merge.</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- NEXT -->
+  <section class="next">
+    <div class="card card-pad">
+      <div class="num">→</div>
+      <div>
+        <h3>Your call on direction, then I apply it</h3>
+        <p>This is the kit. Once you react to it — accent, type, and which of the three temperatures you like — I'll render the real screens with it: the welcome page, a full doc-reading page with TOC, the folder landing, and the editor.</p>
+        <ul><li>welcome page</li><li>doc reading page + TOC</li><li>folder landing</li><li>browser editor</li><li>search overlay</li></ul>
+      </div>
+    </div>
+</div>
+
+<div id="tweak-root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": 15,
+  "accent": "#0f766e",
+  "readingFont": "sans"
+}/*EDITMODE-END*/;
+
+// Each accent option maps to a {light slash, dark slash} pair so both themes shift together.
+const ACCENTS = {
+  "#0f766e": { l:"#0f766e", d:"#2dd4bf" }, // Teal (the logo)
+  "#115e59": { l:"#115e59", d:"#5eead4" }, // Pine (deeper, quieter)
+  "#2563eb": { l:"#2563eb", d:"#60a5fa" }  // Blue (the old direction)
+};
+
+function applyTweaks(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--warmth', t.warmth + '%');
+  const a = ACCENTS[t.accent] || ACCENTS["#0f766e"];
+  root.style.setProperty('--accent-l', a.l);
+  root.style.setProperty('--accent-d', a.d);
+  document.body.classList.toggle('read-serif', t.readingFont === 'serif');
+}
+
+// Reflect defaults immediately, before the panel is ever opened.
+applyTweaks(TWEAK_DEFAULTS);
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  React.useEffect(() => { applyTweaks(t); }, [t]);
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection label="Temperature" />
+      <TweakSlider label="Warmth" value={t.warmth} min={0} max={100} unit="%"
+                   onChange={(v) => setTweak('warmth', v)} />
+      <TweakSection label="Brand" />
+      <TweakColor label="Accent" value={t.accent}
+                  options={["#0f766e", "#115e59", "#2563eb"]}
+                  onChange={(v) => setTweak('accent', v)} />
+      <TweakSection label="Reading column" />
+      <TweakRadio label="Body font" value={t.readingFont}
+                  options={[{ value:'sans', label:'Sans' }, { value:'serif', label:'Serif' }]}
+                  onChange={(v) => setTweak('readingFont', v)} />
+    </TweaksPanel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('tweak-root')).render(<App />);
+</script>
+</body>
+</html>

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Search · Plainbase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+<script>
+  (function () { try {
+    var s = localStorage.getItem("pb-theme");
+    var dark = s === "dark" || (s !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.dataset.theme = "dark";
+  } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="plainbase.css" />
+<style>
+/* ---- backdrop app (dimmed context) ------------------------------------------ */
+.bg-main { flex:1; min-width:0; height:100%; overflow:hidden; }
+.bg-content { max-width:760px; margin:0 auto; padding:40px 44px; }
+.bg-content .crumbs { margin-bottom:22px; }
+
+/* ---- search palette ---------------------------------------------------------- */
+.sp-backdrop { position:fixed; inset:0; z-index:50; display:flex; justify-content:center; align-items:flex-start;
+  padding-top:92px; background:color-mix(in srgb, var(--gray-950) 42%, transparent); }
+[data-theme="dark"] .sp-backdrop { background:color-mix(in srgb, #000 58%, transparent); }
+.sp-panel { width:608px; max-width:92%; background:var(--raised); border:1px solid var(--border-strong);
+  border-radius:13px; box-shadow:var(--shadow-lg); overflow:hidden; display:flex; flex-direction:column; }
+.sp-inputrow { display:flex; align-items:center; gap:12px; padding:15px 18px; border-bottom:1px solid var(--border); }
+.sp-inputrow .gl { font-size:18px; color:var(--muted); }
+.sp-inputrow input { flex:1; min-width:0; border:0; background:transparent; outline:none; font-family:var(--sans); font-size:16px; color:var(--ink); }
+.sp-inputrow input::placeholder { color:var(--faint); }
+.sp-inputrow .esc { font-family:var(--mono); font-size:11px; color:var(--faint); border:1px solid var(--border); border-radius:5px; padding:3px 7px; }
+.sp-results { max-height:392px; overflow-y:auto; padding:7px; }
+.sp-results::-webkit-scrollbar { width:10px; }
+.sp-results::-webkit-scrollbar-thumb { background:var(--border-strong); border:3px solid var(--raised); border-radius:6px; }
+.sp-grouplabel { font-family:var(--mono); font-size:10px; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); padding:9px 11px 5px; }
+.sp-row { display:flex; align-items:center; gap:13px; padding:9px 11px; border-radius:8px; cursor:pointer; position:relative; }
+.sp-row.sel { background:var(--accent-soft); }
+.sp-row.sel::before { content:""; position:absolute; left:2px; top:9px; bottom:9px; width:3px; background:var(--accent); border-radius:2px; transform:skewX(-12deg); }
+.sp-row .ricon { color:var(--faint); flex:none; display:flex; width:17px; justify-content:center; }
+.sp-row.sel .ricon { color:var(--accent); }
+.sp-row .ricon svg { width:16px; height:16px; display:block; }
+.sp-row .ricon .hh { font-family:var(--mono); font-size:14px; font-weight:600; }
+.sp-row .rmain { min-width:0; flex:1; }
+.sp-row .rt { display:block; font-size:14px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sp-row .rt mark { background:transparent; color:var(--accent); font-weight:600; }
+.sp-row .rsnip { display:block; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+body[data-snip="off"] .sp-row .rsnip { display:none; }
+.sp-row .rpath { margin-left:auto; flex:none; font-family:var(--mono); font-size:11px; color:var(--faint); padding-left:10px; }
+.sp-empty { padding:34px 20px; text-align:center; color:var(--muted); font-size:14px; }
+.sp-empty .q { color:var(--ink); font-weight:600; }
+.sp-foot { display:flex; align-items:center; gap:18px; padding:9px 16px; border-top:1px solid var(--border);
+  font-family:var(--mono); font-size:10.5px; color:var(--faint); }
+.sp-foot b { color:var(--muted); font-weight:500; }
+.sp-foot .spacer { margin-left:auto; }
+</style>
+</head>
+<body data-snip="on">
+<div class="viewport">
+<div class="frame" id="frame">
+<header class="app-header">
+  <a href="#" class="brand">
+    <svg class="slash" viewBox="0 0 40 60" aria-hidden="true"><path fill="var(--accent)" d="M0,54 27,0 h11.8 L11.8,54 z"></path></svg>
+    <span class="nm">plainbase</span>
+  </a>
+  <div class="header-actions">
+    <button class="search-trigger" id="opentrigger"><span class="gl">⌕</span>Search docs<kbd>⌘K</kbd></button>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav class="tree" aria-label="Documentation tree">
+      <a href="#" class="root-link" style="color:var(--muted);font-weight:500;">Welcome to Demo Docs</a>
+      <details><summary><span class="tw">▸</span>API Reference</summary><div class="kids"><a href="#">API Overview</a><a href="#">Authentication</a></div></details>
+      <details><summary><span class="tw">▸</span>Guides</summary><div class="kids"><a href="#">Getting Started</a><a href="#">Deploy Guide</a></div></details>
+      <details open><summary><span class="tw">▸</span>infra</summary><div class="kids"><a href="#" class="active">Kubernetes</a><a href="#">Networking</a><a href="#">Monitoring</a></div></details>
+      <details><summary><span class="tw">▸</span>team</summary><div class="kids"><a href="#">Team Handbook</a><a href="#">Onboarding</a></div></details>
+    </nav>
+  </aside>
+
+  <div class="bg-main">
+    <div class="bg-content">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="#">docs</a><span class="bsl">/</span><a href="#">infra</a><span class="bsl">/</span><span class="cur">Kubernetes</span></nav>
+      <article class="prose">
+        <h1>Kubernetes</h1>
+        <p>Cluster layout, namespaces, and deployment manifests for the production estate. Every environment runs an isolated cluster with three control-plane nodes behind an internal load balancer.</p>
+        <h2>Namespaces</h2>
+        <p>One namespace per environment, created by Terraform.</p>
+      </article>
+    </div>
+  </div>
+</div>
+
+<!-- SEARCH PALETTE -->
+<div class="sp-backdrop" id="backdrop">
+  <div class="sp-panel" role="dialog" aria-label="Search">
+    <div class="sp-inputrow">
+      <span class="gl">⌕</span>
+      <input id="spinput" type="text" placeholder="Search pages, headings, and tags…" autocomplete="off" spellcheck="false" />
+      <span class="esc">esc</span>
+    </div>
+    <div class="sp-results" id="spresults"></div>
+    <div class="sp-foot">
+      <span><b>↑↓</b> navigate</span>
+      <span><b>↵</b> open</span>
+      <span><b>esc</b> close</span>
+      <span class="spacer"></span>
+      <span id="spcount"></span>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div id="tweak-root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+  // scaler + theme toggle
+  (function () {
+    var frame = document.getElementById('frame');
+    function fit() {
+      var s = Math.min(1, window.innerWidth / 1340);
+      frame.style.transform = 'scale(' + s + ')';
+      frame.style.height = (window.innerHeight / s) + 'px';
+      frame.style.marginLeft = Math.max(0, (window.innerWidth - 1340 * s) / 2) + 'px';
+    }
+    window.addEventListener('resize', fit); fit();
+  })();
+  document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+    var dark = document.documentElement.dataset.theme === 'dark';
+    if (dark) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = 'dark';
+    try { localStorage.setItem('pb-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+
+  // ---- search palette ----
+  var INDEX = [
+    { t:'Kubernetes', path:'infra', type:'page', snip:'Cluster layout, namespaces, and deployment manifests.' },
+    { t:'Cluster layout', path:'infra/kubernetes', type:'heading', snip:'Three control-plane nodes behind a load balancer.' },
+    { t:'Deployments', path:'infra/kubernetes', type:'heading', snip:'Ships as a single container image.' },
+    { t:'Deploy Guide', path:'guides', type:'page', snip:'Rollout steps and the deploy checklist.' },
+    { t:'Networking', path:'infra', type:'page', snip:'TLS terminates at the load balancer.' },
+    { t:'Monitoring', path:'infra', type:'page', snip:'Dashboards, alerts, and on-call signals.' },
+    { t:'Incident Runbook', path:'infra', type:'page', snip:'What to do when production breaks.' },
+    { t:'Getting Started', path:'guides', type:'page', snip:'Your first ten minutes with the docs.' },
+    { t:'Setup', path:'guides', type:'page', snip:'Install and configure Plainbase.' },
+    { t:'Searching the Docs', path:'guides', type:'page', snip:'Typo-tolerant full-text search.' },
+    { t:'API Overview', path:'api', type:'page', snip:'REST, MCP, authentication, and errors.' },
+    { t:'Authentication', path:'api', type:'page', snip:'Tokens, scopes, and sessions.' },
+    { t:'MCP Server', path:'api', type:'page', snip:'Agent-readable search and read API.' },
+    { t:'Team Handbook', path:'team', type:'page', snip:'How the team works together.' },
+    { t:'Onboarding', path:'team', type:'page', snip:'Your first week, step by step.' }
+  ];
+  var RECENT = ['Kubernetes', 'Deploy Guide', 'Onboarding', 'API Overview'];
+
+  var backdrop = document.getElementById('backdrop');
+  var input = document.getElementById('spinput');
+  var resultsEl = document.getElementById('spresults');
+  var countEl = document.getElementById('spcount');
+  var sel = 0, current = [];
+
+  var pageIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg>';
+
+  function esc(s) { return s.replace(/[&<>]/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;' }[c]; }); }
+  function highlight(title, q) {
+    if (!q) return esc(title);
+    var i = title.toLowerCase().indexOf(q.toLowerCase());
+    if (i < 0) return esc(title);
+    return esc(title.slice(0, i)) + '<mark>' + esc(title.slice(i, i + q.length)) + '</mark>' + esc(title.slice(i + q.length));
+  }
+  function search(q) {
+    q = q.trim();
+    if (!q) return INDEX.filter(function (d) { return RECENT.indexOf(d.t) >= 0; })
+      .sort(function (a, b) { return RECENT.indexOf(a.t) - RECENT.indexOf(b.t); });
+    var ql = q.toLowerCase();
+    return INDEX.filter(function (d) { return d.t.toLowerCase().indexOf(ql) >= 0 || d.snip.toLowerCase().indexOf(ql) >= 0 || d.path.toLowerCase().indexOf(ql) >= 0; })
+      .sort(function (a, b) {
+        var as = a.t.toLowerCase().indexOf(ql), bs = b.t.toLowerCase().indexOf(ql);
+        var aStart = as === 0 ? 0 : 1, bStart = bs === 0 ? 0 : 1;
+        if (aStart !== bStart) return aStart - bStart;
+        return (as < 0 ? 99 : as) - (bs < 0 ? 99 : bs);
+      });
+  }
+  function render() {
+    var q = input.value.trim();
+    current = search(q);
+    if (sel >= current.length) sel = Math.max(0, current.length - 1);
+    countEl.textContent = current.length + (current.length === 1 ? ' result' : ' results');
+    if (!current.length) {
+      resultsEl.innerHTML = '<div class="sp-empty">No matches for <span class="q">' + esc(q) + '</span></div>';
+      return;
+    }
+    var html = '<div class="sp-grouplabel">' + (q ? 'Results' : 'Recent') + '</div>';
+    current.forEach(function (d, i) {
+      var icon = d.type === 'heading' ? '<span class="hh">#</span>' : pageIcon;
+      var pathLabel = d.type === 'heading' ? d.path : d.path + '/' + d.t.toLowerCase().replace(/\s+/g, '-') + '.md';
+      html += '<div class="sp-row' + (i === sel ? ' sel' : '') + '" data-i="' + i + '">' +
+        '<span class="ricon">' + icon + '</span>' +
+        '<span class="rmain"><span class="rt">' + highlight(d.t, q) + '</span><span class="rsnip">' + esc(d.snip) + '</span></span>' +
+        '<span class="rpath">' + esc(pathLabel) + '</span></div>';
+    });
+    resultsEl.innerHTML = html;
+    resultsEl.querySelectorAll('.sp-row').forEach(function (row) {
+      row.addEventListener('mousemove', function () { if (sel !== +row.dataset.i) { sel = +row.dataset.i; paint(); } });
+      row.addEventListener('click', function () { open(current[+row.dataset.i]); });
+    });
+  }
+  function paint() {
+    resultsEl.querySelectorAll('.sp-row').forEach(function (row, i) { row.classList.toggle('sel', i === sel); });
+    var s = resultsEl.querySelector('.sp-row.sel');
+    if (s) s.scrollIntoViewIfNeeded ? s.scrollIntoViewIfNeeded() : 0;
+  }
+  function open(d) {
+    if (!d) return;
+    var s = resultsEl.querySelector('.sp-row.sel');
+    if (s) { s.style.transition = 'background .1s'; s.style.background = 'var(--accent)'; }
+    setTimeout(closePalette, 130);
+  }
+  function openPalette() { backdrop.style.display = 'flex'; input.focus(); input.select(); }
+  function closePalette() { backdrop.style.display = 'none'; }
+
+  input.addEventListener('input', function () { sel = 0; render(); });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(current.length - 1, sel + 1); paint(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); paint(); }
+    else if (e.key === 'Enter') { e.preventDefault(); open(current[sel]); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); }
+    else if (e.key === 'Escape') { closePalette(); }
+  });
+  document.getElementById('opentrigger').addEventListener('click', openPalette);
+  backdrop.addEventListener('mousedown', function (e) { if (e.target === backdrop) closePalette(); });
+
+  render();
+  window.__searchRender = render;
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": 5,
+  "accent": "#0f766e",
+  "darkDepth": "soft",
+  "snippets": "on"
+}/*EDITMODE-END*/;
+
+const ACCENTS = {
+  "#0f766e": { l:"#0f766e", d:"#2dd4bf" },
+  "#115e59": { l:"#115e59", d:"#5eead4" },
+  "#2563eb": { l:"#2563eb", d:"#60a5fa" }
+};
+
+function applyTweaks(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--warmth', t.warmth + '%');
+  const a = ACCENTS[t.accent] || ACCENTS["#0f766e"];
+  root.style.setProperty('--accent-l', a.l);
+  root.style.setProperty('--accent-d', a.d);
+  const dd = t.darkDepth || 'soft';
+  if (dd === 'soft') delete root.dataset.dark; else root.dataset.dark = dd;
+  document.body.dataset.snip = t.snippets || 'on';
+}
+applyTweaks(TWEAK_DEFAULTS);
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  React.useEffect(() => { applyTweaks(t); }, [t]);
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection label="Search results" />
+      <TweakRadio label="Snippets" value={t.snippets}
+                  options={[{ value:'on', label:'On' }, { value:'off', label:'Off' }]}
+                  onChange={(v) => setTweak('snippets', v)} />
+      <TweakSection label="Temperature" />
+      <TweakSlider label="Warmth" value={t.warmth} min={0} max={100} unit="%"
+                   onChange={(v) => setTweak('warmth', v)} />
+      <TweakSection label="Brand" />
+      <TweakColor label="Accent" value={t.accent}
+                  options={["#0f766e", "#115e59", "#2563eb"]}
+                  onChange={(v) => setTweak('accent', v)} />
+      <TweakSection label="Dark mode" />
+      <TweakRadio label="Dark depth" value={t.darkDepth}
+                  options={[{ value:'deep', label:'Deep' }, { value:'medium', label:'Medium' }, { value:'soft', label:'Soft' }]}
+                  onChange={(v) => setTweak('darkDepth', v)} />
+    </TweaksPanel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('tweak-root')).render(<App />);
+</script>
+</body>
+</html>

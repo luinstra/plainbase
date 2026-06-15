@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Editing · Kubernetes · Plainbase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+<script>
+  (function () { try {
+    var s = localStorage.getItem("pb-theme");
+    var dark = s === "dark" || (s !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.dataset.theme = "dark";
+  } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="plainbase.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.css" />
+<style>
+/* ---- editor shell ------------------------------------------------------------ */
+.app-header .filepath { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:13px; color:var(--muted); }
+.app-header .filepath .seg { color:var(--faint); }
+.app-header .filepath .cur { color:var(--ink); }
+.app-header .filepath .dot { width:7px; height:7px; border-radius:50%; background:var(--status-draft); margin-left:4px; opacity:0; transition:opacity .15s; }
+body.unsaved .app-header .filepath .dot { opacity:1; }
+
+/* segmented view toggle */
+.viewseg { display:flex; padding:2px; background:var(--sunken); border:1px solid var(--border); border-radius:var(--r-md); }
+.viewseg button { appearance:none; border:0; background:transparent; color:var(--muted); cursor:pointer;
+  font-family:var(--sans); font-size:12.5px; font-weight:500; padding:4px 11px; border-radius:4px; }
+.viewseg button:hover { color:var(--ink); }
+.viewseg button[aria-pressed="true"] { background:var(--raised); color:var(--ink); box-shadow:var(--shadow); }
+
+.editor { flex:1; min-height:0; display:flex; flex-direction:column; }
+
+/* frontmatter properties panel */
+.props { display:flex; flex-wrap:wrap; align-items:center; gap:10px 26px; padding:13px 24px;
+  border-bottom:1px solid var(--border); background:var(--raised); }
+body[data-fm="raw"] .props { display:none; }
+.pfield { display:flex; align-items:center; gap:9px; }
+.pfield > .pk { font-family:var(--mono); font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); }
+.pinput { font-family:var(--sans); font-size:13.5px; color:var(--ink); background:transparent; border:1px solid transparent;
+  border-radius:var(--r-sm); padding:3px 7px; min-width:0; }
+.pinput:hover { border-color:var(--border); }
+.pinput:focus { outline:none; border-color:var(--accent); background:var(--surface); }
+.pinput.title { font-weight:600; font-size:14.5px; width:180px; }
+.ptags { display:flex; align-items:center; gap:5px; }
+.ptags .addtag { font-family:var(--mono); font-size:11px; color:var(--faint); border:1px dashed var(--border-strong);
+  border-radius:4px; padding:2px 6px; cursor:pointer; background:transparent; }
+.ptags .addtag:hover { color:var(--accent); border-color:var(--accent); }
+.pstatus { display:inline-flex; }
+
+/* editor toolbar */
+.etoolbar { display:flex; align-items:center; gap:3px; padding:7px 18px; border-bottom:1px solid var(--border); background:var(--surface); }
+.tbtn { appearance:none; border:0; background:transparent; color:var(--muted); cursor:pointer; height:30px; min-width:30px;
+  padding:0 8px; border-radius:var(--r-sm); font-family:var(--mono); font-size:13px; display:inline-flex; align-items:center; justify-content:center; }
+.tbtn:hover { background:var(--hover); color:var(--ink); }
+.tbtn b { font-family:var(--sans); }
+.tbtn i { font-family:var(--sans); font-style:italic; }
+.tdiv { width:1px; height:18px; background:var(--border); margin:0 6px; }
+.etoolbar .hint { margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--faint); }
+
+/* panes */
+.panes { flex:1; min-height:0; display:flex; }
+.pane { flex:1; min-width:0; height:100%; overflow:auto; }
+.pane-write { border-right:1px solid var(--border); overflow:hidden; }
+/* CodeMirror 5 — themed entirely from plainbase.css tokens (warmth / accent / dark depth flow in) */
+.pane-write #src { height:100%; }
+.CodeMirror { height:100%; background:var(--surface); color:var(--ink); font-family:var(--mono); font-size:13.5px; line-height:1.7; }
+.CodeMirror-lines { padding:16px 0; }
+.CodeMirror pre.CodeMirror-line, .CodeMirror pre.CodeMirror-line-like { padding:0 24px; }
+.CodeMirror-cursor { border-left:2px solid var(--accent); }
+.CodeMirror-selected { background:var(--accent-soft); }
+.CodeMirror-focused .CodeMirror-selected { background:var(--accent-soft); }
+.CodeMirror-gutters { display:none; }
+.cm-s-default .cm-header { color:var(--ink); font-weight:600; }
+.cm-s-default .cm-strong { color:var(--ink); font-weight:700; }
+.cm-s-default .cm-em { font-style:italic; }
+.cm-s-default .cm-link { color:var(--link); }
+.cm-s-default .cm-url { color:var(--faint); }
+.cm-s-default .cm-comment { color:var(--accent); }
+.cm-s-default .cm-quote { color:var(--muted); font-style:italic; }
+.cm-s-default .cm-variable-2 { color:var(--muted); }
+.cm-s-default .cm-hr { color:var(--faint); }
+.pane-preview { background:var(--surface); }
+.pane-preview .ppad { max-width:720px; padding:24px 30px 60px; }
+.pane-preview .prose { font-size:15.5px; }
+
+body[data-view="write"] .pane-preview { display:none; }
+body[data-view="write"] .pane-write { border-right:0; }
+body[data-view="preview"] .pane-write { display:none; }
+
+/* commit bar */
+.commitbar { flex:none; display:flex; align-items:center; gap:12px; padding:11px 22px; border-top:1px solid var(--border); background:var(--raised); }
+.commitbar .gitref { display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px; color:var(--muted); flex:none; }
+.commitbar .gitref svg { width:15px; height:15px; color:var(--faint); }
+.commitmsg { flex:1; min-width:0; font-family:var(--sans); font-size:13.5px; color:var(--ink); background:var(--surface);
+  border:1px solid var(--border); border-radius:var(--r-md); padding:7px 12px; }
+.commitmsg:focus { outline:none; border-color:var(--accent); }
+.commitmsg::placeholder { color:var(--faint); }
+.btn { font-family:var(--sans); font-size:13.5px; font-weight:500; border-radius:var(--r-md); padding:7px 15px;
+  border:1px solid transparent; cursor:pointer; flex:none; }
+.btn-ghost { background:transparent; color:var(--muted); }
+.btn-ghost:hover { background:var(--hover); color:var(--ink); }
+.btn-primary { background:var(--accent); color:var(--accent-ink); }
+.btn-primary:hover { background:var(--link-hover); }
+.btn-primary:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body data-view="split" data-fm="panel">
+<div class="viewport">
+<div class="frame" id="frame">
+<header class="app-header">
+  <a href="#" class="brand">
+    <svg class="slash" viewBox="0 0 40 60" aria-hidden="true"><path fill="var(--accent)" d="M0,54 27,0 h11.8 L11.8,54 z"></path></svg>
+    <span class="nm">plainbase</span>
+  </a>
+  <div class="filepath"><span class="seg">infra</span><span class="seg">/</span><span class="cur">kubernetes.md</span><span class="dot" title="Unsaved changes"></span></div>
+  <div class="header-actions">
+    <div class="viewseg" role="group" aria-label="View">
+      <button data-view-btn="split" aria-pressed="true">Split</button>
+      <button data-view-btn="write" aria-pressed="false">Write</button>
+      <button data-view-btn="preview" aria-pressed="false">Preview</button>
+    </div>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<div class="editor">
+  <!-- frontmatter properties (panel mode) -->
+  <div class="props">
+    <div class="pfield"><span class="pk">Title</span><input class="pinput title" value="Kubernetes" /></div>
+    <div class="pfield"><span class="pk">Status</span><span class="pstatus"><span class="chip active"><span class="d"></span>active</span></span></div>
+    <div class="pfield"><span class="pk">Owner</span><span class="mv" style="display:flex;align-items:center;gap:7px;"><span class="avatar">OP</span><input class="pinput" value="ops" style="width:54px;" /></span></div>
+    <div class="pfield"><span class="pk">Tags</span><span class="ptags"><span class="tag">infra</span><span class="tag">kubernetes</span><button class="addtag">+ add</button></span></div>
+    <div class="pfield"><span class="pk">Review</span><input class="pinput" value="2026-09-01" style="width:96px;font-family:var(--mono);font-size:12.5px;" /></div>
+  </div>
+
+  <!-- markdown toolbar -->
+  <div class="etoolbar">
+    <button class="tbtn" data-md="h2" title="Heading">H2</button>
+    <span class="tdiv"></span>
+    <button class="tbtn" data-md="bold" title="Bold"><b>B</b></button>
+    <button class="tbtn" data-md="italic" title="Italic"><i>I</i></button>
+    <button class="tbtn" data-md="code" title="Inline code">&lt;/&gt;</button>
+    <button class="tbtn" data-md="link" title="Link">↗</button>
+    <span class="tdiv"></span>
+    <button class="tbtn" data-md="ul" title="Bulleted list">• —</button>
+    <button class="tbtn" data-md="quote" title="Quote">"</button>
+    <button class="tbtn" data-md="fence" title="Code block">{ }</button>
+    <span class="hint">Markdown · ⌘S to save</span>
+  </div>
+
+  <!-- panes -->
+  <div class="panes">
+    <div class="pane pane-write">
+      <div id="src"></div>
+    </div>
+    <div class="pane pane-preview">
+      <div class="ppad"><article class="prose" id="preview"></article></div>
+    </div>
+  </div>
+</div>
+
+<!-- commit bar -->
+<div class="commitbar">
+  <span class="gitref"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-2 4-6 4"/></svg>main</span>
+  <input class="commitmsg" id="commitmsg" placeholder="Describe this change…" />
+  <button class="btn btn-ghost" id="discard">Discard</button>
+  <button class="btn btn-primary" id="save" disabled>Save changes</button>
+</div>
+</div>
+</div>
+
+<!-- seed content (kept out of the textarea HTML to avoid escaping) -->
+<script type="text/markdown" id="seed-body"># Kubernetes
+
+Cluster layout, namespaces, and deployment manifests for the production estate.
+
+## Cluster layout
+
+Every environment runs an isolated cluster with three control-plane nodes behind an internal load balancer. Worker capacity differs per environment.
+
+| Environment | Namespace | Workers |
+| --- | --- | --- |
+| Production | `prod` | 12 |
+| Staging | `staging` | 4 |
+
+## Namespaces
+
+One namespace per environment, created by Terraform — never `kubectl create namespace` by hand.
+
+- Application workloads live in the environment namespace.
+- Cluster tooling lives in `platform`.
+
+## Deployments
+
+The app ships as a single container image. See the [deploy guide](#) for rollout steps.
+
+```bash
+kubectl -n prod scale deploy/web --replicas=8
+```
+
+> Control-plane changes require a maintainer review before merge.
+</script>
+<script type="text/yaml" id="seed-fm">---
+title: Kubernetes
+owner: ops
+status: active
+tags: [infra, kubernetes]
+review: 2026-09-01
+---</script>
+
+<div id="tweak-root"></div>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+  // frame scaler
+  (function () {
+    var frame = document.getElementById('frame');
+    function fit() {
+      var s = Math.min(1, window.innerWidth / 1340);
+      frame.style.transform = 'scale(' + s + ')';
+      frame.style.height = (window.innerHeight / s) + 'px';
+      frame.style.marginLeft = Math.max(0, (window.innerWidth - 1340 * s) / 2) + 'px';
+    }
+    window.addEventListener('resize', fit); fit();
+  })();
+  // theme toggle
+  document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+    var dark = document.documentElement.dataset.theme === 'dark';
+    if (dark) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = 'dark';
+    try { localStorage.setItem('pb-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/markdown/markdown.min.js"></script>
+<script>
+(function () {
+  var preview = document.getElementById('preview');
+  var saveBtn = document.getElementById('save');
+  var seedBody = document.getElementById('seed-body').textContent.replace(/^\n/, '').replace(/\s+$/, '');
+  var seedFm = document.getElementById('seed-fm').textContent.trim();
+
+  var cm = CodeMirror(document.getElementById('src'), {
+    value: seedBody, mode: 'markdown', lineWrapping: true, lineNumbers: false, viewportMargin: Infinity
+  });
+
+  function stripFM(s) { return s.replace(/^\s*---\n[\s\S]*?\n---\n?/, ''); }
+  function render() { preview.innerHTML = window.marked.parse(stripFM(cm.getValue())); }
+  function markUnsaved() { document.body.classList.add('unsaved'); saveBtn.disabled = false; }
+
+  cm.on('change', function (_, ch) { if (ch.origin !== 'setValue') markUnsaved(); render(); });
+
+  function applyFmMode(mode) {
+    document.body.dataset.fm = mode;
+    cm.setValue(mode === 'raw' ? (seedFm + '\n\n' + seedBody) : seedBody);
+    render();
+  }
+  window.__applyFmMode = applyFmMode;
+
+  function wrap(pre, suf) { var sel = cm.getSelection() || 'text'; cm.replaceSelection(pre + sel + suf); cm.focus(); render(); markUnsaved(); }
+  function insert(txt) { cm.replaceSelection(txt); cm.focus(); render(); markUnsaved(); }
+  var acts = { bold: function(){ wrap('**','**'); }, italic: function(){ wrap('*','*'); }, code: function(){ wrap('`','`'); },
+    link: function(){ wrap('[','](url)'); }, h2: function(){ insert('## '); }, ul: function(){ insert('- '); },
+    quote: function(){ insert('> '); }, fence: function(){ insert('\n```\n\n```\n'); } };
+  document.querySelectorAll('[data-md]').forEach(function (b) {
+    b.addEventListener('mousedown', function (e) { e.preventDefault(); });
+    b.addEventListener('click', function () { acts[b.dataset.md] && acts[b.dataset.md](); });
+  });
+
+  document.querySelectorAll('[data-view-btn]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.body.dataset.view = b.dataset.viewBtn;
+      document.querySelectorAll('[data-view-btn]').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+      setTimeout(function () { cm.refresh(); }, 0);
+    });
+  });
+
+  function doSave() { document.body.classList.remove('unsaved'); saveBtn.disabled = true; var o = saveBtn.textContent; saveBtn.textContent = 'Saved ✓'; document.getElementById('commitmsg').value = ''; setTimeout(function () { saveBtn.textContent = o; }, 1400); }
+  saveBtn.addEventListener('click', doSave);
+  document.getElementById('discard').addEventListener('click', function () { applyFmMode(document.body.dataset.fm || 'panel'); document.body.classList.remove('unsaved'); saveBtn.disabled = true; });
+  document.addEventListener('keydown', function (e) { if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); doSave(); } });
+
+  applyFmMode(window.__fmMode || 'panel');
+  setTimeout(function () { cm.refresh(); }, 30);
+})();
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": 5,
+  "accent": "#0f766e",
+  "darkDepth": "soft",
+  "frontmatter": "panel"
+}/*EDITMODE-END*/;
+
+const ACCENTS = {
+  "#0f766e": { l:"#0f766e", d:"#2dd4bf" },
+  "#115e59": { l:"#115e59", d:"#5eead4" },
+  "#2563eb": { l:"#2563eb", d:"#60a5fa" }
+};
+
+function applyTweaks(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--warmth', t.warmth + '%');
+  const a = ACCENTS[t.accent] || ACCENTS["#0f766e"];
+  root.style.setProperty('--accent-l', a.l);
+  root.style.setProperty('--accent-d', a.d);
+  const dd = t.darkDepth || 'soft';
+  if (dd === 'soft') delete root.dataset.dark; else root.dataset.dark = dd;
+  window.__fmMode = t.frontmatter || 'panel';
+  if (window.__applyFmMode) window.__applyFmMode(window.__fmMode);
+}
+applyTweaks(TWEAK_DEFAULTS);
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  React.useEffect(() => { applyTweaks(t); }, [t]);
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection label="Frontmatter" />
+      <TweakRadio label="Editing" value={t.frontmatter}
+                  options={[{ value:'panel', label:'Panel' }, { value:'raw', label:'Raw YAML' }]}
+                  onChange={(v) => setTweak('frontmatter', v)} />
+      <TweakSection label="Temperature" />
+      <TweakSlider label="Warmth" value={t.warmth} min={0} max={100} unit="%"
+                   onChange={(v) => setTweak('warmth', v)} />
+      <TweakSection label="Brand" />
+      <TweakColor label="Accent" value={t.accent}
+                  options={["#0f766e", "#115e59", "#2563eb"]}
+                  onChange={(v) => setTweak('accent', v)} />
+      <TweakSection label="Dark mode" />
+      <TweakRadio label="Dark depth" value={t.darkDepth}
+                  options={[{ value:'deep', label:'Deep' }, { value:'medium', label:'Medium' }, { value:'soft', label:'Soft' }]}
+                  onChange={(v) => setTweak('darkDepth', v)} />
+    </TweaksPanel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('tweak-root')).render(<App />);
+</script>
+</body>
+</html>

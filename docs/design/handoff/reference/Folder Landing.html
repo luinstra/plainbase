@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Folder · Plainbase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+<script>
+  (function () { try {
+    var s = localStorage.getItem("pb-theme");
+    var dark = s === "dark" || (s !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.dataset.theme = "dark";
+  } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="plainbase.css" />
+<style>
+/* ---- folder landing specifics ------------------------------------------------ */
+.folderview { max-width:780px; margin:0 auto; padding:38px 44px 96px; }
+.folderview .crumbs { margin-bottom:22px; }
+.folderview .prose { margin-bottom:6px; }
+.folderview .prose h1 { font-size:32px; margin:0 0 12px; }
+.folderview .prose p { color:var(--muted); margin:0; }
+
+/* generated listing (app chrome) */
+.listing { margin-top:36px; }
+.lgroup { margin-top:34px; }
+.lgroup:first-child { margin-top:0; }
+.llabel { font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--muted); display:flex; align-items:center; gap:9px; margin:0 0 15px; }
+.llabel::before { content:""; width:11px; height:13px; background:var(--accent);
+  clip-path:polygon(42% 0,100% 0,58% 100%,0 100%); display:inline-block; flex:none; }
+.llabel .ct { color:var(--faint); font-weight:400; letter-spacing:.02em; }
+
+/* subfolders → cards */
+.folder-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(216px,1fr)); gap:12px; }
+.folder-card { display:flex; align-items:flex-start; gap:11px; padding:14px 15px; border:1px solid var(--border);
+  border-radius:var(--r-lg); background:var(--raised); text-decoration:none; transition:border-color .12s, background .12s, transform .12s; }
+.folder-card:hover { border-color:var(--border-strong); background:var(--hover); transform:translateY(-1px); }
+.folder-card .ficon { color:var(--accent); flex:none; margin-top:1px; }
+.folder-card .ficon svg { width:19px; height:19px; display:block; }
+.folder-card > span:last-child { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.folder-card .fn { font-size:14.5px; font-weight:600; color:var(--ink); line-height:1.3; }
+.folder-card .fm { font-size:12px; color:var(--muted); line-height:1.45; }
+.folder-card .fc { font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:3px; }
+
+/* pages → compact multi-column list */
+.page-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:1px 26px; }
+.page-row { display:flex; align-items:center; gap:10px; padding:8px 9px; border-radius:6px; text-decoration:none; min-width:0; }
+.page-row:hover { background:var(--hover); }
+.page-row .picon { color:var(--faint); flex:none; display:flex; }
+.page-row .picon svg { width:15px; height:15px; display:block; }
+.page-row .pt { flex:1; min-width:0; font-size:14.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.page-row:hover .pt { color:var(--accent); }
+.page-row .pmeta { margin-left:auto; flex:none; display:flex; align-items:center; gap:9px;
+  font-family:var(--mono); font-size:10.5px; color:var(--faint); }
+.page-row .pdot { width:6px; height:6px; border-radius:50%; background:var(--status-active); }
+.page-row .pdot.draft { background:var(--status-draft); }
+
+/* scenario switching */
+.scn { display:none; }
+body[data-folder="mixed"] .scn-mixed,
+body[data-folder="sections"] .scn-sections,
+body[data-folder="flat"] .scn-flat { display:block; }
+</style>
+</head>
+<body data-folder="mixed">
+<div class="viewport">
+<div class="frame" id="frame">
+<header class="app-header">
+  <a href="#" class="brand">
+    <svg class="slash" viewBox="0 0 40 60" aria-hidden="true"><path fill="var(--accent)" d="M0,54 27,0 h11.8 L11.8,54 z"></path></svg>
+    <span class="nm">plainbase</span>
+  </a>
+  <div class="header-actions">
+    <button class="search-trigger" data-search><span class="gl">⌕</span>Search docs<kbd>⌘K</kbd></button>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav class="tree" aria-label="Documentation tree">
+      <a href="#" class="root-link" style="color:var(--muted);font-weight:500;">Welcome to Demo Docs</a>
+      <details><summary><span class="tw">▸</span>API Reference</summary>
+        <div class="kids"><a href="#">API Overview</a><a href="#">REST API</a><a href="#">Authentication</a></div>
+      </details>
+      <details open><summary><span class="tw">▸</span>Guides</summary>
+        <div class="kids"><a href="#">Getting Started</a><a href="#">Setup</a><a href="#">Deploy Guide</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>infra</summary>
+        <div class="kids"><a href="#">Kubernetes</a><a href="#">Networking</a><a href="#">Runbooks</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>team</summary>
+        <div class="kids"><a href="#">Team Handbook</a><a href="#">Onboarding</a></div>
+      </details>
+    </nav>
+  </aside>
+
+  <div class="scroll">
+    <div class="folderview">
+
+      <!-- ============ SCENARIO A — MIXED (subfolders + pages) ============ -->
+      <div class="scn scn-mixed">
+        <nav class="crumbs" aria-label="Breadcrumb"><a href="#">docs</a><span class="bsl">/</span><span class="cur">Guides</span></nav>
+        <article class="prose">
+          <h1>Guides</h1>
+          <p>How-to walkthroughs for setting up, writing, and shipping docs. Start with onboarding, then dig into the advanced material as you need it.</p>
+        </article>
+        <div class="listing">
+          <div class="lgroup">
+            <p class="llabel">Folders <span class="ct">· 1</span></p>
+            <div class="folder-grid">
+              <a class="folder-card" href="#">
+                <span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+                <span><span class="fn">Advanced</span><span class="fm">Scaling, tuning, and backups.</span><span class="fc">3 pages</span></span>
+              </a>
+            </div>
+          </div>
+          <div class="lgroup">
+            <p class="llabel">Pages <span class="ct">· 6</span></p>
+            <div class="page-grid">
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Getting Started</span><span class="pmeta"><span class="pdot"></span>2026-06-02</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Setup</span><span class="pmeta"><span class="pdot"></span>2026-05-28</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Using the Editor</span><span class="pmeta"><span class="pdot"></span>2026-05-30</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Searching the Docs</span><span class="pmeta"><span class="pdot"></span>2026-04-19</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Writing Style Guide</span><span class="pmeta"><span class="pdot draft"></span>draft</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Deploy Guide</span><span class="pmeta"><span class="pdot"></span>2026-06-09</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENARIO B — MANY SUBFOLDERS ============ -->
+      <div class="scn scn-sections">
+        <nav class="crumbs" aria-label="Breadcrumb"><a href="#">docs</a><span class="bsl">/</span><span class="cur">Engineering</span></nav>
+        <article class="prose">
+          <h1>Engineering</h1>
+          <p>Team spaces for every part of the stack. Each area owns its own runbooks, guides, and references.</p>
+        </article>
+        <div class="listing">
+          <div class="lgroup">
+            <p class="llabel">Folders <span class="ct">· 9</span></p>
+            <div class="folder-grid">
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Backend</span><span class="fm">Services, APIs, and data flow.</span><span class="fc">8 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Frontend</span><span class="fm">Web app, components, and build.</span><span class="fc">6 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Infra</span><span class="fm">Clusters, networking, and runbooks.</span><span class="fc">9 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Data</span><span class="fm">Pipelines, warehouse, and schemas.</span><span class="fc">5 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Security</span><span class="fm">Access, secrets, and incident policy.</span><span class="fc">4 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Mobile</span><span class="fm">iOS and Android clients.</span><span class="fc">3 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Design System</span><span class="fm">Tokens, components, and patterns.</span><span class="fc">7 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">QA</span><span class="fm">Test plans and release checks.</span><span class="fc">4 pages</span></span></a>
+              <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">On-call</span><span class="fm">Rotations, escalation, and paging.</span><span class="fc">6 pages</span></span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ SCENARIO C — FLAT (many pages, no subfolders) ============ -->
+      <div class="scn scn-flat">
+        <nav class="crumbs" aria-label="Breadcrumb"><a href="#">docs</a><span class="bsl">/</span><a href="#">infra</a><span class="bsl">/</span><span class="cur">Runbooks</span></nav>
+        <article class="prose">
+          <h1>Runbooks</h1>
+          <p>Step-by-step procedures for incidents and routine operations. Keep them short, current, and copy-pasteable.</p>
+        </article>
+        <div class="listing">
+          <div class="lgroup">
+            <p class="llabel">Pages <span class="ct">· 14</span></p>
+            <div class="page-grid">
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Incident Response</span><span class="pmeta"><span class="pdot"></span>06-11</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Database Failover</span><span class="pmeta"><span class="pdot"></span>06-08</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Cache Eviction</span><span class="pmeta"><span class="pdot"></span>05-22</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Certificate Rotation</span><span class="pmeta"><span class="pdot draft"></span>draft</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">On-call Handoff</span><span class="pmeta"><span class="pdot"></span>06-10</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Log Search</span><span class="pmeta"><span class="pdot"></span>04-30</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Rollback Procedure</span><span class="pmeta"><span class="pdot"></span>06-05</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Scaling Event</span><span class="pmeta"><span class="pdot"></span>05-15</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">DNS Change</span><span class="pmeta"><span class="pdot"></span>05-09</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Secret Rotation</span><span class="pmeta"><span class="pdot"></span>06-01</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Backup Verification</span><span class="pmeta"><span class="pdot"></span>05-26</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Load Test</span><span class="pmeta"><span class="pdot draft"></span>draft</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Postmortem Template</span><span class="pmeta"><span class="pdot"></span>03-12</span></a>
+              <a class="page-row" href="#"><span class="picon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h7l5 5v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v5h5"/></svg></span><span class="pt">Escalation Paths</span><span class="pmeta"><span class="pdot"></span>06-03</span></a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div id="tweak-root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+  (function () {
+    var frame = document.getElementById('frame');
+    function fit() {
+      var s = Math.min(1, window.innerWidth / 1340);
+      frame.style.transform = 'scale(' + s + ')';
+      frame.style.height = (window.innerHeight / s) + 'px';
+      frame.style.marginLeft = Math.max(0, (window.innerWidth - 1340 * s) / 2) + 'px';
+    }
+    window.addEventListener('resize', fit);
+    fit();
+  })();
+  document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+    var dark = document.documentElement.dataset.theme === 'dark';
+    if (dark) delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = 'dark';
+    try { localStorage.setItem('pb-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": 5,
+  "accent": "#0f766e",
+  "darkDepth": "soft",
+  "folderShape": "mixed"
+}/*EDITMODE-END*/;
+
+const ACCENTS = {
+  "#0f766e": { l:"#0f766e", d:"#2dd4bf" },
+  "#115e59": { l:"#115e59", d:"#5eead4" },
+  "#2563eb": { l:"#2563eb", d:"#60a5fa" }
+};
+
+function applyTweaks(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--warmth', t.warmth + '%');
+  const a = ACCENTS[t.accent] || ACCENTS["#0f766e"];
+  root.style.setProperty('--accent-l', a.l);
+  root.style.setProperty('--accent-d', a.d);
+  const dd = t.darkDepth || 'soft';
+  if (dd === 'soft') delete root.dataset.dark; else root.dataset.dark = dd;
+  document.body.dataset.folder = t.folderShape || 'mixed';
+}
+applyTweaks(TWEAK_DEFAULTS);
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  React.useEffect(() => { applyTweaks(t); }, [t]);
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection label="Folder example" />
+      <TweakRadio label="Shape" value={t.folderShape}
+                  options={[{ value:'mixed', label:'Mixed' }, { value:'sections', label:'Folders' }, { value:'flat', label:'Files' }]}
+                  onChange={(v) => setTweak('folderShape', v)} />
+      <TweakSection label="Temperature" />
+      <TweakSlider label="Warmth" value={t.warmth} min={0} max={100} unit="%"
+                   onChange={(v) => setTweak('warmth', v)} />
+      <TweakSection label="Brand" />
+      <TweakColor label="Accent" value={t.accent}
+                  options={["#0f766e", "#115e59", "#2563eb"]}
+                  onChange={(v) => setTweak('accent', v)} />
+      <TweakSection label="Dark mode" />
+      <TweakRadio label="Dark depth" value={t.darkDepth}
+                  options={[{ value:'deep', label:'Deep' }, { value:'medium', label:'Medium' }, { value:'soft', label:'Soft' }]}
+                  onChange={(v) => setTweak('darkDepth', v)} />
+    </TweaksPanel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('tweak-root')).render(<App />);
+</script>
+</body>
+</html>

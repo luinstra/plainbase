@@ -1,9 +1,10 @@
 # UI Identity Revamp — deferred work & follow-ups
 
-The UI Identity Revamp (branch `feat/ui-identity-revamp`, 5 chunks) enacted the design handoff in
-`docs/design/design_handoff.zip`. This file records what was **intentionally deferred** — the items
-the handoff or the build flagged as forward-looking — so they aren't lost in commit messages or the
-gitignored `.crew/` chunk addenda. Each is a real backlog item with what's needed to unblock it.
+The UI Identity Revamp (5 chunks) enacted the design handoff in `docs/design/handoff/` (`README.md`
+is the spec; `reference/plainbase.css` the token sheet; `reference/*.html` the hi-fi prototypes).
+This file records what was **intentionally deferred** — the items the handoff or the build flagged as
+forward-looking — so they aren't lost in commit messages or the gitignored `.crew/` chunk addenda.
+Each is a real backlog item with what's needed to unblock it.
 
 ## Forward-looking (needs a capability we don't have yet)
 

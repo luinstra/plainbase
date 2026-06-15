@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Welcome to Demo Docs · Plainbase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+<script>
+  (function () { try {
+    var s = localStorage.getItem("pb-theme");
+    var dark = s === "dark" || (s !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    if (dark) document.documentElement.dataset.theme = "dark";
+  } catch (e) {} })();
+</script>
+<link rel="stylesheet" href="plainbase.css" />
+<style>
+/* the home is simply the ROOT folder landing — no distinct template.
+   Authored index.md prose on top; the generated child-folder listing below. */
+.folderview { max-width:780px; margin:0 auto; padding:52px 44px 96px; }
+.folderview .prose h1 { font-size:36px; margin:0 0 14px; }
+.folderview .prose h2 { font-size:18px; margin:30px 0 12px; padding-bottom:0; border-bottom:0; }
+.folderview .prose .intro { font-size:17px; line-height:1.7; color:var(--muted); max-width:60ch; }
+.folderview .prose ul { list-style:none; padding-left:0; }
+.folderview .prose li { margin:7px 0; }
+.folderview .prose li .ld { color:var(--muted); }
+kbd.k { font-family:var(--mono); font-size:.8em; border:1px solid var(--border); border-radius:4px; padding:1px 5px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="viewport">
+<div class="frame" id="frame">
+<header class="app-header">
+  <a href="#" class="brand">
+    <svg class="slash" viewBox="0 0 40 60" aria-hidden="true"><path fill="var(--accent)" d="M0,54 27,0 h11.8 L11.8,54 z"></path></svg>
+    <span class="nm">plainbase</span>
+  </a>
+  <div class="header-actions">
+    <button class="search-trigger" data-search><span class="gl">⌕</span>Search docs<kbd>⌘K</kbd></button>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle theme" title="Toggle theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav class="tree" aria-label="Documentation tree">
+      <a href="#" class="root-link active" aria-current="page">Welcome to Demo Docs</a>
+      <details><summary><span class="tw">▸</span>API Reference</summary>
+        <div class="kids"><a href="#">API Overview</a><a href="#">REST API</a><a href="#">Authentication</a><a href="#">MCP Server</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>changelog</summary>
+        <div class="kids"><a href="#">Changelog 2026-03</a><a href="#">Changelog 2026-02</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>Guides</summary>
+        <div class="kids"><a href="#">Getting Started</a><a href="#">Setup</a><a href="#">Deploy Guide</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>infra</summary>
+        <div class="kids"><a href="#">Kubernetes</a><a href="#">Networking</a><a href="#">Monitoring</a></div>
+      </details>
+      <details><summary><span class="tw">▸</span>team</summary>
+        <div class="kids"><a href="#">Team Handbook</a><a href="#">Onboarding</a><a href="#">Roles and Responsibilities</a></div>
+      </details>
+    </nav>
+  </aside>
+
+  <div class="scroll">
+    <div class="folderview">
+
+      <!-- ROOT index.md — authored markdown, rendered as standard prose -->
+      <article class="prose">
+        <h1>Welcome to Demo Docs</h1>
+        <p class="intro">The team's internal knowledge base — runbooks, guides, API references, and
+          meeting notes, kept as plain Markdown you can read here or edit in your own tools. Press
+          <kbd class="k">⌘K</kbd> to search anything.</p>
+        <h2>Start here</h2>
+        <ul>
+          <li><a href="#">Getting Started</a> <span class="ld">— your first ten minutes.</span></li>
+          <li><a href="#">Setup</a> <span class="ld">— install and configure.</span></li>
+          <li><a href="#">Using the Editor</a> <span class="ld">— edit docs in the browser.</span></li>
+        </ul>
+      </article>
+
+      <!-- generated listing of the root's child folders (app chrome, same as any folder) -->
+      <div class="listing">
+        <div class="lgroup">
+          <p class="llabel">Folders <span class="ct">· 5</span></p>
+          <div class="folder-grid">
+            <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">API Reference</span><span class="fm">REST, MCP, authentication, and error semantics.</span><span class="fc">api/ · 6 pages</span></span></a>
+            <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">Guides</span><span class="fm">Getting started, setup, and editor how-tos.</span><span class="fc">guides/ · 7 pages</span></span></a>
+            <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">infra</span><span class="fm">Clusters, networking, monitoring, and runbooks.</span><span class="fc">infra/ · 6 pages</span></span></a>
+            <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">team</span><span class="fm">Handbook, onboarding, roles, and meeting notes.</span><span class="fc">team/ · 5 pages</span></span></a>
+            <a class="folder-card" href="#"><span class="ficon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h3.6l1.8 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span><span class="fn">changelog</span><span class="fm">What shipped, month by month.</span><span class="fc">changelog/ · 3 pages</span></span></a>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div id="tweak-root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script>
+  (function () {
+    var frame = document.getElementById('frame');
+    function fit() {
+      var s = Math.min(1, window.innerWidth / 1340);
+      frame.style.transform = 'scale(' + s + ')';
+      frame.style.height = (window.innerHeight / s) + 'px';
+      frame.style.marginLeft = Math.max(0, (window.innerWidth - 1340 * s) / 2) + 'px';
+    }
+    window.addEventListener('resize', fit); fit();
+  })();
+  document.querySelector('[data-theme-toggle]').addEventListener('click', function () {
+    var dark = document.documentElement.dataset.theme === 'dark';
+    if (dark) delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = 'dark';
+    try { localStorage.setItem('pb-theme', dark ? 'light' : 'dark'); } catch (e) {}
+  });
+</script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "warmth": 5,
+  "accent": "#0f766e",
+  "darkDepth": "soft"
+}/*EDITMODE-END*/;
+
+const ACCENTS = {
+  "#0f766e": { l:"#0f766e", d:"#2dd4bf" },
+  "#115e59": { l:"#115e59", d:"#5eead4" },
+  "#2563eb": { l:"#2563eb", d:"#60a5fa" }
+};
+
+function applyTweaks(t) {
+  const root = document.documentElement;
+  root.style.setProperty('--warmth', t.warmth + '%');
+  const a = ACCENTS[t.accent] || ACCENTS["#0f766e"];
+  root.style.setProperty('--accent-l', a.l);
+  root.style.setProperty('--accent-d', a.d);
+  const dd = t.darkDepth || 'soft';
+  if (dd === 'soft') delete root.dataset.dark; else root.dataset.dark = dd;
+}
+applyTweaks(TWEAK_DEFAULTS);
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  React.useEffect(() => { applyTweaks(t); }, [t]);
+  return (
+    <TweaksPanel title="Tweaks">
+      <TweakSection label="Temperature" />
+      <TweakSlider label="Warmth" value={t.warmth} min={0} max={100} unit="%"
+                   onChange={(v) => setTweak('warmth', v)} />
+      <TweakSection label="Brand" />
+      <TweakColor label="Accent" value={t.accent}
+                  options={["#0f766e", "#115e59", "#2563eb"]}
+                  onChange={(v) => setTweak('accent', v)} />
+      <TweakSection label="Dark mode" />
+      <TweakRadio label="Dark depth" value={t.darkDepth}
+                  options={[{ value:'deep', label:'Deep' }, { value:'medium', label:'Medium' }, { value:'soft', label:'Soft' }]}
+                  onChange={(v) => setTweak('darkDepth', v)} />
+    </TweaksPanel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('tweak-root')).render(<App />);
+</script>
+</body>
+</html>
