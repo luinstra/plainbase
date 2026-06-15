@@ -94,9 +94,54 @@ spike can revisit Option A without a rewrite. Phase 3 is not blocked on that spi
 1. **Amend collapses only KNOWN-UNPUSHED commits.** The session-window amend rewrites the prior
    commit; if it was already pushed, that rewrites *published* history. The amend path must verify the
    target commit is not on an upstream before collapsing, else start a new commit. Covered by a test.
+   **[SUPERSEDED for Phase 3 — see Addendum (2026-06-15): the amend is abandoned entirely; the
+   unpushed check has an irreducible TOCTOU.]**
 2. **Explicit EOL pinning + a byte-fidelity golden test** — commit a CRLF-containing file through the
    pipeline and assert the on-disk bytes are unchanged, guarding the hard byte-fidelity promise against
-   EOL normalization under either engine.
+   EOL normalization under either engine. **[EXTENDED by Addendum (2026-06-15): EOL pinning is not
+   sufficient — `.gitattributes` clean filters and Git LFS also rewrite blobs.]**
 
 Debate synthesis + all rounds archived at
 `~/.claude-octopus/debates/<session>/jgit-vs-git-binary/synthesis.md`.
+
+## Addendum (2026-06-15) — Phase 3 debate hardening
+
+A second four-model debate (Opus, Codex/gpt-5.5, Gemini 2.5 Pro, Sonnet 4.6), run while stress-testing
+the Phase 3 phase plan before its build loops, amended the two cross-cutting fixes above. Both
+amendments were folded into `.crew/plans/phase-3-editing-save-git-history-implementation-plan.md`
+(Iteration 3); this addendum keeps the committed ADR consistent with them. The core decision —
+**system `git` binary via a hermetic `GitExecutor`, not JGit** — is unchanged and reaffirmed.
+
+### Amendment 1 — the automatic session-window amend is ABANDONED in Phase 3 (supersedes Cross-cutting fix #1)
+
+Fix #1 above tried to make the session-window amend safe by collapsing **only known-unpushed**
+commits. The debate showed that guard has an **irreducible TOCTOU**: git offers no atomic
+check-and-amend, so an external `git push` (the user's own tooling, a CI runner — Plainbase is
+filesystem-native and *coexists* with external git) can land between the unpushed check and
+`git commit --amend`, rewriting **published** history — catastrophic and recoverable only by
+force-push. The `@{upstream}` reachability check also breaks on detached HEAD, shallow clones, and
+linked worktrees, all realistic states.
+
+**Decision:** Phase 3 commits **one new commit per save**, always (no automatic amend). This also
+*simplifies* the build — the amend logic, the unpushed-reachability query, and the bare-remote test
+leave the Git chunk's scope. If commit-collapsing is ever wanted, it returns as a **separate, explicit
+squash/cleanup command** (never automatic save behavior), and even then only on a branch with **no
+configured upstream** plus fail-loud post-rewrite divergence detection. A verbose-but-truthful,
+append-only history beats a "clean" but corruptible one.
+
+### Amendment 2 — byte-fidelity must survive `.gitattributes` clean filters and Git LFS (extends Cross-cutting fix #2)
+
+Fix #2 pinned `core.autocrlf=false`/`core.eol=lf` to stop EOL mangling. That is **necessary but not
+sufficient**: a repo's `.gitattributes` **clean filters** or **Git LFS** also transform blobs, so
+porcelain `git add` can commit bytes that differ from the file on disk (`git show HEAD:path` ≠ the
+saved bytes) — the hard byte-fidelity promise broken even with EOL pinned.
+
+**Decision:** the byte-fidelity guarantee is asserted on the **committed blob**, not just the working
+tree — a golden test commits a CRLF file **and** a file under a hostile `.gitattributes`/LFS rule and
+asserts `git show HEAD:path` equals the on-disk bytes. If porcelain `git add` cannot guarantee this,
+the `GitExecutor` commits via **plumbing** (`git hash-object --no-filters -w` + `git update-index
+--cacheinfo`), bypassing filters entirely. The hermetic-executor principle is unchanged; its
+byte-fidelity scope widens from "EOL" to "any filter/attribute/LFS transform."
+
+Phase 3 debate synthesis + all rounds archived at
+`~/.claude-octopus/debates/<session>/phase-3-plan/synthesis.md`.
