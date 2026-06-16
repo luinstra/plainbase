@@ -123,6 +123,7 @@ private class ReindexFailureHarness(
             searchService = com.plainbase.domain.service.SearchService(provider = engine, indexBuilder = harness.builder),
             aliasRegistry = harness.registry,
             contentStore = store,
+            writePipeline = harness.writePipeline(),
         )
     }
 

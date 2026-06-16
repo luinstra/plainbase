@@ -9,6 +9,7 @@ import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.TreeBuilder
 import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.ktor.dto.ReindexResponse
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.TreeResponse
@@ -28,6 +29,7 @@ class RestServices(
     val searchService: SearchService,
     val aliasRegistry: UrlAliasRegistry,
     val contentStore: ContentStore,
+    val writePipeline: WritePipeline,
 ) {
 
     /** The per-snapshot memoized `/api/v1/tree` JSON (§C4). */

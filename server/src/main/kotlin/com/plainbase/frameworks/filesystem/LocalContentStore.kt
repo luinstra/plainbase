@@ -2,6 +2,7 @@
 
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentEntry
 import com.plainbase.domain.content.ContentFile
 import com.plainbase.domain.content.ContentFolder
@@ -22,6 +23,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
@@ -355,6 +357,57 @@ class LocalContentStore(
         }
     }
 
+    override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
+        val snap = snapshot.load()
+        // Indexed-only gate (see read/the class header): a path the scan skipped is not a CAS target.
+        if (!snap.isIndexedFile(path)) return CasResult.Deleted
+        val target = resolveOnDisk(path, snap)
+        // One identity capture: read the current bytes AND the file key + mtime in the same breath, so
+        // the recheck before the rename compares against exactly what the hash was computed over.
+        val before = try {
+            if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(target)) return CasResult.Deleted
+            val attrs = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            FileIdentity(bytes = Files.readAllBytes(target), fileKey = attrs.fileKey(), modified = attrs.lastModifiedTime())
+        } catch (e: IOException) {
+            return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+        }
+        val beforeHash = hasher(before.bytes)
+        if (beforeHash != baseHash) return CasResult.Mismatch(currentBytes = before.bytes, currentHash = beforeHash)
+
+        logger.info { "CAS-writing content file: ${path.value} (${bytes.size} bytes)" }
+        // A pre-rename I/O failure (temp create/write, the re-stat, or the move) must NOT escape as an
+        // exception: WritePipeline has already marked the page dirty, so an uncaught throw would orphan
+        // a dirty row whose expectedHash names bytes that never landed. Convert it to Unreadable — the
+        // same typed outcome as the read/stat section — so the pipeline restores-or-clears the mark.
+        var tmp: Path? = null
+        try {
+            tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
+            Files.write(tmp, bytes)
+            // Re-stat the target immediately before the rename: a non-cooperating external write since
+            // the read changes the file key or mtime — detect it rather than clobber it (MUST-FIX 2).
+            val now = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            if (now.fileKey() != before.fileKey || now.lastModifiedTime() != before.modified) {
+                val current = try {
+                    Files.readAllBytes(target)
+                } catch (_: IOException) {
+                    null
+                }
+                return CasResult.Mismatch(currentBytes = current, currentHash = current?.let(hasher))
+            }
+            try {
+                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
+                Files.copy(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+            return CasResult.Written(newHash = hasher(bytes))
+        } catch (e: IOException) {
+            return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+        } finally {
+            tmp?.let { Files.deleteIfExists(it) }
+        }
+    }
+
     override fun watch(onChange: (TreePath) -> Unit): AutoCloseable =
         // The watcher shares the scan's IgnoreRules (one ignore policy, §B1) and skips the
         // configured exclusions — DATA_DIR when it is nested inside the content root, so the app's
@@ -377,6 +430,9 @@ class LocalContentStore(
         } catch (_: IOException) {
             false
         }
+
+    /** A CAS read's captured identity: the bytes hashed, plus the file key + mtime the rename rechecks. */
+    private class FileIdentity(val bytes: ByteArray, val fileKey: Any?, val modified: FileTime)
 
     companion object {
         private val logger = KotlinLogging.logger {}

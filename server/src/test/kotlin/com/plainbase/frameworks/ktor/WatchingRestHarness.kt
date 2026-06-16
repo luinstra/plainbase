@@ -60,6 +60,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             searchService = SearchService(provider = searchProvider, indexBuilder = harness.builder),
             aliasRegistry = harness.registry,
             contentStore = store,
+            writePipeline = harness.writePipeline(),
         )
     }
 

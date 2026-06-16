@@ -10,6 +10,7 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
@@ -27,7 +28,7 @@ import java.nio.file.Path
  */
 class IndexHarness(
     root: Path,
-    contentStore: ContentStore = LocalContentStore(root),
+    private val contentStore: ContentStore = LocalContentStore(root),
     frontmatterParser: FrontmatterParser = FrontmatterReader(),
     rendererFactory: (PageIndexView) -> MarkdownRenderer = { view -> FlexmarkRenderer(view) },
     listeners: List<IndexBuilder.PublicationListener> = emptyList(),
@@ -36,26 +37,41 @@ class IndexHarness(
 
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
+    private val citations = CitationFactory()
 
     val idMap = SqlDelightIdMapRepository(database)
     val aliases = SqlDelightUrlAliasRepository(database)
     val registry = UrlAliasRegistry(aliases)
     val checkpoints = SqlDelightPageCheckpointRepository(database)
+    val dirtyPages = SqlDelightDirtyPageRepository(database)
+    private val frontmatter = frontmatterParser
+    private val patcher = FrontmatterPatcher()
     val builder = IndexBuilder(
         contentStore = contentStore,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
         identity = PageIdentityService(UuidV7IdProvider()),
-        patcher = FrontmatterPatcher(),
+        patcher = patcher,
         idMap = idMap,
         aliasRegistry = registry,
         checkpoint = checkpoints,
-        citations = CitationFactory(),
+        citations = citations,
         // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
         searchIndexer = searchIndexer,
     )
+
+    /** A real [WritePipeline] over the harness's own content store + repos (the production wiring, minus HTTP). */
+    fun writePipeline(historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> }): WritePipeline =
+        WritePipeline(
+            contentStore = contentStore,
+            indexBuilder = builder,
+            citations = citations,
+            frontmatterParser = frontmatter,
+            dirtyPages = dirtyPages,
+            historyHook = historyHook,
+        )
 
     override fun close() = driver.close()
 }

@@ -3,6 +3,7 @@ package com.plainbase
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdoptCommand
 import com.plainbase.frameworks.cli.ReindexCommand
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -62,8 +63,12 @@ private fun serve() {
     val scheduler = RebuildScheduler(rebuild = { builder.rebuild() })
     val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
     try {
-        // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand.
+        // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
+        // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
         builder.rebuild()
+        // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
+        // and before serving — drift-skips a page whose on-disk bytes changed since the crash.
+        koin.get<WritePipeline>().reconcileDirtyPages()
         KtorServer(config, koin.get()).start(wait = true)
     } finally {
         watch.close()

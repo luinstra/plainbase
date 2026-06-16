@@ -50,6 +50,28 @@ interface ContentStore {
     fun write(path: TreePath, bytes: ByteArray)
 
     /**
+     * The PB-WRITE-1 indexed-only, hash-guarded, identity-rechecked atomic write (debate MUST-FIX 2).
+     *
+     * A read-then-[write] split has a window — an external editor or a watcher rename between the two
+     * — that could lose an update or write a ghost file. This resolves [path] ONCE to a single on-disk
+     * file identity, reads its bytes, hashes them through [hasher] (the domain-owned frozen
+     * `CitationFactory.contentHash`, passed in so this adapter never imports it), and — immediately
+     * before the atomic rename — rechecks that identity (file key + mtime) so a concurrent external
+     * write since the read is DETECTED, not clobbered.
+     *
+     * Boundary honesty: this is best-effort detection of NON-cooperating external writers on a LOCAL
+     * filesystem. It is NOT a global lock — two Plainbase processes are excluded by the DATA_DIR lock,
+     * and cooperating writers serialize on the `WritePipeline` monitor (which is why the recheck only
+     * ever guards against external writers).
+     *
+     * Returns the bytes verbatim on a [CasResult.Written] (no reserialization, no patcher); a
+     * [CasResult.Mismatch] when the on-disk hash differs from [baseHash] or an external write landed
+     * between the read and the rename; [CasResult.Deleted] when the indexed file is gone; and
+     * [CasResult.Unreadable] when the read/stat threw (permission/locked/partial/transient FS).
+     */
+    fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult
+
+    /**
      * Watches the content tree for changes, invoking [onChange] with each changed path until the
      * returned handle is closed. Ignored entries (the same rules as [scan]) never produce a call.
      *
@@ -66,6 +88,26 @@ interface ContentStore {
         /** The synthetic path [watch] delivers on an event-queue overflow (consumers just schedule — §B2). */
         val OVERFLOW: TreePath = TreePath.require("(overflow)")
     }
+}
+
+/** The outcome of [ContentStore.compareAndSwapWrite] (PB-WRITE-1, debate MUST-FIX 2). */
+sealed interface CasResult {
+
+    /** The on-disk hash matched [baseHash] and the rename completed; [newHash] is the written bytes' hash. */
+    data class Written(val newHash: String) : CasResult
+
+    /**
+     * The on-disk hash differed from `baseHash`, OR an external write landed between the read and the
+     * rename (the file-identity recheck fired). [currentBytes]/[currentHash] are the on-disk state at
+     * detection — both null when the file vanished concurrently.
+     */
+    data class Mismatch(val currentBytes: ByteArray?, val currentHash: String?) : CasResult
+
+    /** The indexed file is gone (deleted, or never indexed) — nothing to compare-and-swap against. */
+    data object Deleted : CasResult
+
+    /** The read/stat threw (permission/locked/partial/transient FS); [cause] is diagnostic. */
+    data class Unreadable(val cause: String) : CasResult
 }
 
 /** Lightweight metadata for a content entry — what a scan-free `stat` can cheaply provide. */

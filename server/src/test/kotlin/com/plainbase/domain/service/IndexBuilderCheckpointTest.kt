@@ -189,6 +189,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             searchService = SearchService(mockk(relaxed = true), builder), // 301s never touch search
             aliasRegistry = registry,
             contentStore = store,
+            writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
         )
     }
 }

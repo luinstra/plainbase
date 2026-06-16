@@ -1,0 +1,9 @@
+-- v3 -> v4: Phase 3, chunk W1 — the PB-WRITE-1 write-ahead dirty-page journal.
+-- Same DDL as DirtyPage.sq minus the Kotlin `AS` type annotations (migrations are plain SQL).
+-- App state (recovery truth), never disposable search.db (ADR-0004).
+CREATE TABLE dirty_page (
+  id BLOB NOT NULL PRIMARY KEY,
+  path TEXT NOT NULL,
+  expected_hash TEXT NOT NULL,
+  stage TEXT NOT NULL
+);

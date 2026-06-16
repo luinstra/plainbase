@@ -10,12 +10,14 @@ import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
@@ -59,12 +61,20 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     searchIndexer = searchIndexer,
                 )
                 builder.rebuild()
+                val writeCitations = CitationFactory()
                 val services = RestServices(
                     indexBuilder = builder,
                     pageService = PageService(builder, registry, CitationFactory()),
                     searchService = SearchService(provider = searchProvider, indexBuilder = builder),
                     aliasRegistry = registry,
                     contentStore = store,
+                    writePipeline = WritePipeline(
+                        contentStore = store,
+                        indexBuilder = builder,
+                        citations = writeCitations,
+                        frontmatterParser = FrontmatterReader(),
+                        dirtyPages = SqlDelightDirtyPageRepository(database),
+                    ),
                 )
                 block(services)
             }

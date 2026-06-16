@@ -31,6 +31,7 @@ object DatabaseFactory {
         identity_issueAdapter = Identity_issue.Adapter(pathAdapter = TreePathColumnAdapter),
         url_aliasAdapter = Url_alias.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
         page_checkpointAdapter = Page_checkpoint.Adapter(idAdapter = PageIdColumnAdapter, url_pathAdapter = TreePathColumnAdapter),
+        dirty_pageAdapter = Dirty_page.Adapter(idAdapter = PageIdColumnAdapter, pathAdapter = TreePathColumnAdapter),
     )
 
     /** In-memory database for tests and the spike. */

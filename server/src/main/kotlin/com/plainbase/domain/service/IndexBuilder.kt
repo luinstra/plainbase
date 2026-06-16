@@ -188,6 +188,67 @@ class IndexBuilder(
         return snapshot.pages.size
     }
 
+    /**
+     * Targeted single-page reindex (PB-WRITE-1 §B1 fix C): re-reads + re-renders ONLY [pageId]'s page,
+     * publishes a snapshot identical to the current one except for that page, and upserts that ONE page
+     * into search via [SearchIndexer.syncPage]. O(changed-page) END-TO-END — render O(1), search O(1)
+     * (single-page upsert, NOT the corpus-wide [SearchIndexer.sync] diff), checkpoint O(0) (skipped).
+     * Full [rebuild] stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher
+     * rebuild never interleaves.
+     *
+     * The caller (`WritePipeline.write`) has ALREADY rejected any id/slug/redirect_from change (the
+     * edit-classification guard), so this page's identity, urlPath, and aliases are unchanged — only
+     * its bytes-derived fields (markdown, contentHash, html, headings, links, sections, title) are
+     * recomputed. So this does NOT call [notifyPublished] (which would fire the O(corpus) checkpoint
+     * replace) and does NOT call [recordAliases]: there is nothing checkpoint- or alias-relevant to
+     * change. A genuine rename never reaches here — it is a deferred §H operation through full [rebuild].
+     *
+     * Rendered against the CURRENT published snapshot's view (URL-complete: every OTHER page's
+     * canonical URL is final), so this page's outbound links resolve exactly as in a full rebuild.
+     *
+     * **Cross-page render coherence — a documented invariant, not a tracked feature.** Re-rendering
+     * one page is correct iff a page's HTML/headings/links/sections are a pure function of its OWN
+     * content (plus the unchanged URL-complete view). That holds today: the renderer embeds other
+     * pages' URLs but never their content (no backlinks, no transclusion, no server-rendered
+     * child-lists), and folder landing pages are client-rendered (ADR-0003). TRIPWIRE for whoever
+     * later adds backlinks / transclusion / "pages that mention this one": that feature breaks the
+     * pure-function assumption and must either re-render dependents or route through full [rebuild].
+     *
+     * THROWS [IllegalStateException] if [pageId] is absent or its file is unreadable on the SAVE path:
+     * the CAS just wrote those bytes, so a missing page is a real invariant violation, never a silent
+     * success (debate MUST-FIX 4). `WritePipeline.reconcileDirtyPages` tolerates a vanished page at its
+     * OWN call site, never here.
+     */
+    @Synchronized
+    fun reindex(pageId: PageId): PageIndex {
+        val previous = holder.load()
+        val target = previous.byId[pageId]
+            ?: error("reindex($pageId): page not in the published snapshot — a save-path invariant violation")
+        val bytes = contentStore.read(target.path)
+            ?: error("reindex($pageId): ${target.path.value} unreadable just after a CAS write")
+        val parsed = frontmatterParser.parse(bytes)
+        val rendered = rendererFactory(previous).render(target.path, bytes)
+        val reindexed = target.copy(
+            frontmatter = parsed,
+            markdown = String(bytes, Charsets.UTF_8),
+            contentHash = citations.contentHash(bytes),
+            title = parsed.scalar("title") ?: rendered.headings.firstOrNull { it.level == 1 }?.text ?: target.path.stem,
+            html = rendered.html,
+            headings = rendered.headings.toList(),
+            links = rendered.links.toList(),
+            sections = rendered.sections.toList(),
+        )
+        val snapshot = PageIndex(
+            pages = previous.pages.map { if (it.id == pageId) reindexed else it },
+            folders = previous.folders,
+            assets = previous.assets,
+        )
+        holder.store(snapshot)
+        logger.info { "reindexed page ${pageId.value} (${target.path.value}); ${snapshot.pages.size} page(s) published" }
+        searchIndexer?.syncPage(reindexed) // genuine O(1) single-page upsert — NOT sync(snapshot), NOT notifyPublished
+        return snapshot
+    }
+
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex) {
         listeners.forEach { listener ->

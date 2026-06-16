@@ -12,15 +12,15 @@ import java.nio.file.StandardCopyOption
 import java.sql.DriverManager
 
 /**
- * The Phase-2 app-DB migration (`2.sqm`, chunk S2 — the ONLY one): a REAL v2 database file (the
- * committed SQLDelight `schema/2.db` baseline) opened through the production [DatabaseFactory]
- * must migrate cleanly to v3 — `page_search` (the Phase-0 FTS5 spike table) dropped,
- * `page_checkpoint` (§B3) present and usable. `verifyMigrations` checks the DDL at build time;
- * this proves the runtime path end to end.
+ * The full app-DB migration chain from the committed v2 baseline: a REAL v2 database file (the
+ * SQLDelight `schema/2.db` baseline) opened through the production [DatabaseFactory] must migrate
+ * cleanly to the current schema — `page_search` (the Phase-0 FTS5 spike table) dropped by `2.sqm`,
+ * `page_checkpoint` (§B3) present and usable, and `dirty_page` (W1's `3.sqm` write-ahead journal)
+ * present. `verifyMigrations` checks the DDL at build time; this proves the runtime path end to end.
  */
 class AppDbMigrationTest : FunSpec({
 
-    test("v2 -> v3 applies on open: page_search dropped, page_checkpoint created, user_version bumped") {
+    test("v2 baseline migrates to the current schema: page_search dropped, page_checkpoint + dirty_page created") {
         val dir = Files.createTempDirectory("plainbase-migration-test")
         try {
             val dbPath = dir.resolve("plainbase.db")
@@ -30,13 +30,19 @@ class AppDbMigrationTest : FunSpec({
             }
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
-                // The table is live, not just present: a row round-trips through the typed layer.
+                // The tables are live, not just present: rows round-trip through the typed layer.
                 val db = DatabaseFactory.createDatabase(driver)
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
                 db.pageCheckpointQueries.insertRow(id, TreePath.require("docs/start"))
                 val row = db.pageCheckpointQueries.selectAll().executeAsOne()
                 row.id shouldBe id
                 row.url_path?.value shouldBe "docs/start"
+
+                db.dirtyPageQueries.upsert(id, TreePath.require("docs/start"), "sha256:abc", "WRITING")
+                val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
+                dirty.id shouldBe id
+                dirty.path.value shouldBe "docs/start"
+                dirty.stage shouldBe "WRITING"
             }
 
             DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
@@ -45,12 +51,13 @@ class AppDbMigrationTest : FunSpec({
                         buildList { while (rows.next()) add(rows.getString(1)) }
                     }
                     tables shouldContain "page_checkpoint"
+                    tables shouldContain "dirty_page"
                     tables shouldNotContain "page_search"
                     val version = statement.executeQuery("PRAGMA user_version").use { rows ->
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 3L
+                    version shouldBe 4L
                 }
             }
         } finally {
