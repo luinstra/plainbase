@@ -11,6 +11,7 @@ import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
@@ -75,6 +76,8 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                         frontmatterParser = FrontmatterReader(),
                         dirtyPages = SqlDelightDirtyPageRepository(database),
                     ),
+                    citations = CitationFactory(),
+                    maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
                 )
                 block(services)
             }

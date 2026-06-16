@@ -62,10 +62,17 @@ class IndexHarness(
         searchIndexer = searchIndexer,
     )
 
-    /** A real [WritePipeline] over the harness's own content store + repos (the production wiring, minus HTTP). */
-    fun writePipeline(historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> }): WritePipeline =
+    /**
+     * A real [WritePipeline] over [store] (defaulting to the harness's own content store) + repos —
+     * the production wiring minus HTTP. The [store] override lets a test point the pipeline's CAS at
+     * a failing/wrapping stand-in while the index/search wiring keeps using the real copy.
+     */
+    fun writePipeline(
+        historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+        store: ContentStore = contentStore,
+    ): WritePipeline =
         WritePipeline(
-            contentStore = contentStore,
+            contentStore = store,
             indexBuilder = builder,
             citations = citations,
             frontmatterParser = frontmatter,

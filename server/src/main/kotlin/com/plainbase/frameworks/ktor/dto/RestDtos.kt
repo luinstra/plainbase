@@ -64,6 +64,32 @@ object ErrorCodes {
      * frozen §A5 vocabulary; appended here as a constant (codes are append-only).
      */
     const val REINDEX_IN_FLIGHT: String = "reindex_in_flight"
+
+    // ---- PB-WRITE-1 (W3a): the write/save vocabulary (append-only; froze when W3a landed) --------
+
+    /** 409: a save's base_hash no longer matches the on-disk bytes — the conflict envelope carries reason + current_*. */
+    const val CONFLICT: String = "conflict"
+
+    /** 422: a PUT body would change the frontmatter id (vs path-param, or vs the file's current id) — IDs are immutable. */
+    const val ID_CHANGE_UNSUPPORTED: String = "id_change_unsupported"
+
+    /** 422: a PUT body would change the slug — a re-slug is a move (deferred §H), never a save side effect. */
+    const val SLUG_CHANGE_UNSUPPORTED: String = "slug_change_unsupported"
+
+    /** 422: a PUT body would change redirect_from — an alias change is a move (deferred §H), never a save side effect. */
+    const val REDIRECT_FROM_CHANGE_UNSUPPORTED: String = "redirect_from_change_unsupported"
+
+    /** 503: the on-disk file could not be read at CAS time (locked/permission/transient FS) — retryable, nothing written. */
+    const val CONTENT_UNREADABLE: String = "content_unreadable"
+
+    /** 400: the base_hash (If-Match) header is missing, malformed, or not sha256:+64-hex. */
+    const val INVALID_BASE_HASH: String = "invalid_base_hash"
+
+    /** 413: a request body exceeding the configured PB-WRITE-1 max body size (the body carries the authoritative max_bytes). */
+    const val BODY_TOO_LARGE: String = "body_too_large"
+
+    /** 415: a PUT without the accepted text/markdown media type. */
+    const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

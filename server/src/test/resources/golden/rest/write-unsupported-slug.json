@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "slug_change_unsupported",
+    "field": "slug",
+    "message": "Changing slug is a move, not a save (deferred)."
+  }
+}

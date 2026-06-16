@@ -1,0 +1,217 @@
+package com.plainbase.frameworks.ktor.dto
+
+import com.plainbase.domain.model.WriteOutcome
+import io.ktor.http.HttpStatusCode
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/*
+ * PB-WRITE-1 (chunk W3a) — the FROZEN wire shapes for `PUT /api/v1/pages/{id}`, kept beside (not
+ * inside) the frozen PB-REST-1 RestDtos so the day-one read shapes never grow a field. The whole
+ * point of this file is byte-precision on the wire: the variant 200 DTOs (WrittenResponse vs
+ * WrittenButUnindexedResponse) mean a "doesn't-apply" field is ABSENT from the DTO (never
+ * `"x": null`); only a genuinely-pending nullable (`commit`) is present-`null` on the DTO it
+ * belongs to (encoded through the scoped RestJson, `explicitNulls = true`).
+ *
+ * ============================== NEVER-CHANGE POLICY ==============================
+ * These shapes froze when W3a landed. They are append-only: a field is never removed or retyped,
+ * the `reason` set (WriteConflictReason) only grows, and `commit`/`warning`/`current_*`/`max_bytes`
+ * are forever. See `ForeverApiGoldenSuite.kt` for the freeze ledger.
+ * =================================================================================
+ */
+
+/** 200 (`WriteOutcome.Written`): exactly two keys; `commit` present-null until W4. NO `warning` key. */
+@Serializable
+data class WrittenResponse(
+    @SerialName("content_hash") val contentHash: String,
+    val commit: String?,
+)
+
+/**
+ * 200 (`WriteOutcome.WrittenButUnindexed`, R2): a DISTINCT type carrying a non-null [warning]. The
+ * bytes are durably on disk; `content_hash` is the next CAS token, so a warning-blind client stays
+ * safe. "200 means *saved*, not *saved-and-indexed*."
+ */
+@Serializable
+data class WrittenButUnindexedResponse(
+    @SerialName("content_hash") val contentHash: String,
+    val commit: String?,
+    val warning: WriteWarning,
+)
+
+@Serializable
+data class WriteWarning(val code: String, val message: String)
+
+/** 409 drift envelope (kept distinct from the frozen [ErrorEnvelope] — it grows `reason` + `current_*`). */
+@Serializable
+data class WriteConflictEnvelope(val error: WriteConflictBody)
+
+@Serializable
+data class WriteConflictBody(
+    val code: String,
+    val reason: String,
+    val message: String,
+    @SerialName("current_content") val currentContent: String?,
+    @SerialName("current_hash") val currentHash: String?,
+    @SerialName("current_path") val currentPath: String?,
+)
+
+/** 422 unsupported-edit envelope (a rename, not a drift): `code` + `field`, NO `reason`, NO `current_*`. */
+@Serializable
+data class UnsupportedEditEnvelope(val error: UnsupportedEditBody)
+
+@Serializable
+data class UnsupportedEditBody(val code: String, val field: String, val message: String)
+
+/** 413 body: the plain `{code, message}` envelope PLUS the authoritative `max_bytes` (never a mutation of [ErrorBody]). */
+@Serializable
+data class BodyTooLargeEnvelope(val error: BodyTooLargeBody)
+
+@Serializable
+data class BodyTooLargeBody(val code: String, val message: String, @SerialName("max_bytes") val maxBytes: Long)
+
+/**
+ * The frozen drift-only `reason` enum (PB-WRITE-1): the set is `{content_changed, page_moved,
+ * page_deleted}` and only ever grows (additive). `page_moved` is PRODUCER-RESERVED — no §H mover
+ * emits it yet, but the value is pinned so a future producer adds no new vocabulary. **`id_changed`
+ * is deliberately NOT a member** (the debate's sharpest fix): id/slug/redirect_from rejections are
+ * 422 + code + field, never a drift discriminator.
+ */
+object WriteConflictReason {
+    const val CONTENT_CHANGED: String = "content_changed"
+    const val PAGE_MOVED: String = "page_moved"
+    const val PAGE_DELETED: String = "page_deleted"
+
+    /** The frozen reason set (additive-only). Pinned by the golden suite's reason-enum assertion. */
+    val ALL: Set<String> = setOf(CONTENT_CHANGED, PAGE_MOVED, PAGE_DELETED)
+}
+
+/**
+ * The frozen PB-WRITE-1 warning vocabulary — distinct from [ErrorCodes] (a warning rides a 200, not
+ * an error status). Append-only, never removed/retyped.
+ */
+object WriteWarningCode {
+    /** R2: the bytes saved to disk but the search/history sync deferred to the next startup reconciliation. */
+    const val REINDEX_DEFERRED: String = "reindex_deferred"
+}
+
+/** The W3a default warning message for a deferred reindex (R2). */
+private const val REINDEX_DEFERRED_MESSAGE =
+    "Saved to disk; search/history update deferred to next startup reconciliation."
+
+/**
+ * The single point where a [WriteOutcome] meets the PB-WRITE-1 wire: a [status] plus a self-rendering
+ * payload. The route renders it through the scoped [RestJson]. Pre-pipeline request rejections
+ * (415/413/404/400-id/400-base_hash/422-route-layer-id) are the route's own [respondError]-style
+ * answers, never produced here.
+ */
+sealed interface WriteWire {
+    val status: HttpStatusCode
+
+    /** Encodes the body through [RestJson] (the present-null guarantee). */
+    fun encode(): String
+
+    private class Of<T>(
+        override val status: HttpStatusCode,
+        private val serializer: KSerializer<T>,
+        private val value: T,
+    ) : WriteWire {
+        override fun encode(): String = RestJson.encodeToString(serializer, value)
+    }
+
+    companion object {
+        internal fun <T> of(status: HttpStatusCode, serializer: KSerializer<T>, value: T): WriteWire =
+            Of(status, serializer, value)
+    }
+}
+
+/**
+ * Maps a [WriteOutcome] to the frozen PB-WRITE-1 wire, applying the retry-idempotency shim
+ * (Resolution / debate "Other frozen items"): a stale `base_hash` whose on-disk bytes ALREADY equal
+ * the submitted bytes is a network-retry of a write that landed — a 200 no-op, not a false 409. It is
+ * a pure wire-layer shim (no W1 signature change): a `content_changed` [WriteOutcome.Conflict] whose
+ * `currentHash` equals `hash(submitted)` becomes a [WrittenResponse] with that hash.
+ *
+ * [submittedHash] is `CitationFactory.contentHash` over the exact submitted body bytes (the same
+ * frozen hash W1 keyed the CAS on — no second hash definition).
+ */
+fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
+    is WriteOutcome.Written ->
+        WriteWire.of(HttpStatusCode.OK, WrittenResponse.serializer(), WrittenResponse(contentHash = newHash, commit = commit))
+
+    is WriteOutcome.WrittenButUnindexed ->
+        WriteWire.of(
+            HttpStatusCode.OK,
+            WrittenButUnindexedResponse.serializer(),
+            WrittenButUnindexedResponse(
+                contentHash = newHash,
+                commit = null,
+                warning = WriteWarning(code = WriteWarningCode.REINDEX_DEFERRED, message = REINDEX_DEFERRED_MESSAGE),
+            ),
+        )
+
+    is WriteOutcome.Conflict -> {
+        // Retry-idempotency shim: stale base_hash but the on-disk bytes ARE the submitted bytes → 200 no-op.
+        if (reason == WriteConflictReason.CONTENT_CHANGED && currentHash == submittedHash) {
+            WriteWire.of(HttpStatusCode.OK, WrittenResponse.serializer(), WrittenResponse(contentHash = submittedHash, commit = null))
+        } else {
+            // FROZEN page_deleted shape: ALL current_* are null — the file is gone, so the path it WAS at
+            // is not surfaced (W1 still carries the stale snapshot path on `currentPath`; the wire nulls it
+            // to keep `page_deleted` a clean "nothing to rebase against" signal, per the PB-WRITE-1 freeze).
+            val deleted = reason == WriteConflictReason.PAGE_DELETED
+            WriteWire.of(
+                HttpStatusCode.Conflict,
+                WriteConflictEnvelope.serializer(),
+                WriteConflictEnvelope(
+                    WriteConflictBody(
+                        code = ErrorCodes.CONFLICT,
+                        reason = reason,
+                        message = conflictMessage(reason),
+                        currentContent = currentContent,
+                        currentHash = currentHash,
+                        currentPath = if (deleted) null else currentPath?.value,
+                    ),
+                ),
+            )
+        }
+    }
+
+    is WriteOutcome.UnsupportedEdit ->
+        WriteWire.of(
+            HttpStatusCode.UnprocessableEntity,
+            UnsupportedEditEnvelope.serializer(),
+            UnsupportedEditEnvelope(
+                UnsupportedEditBody(code = unsupportedEditCode(field), field = field, message = unsupportedEditMessage(field)),
+            ),
+        )
+
+    is WriteOutcome.Unreadable ->
+        WriteWire.of(
+            HttpStatusCode.ServiceUnavailable,
+            ErrorEnvelope.serializer(),
+            ErrorEnvelope(ErrorBody(ErrorCodes.CONTENT_UNREADABLE, "The page could not be read on disk; nothing was written. Retry.")),
+        )
+}
+
+private fun conflictMessage(reason: String): String = when (reason) {
+    WriteConflictReason.CONTENT_CHANGED -> "The page changed on disk since you loaded it."
+    WriteConflictReason.PAGE_DELETED -> "The page no longer exists on disk."
+    WriteConflictReason.PAGE_MOVED -> "The page moved on disk since you loaded it."
+    else -> "The page changed on disk since you loaded it."
+}
+
+/** The 422 `<field>_change_unsupported` code for a rename-class rejected edit. */
+fun unsupportedEditCode(field: String): String = when (field) {
+    "id" -> ErrorCodes.ID_CHANGE_UNSUPPORTED
+    "slug" -> ErrorCodes.SLUG_CHANGE_UNSUPPORTED
+    "redirect_from" -> ErrorCodes.REDIRECT_FROM_CHANGE_UNSUPPORTED
+    else -> error("unsupported-edit field is not an immutable identity field: '$field'")
+}
+
+private fun unsupportedEditMessage(field: String): String = when (field) {
+    "id" -> "Changing id is not allowed — page identity is immutable."
+    "slug" -> "Changing slug is a move, not a save (deferred)."
+    "redirect_from" -> "Changing redirect_from is a move, not a save (deferred)."
+    else -> "Changing $field is not allowed."
+}

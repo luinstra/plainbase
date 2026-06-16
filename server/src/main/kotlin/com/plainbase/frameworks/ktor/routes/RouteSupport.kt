@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
 import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
@@ -21,6 +22,31 @@ import kotlinx.serialization.KSerializer
 /** Responds [value] through the scoped [RestJson] serializer (present-null guaranteed, §A4). */
 internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>, value: T, status: HttpStatusCode = HttpStatusCode.OK) {
     respondText(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status)
+}
+
+/**
+ * The §A4 canonical id shape: the 36-char hyphenated UUID form, ANY case (an UPPERCASE path param
+ * resolves to the same lowercase id — RestGoldenTest). Deliberately STRICTER than [PageId.of] /
+ * `Uuid.parseOrNull`, which also accepts the 32-char hyphenless hex form: the HTTP boundary admits
+ * only the canonical hyphenated shape, so a `1-1-1-1-1` AND a 32-hex-no-hyphen id are both
+ * `invalid_page_id`, never silently routed to the index lookup. The regex decides 400-vs-404, never
+ * JDK leniency.
+ */
+private val CANONICAL_PAGE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+/**
+ * Parses the `{id}` path parameter via the §A4 canonical-shape gate, or itself responds 400
+ * `invalid_page_id` and returns null. Shared by [pageRoutes] (read) and [pageWriteRoutes] (PUT) so
+ * both gates are byte-identical. The boundary check is the [CANONICAL_PAGE_ID] regex (the §A4
+ * canonical hyphenated shape) BEFORE [PageId.of]: a shape-valid id then parses to a [PageId]; a
+ * non-canonical one (including the JDK-lenient hex-32 form `PageId.of` would otherwise accept) is
+ * 400, never 404.
+ */
+internal suspend fun ApplicationCall.pageId(): PageId? {
+    val raw = parameters["id"].orEmpty()
+    val id = raw.takeIf(CANONICAL_PAGE_ID::matches)?.let(PageId::of)
+    if (id == null) respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
+    return id
 }
 
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */

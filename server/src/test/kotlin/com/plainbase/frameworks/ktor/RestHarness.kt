@@ -8,6 +8,7 @@ import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
@@ -60,6 +61,8 @@ class RestHarness(
             aliasRegistry = harness.registry,
             contentStore = store,
             writePipeline = harness.writePipeline(),
+            citations = CitationFactory(),
+            maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }
 

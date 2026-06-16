@@ -115,9 +115,19 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
 
     /**
      * Reads the raw value of the column-0 `id` key in [original]'s frontmatter block, or null when
-     * there is no block, the block is not strict UTF-8, or no such key exists. This is the patcher's
-     * own case-5 line grammar — the single id-detection grammar in the tree — exposed for adoption
-     * (chunk 4b), which feeds the value through the §A4 shape gate itself (4a `resolve`).
+     * there is no block or no such key exists. This is the patcher's own case-5 line grammar — the
+     * single id-detection grammar in the tree — exposed for adoption (chunk 4b), which feeds the
+     * value through the §A4 shape gate itself (4a `resolve`).
+     *
+     * **Lenient decode (PB-WRITE-1 round-trip law).** The block is decoded with the SAME lenient
+     * UTF-8 the reader uses for [com.plainbase.domain.page.IndexedPage.markdown] — invalid sequences
+     * become U+FFFD, never a null/refusal. This is deliberately NOT the strict decode the
+     * [patch]/[postCheckHolds] paths run (§A3 case-8 `invalid_encoding` stays frozen): an `id:` line
+     * that is itself clean ASCII must still be read out of a file whose block carries
+     * leniently-accepted invalid bytes elsewhere — otherwise the W3a `PUT` id-tamper check would
+     * re-create the strict-vs-lenient asymmetry that RAW transport exists to eliminate (a file the
+     * reader serves but no `PUT` could ever match). A column-0 `id:` line is pure ASCII by the
+     * grammar below, so leniency widens what is readable without ever altering an id's text.
      *
      * The colon must terminate like a mapping colon: an `id:value` line (no space after the colon)
      * is a plain scalar a YAML parser cannot read an id from, so it is never honored as identity —
@@ -126,7 +136,7 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
      */
     fun readIdValue(original: ByteArray): String? {
         val detection = FrontmatterBlock.detect(original) as? FrontmatterBlock.Detection.Present ?: return null
-        val innerText = strictUtf8(original.copyOfRange(detection.innerStart, detection.innerEnd)) ?: return null
+        val innerText = String(original.copyOfRange(detection.innerStart, detection.innerEnd), Charsets.UTF_8)
         return innerText.lineSequence()
             .firstOrNull { ID_VALUE_LINE.matches(it.trimEnd('\r')) }
             ?.substringAfter(':')

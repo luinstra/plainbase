@@ -61,6 +61,8 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             aliasRegistry = harness.registry,
             contentStore = store,
             writePipeline = harness.writePipeline(),
+            citations = CitationFactory(),
+            maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }
 

@@ -10,6 +10,7 @@ import com.plainbase.frameworks.ktor.routes.docsRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
 import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
 import com.plainbase.frameworks.ktor.routes.pageRoutes
+import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.searchRoute
@@ -93,6 +94,8 @@ fun Application.plainbaseModule(services: RestServices) {
         // structural inside docsRoutes.
         healthRoute()
         pageRoutes(services)
+        // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
+        pageWriteRoutes(services)
         treeRoute(services)
         searchRoute(services)
         adminRoute(services)

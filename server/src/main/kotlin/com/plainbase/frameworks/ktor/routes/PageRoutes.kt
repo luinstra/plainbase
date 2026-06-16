@@ -1,13 +1,14 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.page.PageId
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
 import com.plainbase.frameworks.ktor.dto.PageResponse
 import com.plainbase.frameworks.ktor.dto.toDto
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.response.header
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.route
@@ -40,13 +41,17 @@ fun Route.pageRoutes(services: RestServices) {
                 ?: return@get call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid page path: '$raw'")
             val payload = services.pageService.byUrlPath(path)
                 ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page at path ${path.value}")
-            call.respondRest(PageResponse.serializer(), payload.toDto())
+            val dto = payload.toDto()
+            call.setContentHashETag(dto.contentHash)
+            call.respondRest(PageResponse.serializer(), dto)
         }
         get("/{id}") {
             val id = call.pageId() ?: return@get
             val payload = services.pageService.byId(id)
                 ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-            call.respondRest(PageResponse.serializer(), payload.toDto())
+            val dto = payload.toDto()
+            call.setContentHashETag(dto.contentHash)
+            call.respondRest(PageResponse.serializer(), dto)
         }
         get("/{id}/html") {
             val id = call.pageId() ?: return@get
@@ -57,10 +62,12 @@ fun Route.pageRoutes(services: RestServices) {
     }
 }
 
-/** Parses the `{id}` parameter or responds 400 `invalid_page_id` (and returns null) itself. */
-private suspend fun ApplicationCall.pageId(): PageId? {
-    val raw = parameters["id"].orEmpty()
-    val id = PageId.of(raw)
-    if (id == null) respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
-    return id
+/**
+ * Sets the PB-WRITE-1 read-half of the round-trip: `ETag: "<content_hash>"` — an RFC 7232 STRONG
+ * entity-tag (double-quoted, no `W/`), so the value a client `GET`s is byte-for-byte the `If-Match`
+ * the next `PUT` requires. The quotes are part of the frozen value; [contentHash] is the bare
+ * unquoted value already in the JSON body ([com.plainbase.frameworks.ktor.dto.PageResponse.contentHash]).
+ */
+private fun ApplicationCall.setContentHashETag(contentHash: String) {
+    response.header(HttpHeaders.ETag, "\"$contentHash\"")
 }

@@ -5,6 +5,7 @@ import com.plainbase.domain.service.FrontmatterPatcherGoldenTest
 import com.plainbase.domain.service.LinkResolutionGoldenTest
 import com.plainbase.frameworks.ktor.RestGoldenTest
 import com.plainbase.frameworks.ktor.SearchGoldenTest
+import com.plainbase.frameworks.ktor.WriteGoldenTest
 import io.kotest.core.spec.style.FunSpec
 
 /**
@@ -24,6 +25,7 @@ import io.kotest.core.spec.style.FunSpec
  *   - PB-REST-1   (REST shapes + error envelope)       -> `golden/rest/` snapshots
  *   - PB-SEARCH-1 (search shape + grammar + error envelopes) -> `golden/rest/search-*.json`,
  *                 `golden/rest/error-invalid-query-*.json`
+ *   - PB-WRITE-1  (PUT save shapes + status taxonomy + round-trip) -> `golden/rest/write-*.json`
  *
  * A change that breaks ANY row of these corpora is a forever-API break, not a fix. Corrections to
  * golden rows were FREE only during the chunk-2 authoring window, which closed when chunk 2 landed
@@ -61,6 +63,19 @@ import io.kotest.core.spec.style.FunSpec
  * per-tokenizer-tagged — they live OUTSIDE this suite and may be regenerated under documented
  * review. The S8 reindex endpoint/CLI carry a non-frozen ReindexResponse body (like RescanResponse,
  * §A5) that no golden pins. No S8 work adds or moves a tier-1 golden.
+ *
+ * PB-WRITE-1 freeze ledger (froze when W3a landed, 2026-06): transport is a RAW `text/markdown`
+ * body + the `If-Match` base_hash header (an RFC 7232 strong tag `"sha256:<64-hex>"`); `GET` returns
+ * that value as `ETag` so the round-trip is byte-native. Responses are VARIANT DTOs — field ABSENCE
+ * is part of the shape (`WrittenResponse` has no `warning` key; `WrittenButUnindexedResponse` does;
+ * `commit` is present-`null` until W4). The status taxonomy is frozen: 200 saved (warning-or-not),
+ * 409 drift, 422 unsupported-edit, 400 invalid_base_hash, 404, 413 body_too_large (`max_bytes` in
+ * the body), 415, 503. The drift-only `reason` enum is `{content_changed, page_moved, page_deleted}`
+ * (`page_moved` producer-reserved; **`id_changed` is deliberately NOT a reason** — id/slug/
+ * redirect_from rejections are 422 + code + field). Write error codes are append-only;
+ * `commit`/`warning`/`current_*`/`max_bytes` are never removed or retyped; the 1 MiB body cap is
+ * configurable UPWARD (additive). Tier-1 goldens are the four `golden/rest/write-*.json` snapshots
+ * plus the adversarial byte-identical round-trip (WriteGoldenTest's 7 tests).
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -87,5 +102,9 @@ class ForeverApiGoldenSuite : FunSpec({
 
     test("PB-SEARCH-1: the search snapshot corpus (5 frozen-shape tests, score-normalized)") {
         SelectedSuite.run(SearchGoldenTest::class).shouldHavePassed("SearchGoldenTest", atLeastTests = 5)
+    }
+
+    test("PB-WRITE-1: the write snapshot corpus (7 frozen-shape tests; raw round-trip, 409/422 split, present-null commit)") {
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 7)
     }
 })

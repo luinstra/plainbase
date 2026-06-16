@@ -3,6 +3,7 @@ package com.plainbase.frameworks.koin
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.RestServices
 import org.koin.dsl.module
 
@@ -27,6 +28,8 @@ val restModule = module {
             aliasRegistry = get(),
             contentStore = get(),
             writePipeline = get(),
+            citations = get(),
+            maxWriteBodyBytes = get<PlainbaseConfig>().maxWriteBodyBytes,
         )
     }
 }

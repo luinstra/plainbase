@@ -4,6 +4,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchService
@@ -30,6 +31,10 @@ class RestServices(
     val aliasRegistry: UrlAliasRegistry,
     val contentStore: ContentStore,
     val writePipeline: WritePipeline,
+    /** The frozen content-hash (`CitationFactory.contentHash`) the W3a write route reuses — no second hash. */
+    val citations: CitationFactory,
+    /** PB-WRITE-1 body cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxWriteBodyBytes]. */
+    val maxWriteBodyBytes: Long,
 ) {
 
     /** The per-snapshot memoized `/api/v1/tree` JSON (§C4). */

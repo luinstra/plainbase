@@ -17,6 +17,13 @@ data class PlainbaseConfig(
     val dataDir: Path,
     val host: String,
     val port: Int,
+    /**
+     * PB-WRITE-1 body cap: the maximum `PUT /api/v1/pages/{id}` request-body size in bytes; a body
+     * exceeding it is rejected `413 body_too_large` (the response carries this authoritative number,
+     * so clients never hardcode it). Default 1 MiB; raisable per deploy (raising is additive — the
+     * frozen contract is the cap BEHAVIOR + the code + the `max_bytes` field, never the number).
+     */
+    val maxWriteBodyBytes: Long = DEFAULT_MAX_WRITE_BODY_BYTES,
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
@@ -56,11 +63,15 @@ data class PlainbaseConfig(
 
         const val DEFAULT_PORT: Int = 8080
 
+        /** PB-WRITE-1 default body cap: 1 MiB. Raisable via `PLAINBASE_MAX_WRITE_BODY_BYTES` (raising is additive). */
+        const val DEFAULT_MAX_WRITE_BODY_BYTES: Long = 1_048_576
+
         fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig = PlainbaseConfig(
             contentDir = Path.of(env["CONTENT_DIR"] ?: "./content").toAbsolutePath().normalize(),
             dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
             host = env["PLAINBASE_HOST"] ?: "0.0.0.0",
             port = env["PLAINBASE_PORT"]?.toIntOrNull() ?: DEFAULT_PORT,
+            maxWriteBodyBytes = env["PLAINBASE_MAX_WRITE_BODY_BYTES"]?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }
 }
