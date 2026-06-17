@@ -18,6 +18,8 @@ val restModule = module {
             citations = get(),
             frontmatterParser = get(),
             dirtyPages = get(),
+            idMap = get(),
+            aliasRegistry = get(),
         )
     }
     single {
@@ -29,6 +31,7 @@ val restModule = module {
             contentStore = get(),
             writePipeline = get(),
             citations = get(),
+            idProvider = get(),
             maxWriteBodyBytes = get<PlainbaseConfig>().maxWriteBodyBytes,
         )
     }

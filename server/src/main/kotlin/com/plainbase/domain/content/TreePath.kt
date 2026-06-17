@@ -64,8 +64,16 @@ class TreePath private constructor(
         fun childOf(parent: TreePath?, name: String): TreePath =
             parent?.resolveChild(name) ?: require(name)
 
-        /** A segment is valid iff it is non-empty and is neither `.` nor `..` (and has no `/`). */
+        /**
+         * A segment is valid iff it is non-empty, is neither `.` nor `..`, has no `/`, and contains no
+         * NUL (`Char(0)`). NUL is the ONE byte universally illegal in a filesystem name AND the char that
+         * makes `java.nio.file.Path.resolve` throw an unchecked `InvalidPathException`; rejecting it here
+         * keeps `of()` total so no caller leaks a 500. Other control chars (`\t`, `\n`) ARE legal
+         * POSIX/macOS filenames, so this SHARED scan/read gate must NOT reject them — an existing
+         * control-char-named file must still index. Stricter create-INPUT validation (a control char in a
+         * client-supplied folder is bad input) lives at the create route, not on this shared path.
+         */
         private fun isValidSegment(segment: String): Boolean =
-            segment.isNotEmpty() && segment != "." && segment != ".." && !segment.contains('/')
+            segment.isNotEmpty() && segment != "." && segment != ".." && !segment.contains('/') && Char(0) !in segment
     }
 }

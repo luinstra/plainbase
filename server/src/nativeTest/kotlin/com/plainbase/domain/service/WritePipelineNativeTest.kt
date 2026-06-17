@@ -43,14 +43,16 @@ class WritePipelineNativeTest {
                 val database = DatabaseFactory.createDatabase(driver)
                 val store = LocalContentStore(content)
                 val citations = CitationFactory()
+                val idMap = SqlDelightIdMapRepository(database)
+                val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
                 val builder = IndexBuilder(
                     contentStore = store,
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
-                    idMap = SqlDelightIdMapRepository(database),
-                    aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
+                    idMap = idMap,
+                    aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = citations,
                 )
@@ -61,6 +63,8 @@ class WritePipelineNativeTest {
                     citations = citations,
                     frontmatterParser = FrontmatterReader(),
                     dirtyPages = SqlDelightDirtyPageRepository(database),
+                    idMap = idMap,
+                    aliasRegistry = registry,
                 )
 
                 val page = builder.current.pages.single()

@@ -9,6 +9,7 @@ import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
@@ -62,6 +63,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             contentStore = store,
             writePipeline = harness.writePipeline(),
             citations = CitationFactory(),
+            idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }

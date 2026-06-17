@@ -4,8 +4,6 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.WriteIntent
 import com.plainbase.frameworks.ktor.RestServices
-import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
-import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.UnsupportedEditBody
@@ -18,15 +16,10 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.contentType
-import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
-import io.ktor.utils.io.ByteReadChannel
-import io.ktor.utils.io.readRemaining
-import kotlinx.io.Buffer
-import kotlinx.io.readByteArray
 
 /**
  * PB-WRITE-1 (chunk W3a, FROZEN): `PUT /api/v1/pages/{id}` — the one content-mutating save route.
@@ -113,52 +106,6 @@ private val IF_MATCH_BASE_HASH = Regex("\"(sha256:[0-9a-f]{64})\"")
  */
 private fun ApplicationCall.parseIfMatchBaseHash(): String? =
     request.headers[HttpHeaders.IfMatch]?.let { IF_MATCH_BASE_HASH.matchEntire(it)?.groupValues?.get(1) }
-
-/**
- * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the
- * moment the count would exceed [limit] (so an over-cap body aborts BEFORE the whole thing is
- * buffered). `Content-Length` is never trusted: it can lie, so the stream count is the only
- * authority.
- */
-private suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? {
-    val channel: ByteReadChannel = receiveChannel()
-    val out = Buffer()
-    var count = 0L
-    while (!channel.isClosedForRead) {
-        // Read at most one byte PAST the limit per chunk so an over-cap body aborts before the whole
-        // thing is buffered; Content-Length is never consulted (it can lie).
-        val chunk = channel.readRemaining(DEFAULT_READ_CHUNK).readByteArray()
-        count += chunk.size
-        if (count > limit) {
-            channel.cancel(BodyTooLargeCancellation)
-            return null
-        }
-        out.write(chunk)
-    }
-    return out.readByteArray()
-}
-
-/** The cancellation cause when the body exceeds the cap — never surfaced; the route answers 413 itself. */
-private val BodyTooLargeCancellation = kotlinx.io.IOException("PB-WRITE-1 body exceeds the configured cap")
-
-private const val DEFAULT_READ_CHUNK: Long = 64 * 1024
-
-private suspend fun ApplicationCall.respondBodyTooLarge(maxBytes: Long) {
-    respondText(
-        RestJson.encodeToString(
-            BodyTooLargeEnvelope.serializer(),
-            BodyTooLargeEnvelope(
-                BodyTooLargeBody(
-                    code = ErrorCodes.BODY_TOO_LARGE,
-                    message = "Request body exceeds the $maxBytes-byte limit",
-                    maxBytes = maxBytes,
-                ),
-            ),
-        ),
-        ContentType.Application.Json,
-        HttpStatusCode.PayloadTooLarge,
-    )
-}
 
 private suspend fun ApplicationCall.respondUnsupportedEdit(field: String) {
     respondText(

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.filesystem
 
+import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
@@ -11,8 +12,10 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /**
@@ -127,6 +130,29 @@ class LocalContentStoreTest : FunSpec({
             val bytes = store.read(TreePath.require(nfcName))
             bytes.shouldNotBeNull()
             String(bytes, Charsets.UTF_8) shouldBe "RÉUNION-CONTENT"
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    // ---- Regression: a legal control-char (`\t`) filename must SCAN, not crash the rebuild --------
+    // A `\t`/`\n` is a legal POSIX/macOS filename byte. The shared TreePath gate must only reject NUL —
+    // an over-broad `isISOControl()` reject on TreePath.isValidSegment made scan() (→ TreePath.childOf
+    // → resolveChild → require(isValidSegment)) THROW on such a file, crashing the rebuild/startup. This
+    // pins that the scan indexes it. (Stricter create-input control-char rejection lives at the route.)
+    test("a file whose name contains a legal control char (tab) scans without throwing the rebuild") {
+        val tmp = Files.createTempDirectory("pb-ctrl-name")
+        try {
+            val tabName = "ta" + '\t' + "b.md" // a TAB in the name — legal on POSIX/macOS, not a NUL
+            val landed = runCatching { createWithRawName(tmp, tabName, "TAB-CONTENT") }.getOrNull()
+                ?: return@test // some filesystems refuse a tab in a name at create time — nothing to assert
+
+            val store = LocalContentStore(tmp)
+            val result = store.scan() // must NOT throw
+
+            val file = result.files.single { it.path.name.endsWith(".md") }
+            file.rawName shouldBe landed
+            store.read(file.path).shouldNotBeNull().let { String(it, Charsets.UTF_8) shouldBe "TAB-CONTENT" }
         } finally {
             tmp.toFile().deleteRecursively()
         }
@@ -537,7 +563,144 @@ class LocalContentStoreTest : FunSpec({
             outside.toFile().deleteRecursively()
         }
     }
+
+    // ---- Regression: createExclusive never exposes a 0-byte target (P2 concurrent-rebuild race) -------
+    // A watcher rebuild() runs concurrently with createExclusive (it takes only the IndexBuilder monitor),
+    // so it could scan() a 0-byte reservation between createFile and the content move, publishing a ghost
+    // empty page. The createLink-with-content path eliminates that window: the target only ever appears
+    // with its FULL bytes. A concurrent poller watches the target throughout many creates and asserts it
+    // is NEVER observed as a 0-byte regular file. Race-direction-safe: a miss just lowers sensitivity, it
+    // can never false-fail; under the old reserve-then-move it would catch the empty window.
+    //
+    // The no-empty-window assertion is GATED on hardlink support: where hardlinks are unsupported,
+    // createExclusive legitimately falls back to reserve-then-move (which DOES expose the window), so the
+    // assertion would be a false failure. The full-content-landing assertions hold on BOTH paths and stay
+    // unconditional. ext4/APFS (and CI) support hardlinks, so the meaningful guard runs in the common case.
+    test("createExclusive never exposes the target as a 0-byte file (the no-empty-window invariant)") {
+        val tmp = Files.createTempDirectory("pb-create-atomic")
+        val hasher: (ByteArray) -> String = { it.size.toString() } // content-only test; hash value unused
+        try {
+            val hardlinksSupported = probeHardlinkSupport(tmp)
+            val store = LocalContentStore(tmp)
+            val content = ("# Atomic\n\n" + "x".repeat(8192) + "\n").toByteArray() // big enough to not write instantly
+            repeat(40) { n ->
+                val target = tmp.resolve("page-$n.md")
+                // Local var published safely by the poller.join() happens-before edge (no @Volatile needed).
+                var sawEmpty = false
+                val poller = Thread {
+                    while (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) { /* spin until it appears */ }
+                    // The instant it appears it must already hold content — never a 0-byte regular file.
+                    if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && Files.size(target) == 0L) sawEmpty = true
+                }
+                poller.start()
+                val result = store.createExclusive(TreePath.require("page-$n.md"), content, hasher)
+                poller.join()
+                result.shouldBeInstanceOf<CreateResult.Created>()
+                if (hardlinksSupported) sawEmpty shouldBe false // no window on the createLink path
+                Files.readAllBytes(target).size shouldBe content.size // landed with the full content (both paths)
+            }
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    // ---- Regression: create-reject set == scan skip set on reserved names (no drift) ----------------
+    // The "scan skips segment X but the create gate allows it → ghost page" class (round-2 dotfiles,
+    // round-9 `_folder.yaml`) is closed by ONE shared name-skip predicate. This pins the two predicates
+    // AGREE on every reserved case: for each scan-skipped name, scan() does NOT index a file of that name
+    // AND createExclusive of a path under that segment is Rejected. A future scan-skip addition that
+    // doesn't also reject creates would fail here.
+    test("createExclusive rejects exactly the segment names scan skips (_folder.yaml, dotfile, ignore glob)") {
+        val tmp = Files.createTempDirectory("pb-skip-parity")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            // A store whose ignore globs add a `drafts` skip on top of the always-skipped dotfiles +
+            // `_folder.yaml` sidecar — the full name-skip set the create gate must mirror.
+            val store = LocalContentStore(tmp, IgnoreRules(ignoreGlobs = listOf("drafts", "drafts/**")))
+            val content = "# x\n".toByteArray()
+
+            // Each reserved SEGMENT name and a real on-disk file using it (proving scan skips that name).
+            val skippedSegments = listOf("_folder.yaml", ".secret", "drafts")
+            for (seg in skippedSegments) {
+                // A file literally named the reserved segment at the root → scan must NOT index it.
+                Files.write(tmp.resolve(seg), content)
+                // A create whose PARENT folder is that reserved segment → must be Rejected (would ghost).
+                store.createExclusive(TreePath.require("$seg/page.md"), content, hasher)
+                    .shouldBeInstanceOf<CreateResult.Rejected>()
+            }
+
+            val indexed = store.scan().files.map { it.path.value }.toSet()
+            // Scan indexed NONE of the reserved-name files (it skips them) — parity with the rejects above.
+            skippedSegments.none { it in indexed } shouldBe true
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
+    // ---- Regression: exclusions AT/ABOVE root are no-ops; only inside-root exclusions reject ---------
+    // The create-containment gate must mirror scan's EFFECTIVE exclusions (those strictly inside root).
+    // Scan/watch ignore an exclusion at or above root (root is the scan boundary), so the create gate
+    // must too — else, in the PlainbaseConfig-legal layout where DATA_DIR is a strict ANCESTOR of root,
+    // every create's target `startsWith(DATA_DIR)` and gets rejected (round-12 P2).
+    test("a DATA_DIR that is a strict ANCESTOR of root does not block creates (effective-exclusion parity)") {
+        val data = Files.createTempDirectory("pb-ancestor-data")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            val root = Files.createDirectory(data.resolve("content")) // root is INSIDE the DATA_DIR
+            // The app's own DB files live in the ancestor DATA_DIR — never inside root, so scan never sees
+            // them and the ancestor exclusion is a no-op.
+            Files.write(data.resolve("plainbase.db"), "not content".toByteArray())
+            val store = LocalContentStore(root, exclusions = listOf(data))
+
+            // A create into the content root SUCCEEDS — the ancestor DATA_DIR must not reject it.
+            store.createExclusive(TreePath.require("page.md"), "# hi\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Created>()
+        } finally {
+            data.toFile().deleteRecursively()
+        }
+    }
+
+    test("a DATA_DIR strictly INSIDE root still rejects a create targeting under it (no over-correction)") {
+        val tmp = Files.createTempDirectory("pb-nested-data-create")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            val data = Files.createDirectory(tmp.resolve("data")) // a genuinely nested DATA_DIR
+            val store = LocalContentStore(tmp, exclusions = listOf(data))
+
+            // A create UNDER the nested DATA_DIR is still rejected — don't over-correct into allowing it.
+            store.createExclusive(TreePath.require("data/page.md"), "# hi\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Rejected>()
+            // A create elsewhere in root still works.
+            store.createExclusive(TreePath.require("ok.md"), "# ok\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Created>()
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
 })
+
+/**
+ * Probes once whether [dir]'s filesystem supports hardlinks (the createLink no-empty-window path); a
+ * filesystem that throws [UnsupportedOperationException]/[FileSystemException] makes createExclusive fall
+ * back to reserve-then-move, which legitimately has the 0-byte window.
+ */
+private fun probeHardlinkSupport(dir: Path): Boolean {
+    val src = Files.createTempFile(dir, ".probe-src", ".tmp")
+    val link = dir.resolve(".probe-link")
+    return try {
+        Files.createLink(link, src)
+        true
+    } catch (_: UnsupportedOperationException) {
+        false
+    } catch (_: java.nio.file.FileSystemException) {
+        false
+    } catch (_: IOException) {
+        false
+    } finally {
+        Files.deleteIfExists(link)
+        Files.deleteIfExists(src)
+    }
+}
 
 /**
  * Creates a file named [name] (UTF-8 bytes) directly via the filesystem and returns the name

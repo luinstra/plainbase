@@ -77,6 +77,8 @@ class IndexHarness(
             citations = citations,
             frontmatterParser = frontmatter,
             dirtyPages = dirtyPages,
+            idMap = idMap,
+            aliasRegistry = registry,
             historyHook = historyHook,
         )
 

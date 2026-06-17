@@ -72,6 +72,22 @@ interface ContentStore {
     fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult
 
     /**
+     * Exclusively creates the file at [path] with [bytes] — write-if-absent (PB-WRITE-1, chunk W2).
+     * Returns [CreateResult.Created] (with the written bytes' [hasher] hash) when the file did not
+     * exist and the create + atomic rename landed; [CreateResult.Exists] (carrying the REAL attempted
+     * on-disk [TreePath]) when a file is ALREADY at [path] on disk (nothing written);
+     * [CreateResult.Unreadable] on a permission/transient-FS failure.
+     *
+     * The existence check is the filesystem's own atomic create (an `ATOMIC_MOVE` into a non-existent
+     * target), NOT an index lookup — so a path the scan has not yet seen (a fresh create) is still
+     * protected against a racing second create, and a stale not-yet-indexed file on disk is still
+     * detected. The same boundary-honesty framing as [compareAndSwapWrite]: cooperating writers
+     * serialize on the `WritePipeline` monitor; O_EXCL is the belt-and-suspenders against an external
+     * writer and the not-yet-scanned case. Parents are created as needed (mirroring [write]).
+     */
+    fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
+
+    /**
      * Watches the content tree for changes, invoking [onChange] with each changed path until the
      * returned handle is closed. Ignored entries (the same rules as [scan]) never produce a call.
      *
@@ -108,6 +124,26 @@ sealed interface CasResult {
 
     /** The read/stat threw (permission/locked/partial/transient FS); [cause] is diagnostic. */
     data class Unreadable(val cause: String) : CasResult
+}
+
+/** The outcome of [ContentStore.createExclusive] (PB-WRITE-1, chunk W2 — write-if-absent). */
+sealed interface CreateResult {
+
+    /** The file did not exist and the create + atomic rename landed; [newHash] is the written bytes' hash. */
+    data class Created(val newHash: String) : CreateResult
+
+    /** A file already occupies [path]; nothing written. [path] is the REAL attempted target the route surfaces. */
+    data class Exists(val path: TreePath) : CreateResult
+
+    /**
+     * The target can never name content (W2 P1 containment): a path segment is ignored (dotfile/glob)
+     * or excluded (DATA_DIR), or an existing ancestor is a symlink / resolves outside the content root
+     * (links-are-not-content). NOTHING written. [reason] is diagnostic; the route maps it to a 4xx.
+     */
+    data class Rejected(val reason: String) : CreateResult
+
+    /** The create threw (permission/locked/partial/transient FS); [cause] is diagnostic. */
+    data class Unreadable(val cause: String) : CreateResult
 }
 
 /** Lightweight metadata for a content entry — what a scan-free `stat` can cheaply provide. */

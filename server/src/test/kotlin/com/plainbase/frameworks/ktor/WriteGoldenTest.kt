@@ -4,12 +4,14 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -56,6 +58,21 @@ class WriteGoldenTest : FunSpec({
             }
             put.status shouldBe HttpStatusCode.OK
             put.tree() shouldBe RestGolden.load("write-put-ok.json", mapOf("content_hash" to citations.contentHash(edited)))
+        }
+    }
+
+    test("write-post-ok.json — a 201 create is exactly {content_hash, commit:null}; warning ABSENT") {
+        // The composed bytes are deterministic given a seeded id, so the recompute is stable. The route
+        // composes: ---\nid:<id>\ntitle:"<title>"\n---\n\n (empty body) — recompute over the same bytes.
+        val createdId = "01900000-0000-7000-8000-000000000001"
+        val composed = "---\nid: $createdId\ntitle: \"Golden Create\"\n---\n\n".toByteArray()
+        writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { _ ->
+            val post = client.post("/api/v1/pages") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"folder":"guides","title":"Golden Create"}""")
+            }
+            post.status shouldBe HttpStatusCode.Created
+            post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
         }
     }
 

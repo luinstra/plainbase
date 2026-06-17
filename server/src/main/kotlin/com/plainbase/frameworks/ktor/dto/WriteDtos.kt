@@ -72,6 +72,31 @@ data class BodyTooLargeEnvelope(val error: BodyTooLargeBody)
 data class BodyTooLargeBody(val code: String, val message: String, @SerialName("max_bytes") val maxBytes: Long)
 
 /**
+ * W2 request for `POST /api/v1/pages` (JSON, NOT raw — this is metadata, not a document): the server
+ * mints the id, derives the on-disk path + slug, and composes the frontmatter+body bytes. `folder` is
+ * the content-relative parent (`""`/omitted = root); `title` is required non-blank; `slug` is the
+ * optional author slug intent; `body` is the optional Markdown body (the server adds the frontmatter).
+ */
+@Serializable
+data class CreatePageRequest(
+    val folder: String = "",
+    val title: String,
+    val slug: String? = null,
+    val body: String? = null,
+)
+
+/**
+ * W2 409 envelope (kept distinct from the frozen [ErrorEnvelope] — it carries an extra `path`, exactly
+ * as [BodyTooLargeBody] carries `max_bytes` without mutating [ErrorBody]). `path` is the REAL attempted
+ * on-disk path relayed end-to-end (createExclusive → AlreadyExists → here), the actionable datum.
+ */
+@Serializable
+data class PageExistsEnvelope(val error: PageExistsBody)
+
+@Serializable
+data class PageExistsBody(val code: String, val message: String, val path: String)
+
+/**
  * The frozen drift-only `reason` enum (PB-WRITE-1): the set is `{content_changed, page_moved,
  * page_deleted}` and only ever grows (additive). `page_moved` is PRODUCER-RESERVED — no §H mover
  * emits it yet, but the value is pinned so a future producer adds no new vocabulary. **`id_changed`
@@ -192,6 +217,19 @@ fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
             ErrorEnvelope.serializer(),
             ErrorEnvelope(ErrorBody(ErrorCodes.CONTENT_UNREADABLE, "The page could not be read on disk; nothing was written. Retry.")),
         )
+
+    // W2: AlreadyExists / InvalidLocation / SlugConflict are produced ONLY by WritePipeline.create; the
+    // create route owns their status mapping (409 page_exists / 400 invalid_create_request / 409
+    // slug_conflict). The frozen PUT toWire never produces them — these branches only keep the sealed
+    // `when` exhaustive, adding NO new envelope/serializer dependency to the freeze.
+    is WriteOutcome.AlreadyExists ->
+        error("AlreadyExists is a create-only outcome; PUT (toWire) never produces it")
+
+    is WriteOutcome.InvalidLocation ->
+        error("InvalidLocation is a create-only outcome; PUT (toWire) never produces it")
+
+    is WriteOutcome.SlugConflict ->
+        error("SlugConflict is a create-only outcome; PUT (toWire) never produces it")
 }
 
 private fun conflictMessage(reason: String): String = when (reason) {

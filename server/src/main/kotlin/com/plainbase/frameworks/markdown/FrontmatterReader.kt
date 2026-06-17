@@ -146,11 +146,42 @@ class FrontmatterReader : FrontmatterParser {
         return items
     }
 
-    /** Strips a single pair of matching surrounding quotes (`"…"` or `'…'`); leaves anything else verbatim. */
+    /**
+     * Strips a single pair of matching surrounding quotes (`"…"` or `'…'`); leaves anything else
+     * verbatim. A double-quoted value additionally has its YAML escapes decoded (`\"` → `"`, `\\` →
+     * `\`) so a value the writer double-quote-escaped (the W2 YAML-safe composition) round-trips
+     * byte-faithfully — flexmark hands the value back with the surrounding quotes AND the escapes
+     * literal, so the decode belongs here. Single-quoted values use no backslash escapes in YAML, so
+     * their interior is taken verbatim.
+     */
     private fun stripQuotes(value: String): String {
         if (value.length < 2) return value
         val first = value.first()
-        return if ((first == '"' || first == '\'') && value.last() == first) value.substring(1, value.length - 1) else value
+        if (value.last() != first) return value
+        val inner = value.substring(1, value.length - 1)
+        return when (first) {
+            '"' -> unescapeDoubleQuoted(inner)
+            '\'' -> inner
+            else -> value
+        }
+    }
+
+    /** Decodes the YAML double-quoted escapes this tree emits: `\"` → `"`, `\\` → `\`; other `\x` kept verbatim. */
+    private fun unescapeDoubleQuoted(inner: String): String {
+        if ('\\' !in inner) return inner
+        return buildString(inner.length) {
+            var i = 0
+            while (i < inner.length) {
+                val c = inner[i]
+                if (c == '\\' && i + 1 < inner.length && (inner[i + 1] == '"' || inner[i + 1] == '\\')) {
+                    append(inner[i + 1])
+                    i += 2
+                } else {
+                    append(c)
+                    i++
+                }
+            }
+        }
     }
 
     companion object {

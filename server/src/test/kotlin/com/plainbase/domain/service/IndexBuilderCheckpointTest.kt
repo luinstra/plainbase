@@ -191,6 +191,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             contentStore = store,
             writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
             citations = CitationFactory(),
+            idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }

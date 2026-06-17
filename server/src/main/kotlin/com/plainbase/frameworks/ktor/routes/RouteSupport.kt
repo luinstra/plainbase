@@ -3,25 +3,44 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
+import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.RestJson
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.charset
 import io.ktor.http.decodeURLQueryComponent
 import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
+import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
 import kotlinx.serialization.KSerializer
 
 /** Responds [value] through the scoped [RestJson] serializer (present-null guaranteed, §A4). */
 internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>, value: T, status: HttpStatusCode = HttpStatusCode.OK) {
     respondText(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status)
+}
+
+/**
+ * Sets the PB-WRITE-1 read-half of the round-trip: `ETag: "<content_hash>"` — an RFC 7232 STRONG
+ * entity-tag (double-quoted, no `W/`), so the value a client `GET`s is byte-for-byte the `If-Match`
+ * the next `PUT` requires. The quotes are part of the frozen value; [contentHash] is the bare
+ * unquoted value. Shared by [pageRoutes] (read) and [pageCreateRoutes] (the 201 create response).
+ */
+internal fun ApplicationCall.setContentHashETag(contentHash: String) {
+    response.header(HttpHeaders.ETag, "\"$contentHash\"")
 }
 
 /**
@@ -52,6 +71,53 @@ internal suspend fun ApplicationCall.pageId(): PageId? {
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
 internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) {
     respondRest(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(code, message)), status)
+}
+
+/**
+ * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the
+ * moment the count would exceed [limit] (so an over-cap body aborts BEFORE the whole thing is
+ * buffered). `Content-Length` is never trusted: it can lie, so the stream count is the only
+ * authority. Shared by the PB-WRITE-1 PUT (raw save) and POST (create) routes.
+ */
+internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? {
+    val channel: ByteReadChannel = receiveChannel()
+    val out = Buffer()
+    var count = 0L
+    while (!channel.isClosedForRead) {
+        // Read at most one chunk PAST the limit so an over-cap body aborts before the whole thing is
+        // buffered; Content-Length is never consulted (it can lie).
+        val chunk = channel.readRemaining(BODY_READ_CHUNK).readByteArray()
+        count += chunk.size
+        if (count > limit) {
+            channel.cancel(BodyTooLargeCancellation)
+            return null
+        }
+        out.write(chunk)
+    }
+    return out.readByteArray()
+}
+
+/** The cancellation cause when the body exceeds the cap — never surfaced; the route answers 413 itself. */
+private val BodyTooLargeCancellation = kotlinx.io.IOException("PB-WRITE-1 body exceeds the configured cap")
+
+private const val BODY_READ_CHUNK: Long = 64 * 1024
+
+/** The frozen 413 `body_too_large` envelope (`max_bytes` authoritative) — shared by PUT and POST. */
+internal suspend fun ApplicationCall.respondBodyTooLarge(maxBytes: Long) {
+    respondText(
+        RestJson.encodeToString(
+            BodyTooLargeEnvelope.serializer(),
+            BodyTooLargeEnvelope(
+                BodyTooLargeBody(
+                    code = ErrorCodes.BODY_TOO_LARGE,
+                    message = "Request body exceeds the $maxBytes-byte limit",
+                    maxBytes = maxBytes,
+                ),
+            ),
+        ),
+        ContentType.Application.Json,
+        HttpStatusCode.PayloadTooLarge,
+    )
 }
 
 /**

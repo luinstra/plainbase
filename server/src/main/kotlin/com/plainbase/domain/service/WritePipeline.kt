@@ -2,12 +2,16 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.DirtyPageRepository
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Stage
 import io.github.oshai.kotlinlogging.KotlinLogging
 
@@ -42,6 +46,8 @@ class WritePipeline(
     private val citations: CitationFactory,
     private val frontmatterParser: FrontmatterParser,
     private val dirtyPages: DirtyPageRepository,
+    private val idMap: IdMapRepository,
+    private val aliasRegistry: UrlAliasRegistry,
     private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
 ) {
 
@@ -75,6 +81,133 @@ class WritePipeline(
             }
             is CasResult.Written -> commitAndIndex(intent, newHash = cas.newHash)
         }
+    }
+
+    /**
+     * One new-page creation (PB-WRITE-1, chunk W2), on the SAME monitor as [write] so a create
+     * serializes with every edit and every watcher rebuild. No CAS / edit-classification: a create has
+     * no prior content to classify and no `base_hash` — the collision check is the filesystem's own
+     * exclusive create ([ContentStore.createExclusive]), a pipeline outcome, never a route pre-check.
+     *
+     * The critical section mirrors [write]'s write-ahead-then-post-steps shape:
+     *  0. **Canonical-URL collision guard** (round-8/10/11): the prospective page/folder canonical URL,
+     *     evaluated UNDER this monitor against the FRESH published snapshot, must not be owned by a
+     *     DIFFERENT page/folder/live-alias — else a second concurrent URL-colliding create (serialized
+     *     after the first's rebuild) would displace it. A hit → [WriteOutcome.SlugConflict], NOTHING
+     *     written. This is the race-safe home for the check (not a route pre-check): slugs/URLs are
+     *     snapshot-authoritative, so the verdict must be taken under the same lock the rebuild publishes
+     *     under, exactly like the CAS for content.
+     *  1. write-ahead dirty mark with the about-to-be-written bytes' hash (a fresh pageId has no prior
+     *     journal row, so the no-write branches just clear);
+     *  2. exclusive create — [CreateResult.Exists] → [WriteOutcome.AlreadyExists]; [CreateResult
+     *     .Rejected] → [WriteOutcome.InvalidLocation] (P1 containment); [CreateResult.Unreadable] →
+     *     [WriteOutcome.Unreadable]; [CreateResult.Created] → the post-steps;
+     *  3. bind identity, run the history hook (no-op until W4), index via a full [IndexBuilder.rebuild]
+     *     (its own scan picks up the just-created file, sidestepping the indexed-only read gate and
+     *     reusing every collision/alias/checkpoint rule), then a targeted [IndexBuilder.reindex] whose
+     *     PROPAGATING single-page search upsert surfaces an FTS-sync failure (P2). A post-step throw is
+     *     caught → [WriteOutcome.WrittenButUnindexed] (the bytes ARE on disk, the page IS dirty).
+     */
+    @Synchronized
+    fun create(intent: CreateIntent): WriteOutcome {
+        // (0) Canonical-URL collision guard, under the monitor against the fresh snapshot — BEFORE any
+        // write or dirty mark, so a no-write conflict never touches the journal at all.
+        canonicalUrlCollision(intent)?.let { return WriteOutcome.SlugConflict(it) }
+
+        // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk create. A fresh pageId
+        // has no prior recovery row, so a no-write outcome simply clears the mark.
+        dirtyPages.mark(intent.pageId, intent.path, expectedHash = citations.contentHash(intent.bytes), stage = Stage.WRITING)
+
+        // (2) Exclusive create (write-if-absent) — collision is a race-safe pipeline outcome, not a pre-check.
+        return when (val create = contentStore.createExclusive(intent.path, intent.bytes, citations::contentHash)) {
+            is CreateResult.Exists -> {
+                dirtyPages.clear(intent.pageId)
+                WriteOutcome.AlreadyExists(create.path)
+            }
+            is CreateResult.Rejected -> {
+                dirtyPages.clear(intent.pageId) // P1: an uncreatable location — NOTHING written
+                WriteOutcome.InvalidLocation(create.reason)
+            }
+            is CreateResult.Unreadable -> {
+                dirtyPages.clear(intent.pageId)
+                WriteOutcome.Unreadable(create.cause)
+            }
+            is CreateResult.Created -> createAndIndex(intent, newHash = create.newHash)
+        }
+    }
+
+    /** (3) Post-create steps; the bytes are already durably on disk and the page already marked dirty. */
+    private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
+        try {
+            idMap.bind(intent.path, intent.pageId, materialized = true) // the create composed the id INTO frontmatter
+            historyHook.commit(intent.path, intent.bytes) // no-op until W4 — the same seam an edit uses
+            indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
+            // P2: rebuild()'s publication-listener search sync is best-effort (its listener exceptions are
+            // swallowed+logged), so a failed FTS sync would otherwise yield a clean 201 with the page
+            // missing from search and no retry. A targeted reindex() of the now-published page upserts it
+            // via the PROPAGATING SearchIndexer.syncPage — a search-sync failure throws here, so it lands
+            // in the catch below as WrittenButUnindexed (the SAME guarantee PUT gives) and the dirty mark
+            // is RETAINED for reconcile. Idempotent on success (a second single-page upsert).
+            indexBuilder.reindex(intent.pageId)
+            dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
+            WriteOutcome.Written(newHash = newHash, commit = null)
+        } catch (e: Exception) {
+            // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
+            // the next startup reconciles. The cause is mapped to a structured code at the create route.
+            logger.error(e) { "create wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
+            WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = e.message ?: e::class.simpleName ?: "unknown")
+        }
+
+    /**
+     * The first prospective canonical URL the create would claim that a DIFFERENT existing entry already
+     * owns (so publishing would displace it or leave the newcomer URL-less), as a `/`-joined string, or
+     * null when the whole footprint is free. SNAPSHOT-authoritative and grounded in the same §A4
+     * machinery rebuild uses ([CanonicalUrlBuilder]/[HeadingSlugger]); evaluated under the create monitor
+     * against the fresh [IndexBuilder.current], so two concurrent URL-colliding creates serialize — the
+     * second sees the first's published claim. Same-role per ADR-0002:
+     *  - each NEW (not-yet-indexed) FOLDER segment's URL vs existing FOLDER URLs (round 10);
+     *  - the new PAGE's URL vs existing PAGE URLs (round 8) and LIVE aliases (a dangling alias whose
+     *    target id is absent from the snapshot is ignored — the next rebuild's shadow-sweep drops it,
+     *    so it must not permanently block the create).
+     *
+     * The new page's frontmatter `slug` and the on-disk path come straight from [intent] (the route
+     * composed the bytes), so the computed URL is byte-identical to what the page would publish at.
+     */
+    private fun canonicalUrlCollision(intent: CreateIntent): String? {
+        val snapshot = indexBuilder.current
+        val folderPath = intent.path.parent
+        val slugOverride = frontmatterParser.parse(intent.bytes).scalar("slug")
+        val existingFolderUrls = CanonicalUrlBuilder.folderUrlPaths(snapshot.folders)
+        val indexedFolderPaths = snapshot.folders.map { it.path }.toSet()
+        val folderUrlOwner = existingFolderUrls.entries.mapNotNull { (p, u) -> u?.let { it to p } }.toMap()
+
+        // Walk the ancestor folders root-first, building the URL prefix the way the index does: an indexed
+        // ancestor contributes its OWN canonical URL whole (null ⇒ lost-collision subtree → no collision
+        // possible, stop); a new ancestor contributes slugify(dir name) and must not displace an existing
+        // folder's URL.
+        var prefix: TreePath? = null
+        for (i in 1..(folderPath?.segments?.size ?: 0)) {
+            val ancestor = TreePath.require(folderPath!!.segments.take(i).joinToString("/"))
+            if (ancestor in indexedFolderPaths) {
+                prefix = existingFolderUrls[ancestor] ?: return null
+            } else {
+                val segment = HeadingSlugger.slugify(ancestor.name, HeadingSlugger.FOLDER_FALLBACK)
+                prefix = prefix?.resolveChild(segment) ?: TreePath.require(segment)
+                val owner = folderUrlOwner[prefix]
+                if (owner != null && owner != ancestor) return prefix.value
+            }
+        }
+
+        // The new page's full canonical URL: the (possibly null = root) prefix + the page slug.
+        val pageSlug = HeadingSlugger.slugify(slugOverride ?: intent.path.name.removeSuffix(".md"), HeadingSlugger.PAGE_FALLBACK)
+        val pageUrl = prefix?.resolveChild(pageSlug) ?: TreePath.require(pageSlug)
+        val pageOwner = snapshot.byUrlPath[pageUrl]
+        if (pageOwner != null && pageOwner.path != intent.path) return pageUrl.value // page-page
+        // Only a LIVE alias blocks: a row pointing at a page id no longer in the snapshot is dangling
+        // (the shadow-sweep hasn't dropped it yet) and must not permanently wedge the URL.
+        val aliasTarget = aliasRegistry.find(pageUrl)
+        if (aliasTarget != null && snapshot.byId[aliasTarget] != null) return pageUrl.value
+        return null
     }
 
     /**
@@ -185,6 +318,14 @@ class WritePipeline(
  */
 // Array field on a one-shot param (never a map key) — no generated equals/hashCode (house style).
 data class WriteIntent(val pageId: PageId, val path: TreePath, val baseHash: String, val bytes: ByteArray)
+
+/**
+ * One new-page creation (PB-WRITE-1, chunk W2). [path] is the server-derived on-disk location,
+ * [pageId] the freshly minted identity (materialized into [bytes]' frontmatter from birth), [bytes]
+ * the EXACT composed document buffer to write VERBATIM (frontmatter + body) — never reserialized.
+ */
+// Array field on a one-shot param (never a map key) — no generated equals/hashCode (house style).
+data class CreateIntent(val pageId: PageId, val path: TreePath, val bytes: ByteArray)
 
 /**
  * The Git seam (PB-WRITE-1): a no-op default in W1, keeping the `WrittenButUnindexed`/commit-recovery

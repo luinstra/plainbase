@@ -45,6 +45,9 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
             val database = DatabaseFactory.createDatabase(driver)
             val store = LocalContentStore(content)
             val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
+            // ONE id_map feeds both the IndexBuilder and the new WritePipeline.create, so the create's
+            // bind and the index see the same map (W2).
+            val idMap = SqlDelightIdMapRepository(database)
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
                 val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
@@ -54,7 +57,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
-                    idMap = SqlDelightIdMapRepository(database),
+                    idMap = idMap,
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
@@ -75,8 +78,11 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                         citations = writeCitations,
                         frontmatterParser = FrontmatterReader(),
                         dirtyPages = SqlDelightDirtyPageRepository(database),
+                        idMap = idMap,
+                        aliasRegistry = registry,
                     ),
                     citations = CitationFactory(),
+                    idProvider = UuidV7IdProvider(),
                     maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
                 )
                 block(services)

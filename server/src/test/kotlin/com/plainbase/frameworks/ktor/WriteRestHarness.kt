@@ -2,12 +2,14 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -32,6 +34,7 @@ class WriteRestHarness(
     fixtureRoot: Path,
     seed: (IdMapRepository) -> Unit = {},
     historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+    idProvider: IdProvider = UuidV7IdProvider(),
     private val storeOverride: ((LocalContentStore) -> com.plainbase.domain.content.ContentStore)? = null,
 ) : AutoCloseable {
 
@@ -72,6 +75,7 @@ class WriteRestHarness(
             contentStore = store,
             writePipeline = pipeline,
             citations = CitationFactory(),
+            idProvider = idProvider,
             maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }
@@ -110,10 +114,11 @@ fun writeRestTest(
     fixtureRoot: Path,
     seed: (IdMapRepository) -> Unit = {},
     historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+    idProvider: IdProvider = UuidV7IdProvider(),
     storeOverride: ((LocalContentStore) -> com.plainbase.domain.content.ContentStore)? = null,
     block: suspend ApplicationTestBuilder.(WriteRestHarness) -> Unit,
 ) {
-    WriteRestHarness(fixtureRoot, seed, historyHook, storeOverride).use { harness ->
+    WriteRestHarness(fixtureRoot, seed, historyHook, idProvider, storeOverride).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }
             block(harness)

@@ -4,7 +4,14 @@ import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.search.PageDocuments
+import com.plainbase.domain.search.PageSearchState
+import com.plainbase.domain.search.SearchProvider
+import com.plainbase.domain.search.SearchQuery
+import com.plainbase.domain.search.SearchResults
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -181,6 +188,8 @@ class WritePipelineTest : FunSpec({
                     citations = citations,
                     frontmatterParser = com.plainbase.frameworks.markdown.FrontmatterReader(),
                     dirtyPages = harness.dirtyPages,
+                    idMap = harness.idMap,
+                    aliasRegistry = harness.registry,
                 )
                 val outcome = pipeline.write(WriteIntent(page.id, page.path, page.contentHash, "x".toByteArray()))
                 outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>().cause shouldBe "simulated permission denied"
@@ -188,7 +197,58 @@ class WritePipelineTest : FunSpec({
             }
         }
     }
+
+    // W2 P2: a search-sync failure on CREATE surfaces as WrittenButUnindexed (NOT a clean Written), the
+    // dirty row is RETAINED, and a later reconcile (once search recovers) clears it. Proves the create
+    // path does NOT rely on rebuild()'s swallowed-listener search sync for its searchability guarantee.
+    test("a create whose search sync fails is WrittenButUnindexed; the dirty row is retained and reconcile recovers it") {
+        withTempTree({}) { root ->
+            val provider = TogglingSearchProvider()
+            val searchIndexer = SearchIndexer(provider, SectionSplitter())
+            // No search-sync LISTENER on rebuild() — the propagating guarantee is the reindex() syncPage,
+            // exactly what createAndIndex relies on; rebuild() still publishes the page (read-visible).
+            IndexHarness(root, searchIndexer = searchIndexer).use { harness ->
+                harness.builder.rebuild()
+                val pipeline = harness.writePipeline()
+                val pageId = PageId.require("01900000-0000-7000-8000-0000000000a1")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
+
+                provider.failOnIndex = true
+                val outcome = pipeline.create(CreateIntent(pageId, TreePath.require("created.md"), bytes))
+
+                outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
+                Files.readAllBytes(root.resolve("created.md")) shouldBe bytes // bytes ARE on disk
+                harness.dirtyPages.all().shouldHaveSize(1) // dirty row RETAINED for reconcile
+
+                // Search recovers; reconcile re-runs the (now-succeeding) single-page sync and clears the mark.
+                provider.failOnIndex = false
+                pipeline.reconcileDirtyPages()
+                harness.dirtyPages.all().isEmpty() shouldBe true
+                provider.indexedPageIds.contains(pageId) shouldBe true
+            }
+        }
+    }
 })
+
+/**
+ * A [SearchProvider] stand-in whose [index] throws while [failOnIndex] is set (simulating an FTS lock),
+ * recording the page ids it successfully indexed otherwise. [rebuild]/[indexedState] never fail, so a
+ * full `rebuild()` still publishes the snapshot (read-visibility) even while single-page sync fails.
+ */
+private class TogglingSearchProvider : SearchProvider {
+    var failOnIndex = false
+    val indexedPageIds = mutableSetOf<PageId>()
+
+    override fun index(pages: List<PageDocuments>) {
+        if (failOnIndex) throw java.io.IOException("simulated FTS lock on index")
+        pages.forEach { indexedPageIds += it.pageId }
+    }
+
+    override fun delete(ids: Collection<PageId>) = Unit
+    override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
+    override fun rebuild(pages: Sequence<PageDocuments>) = pages.forEach { indexedPageIds += it.pageId }
+    override fun indexedState(): Map<PageId, PageSearchState> = emptyMap()
+}
 
 /** A real LocalContentStore over [root] — the delegate behind a CAS-failing test stand-in. */
 private fun realStoreDelegate(root: Path): ContentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)

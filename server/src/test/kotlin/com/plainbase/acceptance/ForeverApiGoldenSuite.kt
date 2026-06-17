@@ -76,6 +76,14 @@ import io.kotest.core.spec.style.FunSpec
  * `commit`/`warning`/`current_*`/`max_bytes` are never removed or retyped; the 1 MiB body cap is
  * configurable UPWARD (additive). Tier-1 goldens are the four `golden/rest/write-*.json` snapshots
  * plus the adversarial byte-identical round-trip (WriteGoldenTest's 7 tests).
+ *
+ * W2 (`POST /api/v1/pages` new-page creation, 2026-06) conforms to PB-WRITE-1 — it adds NO new
+ * success shape: a clean create returns the frozen `WrittenResponse` body at **201 Created** (the
+ * create-vs-edit status distinction), with the `ETag` read-half. New append-only codes are
+ * `page_exists` (409, body carries the real `path`) and `invalid_create_request` (400); the new
+ * `WriteOutcome.AlreadyExists` case adds only a forced `error(...)` branch to the frozen `toWire`
+ * (no new envelope). Tier-1 gains one snapshot, `golden/rest/write-post-ok.json` (the 201 create
+ * shape), so WriteGoldenTest is now 8 tests.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -104,7 +112,7 @@ class ForeverApiGoldenSuite : FunSpec({
         SelectedSuite.run(SearchGoldenTest::class).shouldHavePassed("SearchGoldenTest", atLeastTests = 5)
     }
 
-    test("PB-WRITE-1: the write snapshot corpus (7 frozen-shape tests; raw round-trip, 409/422 split, present-null commit)") {
-        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 7)
+    test("PB-WRITE-1: the write snapshot corpus (8 frozen-shape tests; raw round-trip, 409/422 split, present-null commit, 201 create)") {
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 8)
     }
 })

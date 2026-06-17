@@ -9,6 +9,7 @@ import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
 import com.plainbase.frameworks.ktor.routes.docsRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
 import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
+import com.plainbase.frameworks.ktor.routes.pageCreateRoutes
 import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
@@ -96,6 +97,8 @@ fun Application.plainbaseModule(services: RestServices) {
         pageRoutes(services)
         // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
         pageWriteRoutes(services)
+        // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
+        pageCreateRoutes(services)
         treeRoute(services)
         searchRoute(services)
         adminRoute(services)

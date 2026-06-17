@@ -90,6 +90,17 @@ object ErrorCodes {
 
     /** 415: a PUT without the accepted text/markdown media type. */
     const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"
+
+    // ---- PB-WRITE-1 (W2): the new-page-creation vocabulary (append-only) -----------------------------
+
+    /** 409: POST /api/v1/pages targets a path that already exists on disk — nothing written; the body carries the path. */
+    const val PAGE_EXISTS: String = "page_exists"
+
+    /** 400: a POST /api/v1/pages request is malformed — missing/blank title, an invalid folder, or unparseable JSON. */
+    const val INVALID_CREATE_REQUEST: String = "invalid_create_request"
+
+    /** 409: a POST /api/v1/pages would claim a canonical URL/slug another page already owns — nothing written; the body carries the URL. */
+    const val SLUG_CONFLICT: String = "slug_conflict"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

@@ -125,6 +125,7 @@ private class ReindexFailureHarness(
             contentStore = store,
             writePipeline = harness.writePipeline(),
             citations = com.plainbase.domain.service.CitationFactory(),
+            idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         )
     }

@@ -57,4 +57,31 @@ sealed interface WriteOutcome {
      * code at the W3 route, never surfaced raw.
      */
     data class WrittenButUnindexed(val newHash: String, val cause: String) : WriteOutcome
+
+    /**
+     * W2 (create): an exclusive create found a file ALREADY at [path] on disk — NOTHING written.
+     * Distinct from [Conflict] (a drift on an EDIT): a create has no base_hash and no prior identity,
+     * so this is its own case. Produced ONLY by `WritePipeline.create`; the W2 create route maps it to
+     * 409 `page_exists`. The PUT route never produces it (its `toWire` branch is an `error(...)`).
+     */
+    data class AlreadyExists(val path: TreePath) : WriteOutcome
+
+    /**
+     * W2 (create, P1 containment): the requested location can never name content — an ignored/excluded
+     * segment, or a symlinked / outside-root existing ancestor (links-are-not-content). NOTHING
+     * written. Produced ONLY by `WritePipeline.create`; the W2 create route maps it to 400
+     * `invalid_create_request`. The PUT route never produces it (its `toWire` branch is an `error(...)`).
+     */
+    data class InvalidLocation(val reason: String) : WriteOutcome
+
+    /**
+     * W2 (create, P1/P2 canonical-URL collision): the prospective canonical URL ([urlPath], a
+     * `/`-joined slug path) is already owned by a DIFFERENT published page, folder, or live alias —
+     * publishing would leave the newcomer URL-less or silently DISPLACE the existing entry's routing.
+     * NOTHING written. Evaluated UNDER the create monitor against the fresh published snapshot (so a
+     * second concurrent URL-colliding create, serialized after the first's rebuild, sees the claim).
+     * Produced ONLY by `WritePipeline.create`; the W2 create route maps it to 409 `slug_conflict`. The
+     * PUT route never produces it (its `toWire` branch is an `error(...)`).
+     */
+    data class SlugConflict(val urlPath: String) : WriteOutcome
 }
