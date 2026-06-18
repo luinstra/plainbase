@@ -604,6 +604,63 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    // ---- Regression: a symlinked content ROOT does not break a top-level asset write (codex-review) --
+    // writeAssetExclusive's parent-exists check must FOLLOW links: rejectionReason (run first) already
+    // rejects symlinked ancestors BELOW root and outside-root escapes, so a symlinked content ROOT is
+    // legitimate. A NOFOLLOW_LINKS check here falsely sees the symlinked root as "not a directory" and
+    // returns ParentMissing (→ a 404 for a page that exists). The content root is a symlink to a real
+    // dir; a top-level asset write must land as Created with the bytes on disk.
+    test("writeAssetExclusive into a symlinked content ROOT succeeds (parent check follows links)") {
+        val realRoot = Files.createTempDirectory("pb-symroot-real")
+        val linkParent = Files.createTempDirectory("pb-symroot-link")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            // The store's root IS a symlink pointing at a real directory (a legitimate deployment).
+            val symRoot = linkParent.resolve("root")
+            try {
+                Files.createSymbolicLink(symRoot, realRoot)
+            } catch (_: IOException) {
+                return@test // platform/permissions disallow symlinks — nothing to assert
+            }
+            val store = LocalContentStore(symRoot)
+            val bytes = "binary-asset".toByteArray()
+
+            // A top-level asset whose parent IS the symlinked root: must be Created, not ParentMissing.
+            store.writeAssetExclusive(TreePath.require("diagram.png"), bytes, hasher)
+                .shouldBeInstanceOf<CreateResult.Created>()
+            // Bytes landed on disk under the (real) root.
+            Files.readAllBytes(realRoot.resolve("diagram.png")) shouldBe bytes
+        } finally {
+            linkParent.toFile().deleteRecursively()
+            realRoot.toFile().deleteRecursively()
+        }
+    }
+
+    // ---- Regression: a regular-FILE parent is ParentMissing, not Rejected (FIX F / codex-review) -----
+    // The parent-is-a-directory check must run BEFORE rejectionReason so a parent that is a regular FILE
+    // (the page's folder path replaced by a file on disk) maps to ParentMissing (→ 404, the documented
+    // contract — the page's folder is gone), NOT rejectionReason's "file-not-dir ancestor" rule which
+    // would classify it as Rejected (→ 400). Nothing is written; the reorder must not let a child slip
+    // under a non-directory parent.
+    test("writeAssetExclusive into a child of a regular-FILE parent is ParentMissing, not Rejected; nothing written") {
+        val root = Files.createTempDirectory("pb-asset-file-parent")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            // `guides` is a regular FILE where the page folder would be (an external clobber on disk).
+            Files.write(root.resolve("guides"), "not a directory".toByteArray())
+            val store = LocalContentStore(root)
+            store.scan()
+
+            store.writeAssetExclusive(TreePath.require("guides/diagram.png"), "binary".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.ParentMissing>()
+            // Nothing landed: the file-parent is untouched, no child created under it.
+            Files.readAllBytes(root.resolve("guides")) shouldBe "not a directory".toByteArray()
+            Files.exists(root.resolve("guides/diagram.png"), LinkOption.NOFOLLOW_LINKS) shouldBe false
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     // ---- Regression: create-reject set == scan skip set on reserved names (no drift) ----------------
     // The "scan skips segment X but the create gate allows it → ghost page" class (round-2 dotfiles,
     // round-9 `_folder.yaml`) is closed by ONE shared name-skip predicate. This pins the two predicates

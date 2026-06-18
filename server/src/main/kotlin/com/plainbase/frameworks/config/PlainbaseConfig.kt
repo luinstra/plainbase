@@ -24,6 +24,13 @@ data class PlainbaseConfig(
      * frozen contract is the cap BEHAVIOR + the code + the `max_bytes` field, never the number).
      */
     val maxWriteBodyBytes: Long = DEFAULT_MAX_WRITE_BODY_BYTES,
+    /**
+     * W3b asset upload cap: the maximum `POST /api/v1/pages/{id}/assets` request-body size in bytes; a body
+     * exceeding it is rejected `413 body_too_large` (the response carries this authoritative number). A
+     * separate, LARGER cap than [maxWriteBodyBytes] — assets are binaries (screenshots, pdfs, fonts), so a
+     * 1 MiB document cap is wrong for them. Default 10 MiB; raisable per deploy (raising is additive).
+     */
+    val maxAssetBytes: Long = DEFAULT_MAX_ASSET_BYTES,
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
@@ -66,12 +73,16 @@ data class PlainbaseConfig(
         /** PB-WRITE-1 default body cap: 1 MiB. Raisable via `PLAINBASE_MAX_WRITE_BODY_BYTES` (raising is additive). */
         const val DEFAULT_MAX_WRITE_BODY_BYTES: Long = 1_048_576
 
+        /** W3b default asset cap: 10 MiB. Raisable via `PLAINBASE_MAX_ASSET_BYTES` (raising is additive). */
+        const val DEFAULT_MAX_ASSET_BYTES: Long = 10_485_760
+
         fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig = PlainbaseConfig(
             contentDir = Path.of(env["CONTENT_DIR"] ?: "./content").toAbsolutePath().normalize(),
             dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
             host = env["PLAINBASE_HOST"] ?: "0.0.0.0",
             port = env["PLAINBASE_PORT"]?.toIntOrNull() ?: DEFAULT_PORT,
             maxWriteBodyBytes = env["PLAINBASE_MAX_WRITE_BODY_BYTES"]?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = env["PLAINBASE_MAX_ASSET_BYTES"]?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
         )
     }
 }

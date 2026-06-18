@@ -193,6 +193,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             citations = CitationFactory(),
             idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
         )
     }
 }

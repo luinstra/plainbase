@@ -7,7 +7,6 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.DirtyPageRepository
@@ -133,6 +132,9 @@ class WritePipeline(
                 WriteOutcome.Unreadable(create.cause)
             }
             is CreateResult.Created -> createAndIndex(intent, newHash = create.newHash)
+            // ParentMissing is produced ONLY by ContentStore.writeAssetExclusive (W3b assets); the page
+            // create path uses createExclusive, which creates parents and never returns it. Unreachable here.
+            CreateResult.ParentMissing -> error("createExclusive never returns ParentMissing; it is asset-write-only (W3b)")
         }
     }
 

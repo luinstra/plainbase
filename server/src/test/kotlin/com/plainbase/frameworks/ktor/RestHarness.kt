@@ -65,6 +65,7 @@ class RestHarness(
             citations = CitationFactory(),
             idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
         )
     }
 

@@ -33,6 +33,7 @@ val restModule = module {
             citations = get(),
             idProvider = get(),
             maxWriteBodyBytes = get<PlainbaseConfig>().maxWriteBodyBytes,
+            maxAssetBytes = get<PlainbaseConfig>().maxAssetBytes,
         )
     }
 }

@@ -456,6 +456,68 @@ class LocalContentStore(
         return writeIfAbsent(path, resolvedTarget, bytes, hasher)
     }
 
+    override fun writeAssetExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
+        val target = resolveOnDisk(path, snapshot.load())
+        // Asset difference (1): require the parent to ALREADY exist and be a directory — never create it
+        // (an external rm of the page's folder must not be papered over by recreating it under the asset).
+        // This parent-is-a-directory check runs BEFORE rejectionReason so an ABSENT or NOT-A-DIRECTORY
+        // parent (e.g. the page folder was replaced by a regular file) maps to ParentMissing (→ 404, the
+        // documented contract) — NOT to rejectionReason's "file-not-dir ancestor" → Rejected (→ 400).
+        // The existence check FOLLOWS links: the store legitimately allows a symlinked content ROOT, so a
+        // NOFOLLOW check here would falsely return ParentMissing (→ 404) for a top-level page whose parent
+        // IS that symlinked root. rejectionReason (run just after, on the confirmed-directory parent) still
+        // vets symlinked ancestors below root and outside-root escapes — security is preserved, and a
+        // non-directory parent can hold no content regardless.
+        val onDiskParent = target.parent
+        if (onDiskParent == null || !Files.isDirectory(onDiskParent)) {
+            logger.warn { "Refusing asset write of '${path.value}': parent directory is absent or not a directory" }
+            return CreateResult.ParentMissing
+        }
+        // SAME P1 containment as createExclusive (one source of truth), now on the confirmed-directory
+        // parent: scan-skipped-name segments, an excluded subtree, a symlinked existing ancestor, an
+        // ancestor resolving outside root.
+        rejectionReason(path, target)?.let { reason ->
+            logger.warn { "Refusing asset write of '${path.value}': $reason" }
+            return CreateResult.Rejected(reason)
+        }
+        // NFC-equivalent LEAF guard (same as createExclusive): a non-NFC sibling the scan hasn't seen
+        // occupies the path; treat it as already-present. O_EXCL is the true serialization point below.
+        if (nfcEquivalentSiblingExists(target)) return CreateResult.Exists(path)
+        logger.info { "Writing asset file: ${path.value} (${bytes.size} bytes)" }
+        // Asset difference (2): fail closed — the createLink O_EXCL write ONLY, no reserve-then-move.
+        return writeAssetIfAbsent(path, target, bytes, hasher)
+    }
+
+    /**
+     * The fail-closed asset write (W3b): like [writeIfAbsent] but with NO reserve-then-move fallback —
+     * an asset has no `dirty_page` self-heal for the 0-byte reservation window, so when [Files.createLink]
+     * is unavailable this returns [CreateResult.Unreadable] (→ 503) rather than reserving an empty target.
+     */
+    private fun writeAssetIfAbsent(path: TreePath, target: Path, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
+        var tmp: Path? = null
+        return try {
+            // Short fixed prefix (not the full target name): a 255-byte target would push a
+            // `.${fileName}.` + random + `.tmp` temp past NAME_MAX. The temp only needs to be a hidden sibling.
+            tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
+            Files.write(tmp, bytes)
+            try {
+                // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.
+                Files.createLink(target, tmp)
+            } catch (_: FileAlreadyExistsException) {
+                return CreateResult.Exists(path) // a file already occupies the target — nothing written
+            } catch (e: Exception) {
+                if (e !is UnsupportedOperationException && e !is FileSystemException) throw e
+                logger.warn { "createLink unavailable for asset ${path.value}; failing closed (no reserve-then-move)" }
+                return CreateResult.Unreadable("hardlink unavailable on this filesystem; asset write fails closed")
+            }
+            CreateResult.Created(newHash = hasher(bytes))
+        } catch (e: IOException) {
+            CreateResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+        } finally {
+            tmp?.let { Files.deleteIfExists(it) } // the target is its own hardlink now; drop the temp name
+        }
+    }
+
     /**
      * Creates the target write-if-absent WITHOUT ever exposing a 0-byte file (P2 race fix): the full
      * [bytes] are written to a temp sibling FIRST, then [Files.createLink] atomically links the target
@@ -472,7 +534,9 @@ class LocalContentStore(
     private fun writeIfAbsent(path: TreePath, target: Path, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
         var tmp: Path? = null
         return try {
-            tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
+            // Short fixed prefix (not the full target name): a 255-byte target would push a
+            // `.${fileName}.` + random + `.tmp` temp past NAME_MAX. The temp only needs to be a hidden sibling.
+            tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
             Files.write(tmp, bytes)
             try {
                 // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.

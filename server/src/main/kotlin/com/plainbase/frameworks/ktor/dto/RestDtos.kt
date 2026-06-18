@@ -101,6 +101,11 @@ object ErrorCodes {
 
     /** 409: a POST /api/v1/pages would claim a canonical URL/slug another page already owns — nothing written; the body carries the URL. */
     const val SLUG_CONFLICT: String = "slug_conflict"
+
+    // ---- W3b: the asset-upload vocabulary (append-only) ----------------------------------------------
+
+    /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
+    const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

@@ -46,9 +46,14 @@ class WriteRestHarness(
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
     private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+
+    // The index builder runs over the SAME (possibly wrapped) store the route + pipeline see, so a
+    // storeOverride can model BOTH a failing write (writeAssetExclusive Unreadable) AND a failing post-
+    // write rebuild (a scan that throws). Existing overrides delegate scan/read to the real copy via
+    // `by real`, so the snapshot stays genuine; with no override, pipelineStore === store.
     private val harness = IndexHarness(
         root,
-        contentStore = store,
+        contentStore = pipelineStore,
         listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
         searchIndexer = searchIndexer,
     )
@@ -64,19 +69,21 @@ class WriteRestHarness(
         copyTree(fixtureRoot, root)
         seed(harness.idMap)
         harness.builder.rebuild()
-        // The pipeline may run over a wrapped store (the failing-store stand-in for the Unreadable test);
-        // the index/search wiring always uses the real copy so the snapshot is genuine.
+        // The pipeline, the route-facing contentStore, AND the index builder all run over the same
+        // (possibly wrapped) store. Override wrappers delegate scan/read to the real copy via `by real`,
+        // so the snapshot stays genuine; with no override, pipelineStore === store (a no-op).
         val pipeline = harness.writePipeline(historyHook, store = pipelineStore)
         services = RestServices(
             indexBuilder = harness.builder,
             pageService = PageService(harness.builder, harness.registry, CitationFactory()),
             searchService = SearchService(provider = searchProvider, indexBuilder = harness.builder),
             aliasRegistry = harness.registry,
-            contentStore = store,
+            contentStore = pipelineStore,
             writePipeline = pipeline,
             citations = CitationFactory(),
             idProvider = idProvider,
             maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
         )
     }
 

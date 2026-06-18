@@ -127,6 +127,7 @@ private class ReindexFailureHarness(
             citations = com.plainbase.domain.service.CitationFactory(),
             idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
         )
     }
 

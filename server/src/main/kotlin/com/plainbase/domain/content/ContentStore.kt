@@ -88,6 +88,28 @@ interface ContentStore {
     fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
 
     /**
+     * The binary twin of [createExclusive] for an uploaded asset (chunk W3b): write-if-absent into a
+     * page's OWN, already-existing folder. It reuses the SAME P1 containment guards as [createExclusive]
+     * (the scan-skipped-name / excluded-subtree / symlinked-ancestor / outside-root refusals + the
+     * NFC-leaf collision guard) as ONE source of truth — never a re-derived weaker check — but differs in
+     * exactly two ways an asset demands and a page does not:
+     *
+     *  1. **It NEVER creates parent directories.** A page create legitimately mints a fresh nested folder;
+     *     an asset writes into THIS page's folder, which must already exist. Snapshot membership proves the
+     *     page existed at index time, not that its folder still exists at upload time, so if the resolved
+     *     parent is absent (or is not a directory) this returns [CreateResult.ParentMissing] rather than
+     *     recreating the folder and stranding the asset under a page-less directory.
+     *  2. **It fails closed.** It uses ONLY the no-0-byte-window `createLink` O_EXCL write; on a filesystem
+     *     where hardlinks are unavailable it returns [CreateResult.Unreadable] instead of falling back to
+     *     the reserve-then-move path. Pages self-heal a reserve-then-move crash window via the `dirty_page`
+     *     journal; an asset has no such recovery, so a 0-byte reservation could permanently wedge future
+     *     uploads behind a 409 — fail closed instead.
+     *
+     * [hasher] is the frozen `CitationFactory.contentHash` (passed in so this adapter never imports it).
+     */
+    fun writeAssetExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
+
+    /**
      * Watches the content tree for changes, invoking [onChange] with each changed path until the
      * returned handle is closed. Ignored entries (the same rules as [scan]) never produce a call.
      *
@@ -141,6 +163,13 @@ sealed interface CreateResult {
      * (links-are-not-content). NOTHING written. [reason] is diagnostic; the route maps it to a 4xx.
      */
     data class Rejected(val reason: String) : CreateResult
+
+    /**
+     * The resolved parent directory is absent or is not a directory (W3b [ContentStore.writeAssetExclusive]
+     * only): the page's folder vanished on disk between index time and the upload. NOTHING written, and —
+     * unlike [createExclusive] — the missing dir is deliberately NOT recreated. The route maps this to 404.
+     */
+    data object ParentMissing : CreateResult
 
     /** The create threw (permission/locked/partial/transient FS); [cause] is diagnostic. */
     data class Unreadable(val cause: String) : CreateResult

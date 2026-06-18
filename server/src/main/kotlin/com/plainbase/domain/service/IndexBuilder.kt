@@ -14,6 +14,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
+import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -248,6 +249,18 @@ class IndexBuilder(
         searchIndexer?.syncPage(reindexed) // genuine O(1) single-page upsert — NOT sync(snapshot), NOT notifyPublished
         return snapshot
     }
+
+    /**
+     * Renders a SUBMITTED Markdown buffer for the (private, non-contractual W3b) preview pane: PB-SLUG-1
+     * heading ids + PB-LINK-1 link rewriting via the SAME [rendererFactory] every index render uses (§3
+     * single-renderer rule — preview NEVER constructs its own renderer). Link resolution is against the
+     * CURRENT published snapshot [current] (so `[[other page]]` / relative links resolve as a reader would
+     * see them); [sourcePath] is the buffer's notional location for relative-href resolution (the editor's
+     * page path, or a synthetic root path when previewing a not-yet-saved buffer). READ-ONLY: nothing is
+     * read from disk, nothing is published, no snapshot swap — a pure function of [bytes] + the live view.
+     */
+    fun renderPreview(sourcePath: TreePath, bytes: ByteArray): RenderedPage =
+        rendererFactory(current).render(sourcePath, bytes)
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex) {

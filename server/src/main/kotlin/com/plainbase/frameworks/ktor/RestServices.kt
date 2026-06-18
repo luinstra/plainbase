@@ -38,6 +38,8 @@ class RestServices(
     val idProvider: IdProvider,
     /** PB-WRITE-1 body cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxWriteBodyBytes]. */
     val maxWriteBodyBytes: Long,
+    /** W3b asset upload cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxAssetBytes]. */
+    val maxAssetBytes: Long,
 ) {
 
     /** The per-snapshot memoized `/api/v1/tree` JSON (§C4). */

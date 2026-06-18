@@ -13,6 +13,7 @@ import com.plainbase.frameworks.ktor.routes.pageCreateRoutes
 import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
+import com.plainbase.frameworks.ktor.routes.previewRoute
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.treeRoute
@@ -99,6 +100,8 @@ fun Application.plainbaseModule(services: RestServices) {
         pageWriteRoutes(services)
         // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
         pageCreateRoutes(services)
+        // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.
+        previewRoute(services)
         treeRoute(services)
         searchRoute(services)
         adminRoute(services)
