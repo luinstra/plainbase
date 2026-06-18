@@ -6,7 +6,6 @@ import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
-import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer

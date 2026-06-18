@@ -17,6 +17,7 @@ plugins {
 // baseline style, but never restructures signatures, when-branches, or `=` wrapping.
 val ktlintDisabledRules =
     mapOf(
+        "ktlint_standard_no-unused-imports" to "enabled",
         "ktlint_standard_class-signature" to "disabled",
         "ktlint_standard_function-signature" to "disabled",
         "ktlint_standard_when-entry-bracing" to "disabled",

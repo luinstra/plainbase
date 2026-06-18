@@ -15,6 +15,9 @@ max_line_length = 140
 # Owner style: author's layout wins. The disables below are honored by IDEs and the
 # ktlint CLI; Spotless ignores enablement properties from this file, so the SAME list
 # is passed via editorConfigOverride in server/build.gradle.kts — keep them in sync.
+# no-unused-imports: ktlint_official leaves this OFF by default; we force it ON (it caught
+# real dead imports that had accumulated while it was dormant). Spotless honors it via the map.
+ktlint_standard_no-unused-imports = enabled
 ktlint_standard_class-signature = disabled
 ktlint_standard_function-signature = disabled
 ktlint_standard_when-entry-bracing = disabled
