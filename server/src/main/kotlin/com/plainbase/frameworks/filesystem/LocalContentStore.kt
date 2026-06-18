@@ -345,6 +345,17 @@ class LocalContentStore(
         return resolveOnDisk(parent, snap).resolve(rawLeaf)
     }
 
+    override fun resolveRepoRelativePath(path: TreePath): String {
+        // The raw on-disk path relative to the content root, re-joined with '/' (git paths are '/'-joined,
+        // never OS backslashes). resolveOnDisk is total and raw-name-preserving, so a non-NFC on-disk name is
+        // staged verbatim; a brand-new/unscanned page falls back to its NFC name (the correct fresh form).
+        // Resolves via the current scan snapshot: a page created under a parent dir added externally since the
+        // last scan (with a non-NFC raw name) falls back to the NFC path.value for that parent until the next
+        // rescan updates the snapshot — an accepted narrow limitation (not a regression; r6b strictly improved
+        // path fidelity), as a live-FS-resolution fix is disproportionate.
+        return root.relativize(resolveOnDisk(path, snapshot.load())).joinToString("/") { it.toString() }
+    }
+
     override fun write(path: TreePath, bytes: ByteArray) {
         // Resolve through the scan-retained raw names exactly like read (P4): on a
         // normalization-preserving filesystem an existing NFD-named file is REPLACED rather than

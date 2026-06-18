@@ -20,6 +20,7 @@ val restModule = module {
             dirtyPages = get(),
             idMap = get(),
             aliasRegistry = get(),
+            historyHook = get(),
         )
     }
     single {

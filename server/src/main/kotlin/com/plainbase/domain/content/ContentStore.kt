@@ -40,6 +40,19 @@ interface ContentStore {
     fun stat(path: TreePath): ContentStat?
 
     /**
+     * The repo-relative path to STAGE in git for [path] — slash-separated, raw-on-disk-name-preserving (so
+     * it may differ from [TreePath.value] on a normalization-preserving filesystem, where an NFD on-disk
+     * name is kept verbatim while the [TreePath] is NFC). The Git history layer (chunk W4) must stage THIS
+     * string, not [TreePath.value], or the committed git path is a phantom that does not match the real file
+     * (history diverges from the content tree; W5's path-keyed citations miss it).
+     *
+     * Total — never throws. A not-yet-indexed / brand-new page falls back to [TreePath.value]; new pages are
+     * NFC by construction, so that is the correct on-disk form. The separator is always `/` (git paths are
+     * `/`-joined), never an OS-specific separator.
+     */
+    fun resolveRepoRelativePath(path: TreePath): String
+
+    /**
      * Atomically writes [bytes] to the file at [path], creating parent directories as needed.
      *
      * The implementation writes to a temporary sibling and renames into place

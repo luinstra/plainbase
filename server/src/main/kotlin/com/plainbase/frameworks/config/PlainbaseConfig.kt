@@ -31,6 +31,8 @@ data class PlainbaseConfig(
      * 1 MiB document cap is wrong for them. Default 10 MiB; raisable per deploy (raising is additive).
      */
     val maxAssetBytes: Long = DEFAULT_MAX_ASSET_BYTES,
+    /** W4 Git-history layer config (ADR-0006): enablement tri-state + the commit identity. */
+    val git: GitConfig = GitConfig(),
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
@@ -76,6 +78,10 @@ data class PlainbaseConfig(
         /** W3b default asset cap: 10 MiB. Raisable via `PLAINBASE_MAX_ASSET_BYTES` (raising is additive). */
         const val DEFAULT_MAX_ASSET_BYTES: Long = 10_485_760
 
+        /** W4 default Git author/committer identity (D1) — Phase 3 has no principal. */
+        const val DEFAULT_GIT_AUTHOR_NAME: String = "Plainbase"
+        const val DEFAULT_GIT_AUTHOR_EMAIL: String = "plainbase@localhost"
+
         fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig = PlainbaseConfig(
             contentDir = Path.of(env["CONTENT_DIR"] ?: "./content").toAbsolutePath().normalize(),
             dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
@@ -83,6 +89,23 @@ data class PlainbaseConfig(
             port = env["PLAINBASE_PORT"]?.toIntOrNull() ?: DEFAULT_PORT,
             maxWriteBodyBytes = env["PLAINBASE_MAX_WRITE_BODY_BYTES"]?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = env["PLAINBASE_MAX_ASSET_BYTES"]?.toLongOrNull()?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
+            git = GitConfig(
+                enabled = env["PLAINBASE_GIT_ENABLED"]?.toBooleanStrictOrNull(),
+                authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: DEFAULT_GIT_AUTHOR_NAME,
+                authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: DEFAULT_GIT_AUTHOR_EMAIL,
+            ),
         )
     }
 }
+
+/**
+ * W4 Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in CONTENT_DIR
+ * (the detection lives in `historyModule`, not here); `true`/`false` override either direction.
+ * [authorName]/[authorEmail] are the commit identity (Phase 3 default `Plainbase <plainbase@localhost>`;
+ * the author/committer split is plumbed for Phase 4). There is no amend/squash knob — one commit per save, always (fix D).
+ */
+data class GitConfig(
+    val enabled: Boolean? = null,
+    val authorName: String = PlainbaseConfig.DEFAULT_GIT_AUTHOR_NAME,
+    val authorEmail: String = PlainbaseConfig.DEFAULT_GIT_AUTHOR_EMAIL,
+)
