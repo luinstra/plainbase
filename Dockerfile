@@ -15,7 +15,7 @@ RUN ./gradlew :server:installDist --no-daemon
 # Native-image variants are produced by CI per platform; the compose tier ships the JAR.
 FROM eclipse-temurin:21-jre
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/server/build/install/plainbase /opt/plainbase

@@ -33,7 +33,7 @@ Filesystem-native, agent-native internal docs product. Master plan:
 
 - `./gradlew build` = JAR floor: compile, tests, spotlessCheck, dependency allowlist.
 - `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
-  = the native gate (8/8 required). GraalVM comes from asdf (`.tool-versions`).
+  = the native gate (7/7 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
 
@@ -66,7 +66,7 @@ command string. Use these stable `./gradlew :*` invocations instead:
    BLOCKING.
 3. **Verify** — always through Gradle (§Verification): JVM floor `./gradlew build`; **server changes
    also run the native gate** (`:server:nativeTest` → `:server:nativeCompile` → `plainbase spike`,
-   8/8). Run the full floor, not just the native gate — a cross-cutting refactor can break a
+   7/7). Run the full floor, not just the native gate — a cross-cutting refactor can break a
    JVM-only test the native subset never compiles.
 4. **Commit on the owner's explicit word only** — logical commits (one concern each: decision /
    feature+its tests / tooling), conventional style, on `main`. Gitignored `.crew/` addenda stay
