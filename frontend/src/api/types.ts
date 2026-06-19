@@ -195,3 +195,35 @@ export interface PreviewResponse {
   html: string;
   headings: HeadingDto[];
 }
+
+/**
+ * W5 history/diff read shapes (NON-FROZEN — server-as-authority, no golden pins them;
+ * transcribed from server frameworks/ktor/dto/HistoryDtos.kt). `git_enabled` lets the client tell
+ * "Git off" (false) apart from "Git on, no commits yet" (true + empty `commits`). Timestamps are
+ * ISO-8601 strings (the server's kotlin.time.Instant never reaches the wire).
+ */
+export interface CommitDto {
+  sha: string;
+  author_name: string;
+  author_email: string;
+  author_time: string; // ISO-8601
+  committer_name: string;
+  committer_email: string;
+  committer_time: string; // ISO-8601
+  message: string;
+}
+
+/** `GET …/history` — `commits` is NEWEST-FIRST. */
+export interface HistoryResponse {
+  git_enabled: boolean;
+  commits: CommitDto[];
+}
+
+/** `GET …/diff` — the file's unified diff between two commits. */
+export interface DiffResponse {
+  git_enabled: boolean;
+  from: string;
+  to: string;
+  path: string;
+  unified_diff: string;
+}

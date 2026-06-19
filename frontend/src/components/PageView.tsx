@@ -281,7 +281,7 @@ function PageContent({ id, page: seeded, below }: { id: string; page?: PageRespo
           <Breadcrumbs path={html.data.path} title={html.data.title} />
           <Prose html={html.data.html} />
           {below}
-          <DocFooter frontmatter={frontmatter} url={page?.url ?? null} />
+          <DocFooter frontmatter={frontmatter} url={page?.url ?? null} hasHistory={(page?.commit ?? null) !== null} />
         </div>
       </div>
       <aside
@@ -410,12 +410,13 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
 /**
  * The doc footer below `<Prose>` (a sibling, never inside it): the "Edit this page" affordance
  * (W6/D-3 — links to the SAME path with `?mode=edit`, the canonical url is the splat key so the editor
- * inherits rename-stability), plus a mono "Last updated {date} by {owner}" line sourced from
- * frontmatter. The Edit link renders regardless of `updated`; the W7 history affordance will sit beside
- * `data-pb-edit-page` here. A collision loser (no canonical url) gets no Edit link (it has no `/docs`
- * address to edit at).
+ * inherits rename-stability), the W7 "History" affordance beside it, plus a mono "Last updated {date} by
+ * {owner}" line sourced from frontmatter. The Edit link renders regardless of `updated`. A collision loser
+ * (no canonical url) gets no Edit/History link (it has no `/docs` address). The History link gates on
+ * `hasHistory` (W7/MF-1: `PageResponse.commit != null` — git-on with ≥1 commit — a ZERO-extra-fetch signal;
+ * NoOp git always yields null so git-off never false-positives, and a zero-commit page correctly shows none).
  */
-function DocFooter({ frontmatter, url }: { frontmatter?: Record<string, unknown>; url: string | null }) {
+function DocFooter({ frontmatter, url, hasHistory }: { frontmatter?: Record<string, unknown>; url: string | null; hasHistory: boolean }) {
   const updated = asString(frontmatter?.updated);
   const owner = asString(frontmatter?.owner);
   const splat = url?.startsWith("/docs/") ? url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/") : null;
@@ -425,6 +426,11 @@ function DocFooter({ frontmatter, url }: { frontmatter?: Record<string, unknown>
       {splat && (
         <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
           Edit this page
+        </Link>
+      )}
+      {splat && hasHistory && (
+        <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "history" }} className="pb-docfoot-history" data-pb-history-page>
+          History
         </Link>
       )}
       {updated && (

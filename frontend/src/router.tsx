@@ -8,6 +8,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { EditorPage, NewPage } from "./components/EditorPage";
+import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
 import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
 import { Shell } from "./components/Shell";
@@ -90,25 +91,16 @@ function DocsSplat() {
   if (encodedSlash) return <NotFoundView />;
   const path = _splat ?? "";
   if (mode === "edit" && path) return <EditorPage path={path} />;
-  if (mode === "history" && path) return <HistoryPage path={path} />;
+  if (mode === "history" && path) return <History path={path} />;
   // An empty splat ("/docs/") is the root landing too; the trailing-slash pathname would
   // never match the root's verbatim `/docs` url, so it is passed explicitly.
   if (!path) return <FolderLanding url="/docs" />;
   return <DocsPage path={path} />;
 }
 
-/**
- * W7 SEAM (do NOT build here): the per-page history surface (`?mode=history`). W7 replaces this
- * placeholder with the real commit list + diff component; the dispatcher branch + the `validateSearch`
- * enum are already in place, so W7 adds only the component.
- */
-function HistoryPage({ path }: { path: string }) {
-  return (
-    <div className="py-16 text-center text-faint" data-pb-history-placeholder>
-      History for {path} is coming soon.
-    </div>
-  );
-}
+// W7 landed: the per-page history surface (`?mode=history`) is the real `<History>` component
+// (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
+// dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
 
 const newRoute = createRoute({
   getParentRoute: () => rootRoute,

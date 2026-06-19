@@ -1,6 +1,6 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { getJson, previewRaw } from "./client";
-import type { PageHtmlResponse, PageResponse, PreviewResponse, SearchResponse, TreeResponse } from "./types";
+import type { DiffResponse, HistoryResponse, PageHtmlResponse, PageResponse, PreviewResponse, SearchResponse, TreeResponse } from "./types";
 
 /**
  * Re-encodes a decoded `/docs/`-relative path for the by-path endpoint. The router hands
@@ -50,6 +50,34 @@ export const pageHtmlQuery = (id: string) =>
     staleTime: 30_000,
   });
 
+/**
+ * W7 per-page commit history (NEWEST-FIRST). Fired ONLY when the user OPENS `?mode=history`; the read
+ * view never mounts this (the footer affordance gates on the already-loaded `PageResponse.commit`).
+ * `retry: false` so a 5xx from an uncapped git subprocess isn't multiplied 3× into a subprocess storm.
+ */
+export const historyQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["page", "history", id],
+    queryFn: () => getJson<HistoryResponse>(`/api/v1/pages/${id}/history`),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+/**
+ * A two-commit unified diff. Keyed on (id, from, to); only fires once both refs are chosen. `from`/`to`
+ * are list-sourced full hex SHAs (always matching the server's `[0-9a-fA-F]{7,64}` guard) — they're
+ * `encodeURIComponent`'d anyway as a belt-and-suspenders transport invariant. `retry: false` for the
+ * same subprocess-storm reason as `historyQuery`.
+ */
+export const diffQuery = (id: string, from: string | null, to: string | null) =>
+  queryOptions({
+    queryKey: ["page", "diff", id, from, to],
+    queryFn: () => getJson<DiffResponse>(`/api/v1/pages/${id}/diff?from=${encodeURIComponent(from!)}&to=${encodeURIComponent(to!)}`),
+    enabled: from !== null && to !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+
 /** §A1: `limit` is 1–100; S7 always sends a fixed page of 20 (no user-controlled limit). */
 export const SEARCH_LIMIT = 20;
 /** §A1: `q` is ≤ 512 UTF-16 code units; the client clamps so `invalid_query` is unreachable. */
@@ -96,7 +124,8 @@ export function previewQuery(text: string, path?: string) {
 /**
  * The single post-write cache-invalidation point (every save/create success path calls THIS, never an
  * ad-hoc per-site `invalidateQueries`). A write that adds/removes/changes content can stale: the tree
- * (sidebar), the page's id-keyed reads (`pageQuery`/`pageHtmlQuery`), the destination URL's by-path read
+ * (sidebar), the page's id-keyed reads (`pageQuery`/`pageHtmlQuery`), its history (`historyQuery` — a save
+ * commits, so the commit list grows; W7 master criterion 6), the destination URL's by-path read
  * (`pageByPathQuery` — keyed by the URL splat, NOT the content file path; reuse {@link byPathKeyForUrl}),
  * AND any full-text `['search', …]` result (full-text goes stale on ANY content edit). Pass whatever of
  * {id, url} the calling path knows; an absent/non-`/docs/` url no-ops its by-path leg. Covering the whole
@@ -108,6 +137,9 @@ export function invalidateAfterWrite(queryClient: QueryClient, { id, url }: { id
   if (id) {
     void queryClient.invalidateQueries({ queryKey: pageQuery(id).queryKey });
     void queryClient.invalidateQueries({ queryKey: pageHtmlQuery(id).queryKey });
+    // A save commits — the commit list grew, and the read view's freshly-non-null `commit` lights up the
+    // footer history affordance (refreshed via the pageQuery/pageByPathQuery legs above) with no extra fetch.
+    void queryClient.invalidateQueries({ queryKey: historyQuery(id).queryKey });
   }
   const byPathKey = byPathKeyForUrl(url ?? null);
   if (byPathKey !== null) void queryClient.invalidateQueries({ queryKey: pageByPathQuery(byPathKey).queryKey });

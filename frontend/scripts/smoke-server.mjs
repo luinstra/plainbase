@@ -37,6 +37,10 @@ const child = spawn(binary, ["serve"], {
     DATA_DIR: dataDir,
     PLAINBASE_HOST: "127.0.0.1",
     PLAINBASE_PORT: "4378",
+    // W7 master criterion 6 (history.spec.ts): force Git mode on so /history returns git_enabled:true.
+    // The .smoke-content copy carries NO .git, so prepare() runs `git init` but seeds NO commit — the
+    // repo boots with an EMPTY commit list and the FIRST save creates the first commit (MF-4).
+    PLAINBASE_GIT_ENABLED: "true",
   },
 });
 
