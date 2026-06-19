@@ -6,7 +6,12 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
+import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
+import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteConflictReason
+import com.plainbase.frameworks.ktor.dto.WriteWarning
+import com.plainbase.frameworks.ktor.dto.WriteWarningCode
+import com.plainbase.frameworks.ktor.routes.createUrl
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -21,6 +26,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -61,19 +67,90 @@ class WriteGoldenTest : FunSpec({
         }
     }
 
-    test("write-post-ok.json — a 201 create is exactly {content_hash, commit:null}; warning ABSENT") {
+    test("write-post-ok.json — a 201 create returns {id, url, content_hash, commit:null}; warning ABSENT") {
         // The composed bytes are deterministic given a seeded id, so the recompute is stable. The route
         // composes: ---\nid:<id>\ntitle:"<title>"\n---\n\n (empty body) — recompute over the same bytes.
         val createdId = "01900000-0000-7000-8000-000000000001"
         val composed = "---\nid: $createdId\ntitle: \"Golden Create\"\n---\n\n".toByteArray()
-        writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { _ ->
+        writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
                 setBody("""{"folder":"guides","title":"Golden Create"}""")
             }
             post.status shouldBe HttpStatusCode.Created
+            // The 201 GAINS the minted `id` + the SERVER-AUTHORITATIVE canonical `url` (W6, additive
+            // PB-WRITE-1 revision). The golden pins both; `url` is the published `IndexedPage.url`, NOT a
+            // client-/path-derived slug — asserted against the snapshot below so the literal can't drift.
             post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
+            harness.services.indexBuilder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/golden-create"
         }
+    }
+
+    test("write-post-ok-unicode.json — a 201 create's url is the slugified urlPath, NOT the raw on-disk path") {
+        // The divergence guard (house rule). The slug "Café Ω" slugifies to the NON-ASCII `café-ω`, so the
+        // on-disk filename is `café-ω.md` (raw unicode bytes) while the canonical url percent-encodes the
+        // urlPath: `/docs/guides/caf%C3%A9-%CF%89`. A naive re-compose from the file path would give a
+        // DIFFERENT string (raw é/ω, or a title slug) — proving `url` is the published IndexedPage.url.
+        val createdId = "01900000-0000-7000-8000-000000000001"
+        val composed = "---\nid: $createdId\ntitle: \"Report\"\nslug: \"Café Ω\"\n---\n\n".toByteArray()
+        writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
+            val post = client.post("/api/v1/pages") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"folder":"guides","title":"Report","slug":"Café Ω"}""")
+            }
+            post.status shouldBe HttpStatusCode.Created
+            post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
+            // The response url IS the published IndexedPage.url: the PercentCoding.encodePath(urlPath) form,
+            // never a percent-encode of the raw on-disk filename nor a slug of the title.
+            harness.services.indexBuilder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/caf%C3%A9-%CF%89"
+        }
+    }
+
+    test("createUrl falls back to the /p/{id} permalink for a path-space loser (no fabricated /docs/<raw path>)") {
+        // A published page whose canonical url is null (a same-slug collision loser) is reachable ONLY via
+        // its permalink. createUrl must return that permalink — NEVER a fabricated `/docs/<raw path>` that
+        // points at a 404. Both `a b.md` (0x20 wins on raw-byte order) and `a-b.md` slugify to `a-b`, so the
+        // latter is the loser (url = null) — the same induction RestRedirectTest uses.
+        val winnerId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d1"
+        val loserId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d2"
+        val seedCollision: (IdMapRepository) -> Unit = { idMap ->
+            idMap.bind(TreePath.require("a b.md"), PageId.require(winnerId), materialized = true)
+            idMap.bind(TreePath.require("a-b.md"), PageId.require(loserId), materialized = true)
+        }
+        val tree = java.nio.file.Files.createTempDirectory("plainbase-write-loser")
+        try {
+            java.nio.file.Files.write(tree.resolve("a b.md"), "---\nid: $winnerId\ntitle: Winner\n---\n\n# Winner\n".toByteArray())
+            java.nio.file.Files.write(tree.resolve("a-b.md"), "---\nid: $loserId\ntitle: Loser\n---\n\n# Loser\n".toByteArray())
+            writeRestTest(tree, seedCollision) { harness ->
+                val loser = PageId.require(loserId)
+                // The induction held: the loser really has a null canonical url.
+                harness.services.indexBuilder.current.byId[loser]?.url shouldBe null
+                // So createUrl serves the permalink — the SAME `/p/{id}` shape PermalinkRoute resolves and
+                // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication.
+                createUrl(loser, harness.services) shouldBe "/p/$loserId"
+            }
+        } finally {
+            tree.toFile().deleteRecursively()
+        }
+    }
+
+    test("a created-but-unindexed 201 carries url:null (no fabricated /docs/… from the raw path)") {
+        // The page is unpublished on this branch, so there is NO reliable canonical url until
+        // reconciliation — fabricating one from the raw on-disk path would diverge from the eventual
+        // canonical (a `_folder.yaml` slug override / unicode / collision-de-dup shifts the segment).
+        // The honest wire is `url: null` (present-null via RestJson's explicitNulls), and the clean
+        // create's non-null url shape stays untouched (its golden is asserted above).
+        val response = CreatedButUnindexedResponse(
+            id = "01900000-0000-7000-8000-000000000001",
+            url = null,
+            contentHash = "sha256:" + "0".repeat(64),
+            commit = null,
+            warning = WriteWarning(code = WriteWarningCode.REINDEX_DEFERRED, message = "deferred"),
+        )
+        val tree = RestJson.encodeToString(CreatedButUnindexedResponse.serializer(), response).let(Json::parseToJsonElement).jsonObject
+        // url is PRESENT and explicitly null — never a fabricated `/docs/…` string.
+        ("url" in tree) shouldBe true
+        (tree.getValue("url") is JsonNull) shouldBe true
     }
 
     test("write-conflict-content-changed.json — a 409 drift carries reason + current_* (structural)") {

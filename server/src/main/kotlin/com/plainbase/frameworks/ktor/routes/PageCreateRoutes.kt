@@ -2,10 +2,13 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.dto.CreatePageRequest
+import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
+import com.plainbase.frameworks.ktor.dto.CreatedResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageExistsBody
 import com.plainbase.frameworks.ktor.dto.PageExistsEnvelope
@@ -13,8 +16,6 @@ import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WriteWarningCode
 import com.plainbase.frameworks.ktor.dto.WriteWire
-import com.plainbase.frameworks.ktor.dto.WrittenButUnindexedResponse
-import com.plainbase.frameworks.ktor.dto.WrittenResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -38,9 +39,11 @@ import java.nio.charset.CodingErrorAction
  *
  * This route owns its OWN status `when`: a create returns **201** (a new resource), not the PUT's 200,
  * so it does NOT reuse the frozen `WriteDtos.toWire` (which hard-codes `Written → 200` and carries the
- * edit-only retry-idempotency shim). It conforms to PB-WRITE-1 by reusing the frozen `WrittenResponse`
- * SHAPE at 201; the create-specific failure codes (`page_exists`, `invalid_create_request`) are
- * append-only additions to the frozen `ErrorCodes`.
+ * edit-only retry-idempotency shim). The clean-create 201 carries `CreatedResponse` — PB-WRITE-1's
+ * `WrittenResponse` shape PLUS the minted `id` + the server-authoritative canonical `url` (W6,
+ * owner+debate-approved additive revision: 201 identifies the created resource so the client navigates
+ * to the server's url, never a client-derived slug). The create-specific failure codes (`page_exists`,
+ * `invalid_create_request`) are append-only additions to the frozen `ErrorCodes`.
  */
 fun Route.pageCreateRoutes(services: RestServices) {
     route("/api/v1/pages") {
@@ -129,7 +132,7 @@ fun Route.pageCreateRoutes(services: RestServices) {
             }
 
             val outcome = services.writePipeline.create(CreateIntent(pageId = id, path = path, bytes = bytes))
-            call.respondCreateOutcome(outcome)
+            call.respondCreateOutcome(outcome, id, services)
         }
     }
 }
@@ -230,16 +233,28 @@ private fun yamlDoubleQuoted(value: String): String =
  * The route's OWN exhaustive [WriteOutcome] → wire mapping (it does NOT reuse `toWire`). Only four
  * outcomes are reachable from a create — a create has no `base_hash`/prior identity, so `Conflict`/
  * `UnsupportedEdit` are unreachable and `error(...)` if they ever appear.
+ *
+ * The clean-create 201 carries the minted [id] + the SERVER-AUTHORITATIVE canonical url (W6): after a
+ * clean `Written` the pipeline's rebuild has already published the page, so the url is the real
+ * `IndexedPage.url` looked up by id ([createUrl]) — the slugified/collision-de-duped form, NEVER the raw
+ * on-disk [path]. The `WrittenButUnindexed` twin returns a present-`null` url instead: the page is
+ * unpublished, so no reliable canonical url exists until reconciliation and fabricating one from the raw
+ * path would diverge (slug override / unicode / collision-de-dup) — the client doesn't navigate there.
  */
-private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome) {
+private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, id: PageId, services: RestServices) {
     when (outcome) {
         is WriteOutcome.Written -> {
             setContentHashETag(outcome.newHash)
             respondWriteWire(
                 WriteWire.of(
                     HttpStatusCode.Created,
-                    WrittenResponse.serializer(),
-                    WrittenResponse(contentHash = outcome.newHash, commit = outcome.commit),
+                    CreatedResponse.serializer(),
+                    CreatedResponse(
+                        id = id.value,
+                        url = createUrl(id, services),
+                        contentHash = outcome.newHash,
+                        commit = outcome.commit,
+                    ),
                 ),
             )
         }
@@ -247,10 +262,16 @@ private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome) 
             setContentHashETag(outcome.newHash)
             respondWriteWire(
                 // The SAME 201 as a clean create (never toWire's hard-coded 200), with the frozen warning body.
+                // `url` is present-`null`: the page is unpublished, so there is no reliable canonical url until
+                // reconciliation. Fabricating one from the raw on-disk path would diverge from the eventual
+                // canonical (a `_folder.yaml` slug override / unicode / collision-de-dup shifts the segment), so
+                // the honest answer is null — the client does NOT navigate on this branch, it shows the warning.
                 WriteWire.of(
                     HttpStatusCode.Created,
-                    WrittenButUnindexedResponse.serializer(),
-                    WrittenButUnindexedResponse(
+                    CreatedButUnindexedResponse.serializer(),
+                    CreatedButUnindexedResponse(
+                        id = id.value,
+                        url = null,
                         contentHash = outcome.newHash,
                         commit = null,
                         warning = WriteWarning(code = WriteWarningCode.REINDEX_DEFERRED, message = REINDEX_DEFERRED_MESSAGE),
@@ -299,6 +320,21 @@ private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome) 
 private suspend fun ApplicationCall.respondWriteWire(wire: WriteWire) {
     respondText(wire.encode(), ContentType.Application.Json, wire.status)
 }
+
+/**
+ * The clean-create page's SERVER-AUTHORITATIVE addressable url. The published `IndexedPage.url` (looked
+ * up by the minted [id]) is the canonical path — the slugified, collision-de-duped form via
+ * `PercentCoding.encodePath`, which DIVERGES from the raw on-disk path on slug-override, unicode, and
+ * collision-de-dup. A page that LOST the path-space race carries a null canonical `url` (it's reachable
+ * only via its permalink), so the fallback is the `/p/{id}` permalink — the one URL that ALWAYS resolves
+ * for any published page (the server 302s a winner's permalink → canonical, and serves a loser's
+ * permalink directly). We NEVER fabricate a `/docs/<raw path>` url: the raw path diverges from the
+ * canonical and points at a route that may not exist (a 404 for a loser). This is called ONLY from the
+ * clean `Written` branch, where the rebuild has already published the page; the unindexed branch returns
+ * a `null` url instead (the client doesn't navigate there).
+ */
+internal fun createUrl(id: PageId, services: RestServices): String =
+    services.indexBuilder.current.byId[id]?.url ?: "/p/${id.value}"
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */
 private const val REINDEX_DEFERRED_MESSAGE =

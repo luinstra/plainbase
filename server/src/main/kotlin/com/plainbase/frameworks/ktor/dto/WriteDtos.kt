@@ -46,6 +46,41 @@ data class WrittenButUnindexedResponse(
 @Serializable
 data class WriteWarning(val code: String, val message: String)
 
+/**
+ * 201 (`POST /api/v1/pages`, `WriteOutcome.Written`): the clean-create response. It conforms to
+ * PB-WRITE-1's `WrittenResponse` shape (`content_hash` + present-`null` `commit`) and ADDS the two
+ * fields a create owes the client (W6, owner+debate-approved additive revision): the minted [id] and
+ * the SERVER-AUTHORITATIVE canonical [url]. `url` is the published `IndexedPage.url` (the slugified,
+ * collision-de-duped canonical path), NEVER re-composed from the on-disk file path. Distinct from
+ * the PUT-shared [WrittenResponse] so a save never grows an `id`/`url` key.
+ */
+@Serializable
+data class CreatedResponse(
+    val id: String,
+    val url: String,
+    @SerialName("content_hash") val contentHash: String,
+    val commit: String?,
+)
+
+/**
+ * 201 (`POST /api/v1/pages`, `WriteOutcome.WrittenButUnindexed`, R2): the create twin of
+ * [WrittenButUnindexedResponse] — the bytes are durably on disk, the search/history sync deferred —
+ * carrying the same [id] a clean create returns plus the non-null [warning]. Unlike the clean
+ * [CreatedResponse], [url] is **present-`null`**: the page is unpublished, so there is no reliable
+ * canonical url until reconciliation. Fabricating one from the raw on-disk path would diverge from the
+ * post-reconciliation canonical (a `_folder.yaml` slug override, unicode, or collision-de-dup all shift
+ * the url segment), so the honest answer is `null` — the client does NOT navigate on this branch (it
+ * shows the warning) so no url is needed.
+ */
+@Serializable
+data class CreatedButUnindexedResponse(
+    val id: String,
+    val url: String?,
+    @SerialName("content_hash") val contentHash: String,
+    val commit: String?,
+    val warning: WriteWarning,
+)
+
 /** 409 drift envelope (kept distinct from the frozen [ErrorEnvelope] — it grows `reason` + `current_*`). */
 @Serializable
 data class WriteConflictEnvelope(val error: WriteConflictBody)

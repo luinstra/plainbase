@@ -37,7 +37,9 @@ import io.kotest.core.spec.style.FunSpec
  * be RELAXED into an acceptance by a documented revision — adding a `.out` for a today-refused
  * input is legal; flipping an existing `.out` is not. PB-LINK-1's scheme allowlist and broken-link
  * error classes are append-only; PB-REST-1 fields are never removed or retyped.
- * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003).
+ * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003);
+ * create-response `id` + `url` added 2026-06 (additive, W6 — `POST /api/v1/pages` 201 now identifies
+ * the created resource so the client navigates to the server-authoritative url; owner+debate-approved).
  *
  * PB-SEARCH-1 freeze-tier notes (phase-2 §A6 — what these goldens do and do NOT freeze):
  *   - `score` VALUES are deliberately NOT frozen (§A4: engine-scaled, never comparable across
@@ -77,13 +79,20 @@ import io.kotest.core.spec.style.FunSpec
  * configurable UPWARD (additive). Tier-1 goldens are the four `golden/rest/write-*.json` snapshots
  * plus the adversarial byte-identical round-trip (WriteGoldenTest's 7 tests).
  *
- * W2 (`POST /api/v1/pages` new-page creation, 2026-06) conforms to PB-WRITE-1 — it adds NO new
- * success shape: a clean create returns the frozen `WrittenResponse` body at **201 Created** (the
+ * W2 (`POST /api/v1/pages` new-page creation, 2026-06) conforms to PB-WRITE-1 at **201 Created** (the
  * create-vs-edit status distinction), with the `ETag` read-half. New append-only codes are
  * `page_exists` (409, body carries the real `path`) and `invalid_create_request` (400); the new
  * `WriteOutcome.AlreadyExists` case adds only a forced `error(...)` branch to the frozen `toWire`
- * (no new envelope). Tier-1 gains one snapshot, `golden/rest/write-post-ok.json` (the 201 create
- * shape), so WriteGoldenTest is now 8 tests.
+ * (no new envelope). The clean create returns a create-specific success shape: `CreatedResponse`
+ * (`{id, url, content_hash, commit}`) — the frozen `WrittenResponse` keys PLUS the minted `id` + the
+ * server-authoritative canonical `url` (W6 additive amendment, above): a 201 identifies the created
+ * resource so the client navigates to the server's url, never a client-derived slug. `url` is the
+ * published `IndexedPage.url` (slugified/collision-de-duped), never re-composed from the on-disk path
+ * — pinned by a divergence golden using a non-ASCII slug. Tier-1 holds two create snapshots,
+ * `golden/rest/write-post-ok.json` (the 201 create shape) and `golden/rest/write-post-ok-unicode.json`
+ * (the url-divergence guard), so WriteGoldenTest is now 11 tests (incl. the path-space-loser
+ * permalink fallback: a null-canonical-url create addresses the `/p/{id}` permalink, never a
+ * fabricated `/docs/<raw path>`).
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -112,7 +121,9 @@ class ForeverApiGoldenSuite : FunSpec({
         SelectedSuite.run(SearchGoldenTest::class).shouldHavePassed("SearchGoldenTest", atLeastTests = 5)
     }
 
-    test("PB-WRITE-1: the write snapshot corpus (8 frozen-shape tests; raw round-trip, 409/422 split, present-null commit, 201 create)") {
-        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 8)
+    test(
+        "PB-WRITE-1: the write snapshot corpus (11 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback)",
+    ) {
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 11)
     }
 })
