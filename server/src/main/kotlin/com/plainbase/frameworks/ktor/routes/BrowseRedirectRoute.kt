@@ -3,7 +3,6 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
-import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -28,6 +27,6 @@ fun Route.browseRedirectRoute(services: RestServices) {
             ?: return@get call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
         val page = services.indexBuilder.current.byPath[path]
             ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such page file: ${path.value}")
-        call.respondRedirect(page.url ?: page.permalink, permanent = false)
+        call.respondRedirectPreservingQuery(page.url ?: page.permalink, permanent = false)
     }
 }

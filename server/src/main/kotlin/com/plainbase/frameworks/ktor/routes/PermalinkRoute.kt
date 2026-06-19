@@ -5,7 +5,6 @@ import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -35,6 +34,6 @@ private suspend fun ApplicationCall.handlePermalink(services: RestServices) {
         ?: return respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
     when (val url = page.url) {
         null -> respondSpaShell() // collision loser: the permalink is its only human URL (see class doc)
-        else -> respondRedirect(url, permanent = false)
+        else -> respondRedirectPreservingQuery(url, permanent = false)
     }
 }

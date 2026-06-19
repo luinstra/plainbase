@@ -37,6 +37,13 @@ class RestRedirectTest : FunSpec({
                 val old = client.get("/docs/guides/movable")
                 old.status shouldBe HttpStatusCode.MovedPermanently // 301 — aliases are stable
                 old.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable"
+
+                // A direct hit on an alias edit URL (cold load / refresh / pasted link) carries
+                // ?mode=edit verbatim through the 301, so the SPA lands in the editor, not the
+                // read view — the server-side half of rename-stability.
+                val edit = client.get("/docs/guides/movable?mode=edit")
+                edit.status shouldBe HttpStatusCode.MovedPermanently
+                edit.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable?mode=edit"
             }
         }
     }
@@ -65,6 +72,11 @@ class RestRedirectTest : FunSpec({
                 val response = client.get("/docs/old/loser")
                 response.status shouldBe HttpStatusCode.MovedPermanently
                 response.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}"
+
+                // The query rides the permalink fallback redirect too — same class, same hop.
+                val edit = client.get("/docs/old/loser?mode=edit")
+                edit.status shouldBe HttpStatusCode.MovedPermanently
+                edit.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}?mode=edit"
             }
         }
     }
@@ -76,6 +88,12 @@ class RestRedirectTest : FunSpec({
             val plain = client.get("/browse/guides/deploy-guide.md")
             plain.status shouldBe HttpStatusCode.Found
             plain.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+
+            // A query on the browse redirect is preserved; with no query the Location stays clean
+            // (no trailing `?`) — same byte-for-byte value the no-query golden pins.
+            val edit = client.get("/browse/guides/deploy-guide.md?mode=edit")
+            edit.status shouldBe HttpStatusCode.Found
+            edit.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide?mode=edit"
 
             // Encoded space: decode-once yields the on-disk name `release notes 2026.md`.
             val spaced = client.get("/browse/notes/release%20notes%202026.md")

@@ -17,10 +17,12 @@ import io.ktor.http.charset
 import io.ktor.http.decodeURLQueryComponent
 import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.request.queryString
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
@@ -66,6 +68,19 @@ internal suspend fun ApplicationCall.pageId(): PageId? {
     val id = raw.takeIf(CANONICAL_PAGE_ID::matches)?.let(PageId::of)
     if (id == null) respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
     return id
+}
+
+/**
+ * Redirects to [target], carrying the request's RAW query string through verbatim — so a direct hit
+ * (cold load / refresh / pasted link) on `/docs/<alias>?mode=edit` lands on the canonical URL still
+ * in edit mode, not the read view. The query is appended unparsed (the SPA, not us, owns its grammar)
+ * and only when present, so a no-query redirect stays a clean `Location` with no trailing `?`. The
+ * client-side canonical redirect preserves the query the same way (router.history.replace); this is
+ * the server-side half of the same rename-stability guarantee, applied to every `/docs`-path hop.
+ */
+internal suspend fun ApplicationCall.respondRedirectPreservingQuery(target: String, permanent: Boolean) {
+    val query = request.queryString()
+    respondRedirect(if (query.isEmpty()) target else "$target?$query", permanent)
 }
 
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
