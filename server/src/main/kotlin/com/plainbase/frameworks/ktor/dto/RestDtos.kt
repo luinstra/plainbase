@@ -226,7 +226,7 @@ fun PagePayload.toDto(): PageResponse = PageResponse(
     frontmatter = page.frontmatter.toJsonObject(idMaterialized = page.materialized),
     contentHash = page.contentHash,
     idMaterialized = page.materialized,
-    commit = null, // always null in Phase 1 (Git layer is Phase 3); field present from day one
+    commit = page.commit, // the page's snapshot-resident last commit (W5); null off Git
     citation = citation.toDto(),
 )
 
@@ -238,7 +238,7 @@ fun PageHtmlPayload.toDto(): PageHtmlResponse = PageHtmlResponse(
     title = page.title,
     html = page.html,
     contentHash = page.contentHash,
-    commit = null,
+    commit = page.commit,
     headings = page.headings.map { it.toDto() },
     citation = citation.toDto(),
 )

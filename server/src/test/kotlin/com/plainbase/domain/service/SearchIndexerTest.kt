@@ -42,6 +42,7 @@ class SearchIndexerTest : FunSpec({
         materialized = false,
         markdown = "",
         contentHash = contentHash,
+        commit = null,
         html = "",
         headings = emptyList(),
         links = emptyList(),

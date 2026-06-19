@@ -1,12 +1,14 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -31,6 +33,7 @@ class IndexHarness(
     private val contentStore: ContentStore = LocalContentStore(root),
     frontmatterParser: FrontmatterParser = FrontmatterReader(),
     rendererFactory: (PageIndexView) -> MarkdownRenderer = { view -> FlexmarkRenderer(view) },
+    history: HistoryProvider = NoOpHistoryProvider,
     listeners: List<IndexBuilder.PublicationListener> = emptyList(),
     searchIndexer: SearchIndexer? = null,
 ) : AutoCloseable {
@@ -56,6 +59,7 @@ class IndexHarness(
         aliasRegistry = registry,
         checkpoint = checkpoints,
         citations = citations,
+        history = history,
         // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
@@ -68,7 +72,7 @@ class IndexHarness(
      * a failing/wrapping stand-in while the index/search wiring keeps using the real copy.
      */
     fun writePipeline(
-        historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+        historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> null },
         store: ContentStore = contentStore,
     ): WritePipeline =
         WritePipeline(

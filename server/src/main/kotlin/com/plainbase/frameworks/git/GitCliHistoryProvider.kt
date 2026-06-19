@@ -39,6 +39,8 @@ class GitCliHistoryProvider(
     private val maintenance: (() -> Unit)? = null,
 ) : HistoryProvider {
 
+    override val enabled: Boolean = true
+
     @OptIn(kotlin.io.path.ExperimentalPathApi::class)
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit {
         ensureRepo()
@@ -163,11 +165,117 @@ class GitCliHistoryProvider(
         }
     }
 
-    override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = throw NotImplementedError("W5")
+    /**
+     * The newest commit touching each requested path, batched into as few `git log` walks as the argv
+     * budget allows (never one query per path): each walk runs `--name-only` over a BATCH of paths,
+     * newest→oldest along first-parent history, recording the first commit seen to touch each
+     * still-unresolved path in that batch and stopping once the batch is resolved. A path with no commit
+     * is simply absent. The keys are the requested [TreePath]s; the on-disk repo path (r6b,
+     * raw-name-preserving) bridges a `git log` filename to the [TreePath] the caller asked for.
+     * Unborn HEAD / empty repo → empty.
+     *
+     * Why BATCH and not one walk: `IndexBuilder.rebuild` passes the WHOLE corpus, so a single
+     * `git log … -- <every page path>` puts every path on argv and a large content tree blows the OS
+     * `ARG_MAX` (`Argument list too long` → Git-mode startup/rescan dies). Git 2.54.x `git log` does NOT
+     * accept `--pathspec-from-file` (empirically verified — `fatal: unrecognized argument`), so the
+     * pathspecs cannot move to stdin; instead each invocation caps its total pathspec bytes at
+     * [MAX_PATHSPEC_BYTES_PER_BATCH], far under any ARG_MAX. The result is O(ceil(N / batch)) processes,
+     * independent of per-PAGE count for normal trees (a few thousand `.md` paths fit in one batch); the
+     * "never one query per path" intent stands. Each batch's paths are disjoint, so per-batch walks
+     * resolve independently and the merged map is exactly the single-walk result.
+     */
+    override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> {
+        if (paths.isEmpty()) return emptyMap()
+        val byRepoPath = paths.associateBy(repoPath)
+        val resolved = LinkedHashMap<TreePath, Commit>()
+        for (batch in batchPathspecs(byRepoPath.keys)) {
+            val args = listOf("log", "-z") + FIRST_PARENT + listOf("--name-only", "--format=$LOG_FORMAT", "--") + batch
+            val result = exec.run(args)
+            if (!result.ok) return emptyMapOrThrow(result, "lastCommits")
+            var pendingInBatch = batch.size
+            for ((commit, files) in parseLogWithNames(result.stdoutText)) {
+                for (file in files) {
+                    val touched = byRepoPath[file] ?: continue
+                    if (touched !in resolved) {
+                        resolved[touched] = commit
+                        pendingInBatch--
+                    }
+                }
+                // Parse-only early exit: git has ALREADY produced the full walk (GitExecutor buffers all of
+                // stdout before we parse), so this stops iterating parsed records — it does NOT truncate git's
+                // walk. The full read is intentional (D-3): an old, infrequently-touched page's last commit may
+                // be deep in history, so the walk cannot be safely capped without missing it.
+                if (pendingInBatch == 0) break
+            }
+        }
+        return resolved
+    }
 
-    override fun log(path: TreePath, limit: Int?): List<Commit> = throw NotImplementedError("W5")
+    /**
+     * Splits repo-relative paths into batches whose total pathspec bytes stay under
+     * [MAX_PATHSPEC_BYTES_PER_BATCH], so no single `git log … -- <paths>` invocation overflows the OS
+     * `ARG_MAX`. A path longer than the budget on its own gets its own (over-budget) batch rather than
+     * being silently dropped — git itself, not us, enforces the hard ceiling for that pathological case.
+     */
+    private fun batchPathspecs(repoPaths: Collection<String>): List<List<String>> {
+        val batches = mutableListOf<List<String>>()
+        var current = mutableListOf<String>()
+        var currentBytes = 0
+        for (path in repoPaths) {
+            val bytes = path.toByteArray().size + 1 // +1 for the inter-arg NUL the OS counts per argv entry
+            if (current.isNotEmpty() && currentBytes + bytes > MAX_PATHSPEC_BYTES_PER_BATCH) {
+                batches += current
+                current = mutableListOf()
+                currentBytes = 0
+            }
+            current += path
+            currentBytes += bytes
+        }
+        if (current.isNotEmpty()) batches += current
+        return batches
+    }
 
-    override fun diff(from: String, to: String, path: TreePath): FileDiff = throw NotImplementedError("W5")
+    /** The commit history of [path], newest first (along first-parent history), capped at [limit] when given. */
+    override fun log(path: TreePath, limit: Int?): List<Commit> {
+        val args = buildList {
+            add("log")
+            add("-z")
+            addAll(FIRST_PARENT)
+            limit?.let { add("--max-count=$it") }
+            add("--format=$LOG_FORMAT")
+            add("--")
+            add(repoPath(path))
+        }
+        val result = exec.run(args)
+        if (!result.ok) return emptyListOrThrow(result, "log")
+        return chunkFields(result.stdoutText).map(::commitFrom)
+    }
+
+    override fun diff(from: String, to: String, path: TreePath): FileDiff {
+        // `--no-ext-diff --no-textconv` (before the refs) disarm a repo-local `diff.external`/custom diff
+        // driver/`textconv` from `.git/config` or `.gitattributes` — otherwise hitting the diff read-path
+        // would run that helper as the server user (the read-path analog of W4's hostile-`.gitattributes`
+        // commit paranoia: arbitrary command execution from attacker-controlled repo config).
+        val result = exec.run(listOf("diff", "--no-ext-diff", "--no-textconv", from, to, "--", repoPath(path)))
+        // A bad/unknown ref is a CLIENT error the route maps to 404 (W5 P2): distinguish it from an
+        // OPERATIONAL failure (timeout, corrupt/inaccessible repo, unsupported flag) by git's bad-object
+        // stderr signature, and let every OTHER non-zero exit propagate as a GitCommandException (→ 500 via
+        // the route's default error path). Collapsing operational failures to 404 would hide them as "no diff".
+        if (!result.ok && isUnknownRevision(result)) {
+            throw UnknownRevisionException("diff $from..$to", result.exitCode, result.stderr)
+        }
+        result.orThrow("diff $from..$to")
+        return FileDiff(from = from, to = to, path = path, unifiedDiff = result.stdoutText)
+    }
+
+    /**
+     * Readies the content-root repo at startup (W5 P1): a NESTED `git init` at [workTree] when it has no
+     * own `.git`, never advancing an ancestor checkout (the [ensureRepo] `Files.exists(workTree/.git)`
+     * guard). Called AFTER the data-dir lock (P1-3) and BEFORE the first rebuild's `lastCommits` read, so
+     * a forced-on content root never aborts serve (plain dir → operational failure) nor reads the wrong
+     * ancestor repo. Idempotent — [commit] still calls [ensureRepo] too (harmless belt-and-suspenders).
+     */
+    override fun prepare() = ensureRepo()
 
     override fun gateCheck() {
         val version = exec.run(listOf("--version"))
@@ -176,6 +284,24 @@ class GitCliHistoryProvider(
                 "Git mode is on but the `git` binary is unavailable (${version.stderr.ifBlank { "exit ${version.exitCode}" }}). " +
                     "Install git and ensure it is on PATH, or set PLAINBASE_GIT_ENABLED=false to run without history.",
             )
+        }
+        // The read path (`log`/`lastCommits`) passes `--diff-merges=first-parent`, which git only learned in
+        // 2.31.0; on an older-but-present git every read exits non-zero and Git-mode startup (`rebuild` →
+        // `lastCommits`) aborts serve AFTER this gate passes. Validate the version floor here so it fails LOUD
+        // and actionable at the gate instead. An UNPARSEABLE `git version` line passes with a logged warning
+        // rather than false-failing a perfectly modern git whose banner we did not anticipate.
+        val parsed = parseGitVersion(version.stdoutText)
+        if (parsed == null) {
+            logger.warn { "could not parse git version from '${version.stdoutText.trim()}'; skipping the version-floor check" }
+        } else {
+            val (major, minor) = parsed
+            if (major < MIN_GIT_MAJOR || (major == MIN_GIT_MAJOR && minor < MIN_GIT_MINOR)) {
+                throw GitUnavailableException(
+                    "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
+                        "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
+                        "to run without history.",
+                )
+            }
         }
         // The binary is present, but `--version` never opens the worktree. When a repo IS present, validate
         // ACCESS to it so an inaccessible repo (Docker uid-mismatch `fatal: detected dubious ownership`,
@@ -252,18 +378,76 @@ class GitCliHistoryProvider(
     private fun show(sha: String): Commit {
         val result = exec.run(listOf("show", "-s", "--format=$SHOW_FORMAT", sha))
         result.orThrow("show -s")
-        // Fields are NUL-separated so any byte in a name/email/message parses unambiguously (LC_ALL=C,
-        // quotePath=false). The delimiter is Char(0) — a NUL written as code, never a literal NUL byte in
-        // the source (which would mark this .kt binary to git's diff/blame).
-        val fields = result.stdoutText.removeSuffix("\n").split(Char(0))
-        return Commit(
-            sha = fields[0],
-            author = CommitIdentity(name = fields[1], email = fields[2]),
-            committer = CommitIdentity(name = fields[4], email = fields[5]),
-            authorTime = Instant.fromEpochSeconds(fields[3].toLong()),
-            committerTime = Instant.fromEpochSeconds(fields[6].toLong()),
-            message = fields[7].removeSuffix("\n"),
-        )
+        return commitFrom(result.stdoutText.removeSuffix("\n").split(Char(0)))
+    }
+
+    /**
+     * Builds a [Commit] from its NUL-separated field tuple (`$SHOW_FORMAT`/`$LOG_FORMAT` order): the message
+     * (`%B`, last) keeps any embedded byte verbatim — only its single trailing newline is trimmed. NUL is
+     * the one byte git forbids in a commit object, so it can never appear inside a field and the framing is
+     * collision-proof (the §6 robustness choice over a printable record separator).
+     */
+    private fun commitFrom(fields: List<String>): Commit = Commit(
+        sha = fields[0],
+        author = CommitIdentity(name = fields[1], email = fields[2]),
+        committer = CommitIdentity(name = fields[4], email = fields[5]),
+        authorTime = Instant.fromEpochSeconds(fields[3].toLong()),
+        committerTime = Instant.fromEpochSeconds(fields[6].toLong()),
+        message = fields[7].removeSuffix("\n"),
+    )
+
+    /**
+     * Tokenizes a `git log -z --format=$LOG_FORMAT` stream (no `--name-only`) into per-commit field tuples.
+     * `-z` NUL-terminates each record AND `%x00` separates fields, so the whole stream is NUL-delimited
+     * tokens that chunk cleanly into [COMMIT_FIELD_COUNT]-field records. The trailing empty token (after the
+     * final record's terminator) leaves a short final chunk, which is dropped. Empty history → no records.
+     */
+    private fun chunkFields(stdout: String): List<List<String>> =
+        stdout.split(Char(0)).chunked(COMMIT_FIELD_COUNT).filter { it.size == COMMIT_FIELD_COUNT }
+
+    /**
+     * Parses a `git log -z --name-only` stream into (commit, touched-files) pairs. Under `-z`, each record
+     * is its [COMMIT_FIELD_COUNT] NUL-separated fields, then a SINGLE separator `\n` (the format/name-list
+     * boundary git emits once per record), then the touched filenames as further NUL-separated tokens. So
+     * ONLY the FIRST filename token carries that leading `\n`; every later filename token is the raw path.
+     * A record ends where the next full object-id token begins, so we read the fields, then consume filename
+     * tokens until the next SHA — robust to a body that itself contains control bytes (NUL excepted, which
+     * git forbids).
+     *
+     * The separator `\n` is stripped from the FIRST filename token ONLY — never with a blanket
+     * `removePrefix` on every token, which would corrupt the legitimate leading `\n` of a control-char
+     * filename (in-surface per the freeze-surface policy) that is NOT the first file of a multi-file commit.
+     *
+     * Empties are NOT filtered at the split (revision BLOCKING 2): an empty message (`--allow-empty-message`)
+     * or a blank identity field emits an empty token; dropping it at the root would shift every later field
+     * and misattribute commits. The fixed [COMMIT_FIELD_COUNT] stride keeps every metadata field intact;
+     * empty tokens are skipped ONLY in the inner filename walk (a real filename is never empty). A content
+     * path always contains `/` or `.` (never bare hex), so [SHA_TOKEN] can never mistake a filename for the
+     * next record boundary — see [SHA_TOKEN].
+     */
+    private fun parseLogWithNames(stdout: String): List<Pair<Commit, List<String>>> {
+        val tokens = stdout.split(Char(0))
+        val records = mutableListOf<Pair<Commit, List<String>>>()
+        var i = 0
+        while (i + COMMIT_FIELD_COUNT <= tokens.size && SHA_TOKEN.matches(tokens[i])) {
+            val commit = commitFrom(tokens.subList(i, i + COMMIT_FIELD_COUNT))
+            i += COMMIT_FIELD_COUNT
+            val files = mutableListOf<String>()
+            var firstFile = true
+            while (i < tokens.size && !SHA_TOKEN.matches(tokens[i])) {
+                // The format/name-list separator `\n` prefixes the FIRST filename token only; later tokens
+                // are raw, so a filename legitimately starting with `\n` keeps it (strip the separator, not
+                // the name's own leading byte).
+                val name = if (firstFile) tokens[i].removePrefix("\n") else tokens[i]
+                name.takeIf(String::isNotEmpty)?.let {
+                    files += it
+                    firstFile = false
+                }
+                i++
+            }
+            records += commit to files
+        }
+        return records
     }
 
     /**
@@ -319,13 +503,120 @@ class GitCliHistoryProvider(
         if (!ok) throw GitCommandException(step, exitCode, stderr)
     }
 
+    /**
+     * Classifies a failed read-path `git log`: an unborn HEAD / empty repo is the one BENIGN non-zero exit
+     * ("no history yet" → empty), but a timeout, corrupt/inaccessible repo, or an unsupported flag is an
+     * OPERATIONAL failure that must surface (the W4 fail-loud idiom — [orThrow]/[GitCommandException]),
+     * never collapse to empty. Collapsing the latter would persist a false `commit = null` for a page that
+     * genuinely has history (`IndexBuilder.reindex` does `log(path, 1).firstOrNull()?.sha`) and report a
+     * false empty on `/history`. A born repo asked for a never-committed path exits 0 with empty stdout, so
+     * it never reaches here; the only non-zero "no history" is the unborn case, recognized by its stderr.
+     */
+    private fun emptyListOrThrow(result: GitResult, step: String): List<Commit> {
+        if (isUnbornHead(result)) return emptyList()
+        result.orThrow(step)
+        return emptyList()
+    }
+
+    private fun emptyMapOrThrow(result: GitResult, step: String): Map<TreePath, Commit> {
+        if (isUnbornHead(result)) return emptyMap()
+        result.orThrow(step)
+        return emptyMap()
+    }
+
     private fun commitMessage(repoRelativePath: String): String = "Update $repoRelativePath"
+
+    /**
+     * True only for the unborn-HEAD / empty-repo failure (LC_ALL=C is pinned in [GitExecutor], so the
+     * English signature is stable): modern git says "does not have any commits yet"; older git / a missing
+     * HEAD says "bad default revision 'HEAD'" or "unknown revision … HEAD". Anything else (timeout, corrupt
+     * repo, unknown flag, permission) is operational and must throw.
+     */
+    private fun isUnbornHead(result: GitResult): Boolean = UNBORN_HEAD_STDERR.containsMatchIn(result.stderr)
+
+    /**
+     * True for a `git diff` failure caused by an UNRESOLVABLE `from`/`to` ref — the client error the route
+     * maps to 404 ("no such commit"), distinct from an operational failure (W5 P2). Stable under the pinned
+     * LC_ALL=C: git reports a bad ref as "fatal: bad object <sha>", "unknown revision or path not in the
+     * working tree", "bad revision <ref>", or "ambiguous argument '<ref>': unknown revision". Anything else
+     * (timeout, corrupt repo, permission, unsupported flag) is operational and must surface as 500.
+     */
+    private fun isUnknownRevision(result: GitResult): Boolean = UNKNOWN_REVISION_STDERR.containsMatchIn(result.stderr)
+
+    /**
+     * Extracts (major, minor) from a `git --version` banner, tolerant of vendor suffixes:
+     * `git version 2.54.0` → (2, 54); `git version 2.39.5 (Apple Git-154)` → (2, 39); `git version 2.25.1`
+     * → (2, 25). Anything that does not match the `git version <major>.<minor>` shape → null (the caller
+     * then PASSES with a warning rather than false-failing an unexpected-but-modern banner).
+     */
+    private fun parseGitVersion(banner: String): Pair<Int, Int>? {
+        val match = GIT_VERSION_LINE.find(banner) ?: return null
+        val (major, minor) = match.destructured
+        return major.toIntOrNull()?.let { maj -> minor.toIntOrNull()?.let { min -> maj to min } }
+    }
 
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        // NUL-separated so a name/email/message containing any whitespace or newline parses unambiguously.
+        // NUL-separated fields, `%B` (message) last. NUL is the one byte git forbids in a commit object, so
+        // a name/email/message can carry any other byte and still parse unambiguously. `show -s` reads one
+        // commit; `log` reads many under `-z`, which reuses NUL as the record terminator too (chunkFields /
+        // parseLogWithNames) — collision-proof, no printable record separator the body could mimic.
         private const val SHOW_FORMAT = "%H%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%B"
+        private const val LOG_FORMAT = SHOW_FORMAT
+
+        /** First-parent history flags applied to `log` and `lastCommits` alike (W5 debate MUST-FIX 3 +
+         *  revision BLOCKING 3). `--first-parent` is the TRAVERSAL flag: it walks only the first parent of
+         *  each merge, so a side-branch-only commit is never reported as a path's last touch. `--diff-merges=
+         *  first-parent` is the DISPLAY flag: a merge that resolves the path against its first parent still
+         *  shows (and thus attributes) the change. Together they realize the documented semantic: "the last
+         *  commit that touched the file along first-parent history". One without the other is a half-measure
+         *  (traversal alone hides merge-resolved changes; display alone leaks side-branch commits). */
+        private val FIRST_PARENT = listOf("--first-parent", "--diff-merges=first-parent")
+
+        // The git version floor for the read path: `--diff-merges=first-parent` (in [FIRST_PARENT]) is only
+        // a valid value since git 2.31.0 — that release taught `--diff-merges` the named convenience values
+        // (`first-parent`, `m`, `c`, `cc`, `on`, `off`); 2.30 accepted only `off`/`none`/`on`. Source: git
+        // 2.31.0 release notes (Documentation/RelNotes/2.31.0.txt, "the --diff-merges option learned ...").
+        // An older-but-present git (Ubuntu 20.04 → 2.25, Debian 11 → 2.30) would fail every read, so the gate
+        // rejects it loudly. The other read flags (`--first-parent`, `-z`, `--name-only`, `--max-count`,
+        // `--no-ext-diff`, `--no-textconv`, GIT_LITERAL_PATHSPECS) predate 2.31, so 2.31 is the binding floor.
+        private const val MIN_GIT_MAJOR = 2
+        private const val MIN_GIT_MINOR = 31
+
+        // `git version <major>.<minor>...` — anchored at the banner head, vendor suffixes (`(Apple Git-154)`)
+        // and the patch component ignored. Tolerant: an unrecognized banner yields no match (gate then PASSES
+        // with a warning rather than false-failing).
+        private val GIT_VERSION_LINE = Regex("""git version (\d+)\.(\d+)""")
+
+        private const val COMMIT_FIELD_COUNT = 8
+
+        // Per-`git log` pathspec-byte budget for [lastCommits] batching (P2). 128 KiB is far under the
+        // smallest realistic OS `ARG_MAX` (macOS ~1 MiB, Linux ~2 MiB) once env + the rest of argv are
+        // accounted for, yet large enough that normal trees (thousands of ~40-byte `.md` paths) fit in one
+        // invocation — so the common case is still ONE process, with batching kicking in only for huge trees.
+        private const val MAX_PATHSPEC_BYTES_PER_BATCH = 128 * 1024
+
+        // A full object id (40-hex SHA-1 or 64-hex SHA-256) — marks the start of the next record when walking
+        // the interleaved `--name-only -z` token stream. INVARIANT: a content path always contains `/` or `.`
+        // (page paths are `.md`, all queried paths are content paths), so it can never be bare hex and is never
+        // misread as a record boundary. A future generalization to arbitrary (extensionless top-level) paths
+        // would need a stronger record delimiter than "next bare object-id token".
+        private val SHA_TOKEN = Regex("[0-9a-f]{40}([0-9a-f]{24})?")
+
+        // The git stderr signatures for an unborn HEAD / empty repo across versions — the one BENIGN
+        // non-zero read exit (maps to empty). Stable under the pinned LC_ALL=C (GitExecutor): modern git
+        // emits "does not have any commits yet"; older git / a missing-ref HEAD emits "bad default
+        // revision 'HEAD'" or "unknown revision or path not in the working tree" for HEAD.
+        private val UNBORN_HEAD_STDERR =
+            Regex("""does not have any commits yet|bad default revision 'HEAD'|ambiguous argument 'HEAD': unknown revision""")
+
+        // The git stderr signatures for an UNRESOLVABLE diff ref (W5 P2) — a client 404, not an operational
+        // 500. Stable under LC_ALL=C across versions: a bad object id, an unknown revision, a bad revision, or
+        // an ambiguous-argument unknown-revision. Anything else (timeout, corrupt repo, unsupported flag) is
+        // operational and propagates as a GitCommandException.
+        private val UNKNOWN_REVISION_STDERR =
+            Regex("""fatal: bad object|unknown revision or path not in the working tree|fatal: bad revision|unknown revision""")
     }
 }
 
@@ -341,8 +632,16 @@ internal fun runAutoMaintenance(exec: GitExecutor) {
 }
 
 /** A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the W1 catch. */
-class GitCommandException(step: String, exitCode: Int, stderr: String) :
+open class GitCommandException(step: String, exitCode: Int, stderr: String) :
     RuntimeException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
+
+/**
+ * A `git diff` over a ref that does not resolve to a commit (W5 P2) — a CLIENT error the diff route maps to
+ * 404 `not_found`, distinct from an operational [GitCommandException] (which propagates → 500). Subtypes
+ * [GitCommandException] so the W1 commit-path catch and the provider-level `shouldThrow<GitCommandException>`
+ * read tests stay correct; the route catches THIS narrower type for its 404.
+ */
+class UnknownRevisionException(step: String, exitCode: Int, stderr: String) : GitCommandException(step, exitCode, stderr)
 
 /** The actionable startup gate-check failure when Git mode is on but the binary is missing. */
 class GitUnavailableException(message: String) : RuntimeException(message)

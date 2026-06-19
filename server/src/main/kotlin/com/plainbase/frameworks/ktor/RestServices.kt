@@ -3,6 +3,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IdProvider
@@ -40,6 +41,8 @@ class RestServices(
     val maxWriteBodyBytes: Long,
     /** W3b asset upload cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxAssetBytes]. */
     val maxAssetBytes: Long,
+    /** The W5 history read surface (`/history`, `/diff`); [HistoryProvider.enabled] is the `git_enabled` flag. */
+    val history: HistoryProvider,
 ) {
 
     /** The per-snapshot memoized `/api/v1/tree` JSON (§C4). */

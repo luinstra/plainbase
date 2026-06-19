@@ -47,7 +47,7 @@ class WritePipeline(
     private val dirtyPages: DirtyPageRepository,
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
-    private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+    private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> null },
 ) {
 
     @Synchronized
@@ -142,7 +142,7 @@ class WritePipeline(
     private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
         try {
             idMap.bind(intent.path, intent.pageId, materialized = true) // the create composed the id INTO frontmatter
-            historyHook.commit(intent.path, intent.bytes) // no-op until W4 — the same seam an edit uses
+            val commit = historyHook.commit(intent.path, intent.bytes) // W5: the create's commit SHA (null off Git)
             indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
             // P2: rebuild()'s publication-listener search sync is best-effort (its listener exceptions are
             // swallowed+logged), so a failed FTS sync would otherwise yield a clean 201 with the page
@@ -152,7 +152,7 @@ class WritePipeline(
             // is RETAINED for reconcile. Idempotent on success (a second single-page upsert).
             indexBuilder.reindex(intent.pageId)
             dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
-            WriteOutcome.Written(newHash = newHash, commit = null)
+            WriteOutcome.Written(newHash = newHash, commit = commit)
         } catch (e: Exception) {
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
             // the next startup reconciles. The cause is mapped to a structured code at the create route.
@@ -267,10 +267,10 @@ class WritePipeline(
     /** (3)+(4) Post-write steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun commitAndIndex(intent: WriteIntent, newHash: String): WriteOutcome =
         try {
-            historyHook.commit(intent.path, intent.bytes) // no-op until W4
+            val commit = historyHook.commit(intent.path, intent.bytes) // W5: the save's commit SHA (null off Git)
             indexBuilder.reindex(intent.pageId) // targeted O(1); THROWS on a vanished save-path page (MUST-FIX 4)
             dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
-            WriteOutcome.Written(newHash = newHash, commit = null)
+            WriteOutcome.Written(newHash = newHash, commit = commit)
         } catch (e: Exception) {
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
             // the next startup reconciles. The cause is mapped to a structured code at the W3 route.
@@ -333,7 +333,11 @@ data class CreateIntent(val pageId: PageId, val path: TreePath, val bytes: ByteA
  * The Git seam (PB-WRITE-1): a no-op default in W1, keeping the `WrittenButUnindexed`/commit-recovery
  * paths real and testable WITHOUT importing anything from `domain/history/` (W4). W4 rewires the Koin
  * `single` to its real `HistoryProvider.commit` adapter — a wiring change, not a signature change.
+ *
+ * Returns the recorded commit SHA (W5, F4): the save's new commit in Git mode, or null when history is
+ * off / the no-op default. The SHA threads into [WriteOutcome.Written.commit] so the W3 response carries
+ * the save's commit. A plain `String?` (not a domain `Commit`) keeps this seam framework-free.
  */
 fun interface WriteHistoryHook {
-    fun commit(path: TreePath, bytes: ByteArray)
+    fun commit(path: TreePath, bytes: ByteArray): String?
 }

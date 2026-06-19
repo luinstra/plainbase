@@ -11,6 +11,7 @@ import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.server.testing.ApplicationTestBuilder
@@ -66,6 +67,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            history = NoOpHistoryProvider,
         )
     }
 

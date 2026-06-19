@@ -220,7 +220,10 @@ class WriteRouteCreateTest : FunSpec({
 
         // On-Git stand-in: a RECORDING hook is invoked with the created path + the composed bytes.
         val recorded = AtomicReference<Pair<String, ByteArray>>()
-        val recording = WriteHistoryHook { path, bytes -> recorded.set(path.value to bytes) }
+        val recording = WriteHistoryHook { path, bytes ->
+            recorded.set(path.value to bytes)
+            null
+        }
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider(), historyHook = recording) { harness ->
             client.post("/api/v1/pages") {
                 contentType(json())

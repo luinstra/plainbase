@@ -13,6 +13,7 @@ import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -61,6 +62,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
+                    history = NoOpHistoryProvider,
                     listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
                     searchIndexer = searchIndexer,
                 )
@@ -85,6 +87,7 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     idProvider = UuidV7IdProvider(),
                     maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
                     maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                    history = NoOpHistoryProvider,
                 )
                 block(services)
             }

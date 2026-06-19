@@ -47,7 +47,7 @@ class RestGoldenTest : FunSpec({
             "(#[^@]+)?@([0-9a-f]{7,40}|sha256:[0-9a-f]{64})$",
     )
 
-    fun goldenTest(block: suspend ApplicationTestBuilder.(RestHarness) -> Unit) = restTest(Fixtures.demoDocs, seed, block)
+    fun goldenTest(block: suspend ApplicationTestBuilder.(RestHarness) -> Unit) = restTest(Fixtures.demoDocs, seed, block = block)
 
     suspend fun HttpResponse.jsonBody(): JsonObject {
         status shouldBe HttpStatusCode.OK

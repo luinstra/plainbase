@@ -38,6 +38,7 @@ val indexModule = module {
             aliasRegistry = get(),
             checkpoint = get(),
             citations = get(),
+            history = get(),
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),

@@ -28,7 +28,10 @@ class AssetUploadNoHistoryTest : FunSpec({
 
     test("an asset upload fires no history commit (assets are unversioned in Phase 3)") {
         val commits = AtomicInteger(0)
-        val countingHook = WriteHistoryHook { _, _ -> commits.incrementAndGet() }
+        val countingHook = WriteHistoryHook { _, _ ->
+            commits.incrementAndGet()
+            null
+        }
         writeRestTest(Fixtures.demoDocs, seed, historyHook = countingHook) { _ ->
             val post = client.post("/api/v1/pages/$deployGuideId/assets?filename=diagram.png") { setBody(png) }
             post.status shouldBe HttpStatusCode.Created

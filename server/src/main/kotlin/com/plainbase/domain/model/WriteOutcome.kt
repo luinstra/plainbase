@@ -15,9 +15,9 @@ import com.plainbase.domain.content.TreePath
 sealed interface WriteOutcome {
 
     /**
-     * Disk write + every post-write step (reindex, and in W4 the commit) succeeded. [commit] is the
-     * recorded Git commit — always null in W1 (no history layer; the [com.plainbase.domain.service]
-     * WriteHistoryHook seam defaults to a no-op).
+     * Disk write + every post-write step (reindex, and the commit) succeeded. [commit] is the recorded
+     * Git commit SHA the save produced (W5) — null when history is off (the [com.plainbase.domain.service]
+     * WriteHistoryHook seam returns null for the no-op adapter).
      */
     data class Written(val newHash: String, val commit: String?) : WriteOutcome
 

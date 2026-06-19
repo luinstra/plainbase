@@ -12,6 +12,7 @@ import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SearchResults
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -144,6 +145,7 @@ private class ReindexHarness(root: Path) : AutoCloseable {
         aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
         checkpoint = checkpoint,
         citations = CitationFactory(),
+        history = NoOpHistoryProvider,
         listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
         searchIndexer = SearchIndexer(search, SectionSplitter()),
     )

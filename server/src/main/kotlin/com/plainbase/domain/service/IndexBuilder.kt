@@ -6,6 +6,7 @@ import com.plainbase.domain.content.ContentFile
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
@@ -73,6 +74,7 @@ class IndexBuilder(
     private val aliasRegistry: UrlAliasRegistry,
     private val checkpoint: PageCheckpointRepository,
     private val citations: CitationFactory,
+    private val history: HistoryProvider,
     private val listeners: List<PublicationListener> = emptyList(),
     private val searchIndexer: SearchIndexer? = null,
 ) {
@@ -120,6 +122,11 @@ class IndexBuilder(
         )
         urls.issues.forEach(idMap::record)
 
+        // ONE batched last-commit read for the whole page set (W5 D-3 / fix-C corollary): never one query
+        // per page. NoOp → empty map → every commit null off Git (the frozen-golden invariant). The map
+        // is keyed by the same TreePath the draft carries; an uncommitted page is simply absent (→ null).
+        val commitMap = history.lastCommits(drafts.map { it.file.path })
+
         // Render against a URL-complete skeleton of the final snapshot type: identity and URLs are
         // already final, render fields are filled by the single render below.
         val provisional = drafts.map { draft ->
@@ -137,6 +144,7 @@ class IndexBuilder(
                 // payload a request answers with is coherent BY CONSTRUCTION (see IndexedPage doc).
                 markdown = String(draft.bytes, Charsets.UTF_8),
                 contentHash = citations.contentHash(draft.bytes),
+                commit = commitMap[draft.file.path]?.sha,
                 html = "",
                 headings = emptyList(),
                 links = emptyList(),
@@ -229,10 +237,17 @@ class IndexBuilder(
             ?: error("reindex($pageId): ${target.path.value} unreadable just after a CAS write")
         val parsed = frontmatterParser.parse(bytes)
         val rendered = rendererFactory(previous).render(target.path, bytes)
+        // One genuinely O(1) last-commit lookup for just this page (D-3, reversed by re-review P2-1): a
+        // BOUNDED `git log --max-count=1 -- path`, NEVER `lastCommits` — which has no cap and buffers the
+        // page's FULL history before parsing, so for a heavily-edited page every save/reconcile would read
+        // the whole history (unbounded; can time out / null the commit). `log(path, 1)` shares `rebuild`'s
+        // first-parent attribution, so the citation SHA stays consistent between the two paths.
+        val commit = history.log(target.path, limit = 1).firstOrNull()?.sha
         val reindexed = target.copy(
             frontmatter = parsed,
             markdown = String(bytes, Charsets.UTF_8),
             contentHash = citations.contentHash(bytes),
+            commit = commit,
             title = parsed.scalar("title") ?: rendered.headings.firstOrNull { it.level == 1 }?.text ?: target.path.stem,
             html = rendered.html,
             headings = rendered.headings.toList(),

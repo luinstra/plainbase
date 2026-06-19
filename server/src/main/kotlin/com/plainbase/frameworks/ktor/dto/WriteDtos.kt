@@ -21,7 +21,10 @@ import kotlinx.serialization.Serializable
  * =================================================================================
  */
 
-/** 200 (`WriteOutcome.Written`): exactly two keys; `commit` present-null until W5. NO `warning` key. */
+/**
+ * 200 (`WriteOutcome.Written`): exactly two keys; `commit` is populated with the save's commit SHA in
+ * Git mode (W5) and null off Git / no history. NO `warning` key.
+ */
 @Serializable
 data class WrittenResponse(
     @SerialName("content_hash") val contentHash: String,

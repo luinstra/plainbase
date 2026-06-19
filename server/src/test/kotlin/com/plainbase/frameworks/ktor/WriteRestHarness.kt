@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IdProvider
@@ -13,6 +14,7 @@ import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.client.HttpClient
@@ -33,13 +35,22 @@ import java.nio.file.Path
 class WriteRestHarness(
     fixtureRoot: Path,
     seed: (IdMapRepository) -> Unit = {},
-    historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+    historyHook: WriteHistoryHook? = null,
     idProvider: IdProvider = UuidV7IdProvider(),
     private val storeOverride: ((LocalContentStore) -> com.plainbase.domain.content.ContentStore)? = null,
+    historyFactory: (Path) -> HistoryProvider = { NoOpHistoryProvider },
 ) : AutoCloseable {
 
     /** A private, mutable copy of the fixture tree — deleted on [close]; the committed tree is never touched. */
     val root: Path = Files.createTempDirectory("plainbase-write-root")
+
+    /**
+     * The history provider over THIS harness's own root (F4 Git-mode write tests). The hook used by the
+     * pipeline defaults to this provider's `commit(...).sha` — so a real Git provider drives BOTH the
+     * commit a save records AND the read-side citations. An explicit [historyHook] override wins (the
+     * recording/throwing seams the WrittenButUnindexed tests need).
+     */
+    val history: HistoryProvider = historyFactory(root)
     private val store = LocalContentStore(root)
     private val pipelineStore = storeOverride?.invoke(store) ?: store
     private val searchDir = Files.createTempDirectory("plainbase-write-search")
@@ -54,6 +65,7 @@ class WriteRestHarness(
     private val harness = IndexHarness(
         root,
         contentStore = pipelineStore,
+        history = history,
         listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
         searchIndexer = searchIndexer,
     )
@@ -68,11 +80,17 @@ class WriteRestHarness(
     init {
         copyTree(fixtureRoot, root)
         seed(harness.idMap)
+        // Ready the history store before the first rebuild (the production startup order): a Git provider
+        // git-inits its content-root repo here, so rebuild's `lastCommits` reads a real (if unborn) repo
+        // instead of failing exit-128. NoOp: a no-op.
+        history.prepare()
         harness.builder.rebuild()
         // The pipeline, the route-facing contentStore, AND the index builder all run over the same
         // (possibly wrapped) store. Override wrappers delegate scan/read to the real copy via `by real`,
-        // so the snapshot stays genuine; with no override, pipelineStore === store (a no-op).
-        val pipeline = harness.writePipeline(historyHook, store = pipelineStore)
+        // so the snapshot stays genuine; with no override, pipelineStore === store (a no-op). With no
+        // explicit hook, the pipeline commits through `history` (NoOp → null; a Git provider → the SHA).
+        val hook = historyHook ?: WriteHistoryHook { path, bytes -> history.commit(path, bytes)?.sha }
+        val pipeline = harness.writePipeline(hook, store = pipelineStore)
         services = RestServices(
             indexBuilder = harness.builder,
             pageService = PageService(harness.builder, harness.registry, CitationFactory()),
@@ -84,6 +102,7 @@ class WriteRestHarness(
             idProvider = idProvider,
             maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            history = history,
         )
     }
 
@@ -120,12 +139,13 @@ class WriteRestHarness(
 fun writeRestTest(
     fixtureRoot: Path,
     seed: (IdMapRepository) -> Unit = {},
-    historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> },
+    historyHook: WriteHistoryHook? = null,
     idProvider: IdProvider = UuidV7IdProvider(),
     storeOverride: ((LocalContentStore) -> com.plainbase.domain.content.ContentStore)? = null,
+    historyFactory: (Path) -> HistoryProvider = { NoOpHistoryProvider },
     block: suspend ApplicationTestBuilder.(WriteRestHarness) -> Unit,
 ) {
-    WriteRestHarness(fixtureRoot, seed, historyHook, idProvider, storeOverride).use { harness ->
+    WriteRestHarness(fixtureRoot, seed, historyHook, idProvider, storeOverride, historyFactory).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }
             block(harness)

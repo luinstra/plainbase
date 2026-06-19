@@ -8,6 +8,7 @@ import com.plainbase.frameworks.ktor.routes.assetRoute
 import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
 import com.plainbase.frameworks.ktor.routes.docsRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
+import com.plainbase.frameworks.ktor.routes.historyRoutes
 import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
 import com.plainbase.frameworks.ktor.routes.pageCreateRoutes
 import com.plainbase.frameworks.ktor.routes.pageRoutes
@@ -100,6 +101,8 @@ fun Application.plainbaseModule(services: RestServices) {
         pageWriteRoutes(services)
         // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
         pageCreateRoutes(services)
+        // W5 per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
+        historyRoutes(services)
         // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.
         previewRoute(services)
         treeRoute(services)

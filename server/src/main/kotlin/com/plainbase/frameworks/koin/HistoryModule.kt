@@ -28,7 +28,7 @@ val historyModule = module {
     single<HistoryProvider> { selectHistoryProvider(get(), get<ContentStore>()::resolveRepoRelativePath) }
     single<WriteHistoryHook> {
         val history = get<HistoryProvider>()
-        WriteHistoryHook { path, bytes -> history.commit(path, bytes) }
+        WriteHistoryHook { path, bytes -> history.commit(path, bytes)?.sha }
     }
 }
 

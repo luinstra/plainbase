@@ -129,6 +129,50 @@ class GitExecutorTest : FunSpec({
         }
     }
 
+    test("stdout exceeding the byte cap force-kills git and returns an actionable failure, never an OOM (W5)") {
+        // A fake git that floods stdout WELL past a tiny injected cap is the deterministic OOM-DoS trigger
+        // (a repo with a huge diff / very deep history). The drain must force-kill and fail loud, not buffer
+        // it all. `yes` streams forever until the pipe breaks on the kill — so this also proves the kill
+        // happens (the process does not run to completion emitting unbounded output).
+        withFakeGit("#!/bin/sh\nyes floooooood\n") { root, home, git ->
+            val exec = GitExecutor(workTree = root, home = home, timeoutSeconds = 30, gitBinary = git, maxStdoutBytes = 64L * 1024)
+            val elapsed = measureTime {
+                val result = exec.run(listOf("log"))
+                result.ok shouldBe false
+                result.exitCode shouldBe -1
+                result.stderr shouldContain "exceeded the in-memory read cap"
+                // Buffered bytes are bounded near the cap, never the unbounded flood `yes` would otherwise emit.
+                result.stdout.size.toLong() shouldBeLessThan (64L * 1024 + 1024 * 1024)
+            }
+            // The kill is prompt — far under the 30s timeout (which bounds TIME, not BYTES). If the cap did not
+            // fire, `yes` would only stop at the 30s timeout.
+            elapsed.inWholeSeconds shouldBeLessThan 15L
+        }
+    }
+
+    test("stderr exceeding its byte cap also force-kills git and fails loud (W5)") {
+        withFakeGit("#!/bin/sh\nyes floooooood >&2\n") { root, home, git ->
+            val exec = GitExecutor(workTree = root, home = home, timeoutSeconds = 30, gitBinary = git, maxStderrBytes = 64L * 1024)
+            val elapsed = measureTime {
+                val result = exec.run(listOf("log"))
+                result.ok shouldBe false
+                result.stderr shouldContain "exceeded the in-memory read cap"
+            }
+            elapsed.inWholeSeconds shouldBeLessThan 15L
+        }
+    }
+
+    test("output under the cap is unaffected — a normal-size read returns its full stdout (W5)") {
+        // A bounded emission well under the cap must come back whole and successful — the cap is a safety
+        // floor, not a truncator of normal reads (proves the common path is untouched).
+        withFakeGit("#!/bin/sh\nyes payloadline | head -n 1000\n") { root, home, git ->
+            val exec = GitExecutor(workTree = root, home = home, gitBinary = git, maxStdoutBytes = 64L * 1024)
+            val result = exec.run(listOf("log"))
+            result.ok shouldBe true
+            result.stdoutText.lines().count { it == "payloadline" } shouldBe 1000
+        }
+    }
+
     test("a git that spawns a pipe-holding child and hangs still returns within the bounded timeout (P2-1)") {
         // The fake git backgrounds a child that INHERITS stdout (`sleep 60 &` — fd 1 stays open) and then the
         // parent itself blocks. destroyForcibly() kills only the direct process; the surviving grandchild

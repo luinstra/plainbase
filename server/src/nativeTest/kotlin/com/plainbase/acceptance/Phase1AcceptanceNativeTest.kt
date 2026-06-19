@@ -9,6 +9,7 @@ import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -86,6 +87,7 @@ class Phase1AcceptanceNativeTest {
             aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
             checkpoint = SqlDelightPageCheckpointRepository(database),
             citations = CitationFactory(),
+            history = NoOpHistoryProvider,
         )
     }
 

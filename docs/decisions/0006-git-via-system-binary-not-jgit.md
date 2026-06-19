@@ -61,7 +61,10 @@ The executor is the only place that spawns `git`, and it is hermetic by construc
 - Plainbase-initiated commits skip repo hooks (`--no-verify` / `hooksPath=/dev/null`) — running an
   arbitrary repo's hooks inside the server process is an RCE surface. Documented choice.
 - Structured `GitResult` over exit codes + captured stderr. When Git mode is ON, a startup
-  `git --version` gate-check fails fast with a clear, actionable message.
+  `git --version` gate-check fails fast with a clear, actionable message — including a **git >= 2.31**
+  floor (the history reads pass `--diff-merges=first-parent`, valid only since git 2.31.0). An
+  older-but-present git (e.g. Ubuntu 20.04 → 2.25, Debian 11 → 2.30) is rejected at the gate, not at the
+  first read. The shipped Dockerfile carries a modern git, so containers are unaffected.
 
 **Install-promise scoping:** Git OFF → the binary ships clean with zero git dependency surface. Git
 ON → the user has `git` (it is their workflow); the precondition is gate-checked. "One binary, no
@@ -79,8 +82,9 @@ deps" stays true for everyone who has not opted into history.
 
 **Trade-offs**
 
-- Git mode requires `git` present on the host. Accepted: it is an opt-in feature whose audience runs
-  git already; absence is gate-checked, not silently broken.
+- Git mode requires `git` **>= 2.31** present on the host (for `--diff-merges=first-parent` on the read
+  path). Accepted: it is an opt-in feature whose audience runs git already; an absent or too-old git is
+  gate-checked at startup, not silently broken.
 - Reading `git log`/`git diff` means a stable machine format (`--format`, `-z`, plumbing) rather than
   JGit's typed objects. Bounded parsing, covered by tests.
 

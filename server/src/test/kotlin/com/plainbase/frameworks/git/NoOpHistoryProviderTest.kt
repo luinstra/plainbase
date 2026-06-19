@@ -20,6 +20,7 @@ class NoOpHistoryProviderTest : FunSpec({
             NoOpHistoryProvider.lastCommits(listOf(path)).shouldBeEmpty()
             NoOpHistoryProvider.log(path).shouldBeEmpty()
             NoOpHistoryProvider.diff("a", "b", path).unifiedDiff shouldBe ""
+            NoOpHistoryProvider.prepare() // no-op: creates no `.git`, spawns nothing (W5 P1)
             NoOpHistoryProvider.gateCheck() // never throws
             Files.exists(root.resolve(".git")) shouldBe false
         } finally {

@@ -71,23 +71,45 @@ private fun serve() {
         System.err.println("serve: another Plainbase process is holding ${config.dataDir} — stop it before starting a second instance")
         exitProcess(1)
     }
-    val builder = koin.get<IndexBuilder>()
-    // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
-    // Events arriving while the initial build is in flight coalesce into at most one follow-up
-    // rebuild via the scheduler's single-flight dirty flag.
-    val scheduler = RebuildScheduler(rebuild = { builder.rebuild() })
-    val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
+    // Everything past the lock runs INSIDE the try/finally so the lock ALWAYS releases — including a
+    // prepare() failure (a forced-on Git hitting a read-only/disk-full content dir, or a `git init` fault),
+    // which must surface as the same actionable `serve:` message as gateCheck(), never a raw stack trace
+    // that also leaks the lock. Startup ORDER is unchanged: gateCheck (pre-lock) → lock → prepare() →
+    // watcher → rebuild.
     try {
-        // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
-        // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
-        builder.rebuild()
-        // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
-        // and before serving — drift-skips a page whose on-disk bytes changed since the crash.
-        koin.get<WritePipeline>().reconcileDirtyPages()
-        KtorServer(config, koin.get()).start(wait = true)
+        // W5 P1: ready the history backing store now — AFTER the lock validates/owns DATA_DIR (P1-3: never
+        // touch it before the lock; this is why repo init was lazy) and BEFORE the watcher and the first
+        // rebuild. The startup rebuild reads (lastCommits) before any save commits, and `git -C workTree log`
+        // walks UP to an ancestor `.git` when CONTENT_DIR has none — so a forced-on content root with no own
+        // repo would otherwise abort serve (plain dir) or read the wrong ancestor repo. NoOp is a no-op.
+        try {
+            koin.get<HistoryProvider>().prepare()
+        } catch (e: Exception) {
+            // exitProcess terminates the JVM without running the outer finally, so release the lock
+            // explicitly here — otherwise a forced-on Git failure would leak it in embedded/test use.
+            lock.close()
+            System.err.println("serve: ${e.message}")
+            exitProcess(1)
+        }
+        val builder = koin.get<IndexBuilder>()
+        // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
+        // Events arriving while the initial build is in flight coalesce into at most one follow-up
+        // rebuild via the scheduler's single-flight dirty flag.
+        val scheduler = RebuildScheduler(rebuild = { builder.rebuild() })
+        val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
+        try {
+            // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
+            // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
+            builder.rebuild()
+            // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
+            // and before serving — drift-skips a page whose on-disk bytes changed since the crash.
+            koin.get<WritePipeline>().reconcileDirtyPages()
+            KtorServer(config, koin.get()).start(wait = true)
+        } finally {
+            watch.close()
+            scheduler.close()
+        }
     } finally {
-        watch.close()
-        scheduler.close()
         lock.close()
     }
 }

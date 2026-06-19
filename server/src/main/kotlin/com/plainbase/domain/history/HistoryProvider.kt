@@ -17,6 +17,12 @@ import kotlin.time.Instant
 interface HistoryProvider {
 
     /**
+     * Whether this provider is backed by a real Git repo (false for the no-op adapter). Surfaced to
+     * clients as `git_enabled` so "Git off" is distinguishable from "Git on, no commits yet" (W5 D-4).
+     */
+    val enabled: Boolean
+
+    /**
      * Commits the EXACT [bytes] (the W1 hook bytes — filter-free and disk-independent, never a disk
      * re-read) at [path] as ONE new commit, returning the recorded [Commit] (null only for the no-op
      * adapter). An external edit between the W1 CAS and this call cannot alter what is committed: the
@@ -37,6 +43,20 @@ interface HistoryProvider {
 
     /** The unified diff of [path] between commits [from] and [to]. */
     fun diff(from: String, to: String, path: TreePath): FileDiff
+
+    /**
+     * Readies the backing store so reads and commits operate on the EXACT content root. Called ONCE at
+     * startup, AFTER the data-dir lock is held and BEFORE the first rebuild (W5 P1). NoOp: no-op. Git:
+     * ensures the content-root repo exists, creating a NESTED repo at CONTENT_DIR when it has no own
+     * `.git` (never advancing an ancestor checkout) — idempotent.
+     *
+     * Why a distinct step from the lazy first-commit init: the startup `rebuild()` reads (`lastCommits`)
+     * BEFORE any save commits, and `git -C workTree log` walks UP to an ancestor `.git` when CONTENT_DIR
+     * has none — so a forced-on content root with no own repo would either abort serve (plain dir →
+     * operational failure) or silently read the wrong ancestor repo. Creating the content-root repo here
+     * — after the lock validates DATA_DIR (P1-3: never touch it before the lock) — closes both holes.
+     */
+    fun prepare()
 
     /**
      * Fails fast (with an operator-actionable message) when this provider cannot operate — for the Git

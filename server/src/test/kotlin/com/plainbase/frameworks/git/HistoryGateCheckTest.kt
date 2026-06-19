@@ -4,6 +4,7 @@ import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import java.nio.file.Path
@@ -94,8 +95,137 @@ class HistoryGateCheckTest : FunSpec({
         }
     }
 
+    // R7 (P2): the read path passes `--diff-merges=first-parent`, valid only since git 2.31.0. An
+    // older-but-present git (Ubuntu 20.04 → 2.25) would pass the binary/access checks, then abort serve at the
+    // first read (`rebuild` → `lastCommits`). The gate now rejects a sub-floor version LOUD and actionable.
+    test("git mode on with a too-old git fails the gate with an actionable upgrade message") {
+        val root = Files.createTempDirectory("gate-old-git")
+        val home = Files.createTempDirectory("gate-old-git-home")
+        try {
+            // No `.git`, so only the version check applies; a fake git reporting the Ubuntu 20.04 version.
+            val fakeGit = fakeGit(
+                "#!/bin/sh\n" +
+                    "case \"$*\" in\n" +
+                    "  *--version*) echo 'git version 2.25.1'; exit 0 ;;\n" +
+                    "  *) exit 0 ;;\n" +
+                    "esac\n",
+            )
+            try {
+                val exec = GitExecutor(workTree = root, home = home, gitBinary = fakeGit.toString())
+                val provider = providerOver(exec, root, home, maintenance = {})
+                val error = shouldThrow<GitUnavailableException> { provider.gateCheck() }
+                error.message!! shouldContain "2.31"
+                error.message!! shouldContain "2.25"
+                error.message!! shouldContain "PLAINBASE_GIT_ENABLED=false"
+            } finally {
+                fakeGit.toFile().delete()
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+            home.toFile().deleteRecursively()
+        }
+    }
+
+    // A modern vendor banner (`(Apple Git-154)` suffix) must parse to 2.39 and PASS — the version regex
+    // tolerates the trailing vendor string.
+    test("git mode on with a modern vendor-suffixed git passes the version gate") {
+        val root = Files.createTempDirectory("gate-vendor-git")
+        val home = Files.createTempDirectory("gate-vendor-git-home")
+        try {
+            val fakeGit = fakeGit(
+                "#!/bin/sh\n" +
+                    "case \"$*\" in\n" +
+                    "  *--version*) echo 'git version 2.39.5 (Apple Git-154)'; exit 0 ;;\n" +
+                    "  *) exit 0 ;;\n" +
+                    "esac\n",
+            )
+            try {
+                val exec = GitExecutor(workTree = root, home = home, gitBinary = fakeGit.toString())
+                shouldNotThrowAny { providerOver(exec, root, home, maintenance = {}).gateCheck() }
+            } finally {
+                fakeGit.toFile().delete()
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+            home.toFile().deleteRecursively()
+        }
+    }
+
+    // An unparseable banner is NOT a false-fail: a present git whose version line we cannot read PASSES with
+    // a logged warning (better than rejecting a perfectly modern git over an unanticipated banner shape).
+    test("git mode on with an unparseable version banner passes the gate") {
+        val root = Files.createTempDirectory("gate-weird-git")
+        val home = Files.createTempDirectory("gate-weird-git-home")
+        try {
+            val fakeGit = fakeGit(
+                "#!/bin/sh\n" +
+                    "case \"$*\" in\n" +
+                    "  *--version*) echo 'totally unexpected banner'; exit 0 ;;\n" +
+                    "  *) exit 0 ;;\n" +
+                    "esac\n",
+            )
+            try {
+                val exec = GitExecutor(workTree = root, home = home, gitBinary = fakeGit.toString())
+                shouldNotThrowAny { providerOver(exec, root, home, maintenance = {}).gateCheck() }
+            } finally {
+                fakeGit.toFile().delete()
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+            home.toFile().deleteRecursively()
+        }
+    }
+
     test("NoOp gate-check is always a clean no-op") {
         shouldNotThrowAny { NoOpHistoryProvider.gateCheck() }
+    }
+
+    // W5 revision MINOR: `prepare()` runs in `serve()` INSIDE the lock's try/finally and INSIDE the
+    // actionable-error catch (mirroring gateCheck). A forced-on Git that cannot init its content-root repo
+    // (read-only dir, disk-full, a `git init` fault) must THROW from prepare() so `serve()` presents the
+    // operator-friendly `serve:` message and releases the lock — never a raw stack trace. This proves the
+    // catch has a real throwable to surface.
+    test("prepare() throws an actionable git failure when the content-root repo cannot be initialized") {
+        val root = Files.createTempDirectory("prepare-init-fail")
+        val home = Files.createTempDirectory("prepare-init-fail-home")
+        try {
+            // No `.git` present → prepare()/ensureRepo() runs `git init`; the fake git fails it (exit 128).
+            val fakeGit = fakeGit(
+                "#!/bin/sh\n" +
+                    "case \"$*\" in\n" +
+                    "  *init*) echo 'fatal: could not create work tree dir: Permission denied' >&2; exit 128 ;;\n" +
+                    "  *) exit 0 ;;\n" +
+                    "esac\n",
+            )
+            try {
+                val exec = GitExecutor(workTree = root, home = home, gitBinary = fakeGit.toString())
+                val provider = providerOver(exec, root, home, maintenance = {})
+                val error = shouldThrow<GitCommandException> { provider.prepare() }
+                error.message!! shouldContain "git init"
+            } finally {
+                fakeGit.toFile().delete()
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+            home.toFile().deleteRecursively()
+        }
+    }
+
+    test("DataDirLock releases on close so a forced-on prepare() failure never leaks it") {
+        // The lock-leak half of the MINOR: serve() closes the lock in the prepare()-failure catch before
+        // exitProcess (which skips finally). Proven structurally — a released lock is re-acquirable; a leaked
+        // one is not. tryAcquire after close must succeed.
+        val dataDir = Files.createTempDirectory("prepare-lock-release")
+        try {
+            val first = com.plainbase.frameworks.filesystem.DataDirLock.tryAcquire(dataDir)
+            first shouldNotBe null
+            first!!.close()
+            val second = com.plainbase.frameworks.filesystem.DataDirLock.tryAcquire(dataDir)
+            second shouldNotBe null
+            second!!.close()
+        } finally {
+            dataDir.toFile().deleteRecursively()
+        }
     }
 })
 

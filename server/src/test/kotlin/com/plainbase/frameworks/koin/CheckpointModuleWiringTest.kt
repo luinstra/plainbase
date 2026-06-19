@@ -35,6 +35,7 @@ class CheckpointModuleWiringTest : FunSpec({
                         contentModule,
                         repositoryModule,
                         securityModule,
+                        historyModule,
                         indexModule,
                         checkpointModule,
                         searchModule,

@@ -13,6 +13,8 @@ import com.plainbase.domain.history.HistoryProvider
  */
 object NoOpHistoryProvider : HistoryProvider {
 
+    override val enabled: Boolean = false
+
     override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? = null
 
     override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = emptyMap()
@@ -21,6 +23,8 @@ object NoOpHistoryProvider : HistoryProvider {
 
     override fun diff(from: String, to: String, path: TreePath): FileDiff =
         FileDiff(from = from, to = to, path = path, unifiedDiff = "")
+
+    override fun prepare() = Unit
 
     override fun gateCheck() = Unit
 }

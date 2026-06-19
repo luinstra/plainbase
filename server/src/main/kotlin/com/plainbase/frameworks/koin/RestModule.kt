@@ -35,6 +35,7 @@ val restModule = module {
             idProvider = get(),
             maxWriteBodyBytes = get<PlainbaseConfig>().maxWriteBodyBytes,
             maxAssetBytes = get<PlainbaseConfig>().maxAssetBytes,
+            history = get(),
         )
     }
 }

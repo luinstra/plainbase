@@ -35,7 +35,7 @@ class WritePipelineGitConcurrencyTest : FunSpec({
         try {
             val exec = GitExecutor(workTree = root, home = home)
             val provider = providerOver(exec, root, home)
-            val hook = WriteHistoryHook { path, bytes -> provider.commit(path, bytes) }
+            val hook = WriteHistoryHook { path, bytes -> provider.commit(path, bytes)?.sha }
 
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()

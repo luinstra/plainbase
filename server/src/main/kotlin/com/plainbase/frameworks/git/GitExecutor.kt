@@ -3,8 +3,11 @@ package com.plainbase.frameworks.git
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 
 /**
@@ -16,6 +19,7 @@ import kotlin.concurrent.thread
  * No reflection, no `@Volatile`, kotlin stdlib only — native-image safe. The provider above this never
  * touches `ProcessBuilder`; this never knows the commit recipe.
  */
+@OptIn(ExperimentalAtomicApi::class)
 class GitExecutor(
     private val workTree: Path,
     private val home: Path,
@@ -26,6 +30,16 @@ class GitExecutor(
     // point at a fake `git` script that shapes stdout/stderr deterministically (the F1 stderr proof, the
     // flood/timeout proofs). ProcessBuilder resolves a bare name via the JVM's PATH, not the child env.
     private val gitBinary: String = "git",
+    // Byte ceilings on what a single git invocation may emit. The timeout bounds TIME, not BYTES — but
+    // W5's reads return attacker/size-controlled output (`/history` full `git log`, `/diff` full diff, the
+    // startup `lastCommits` walk), so a repo with huge messages / very deep history / a huge diff could
+    // emit enough WITHIN the timeout to exhaust JVM/native-image memory. On exceed the process is
+    // force-killed and the call comes back a failure GitResult (NOT a throw — the provider's fail-loud
+    // path turns it into a GitCommandException, preserving the "executor never throws, W1 monitor always
+    // releases" contract). The defaults are generous so a normal/large-but-sane repo never trips them;
+    // injectable so a test can drive the path cheaply.
+    private val maxStdoutBytes: Long = DEFAULT_MAX_STDOUT_BYTES,
+    private val maxStderrBytes: Long = DEFAULT_MAX_STDERR_BYTES,
 ) {
 
     /**
@@ -55,6 +69,12 @@ class GitExecutor(
             put("GIT_TERMINAL_PROMPT", "0")
             put("GIT_ASKPASS", "true")
             put("GIT_OPTIONAL_LOCKS", "0")
+            // Every read path arg after `--` (log/diff/lastCommits) is a PATHSPEC, not a literal filename:
+            // a page named `foo[1].md` would be read as a glob/magic pathspec and match OTHER pages (wrong
+            // commits/diff) or none (dropped citation) — `--` separates options from paths, it does NOT force
+            // literal. One env var here makes ALL pathspecs literal. Harmless to the commit recipe, whose only
+            // path arg (`update-index --cacheinfo`) is already a literal pathname, not a pathspec.
+            put("GIT_LITERAL_PATHSPECS", "1")
             putAll(env)
         }
 
@@ -72,18 +92,16 @@ class GitExecutor(
         // — a calling-thread readBytes() would otherwise block past the timeout).
         // The drain/writer threads are DAEMON (P2-1): if git spawned a child that inherited a pipe, a stuck
         // drain must never block JVM shutdown. The normal (process-exited) path still joins them promptly.
+        // True once either drain saw its stream exceed its cap and force-killed the process. Set on a drain
+        // thread, read on the calling thread AFTER its join() (which establishes the happens-before).
+        val overflowed = AtomicBoolean(false)
         val stdoutBuffer = ByteArrayOutputStream()
-        val stdoutDrain = thread(name = "git-stdout-drain", isDaemon = true) { process.inputStream.copyTo(stdoutBuffer) }
-        val stderrBuffer = StringBuilder()
+        val stdoutDrain = thread(name = "git-stdout-drain", isDaemon = true) {
+            drainCapped(process.inputStream, stdoutBuffer, maxStdoutBytes, process, overflowed)
+        }
+        val stderrBuffer = ByteArrayOutputStream()
         val stderrDrain = thread(name = "git-stderr-drain", isDaemon = true) {
-            process.errorStream.reader(Charsets.UTF_8).use { reader ->
-                val chunk = CharArray(4096)
-                while (true) {
-                    val n = reader.read(chunk)
-                    if (n < 0) break
-                    stderrBuffer.append(chunk, 0, n)
-                }
-            }
+            drainCapped(process.errorStream, stderrBuffer, maxStderrBytes, process, overflowed)
         }
 
         // Write stdin on its OWN thread too (P2): a calling-thread write of a >pipe-buffer payload (~64 KiB)
@@ -123,11 +141,56 @@ class GitExecutor(
                 stderr = "git timed out after ${timeoutSeconds}s and was force-killed",
             )
         }
-        // Normal path: the process exited, so its pipes are at EOF — these joins return immediately.
+        // Normal path: the process exited (or a drain force-killed it on overflow), so its pipes are at EOF —
+        // these joins return immediately AND publish the overflow flag the drain set before exiting.
         stdinWriter?.join()
         stdoutDrain.join()
         stderrDrain.join()
-        return GitResult(exitCode = process.exitValue(), stdout = stdoutBuffer.toByteArray(), stderr = stderrBuffer.toString())
+        if (overflowed.load()) {
+            // A drain hit its byte ceiling and force-killed git. Fail loud (NOT silently truncate): the
+            // provider's fail-loud path turns this non-zero result into a GitCommandException — `/history`
+            // and `/diff` surface a 500, the startup `lastCommits` aborts serve, never an OOM. The actionable
+            // text names the cap so an operator knows the repo's history/diff is too large for an in-memory read.
+            logger.error { "git ${args.firstOrNull()} output exceeded the in-memory read cap and was force-killed" }
+            return GitResult(
+                exitCode = -1,
+                stdout = stdoutBuffer.toByteArray(),
+                stderr = "git ${args.firstOrNull()} output exceeded the in-memory read cap " +
+                    "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) and was " +
+                    "force-killed — repo history/diff too large for an in-memory read",
+            )
+        }
+        return GitResult(
+            exitCode = process.exitValue(),
+            stdout = stdoutBuffer.toByteArray(),
+            stderr = stderrBuffer.toString(Charsets.UTF_8),
+        )
+    }
+
+    /**
+     * Drains [stream] into [buffer] up to [cap] bytes; on the first read that would exceed [cap] it
+     * force-kills [process] (and descendants) and flags [overflowed], stopping the drain. The kill makes
+     * [run]'s bounded `waitFor` observe a finished process promptly; the calling thread then sees the flag
+     * after joining this thread. A flood on EITHER stream trips it — both share one flag. Bounded grace
+     * stays the timeout's job; this caps BYTES.
+     */
+    private fun drainCapped(stream: InputStream, buffer: ByteArrayOutputStream, cap: Long, process: Process, overflowed: AtomicBoolean) {
+        val chunk = ByteArray(DRAIN_CHUNK_BYTES)
+        var total = 0L
+        stream.use {
+            while (true) {
+                val n = it.read(chunk)
+                if (n < 0) break
+                total += n
+                if (total > cap) {
+                    overflowed.store(true)
+                    runCatching { process.descendants().forEach { d -> runCatching { d.destroyForcibly() } } }
+                    process.destroyForcibly()
+                    break
+                }
+                buffer.write(chunk, 0, n)
+            }
+        }
     }
 
     companion object {
@@ -138,6 +201,24 @@ class GitExecutor(
 
         /** Bounded grace for the post-force-kill drain joins (P2-1) — caps the call at timeout + this. */
         private const val TIMEOUT_DRAIN_GRACE_MILLIS = 2000L
+
+        /**
+         * Default stdout byte ceiling per git invocation (W5): 64 MiB. GENEROUS by design — a normal or
+         * even large-but-sane repo's `git log`/`diff` is far under this, so the cap is a safety floor that
+         * should never bind in practice, only stop a pathological repo (giant commit messages, a huge diff,
+         * extreme history depth) from OOM-ing the in-memory drain. Kept a documented constant rather than a
+         * per-deploy `git.maxReadBytes` knob: a knob adds config surface (env parse + Koin wiring +
+         * allowlist doc) disproportionate to a ceiling that exists only to convert an OOM into a clean
+         * fail-loud error; injectable via the ctor for the cheap force-kill test.
+         */
+        const val DEFAULT_MAX_STDOUT_BYTES = 64L * 1024 * 1024
+
+        /** Default stderr byte ceiling: 1 MiB. stderr is diagnostic only — a flood there is still a DoS
+         *  vector, so it shares the stdout cap's force-kill path, just at a far smaller ceiling. */
+        const val DEFAULT_MAX_STDERR_BYTES = 1L * 1024 * 1024
+
+        /** Drain read-chunk size — the granularity at which the byte cap is checked. */
+        private const val DRAIN_CHUNK_BYTES = 64 * 1024
 
         /**
          * Pinned on EVERY invocation: deterministic byte handling (`autocrlf`/`eol`), no gpg, no hooks

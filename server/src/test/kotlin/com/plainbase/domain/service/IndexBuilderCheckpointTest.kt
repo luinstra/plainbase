@@ -5,6 +5,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -166,6 +167,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             aliasRegistry = registry,
             checkpoint = checkpoints,
             citations = CitationFactory(),
+            history = NoOpHistoryProvider,
             listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
         )
         return Process(store, registry, builder)
@@ -194,6 +196,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             idProvider = UuidV7IdProvider(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            history = NoOpHistoryProvider,
         )
     }
 }
