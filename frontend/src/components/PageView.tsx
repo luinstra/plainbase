@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter, useRouterState } from "@tanstack/react-router";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
@@ -281,7 +281,7 @@ function PageContent({ id, page: seeded, below }: { id: string; page?: PageRespo
           <Breadcrumbs path={html.data.path} title={html.data.title} />
           <Prose html={html.data.html} />
           {below}
-          <DocFooter frontmatter={frontmatter} />
+          <DocFooter frontmatter={frontmatter} url={page?.url ?? null} />
         </div>
       </div>
       <aside
@@ -408,18 +408,31 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * The doc footer below `<Prose>` (a sibling, never inside it): a mono "Last updated {date} by
- * {owner}" line, sourced from frontmatter. Absent `updated` omits the line entirely; absent
- * `owner` drops the "by …" clause. "Edit this page" and the prev/next pager are deferred (no
- * write backend / repo-base-URL config; no tree fetch here) — see the chunk-4 addendum §4.
+ * The doc footer below `<Prose>` (a sibling, never inside it): the "Edit this page" affordance
+ * (W6/D-3 — links to the SAME path with `?mode=edit`, the canonical url is the splat key so the editor
+ * inherits rename-stability), plus a mono "Last updated {date} by {owner}" line sourced from
+ * frontmatter. The Edit link renders regardless of `updated`; the W7 history affordance will sit beside
+ * `data-pb-edit-page` here. A collision loser (no canonical url) gets no Edit link (it has no `/docs`
+ * address to edit at).
  */
-function DocFooter({ frontmatter }: { frontmatter?: Record<string, unknown> }) {
+function DocFooter({ frontmatter, url }: { frontmatter?: Record<string, unknown>; url: string | null }) {
   const updated = asString(frontmatter?.updated);
-  if (!updated) return null;
   const owner = asString(frontmatter?.owner);
+  const splat = url?.startsWith("/docs/") ? url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/") : null;
+  if (!splat && !updated) return null;
   return (
     <div className="pb-docfoot" data-pb-docfoot>
-      <div className="pb-docfoot-updated">Last updated {updated}{owner ? ` by ${owner}` : ""}</div>
+      {splat && (
+        <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
+          Edit this page
+        </Link>
+      )}
+      {updated && (
+        <div className="pb-docfoot-updated">
+          Last updated {updated}
+          {owner ? ` by ${owner}` : ""}
+        </div>
+      )}
     </div>
   );
 }

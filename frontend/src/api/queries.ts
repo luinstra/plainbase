@@ -1,6 +1,6 @@
-import { queryOptions } from "@tanstack/react-query";
-import { getJson } from "./client";
-import type { PageHtmlResponse, PageResponse, SearchResponse, TreeResponse } from "./types";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
+import { getJson, previewRaw } from "./client";
+import type { PageHtmlResponse, PageResponse, PreviewResponse, SearchResponse, TreeResponse } from "./types";
 
 /**
  * Re-encodes a decoded `/docs/`-relative path for the by-path endpoint. The router hands
@@ -17,6 +17,17 @@ export const treeQuery = queryOptions({
   queryFn: () => getJson<TreeResponse>("/api/v1/tree"),
   staleTime: 60_000,
 });
+
+/**
+ * Decodes a `/docs/<splat>` canonical URL back to the DECODED splat `pageByPathQuery` is keyed by
+ * (the inverse of {@link encodeTreePath}, mirroring the read path's canonical-redirect resolution in
+ * `PageView.tsx`). Returns null for a non-`/docs/` URL (a collision loser has no by-path key). The
+ * key is the URL splat WITHOUT the `.md` extension — NOT the content file path.
+ */
+export function byPathKeyForUrl(url: string | null): string | null {
+  if (!url || !url.startsWith("/docs/")) return null;
+  return url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/");
+}
 
 export const pageByPathQuery = (path: string) =>
   queryOptions({
@@ -59,3 +70,49 @@ export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0) {
     staleTime: 30_000,
   });
 }
+
+/**
+ * The editor's debounced server-preview (W6). Keyed on the (debounced) buffer + path: TanStack Query
+ * attaches each render to its key, so a slow earlier render lands on its own no-longer-observed key and
+ * never paints over the active buffer — the same out-of-order safety the search query relies on.
+ * `enabled: text.length > 0` keeps an empty buffer from POSTing. Preview is non-contractual, so the
+ * result is held only as long as it is the active buffer (a short `staleTime`, no long cache).
+ *
+ * `gcTime` is bounded too: the key includes the FULL buffer, so each debounced render of a large page
+ * lands on its own key and `staleTime` alone would let every stale copy of source+rendered HTML linger
+ * for the default 5 minutes. A short `gcTime` collects superseded entries promptly so a long editing
+ * session can't hoard memory (long enough to still serve the in-flight debounced render).
+ */
+export function previewQuery(text: string, path?: string) {
+  return queryOptions({
+    queryKey: ["preview", path ?? null, text],
+    queryFn: () => previewRaw(text, path),
+    enabled: text.length > 0,
+    staleTime: 5_000,
+    gcTime: 5_000,
+  });
+}
+
+/**
+ * The single post-write cache-invalidation point (every save/create success path calls THIS, never an
+ * ad-hoc per-site `invalidateQueries`). A write that adds/removes/changes content can stale: the tree
+ * (sidebar), the page's id-keyed reads (`pageQuery`/`pageHtmlQuery`), the destination URL's by-path read
+ * (`pageByPathQuery` — keyed by the URL splat, NOT the content file path; reuse {@link byPathKeyForUrl}),
+ * AND any full-text `['search', …]` result (full-text goes stale on ANY content edit). Pass whatever of
+ * {id, url} the calling path knows; an absent/non-`/docs/` url no-ops its by-path leg. Covering the whole
+ * `['page', 'by-path']` namespace too leaves NEITHER a stale old nor new location after a rename/recovery.
+ */
+export function invalidateAfterWrite(queryClient: QueryClient, { id, url }: { id?: string; url?: string | null }): void {
+  void queryClient.invalidateQueries({ queryKey: treeQuery.queryKey });
+  void queryClient.invalidateQueries({ queryKey: ["search"] });
+  if (id) {
+    void queryClient.invalidateQueries({ queryKey: pageQuery(id).queryKey });
+    void queryClient.invalidateQueries({ queryKey: pageHtmlQuery(id).queryKey });
+  }
+  const byPathKey = byPathKeyForUrl(url ?? null);
+  if (byPathKey !== null) void queryClient.invalidateQueries({ queryKey: pageByPathQuery(byPathKey).queryKey });
+  // Leave neither the old nor the new by-path location stale (a rename changes the URL key; the 200 doesn't carry it).
+  void queryClient.invalidateQueries({ queryKey: ["page", "by-path"] });
+}
+
+export type { PreviewResponse };

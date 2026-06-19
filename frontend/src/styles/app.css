@@ -777,3 +777,42 @@ body {
   font-size: 12px;
   color: var(--pb-text-faint);
 }
+.pb-docfoot-edit {
+  display: inline-block;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--pb-link);
+}
+.pb-docfoot-edit:hover {
+  color: var(--pb-link-hover);
+}
+
+/* ---- editor (W6: .pb-editor / data-pb-* are stable selectors + the public customization API) -------- */
+
+.pb-codemirror {
+  background: var(--pb-surface);
+}
+.pb-codemirror .cm-editor {
+  height: 100%;
+}
+
+/* Conflict / refusal banners consume the semantic danger surface — never a literal (token gate). */
+.pb-conflict {
+  border-color: var(--pb-danger);
+  background: var(--pb-danger-soft);
+}
+.pb-refusal {
+  border-color: var(--pb-warning);
+  background: var(--pb-warning-soft);
+}
+
+/* Byte-fidelity refusal (non-UTF-8 page) — a hard "can't save safely" block, the danger surface. */
+.pb-uneditable {
+  border-color: var(--pb-danger);
+  background: var(--pb-danger-soft);
+}
+
+/* Created-but-unindexed notice — a non-blocking warning the new-page form shows instead of navigating. */
+.pb-create-notice {
+  color: var(--pb-warning);
+}

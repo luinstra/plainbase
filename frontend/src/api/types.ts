@@ -113,3 +113,85 @@ export interface SearchResponse {
   total: number;
   hits: SearchHit[];
 }
+
+/**
+ * PB-WRITE-1 wire shapes (frozen, §A4) — transcribed from the server DTOs
+ * (server: frameworks/ktor/dto/WriteDtos.kt). The variant 200/201 DTOs encode field ABSENCE as
+ * shape: a clean save has no `warning` key; only `WrittenButUnindexed` carries one. The hash is
+ * SERVER-OWNED — `content_hash` is the next CAS token, echoed verbatim into `If-Match`, never
+ * re-derived client-side. The 409/422/413 envelopes are richer than the bare `ErrorEnvelope`.
+ */
+
+/** 200 save: exactly `{content_hash, commit}` — no `warning` key. */
+export interface WrittenResponse {
+  content_hash: string;
+  commit: string | null;
+}
+
+/** 200 save, R2: the bytes are durable but the search/history sync deferred — a SUCCESS with a `warning`. */
+export interface WrittenButUnindexedResponse {
+  content_hash: string;
+  commit: string | null;
+  warning: { code: string; message: string };
+}
+
+/** The frozen drift `reason` set (additive-only); `page_moved` is producer-reserved. */
+export type WriteConflictReason = "content_changed" | "page_moved" | "page_deleted";
+
+/** 409 drift envelope — distinct from `ErrorEnvelope` (adds `reason` + `current_*`). */
+export interface WriteConflictEnvelope {
+  error: {
+    code: string;
+    reason: WriteConflictReason;
+    message: string;
+    /** Null for `page_deleted` (nothing to rebase against). */
+    current_content: string | null;
+    current_hash: string | null;
+    current_path: string | null;
+  };
+}
+
+/** 422 unsupported-edit envelope (a rename, not a drift): `code` + `field`, NO `reason`, NO `current_*`. */
+export interface UnsupportedEditEnvelope {
+  error: { code: string; field: string; message: string };
+}
+
+/** 413 envelope — the plain `{code, message}` PLUS the authoritative `max_bytes`. */
+export interface BodyTooLargeEnvelope {
+  error: { code: string; message: string; max_bytes: number };
+}
+
+/** 409 create-collision envelope — the plain `{code, message}` PLUS the attempted `path`. */
+export interface PageExistsEnvelope {
+  error: { code: string; message: string; path: string };
+}
+
+/** `POST /api/v1/pages` request — the server mints the id and derives the path/slug; the client never does. */
+export interface CreatePageRequest {
+  folder?: string;
+  title: string;
+  slug?: string | null;
+  body?: string | null;
+}
+
+/**
+ * 201 create response — the frozen `WrittenResponse` keys PLUS the minted `id` and the
+ * server-authoritative canonical `url` (W6). A clean create (no `warning`) ALWAYS carries a non-null
+ * `url`, and the client navigates DIRECTLY to it (never a client-derived slug). The
+ * `WrittenButUnindexed` create (with a `warning`) carries `url: null`: the page is unpublished, so
+ * there is no reliable canonical url until reconciliation — the client shows the warning and does NOT
+ * navigate on that branch, so the null is never read.
+ */
+export interface CreatedResponse {
+  id: string;
+  url: string | null;
+  content_hash: string;
+  commit: string | null;
+  warning?: { code: string; message: string };
+}
+
+/** `POST /api/v1/preview` response (PRIVATE / NON-CONTRACTUAL): rendered HTML + document-order headings. */
+export interface PreviewResponse {
+  html: string;
+  headings: HeadingDto[];
+}

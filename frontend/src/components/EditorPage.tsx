@@ -1,0 +1,534 @@
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown } from "@codemirror/lang-markdown";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter, useRouterState } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
+import { ApiError, createPage, putPageRaw, type SaveResult } from "../api/client";
+import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } from "../api/queries";
+import type { WriteConflictReason } from "../api/types";
+import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
+import { useDebounced } from "../lib/useDebounced";
+import { NotFoundView } from "./NotFound";
+import { Prose } from "./Prose";
+
+/**
+ * The `?mode=edit` editor surface (W6, D-1/D-4): a CodeMirror 6 Markdown editor over the FULL document
+ * buffer (frontmatter + body as one document), a debounced server-preview pane, and a CAS save against
+ * `PUT /api/v1/pages/{id}` with `base_hash` carried as the `If-Match` ETag. Owns its OWN `useQuery` for
+ * the initial buffer (component-level data-fetching — no route loader). The server is the identity
+ * authority: a tampered id/slug surfaces the 422 refusal, never a silent save (D-4).
+ */
+export function EditorPage({ path }: { path: string }) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const page = useQuery(pageByPathQuery(path));
+  const location = useRouterState({ select: (s) => ({ pathname: s.location.pathname, searchStr: s.location.searchStr, hash: s.location.hash }) });
+
+  // Rename-stable mid-edit (D-1): mirror the read route's canonical-redirect so an alias edit URL
+  // resolves to `/docs/<canonical>?mode=edit`. The replace carries the router location's search + hash
+  // (so `?mode=edit` survives the path canonicalization — the verified clincher behind the route choice).
+  const resolvedFor = `/docs/${encodeTreePath(path)}`;
+  const resolved = page.data;
+  useEffect(() => {
+    if (!resolved || location.pathname !== resolvedFor) return;
+    const canonicalUrl = resolved.url;
+    if (canonicalUrl && canonicalUrl !== resolvedFor) {
+      if (canonicalUrl.startsWith("/docs/")) {
+        const canonicalPath = canonicalUrl.slice("/docs/".length).split("/").map(decodeURIComponent).join("/");
+        queryClient.setQueryData(pageByPathQuery(canonicalPath).queryKey, resolved);
+      }
+      const suffix = location.hash ? `${location.searchStr}#${location.hash}` : location.searchStr;
+      router.history.replace(canonicalUrl + suffix);
+    }
+  }, [resolved, location, resolvedFor, router, queryClient]);
+
+  if (page.isPending) {
+    return (
+      <p className="py-16 text-center text-faint" data-pb-loading>
+        Loading…
+      </p>
+    );
+  }
+  if (page.isError) {
+    if (page.error instanceof ApiError && (page.error.isNotFound || page.error.status === 400)) return <NotFoundView />;
+    return (
+      <div className="py-16 text-center" data-pb-error>
+        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
+        <p className="mt-3 text-muted">{page.error.message}</p>
+      </div>
+    );
+  }
+
+  // Key by id so a navigation to a different page remounts the editor with a fresh buffer/base_hash.
+  return (
+    <Editor
+      key={page.data.id}
+      id={page.data.id}
+      initialPath={page.data.path}
+      initialUrl={page.data.url}
+      initialBuffer={page.data.markdown}
+      initialHash={page.data.content_hash}
+    />
+  );
+}
+
+/** A 409 conflict the editor is showing the user — the buffer is ALWAYS preserved beside it (D-5). */
+interface ConflictView {
+  reason: WriteConflictReason;
+  message: string;
+  currentContent: string | null;
+  currentPath: string | null;
+}
+
+function Editor({
+  id,
+  initialPath,
+  initialUrl,
+  initialBuffer,
+  initialHash,
+}: {
+  id: string;
+  initialPath: string;
+  initialUrl: string | null;
+  initialBuffer: string;
+  initialHash: string;
+}) {
+  const queryClient = useQueryClient();
+
+  const [buffer, setBuffer] = useState(initialBuffer);
+  // The CAS token. ALWAYS server-issued — the initial GET, or a 200/409 response — never recomputed.
+  const [baseHash, setBaseHash] = useState(initialHash);
+  // The page's live content-relative path. page_moved updates it so the editor never drifts (D-5).
+  const [docPath, setDocPath] = useState(initialPath);
+  // The LAST-SAVED buffer — the dirty baseline. It starts as the GET payload and advances on every
+  // successful save, so a saved buffer reads clean (Save disabled, no redundant PUT) until the user
+  // edits again. Tracked separately from `baseHash` (the CAS token), which advances independently.
+  const [savedBuffer, setSavedBuffer] = useState(initialBuffer);
+  const dirty = buffer !== savedBuffer;
+
+  const [conflict, setConflict] = useState<ConflictView | null>(null);
+  const [refusal, setRefusal] = useState<{ field: string; message: string } | null>(null);
+  const [deleted, setDeleted] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Byte-fidelity guard (W6): the read path serves `markdown` as a lossy UTF-8 decode of the
+  // SAME bytes it hashes into `content_hash` (server IndexBuilder: `String(bytes, UTF_8)` +
+  // `sha256(bytes)`, no NFC/EOL transform on content). So for a valid-UTF-8 page the identity
+  // `sha256(utf8(markdown)) == content_hash` holds exactly; a mismatch means the seeded text is
+  // NOT a faithful view of the on-disk bytes (invalid UTF-8 → U+FFFD), and re-encoding it on save
+  // would silently corrupt bytes the user never touched. A text editor can't byte-faithfully
+  // round-trip non-UTF-8, so we DETECT and refuse to save (reading is never blocked).
+  const editable = useEditableGuard(initialBuffer, initialHash);
+
+  const debounced = useDebounced(buffer, 300);
+  const preview = useQuery(previewQuery(debounced, docPath));
+
+  const save = useMutation({
+    // Capture the exact buffer being PUT so the saved baseline advances to it on success (even if the
+    // user keeps typing during the request) — `dirty` then compares against what actually landed.
+    mutationFn: (): Promise<{ result: SaveResult; sent: string }> =>
+      putPageRaw(id, buffer, baseHash).then((result) => ({ result, sent: buffer })),
+    onSuccess: ({ result, sent }) => applySaveResult(result, sent),
+  });
+
+  function applySaveResult(result: SaveResult, sent: string) {
+    switch (result.kind) {
+      case "saved": {
+        setBaseHash(result.written.content_hash);
+        // Advance the dirty baseline to the saved bytes — the editor reads clean (Save disabled, no
+        // redundant PUT) until the user edits again.
+        setSavedBuffer(sent);
+        setConflict(null);
+        setRefusal(null);
+        setDeleted(false);
+        setNotice("warning" in result.written ? result.written.warning.message : "Saved.");
+        // ONE invalidation point (queries.ts): tree, search (full-text goes stale on any edit), this page's
+        // id-keyed + by-path reads. The by-path leg uses the mounted URL splat (NOT the `.md` file path); a
+        // page_moved changes that key and the 200 doesn't carry the new URL, so the helper also clears the
+        // whole by-path namespace to leave neither the old nor the new location stale.
+        invalidateAfterWrite(queryClient, { id, url: initialUrl });
+        return;
+      }
+      case "conflict": {
+        const { reason } = result.conflict;
+        // Each terminal outcome fully supersedes the previous one — clear the sibling banners so a
+        // stale refusal/notice can't linger beside (or, under the notice render-gate, mask) this one.
+        setRefusal(null);
+        setNotice(null);
+        // A deliberate re-save targets the new base — the hash is ALWAYS the server's `current_hash`.
+        if (result.conflict.current_hash) setBaseHash(result.conflict.current_hash);
+        if (reason === "page_deleted") {
+          setDeleted(true);
+          setConflict(null);
+          return;
+        }
+        setDeleted(false);
+        if (reason === "page_moved" && result.conflict.current_path) setDocPath(result.conflict.current_path);
+        setConflict({
+          reason,
+          message: result.conflict.message,
+          currentContent: result.conflict.current_content,
+          currentPath: result.conflict.current_path,
+        });
+        return;
+      }
+      case "unsupported":
+        clearOutcomeBanners();
+        setRefusal({ field: result.unsupported.field, message: result.unsupported.message });
+        return;
+      case "too-large":
+        // Clear any prior conflict/refusal/deleted first — otherwise the notice render-gate
+        // (`!conflict && !refusal && !deleted`) hides this fresh failure behind a stale banner.
+        clearOutcomeBanners();
+        setNotice(`Document exceeds ${result.maxBytes} bytes — trim it and try again.`);
+        return;
+      case "error":
+        clearOutcomeBanners();
+        setNotice(result.error.status === 503 ? "Couldn't save (transient) — please retry." : result.error.message);
+        return;
+    }
+  }
+
+  /** Clears the three outcome banners so a fresh notice/refusal always surfaces (FIX 2 — no stale masking). */
+  function clearOutcomeBanners() {
+    setConflict(null);
+    setRefusal(null);
+    setDeleted(false);
+  }
+
+  return (
+    <div className="pb-editor flex min-w-0 flex-1 gap-8" data-pb-editor>
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-mono text-sm text-muted" data-pb-editor-path>
+            {docPath}
+          </span>
+          <button
+            type="button"
+            className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+            data-pb-save
+            disabled={save.isPending || !dirty || !editable}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? "Saving…" : "Save"}
+          </button>
+        </div>
+
+        {!editable && <UneditableBanner />}
+        {conflict && <ConflictBanner conflict={conflict} />}
+        {refusal && <RefusalBanner refusal={refusal} />}
+        {deleted && <DeletedBanner buffer={buffer} initialPath={initialPath} />}
+        {notice && !conflict && !refusal && !deleted && (
+          <p className="text-sm text-muted" data-pb-editor-notice>
+            {notice}
+          </p>
+        )}
+
+        <CodeMirrorEditor value={buffer} onChange={setBuffer} />
+      </div>
+
+      <div className="hidden w-[clamp(18rem,32vw,40rem)] shrink-0 overflow-y-auto lg:block" data-pb-preview>
+        {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
+      </div>
+    </div>
+  );
+}
+
+/** content_changed / page_moved — the dirty buffer is kept; the server's current content is shown alongside (no auto-merge). */
+function ConflictBanner({ conflict }: { conflict: ConflictView }) {
+  return (
+    <div className="pb-conflict rounded-md border border-edge p-3 text-sm" data-pb-conflict data-pb-conflict-reason={conflict.reason}>
+      <p className="font-medium text-ink">{conflict.message}</p>
+      <p className="mt-1 text-muted">Your edits are kept. Review the current server version below, then Save again to overwrite it.</p>
+      {conflict.reason === "page_moved" && conflict.currentPath && (
+        <p className="mt-1 text-muted">This page moved to {conflict.currentPath} — you are now editing it there.</p>
+      )}
+      {conflict.currentContent !== null && (
+        <details className="mt-2" data-pb-conflict-current>
+          <summary className="cursor-pointer text-muted">Current server version</summary>
+          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-muted">{conflict.currentContent}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** 422 id/slug/redirect_from — a rename, not a save; the editor stays dirty/unsaved (D-4). */
+function RefusalBanner({ refusal }: { refusal: { field: string; message: string } }) {
+  return (
+    <div className="pb-refusal rounded-md border border-edge p-3 text-sm" data-pb-refusal data-pb-refusal-field={refusal.field}>
+      <p className="font-medium text-ink">Changing the page {refusal.field} isn’t a save — it’s a move, which isn’t supported yet.</p>
+      <p className="mt-1 text-muted">{refusal.message}</p>
+    </div>
+  );
+}
+
+/**
+ * Byte-fidelity refusal: the page's on-disk bytes aren't valid UTF-8, so the seeded text is a lossy
+ * decode (U+FFFD) and saving would re-encode it — corrupting bytes the user never edited. Reading is
+ * fine; Save is disabled. The fix is to edit the file with a byte-faithful tool, externally.
+ */
+function UneditableBanner() {
+  return (
+    <div className="pb-uneditable rounded-md border border-edge p-3 text-sm" data-pb-uneditable>
+      <p className="font-medium text-ink">This page isn’t valid UTF-8 and can’t be safely edited here.</p>
+      <p className="mt-1 text-muted">Saving would change bytes you never touched. Edit it externally with a byte-faithful tool.</p>
+    </div>
+  );
+}
+
+/**
+ * Recomputes `sha256(utf8(buffer))` via Web Crypto and compares it to the server's `content_hash`
+ * (sans the `sha256:` prefix). Returns `true` (editable) until a mismatch is CONFIRMED — so a normal
+ * page, and the brief async window before the digest resolves, never block the user. A digest failure
+ * (no `crypto.subtle`) also leaves the page editable rather than false-blocking a valid one.
+ */
+function useEditableGuard(buffer: string, contentHash: string): boolean {
+  const [editable, setEditable] = useState(true);
+  useEffect(() => {
+    let live = true;
+    sha256Hex(buffer)
+      .then((hex) => {
+        if (live) setEditable(hex === null || hex === stripHashPrefix(contentHash));
+      })
+      .catch(() => {
+        if (live) setEditable(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, [buffer, contentHash]);
+  return editable;
+}
+
+/** Lowercase-hex SHA-256 of the UTF-8 bytes of [text], or null when Web Crypto is unavailable. */
+async function sha256Hex(text: string): Promise<string | null> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return null;
+  const digest = await subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const stripHashPrefix = (hash: string): string => (hash.startsWith("sha256:") ? hash.slice("sha256:".length) : hash);
+
+/** page_deleted — no rebase target; offer "save as new page" prefilled with the buffer (no dead-end, D-5). */
+function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: string }) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const folder = initialPath.includes("/") ? initialPath.slice(0, initialPath.lastIndexOf("/")) : "";
+  const fallbackTitle = stripExtension(initialPath.slice(initialPath.lastIndexOf("/") + 1)) || "Untitled";
+
+  async function saveAsNew() {
+    setSaving(true);
+    setError(null);
+    // The server PREPENDS its own freshly-minted frontmatter and appends `body` verbatim. Send the BODY
+    // ONLY (the old frontmatter — incl. the now-defunct id — must not survive, or the file gets two
+    // frontmatter blocks). The title comes from the user's possibly-edited frontmatter, else the filename.
+    const { frontmatter, body } = splitFrontmatter(buffer);
+    const title = (frontmatter && frontmatterValue(frontmatter, "title")) || fallbackTitle;
+    const result = await createPage({ folder, title, body });
+    setSaving(false);
+    if (result.kind === "created") {
+      // Invalidate the DESTINATION url's by-path/page cache BEFORE navigating — save-as-new can reuse a
+      // recovered `/docs/...` URL whose by-path entry still points at the deleted old id, so the read route
+      // would otherwise render that stale id for up to its staleTime. (A `/p/{id}` permalink no-ops.)
+      invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
+      if (result.created.warning || !result.created.url) {
+        // Unindexed (or, defensively, no canonical url yet): the page is unpublished, so navigating
+        // could land on a not-yet-resolvable route. Surface the warning and stay put.
+        setError((result.created.warning ?? { message: "Saved, but not yet indexed." }).message);
+        return;
+      }
+      await router.navigate({ to: result.created.url });
+      return;
+    }
+    setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
+  }
+
+  return (
+    <div className="pb-conflict rounded-md border border-edge p-3 text-sm" data-pb-conflict data-pb-conflict-reason="page_deleted">
+      <p className="font-medium text-ink">This page no longer exists on disk.</p>
+      <p className="mt-1 text-muted">Your edits are kept. Save them as a new page so nothing is lost.</p>
+      <button
+        type="button"
+        className="pb-editor-save mt-2 rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+        data-pb-save-as-new
+        disabled={saving}
+        onClick={() => void saveAsNew()}
+      >
+        {saving ? "Saving…" : "Save as new page"}
+      </button>
+      {error && <p className="mt-1 text-muted">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The `/new` route body (D-2/D-3): title (+ optional folder/slug) → `POST /api/v1/pages` → navigate
+ * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
+ */
+export function NewPage() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [title, setTitle] = useState("");
+  const [folder, setFolder] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const create = useMutation({
+    mutationFn: () => createPage({ folder: folder.trim() || undefined, title: title.trim() }),
+    onSuccess: (result) => {
+      if (result.kind === "created") {
+        invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
+        if (result.created.warning || !result.created.url) {
+          // Created-but-unindexed: the bytes are on disk but NOT yet in the published snapshot, so there
+          // is no reliable canonical url (the server returns `url: null`) until reconciliation. Surface
+          // the warning and stay put rather than navigate into a possibly-not-found route.
+          setNotice(`${(result.created.warning ?? { message: "Saved, but not yet indexed." }).message} It will appear after reconciliation.`);
+          return;
+        }
+        void router.navigate({ to: result.created.url });
+        return;
+      }
+      setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
+    },
+  });
+
+  return (
+    <div className="mx-auto max-w-[40rem]" data-pb-new-page-form>
+      <h1 className="text-2xl font-bold text-ink">New page</h1>
+      <form
+        className="mt-6 flex flex-col gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setError(null);
+          setNotice(null);
+          if (title.trim()) create.mutate();
+        }}
+      >
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Title
+          <input
+            className="rounded-md border border-edge bg-surface px-3 py-2 text-ink"
+            data-pb-new-title
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Page title"
+            autoFocus
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Folder (optional)
+          <input
+            className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
+            data-pb-new-folder
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            placeholder="guides"
+          />
+        </label>
+        <button
+          type="submit"
+          className="self-start rounded-md border border-edge bg-accent px-4 py-2 text-sm font-medium text-accent-contrast disabled:opacity-50"
+          data-pb-new-create
+          disabled={create.isPending || !title.trim()}
+        >
+          {create.isPending ? "Creating…" : "Create page"}
+        </button>
+        {error && <p className="text-sm text-muted">{error}</p>}
+        {notice && (
+          <p className="pb-create-notice text-sm" data-pb-create-notice>
+            {notice}
+          </p>
+        )}
+      </form>
+    </div>
+  );
+}
+
+/** The §5.9-token Markdown highlight style — only `var(--pb-*)` references, so dark mode swaps for free. */
+const pbHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, color: "var(--pb-syntax-title)", fontWeight: "bold" },
+  { tag: tags.strong, color: "var(--pb-text)", fontWeight: "bold" },
+  { tag: tags.emphasis, color: "var(--pb-text)", fontStyle: "italic" },
+  { tag: tags.link, color: "var(--pb-link)" },
+  { tag: tags.url, color: "var(--pb-link)" },
+  { tag: tags.monospace, color: "var(--pb-code-text)" },
+  { tag: tags.keyword, color: "var(--pb-syntax-keyword)" },
+  { tag: tags.string, color: "var(--pb-syntax-string)" },
+  { tag: tags.comment, color: "var(--pb-syntax-comment)" },
+  { tag: tags.meta, color: "var(--pb-text-muted)" },
+  { tag: tags.processingInstruction, color: "var(--pb-text-faint)" },
+]);
+
+/** Editor chrome theme — all colors are `var(--pb-*)` references (placed here, never as hex), per the token gate. */
+const pbEditorTheme = EditorView.theme({
+  "&": { color: "var(--pb-text)", backgroundColor: "var(--pb-surface)" },
+  ".cm-content": { fontFamily: "var(--font-mono)", caretColor: "var(--pb-accent)" },
+  ".cm-gutters": { backgroundColor: "var(--pb-surface-raised)", color: "var(--pb-text-faint)", border: "none" },
+  ".cm-activeLine": { backgroundColor: "var(--pb-surface-raised)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--pb-surface-hover)" },
+  "&.cm-focused": { outline: "none" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--pb-accent)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": { backgroundColor: "var(--pb-selection-bg)" },
+  ".cm-scroller": { fontFamily: "var(--font-mono)" },
+});
+
+/** Mounts a CodeMirror 6 Markdown EditorView over a ref; the React state is the source of truth for the buffer. */
+function CodeMirrorEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const host = useRef<HTMLDivElement>(null);
+  const view = useRef<EditorView | null>(null);
+  // The latest onChange, read inside the (mount-once) update listener without re-creating the view.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!host.current) return;
+    const editor = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          lineNumbers(),
+          history(),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
+          markdown(),
+          syntaxHighlighting(pbHighlightStyle),
+          pbEditorTheme,
+          EditorView.lineWrapping,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+          }),
+        ],
+      }),
+    });
+    view.current = editor;
+    return () => {
+      editor.destroy();
+      view.current = null;
+    };
+    // Mount once; external value pushes are reconciled by the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reconcile an EXTERNAL value change (e.g. a programmatic reset) without clobbering local typing.
+  useEffect(() => {
+    const editor = view.current;
+    if (editor && value !== editor.state.doc.toString()) {
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } });
+    }
+  }, [value]);
+
+  return <div ref={host} className="pb-codemirror min-h-[60vh] rounded-md border border-edge" data-pb-codemirror />;
+}
+
+function stripExtension(name: string): string {
+  return name.endsWith(".md") ? name.slice(0, -3) : name;
+}

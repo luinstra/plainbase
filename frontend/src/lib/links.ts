@@ -1,7 +1,7 @@
 /**
  * Click interception for links inside server-rendered HTML (and the tree nav, which uses
  * the same plain `<a href>` elements so API URLs stay verbatim). Internal `/docs/...`,
- * `/p/...`, and bare `/` (the first-page redirect route — the header logo) hrefs route
+ * `/p/...`, `/new`, and bare `/` (the first-page redirect route — the header logo) hrefs route
  * through the SPA router; everything else — external URLs, `/assets`,
  * downloads, new-tab/modified clicks, same-page `#fragment` jumps — keeps native behavior.
  *
@@ -19,7 +19,8 @@ export function interceptableHref(event: MouseEvent): string | null {
   if (anchor.origin !== window.location.origin) return null;
 
   const path = anchor.pathname;
-  const internal = path === "/" || path === "/docs" || path.startsWith("/docs/") || path.startsWith("/p/");
+  const internal =
+    path === "/" || path === "/docs" || path.startsWith("/docs/") || path.startsWith("/p/") || path === "/new";
   if (!internal) return null;
 
   // Same-page fragment: native anchor navigation scrolls without a reload — leave it alone.
