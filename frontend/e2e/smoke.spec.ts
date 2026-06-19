@@ -24,7 +24,7 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
   await expect(sidebar).toBeVisible();
   const hrefs = await sidebar.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(30); // the whole fixture tree is in the nav
-  for (const href of hrefs) expect(href).toMatch(/^\/(docs|p)\//); // tree urls verbatim; losers via /p/{id}
+  for (const href of hrefs) expect(href).toMatch(/^\/(docs($|\/)|p\/)/); // tree urls verbatim (incl. bare /docs home); losers via /p/{id}
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Deploy Guide" }).click();
