@@ -226,6 +226,17 @@ class GitExecutor(
          * for `init`, and verbatim path bytes (`quotePath=false` + `precomposeUnicode=false`). The latter
          * stops macOS git (default `true`) from NFC-folding our explicit raw path args before writing the
          * index — without it `update-index --cacheinfo <NFD path>` would record the NFC form, defeating r6b.
+         *
+         * The last two are hostile-`.git/config` RCE seals (SG-1/SG-2), pinned the same belt-and-suspenders
+         * way as `core.hooksPath`:
+         *  - `log.showSignature=false` (SG-1): a repo config setting `log.showSignature=true` +
+         *    `gpg.program=<helper>` would otherwise make `git log`/`git show -s` shell out to the helper to
+         *    verify a signed commit — an RCE on `/history`/`show`/`lastCommits`. Pinning the trigger off is
+         *    sufficient; `gpg.program` is moot with no verify-commit/verify-tag path.
+         *  - `protocol.ext.allow=never` (SG-2): kills the `ext::`-transport RCE class reachable through
+         *    `runAutoMaintenance`'s `gc --auto`/`maintenance run --auto` (a hostile config pairing
+         *    `maintenance.prefetch` with an `ext::`/`insteadOf` remote). GC stays enabled — it's load-bearing
+         *    for the commit recipe — but it can no longer be steered into running an arbitrary command.
          */
         private val PINNED_CONFIG = listOf(
             "-c", "core.autocrlf=false",
@@ -235,6 +246,8 @@ class GitExecutor(
             "-c", "init.defaultBranch=main",
             "-c", "core.quotePath=false",
             "-c", "core.precomposeUnicode=false",
+            "-c", "log.showSignature=false",
+            "-c", "protocol.ext.allow=never",
         )
 
         // 40 hex (SHA-1) OR 64 hex (SHA-256, `git init --object-format=sha256`) — full-width object ids only.

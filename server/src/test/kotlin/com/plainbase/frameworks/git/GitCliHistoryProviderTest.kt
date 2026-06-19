@@ -866,6 +866,62 @@ class GitCliHistoryProviderTest : FunSpec({
             provider.log(file).none { it.sha == sideCommit } shouldBe true
         }
     }
+
+    // SG-1 (RCE): a hostile `.git/config` setting `log.showSignature=true` + `gpg.program=<helper>` makes
+    // `git log`/`git show -s` shell out to the helper to "verify" a (signed) commit — an RCE on the read
+    // path (`/history`/`show`/`lastCommits`). PINNED_CONFIG's `-c log.showSignature=false` disarms the
+    // trigger on every invocation, overriding the repo config. A sentinel the helper would write proves it
+    // NEVER ran, and the reads still return the real commit.
+    test("history reads never invoke a repo-configured gpg.program (-c log.showSignature=false)") {
+        withGitRepoHome { root, exec, home ->
+            val provider = providerOver(exec, root, home)
+            val first = provider.commit(path, "first line\n".toByteArray())
+
+            // A hostile gpg helper that writes a sentinel on any invocation, wired in via the repo's own
+            // config exactly as an attacker-controlled checkout would carry it.
+            val gpgSentinel = root.resolve("GPG_RAN")
+            val gpgScript = root.resolve("evil-gpg.sh")
+            Files.writeString(gpgScript, "#!/bin/sh\ntouch '$gpgSentinel'\nexit 0\n")
+            Files.setPosixFilePermissions(gpgScript, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"))
+            exec.run(listOf("config", "log.showSignature", "true")).ok shouldBe true
+            exec.run(listOf("config", "gpg.program", gpgScript.toString())).ok shouldBe true
+
+            // Every read path that runs `git log`/`git show -s`.
+            provider.log(path).first().sha shouldBe first.sha
+            provider.lastCommits(listOf(path)).getValue(path).sha shouldBe first.sha
+            // `git show -s` directly — the same pinned `log.showSignature=false` must hold here too.
+            exec.run(listOf("show", "-s", first.sha)).ok shouldBe true
+
+            Files.exists(gpgSentinel) shouldBe false // the gpg.program helper was NEVER invoked
+        }
+    }
+
+    // SG-2 (RCE): the `ext::` transport lets a remote URL run an arbitrary command; a hostile config pairing
+    // an `ext::` remote (via `insteadOf`) with `maintenance.prefetch=true` would run it when auto-maintenance
+    // fires `git maintenance run --auto`/`gc --auto`. PINNED_CONFIG's `-c protocol.ext.allow=never` makes the
+    // ext transport unusable on every invocation, so maintenance can never be steered into running it. The
+    // sentinel the ext helper would write proves it NEVER ran; maintenance still completes and leaves history.
+    test("auto-maintenance never runs an ext:: remote even with a hostile prefetch config (-c protocol.ext.allow=never)") {
+        withGitRepoHome { root, exec, home ->
+            val provider = providerOver(exec, root, home, maintenance = null)
+            provider.commit(path, "content\n".toByteArray())
+
+            // The ext:: helper writes a sentinel if the ext transport ever runs it.
+            val extSentinel = root.resolve("EXT_REMOTE_RAN")
+            val extScript = root.resolve("evil-ext.sh")
+            Files.writeString(extScript, "#!/bin/sh\ntouch '$extSentinel'\nexit 1\n")
+            Files.setPosixFilePermissions(extScript, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"))
+            // A hostile prefetch-able remote whose URL is an ext:: transport invoking the helper.
+            exec.run(listOf("config", "maintenance.prefetch", "true")).ok shouldBe true
+            exec.run(listOf("remote", "add", "evil", "ext::$extScript %S")).ok shouldBe true
+            exec.run(listOf("config", "remote.evil.fetch", "+refs/heads/*:refs/remotes/evil/*")).ok shouldBe true
+
+            runAutoMaintenance(exec) // the real default dispatcher — `maintenance run --auto` / `gc --auto`
+
+            Files.exists(extSentinel) shouldBe false // the ext:: transport was NEVER allowed to run the helper
+            exec.run(listOf("fsck")).ok shouldBe true // history stays consistent — GC itself still ran
+        }
+    }
 })
 
 /**
