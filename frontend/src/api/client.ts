@@ -33,6 +33,20 @@ export async function getJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Safely parses a JSON body, returning `null` on a thrown/invalid body (e.g. a proxy's HTML error page).
+ * Parses a `clone()` so the ORIGINAL body stream stays unconsumed — a caller that falls back to
+ * `apiError(response)` can then re-read the real body for a better message (a proxy's JSON error
+ * envelope), instead of hitting an already-locked stream.
+ */
+async function parseJson<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.clone().json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Parses a non-2xx body as the frozen `ErrorEnvelope`, falling back to a status-derived message. */
 async function apiError(response: Response): Promise<ApiError> {
   let code = "unknown_error";
@@ -78,10 +92,24 @@ export async function putPageRaw(id: string, body: string, baseHash: string): Pr
     // fetch rejects on offline/timeout (TypeError) — surface it as the transient error the editor retries.
     return { kind: "error", error: networkError() };
   }
-  if (response.ok) return { kind: "saved", written: (await response.json()) as WrittenResponse | WrittenButUnindexedResponse };
-  if (response.status === 409) return { kind: "conflict", conflict: ((await response.json()) as WriteConflictEnvelope).error };
-  if (response.status === 422) return { kind: "unsupported", unsupported: ((await response.json()) as UnsupportedEditEnvelope).error };
-  if (response.status === 413) return { kind: "too-large", maxBytes: ((await response.json()) as BodyTooLargeEnvelope).error.max_bytes };
+  // A non-JSON body on ANY typed status (e.g. a reverse proxy's HTML 413/200) degrades to the generic
+  // error family the editor retries — never an uncaught SyntaxError that freezes "Saving…".
+  if (response.ok) {
+    const written = await parseJson<WrittenResponse | WrittenButUnindexedResponse>(response);
+    return written ? { kind: "saved", written } : { kind: "error", error: await apiError(response) };
+  }
+  if (response.status === 409) {
+    const envelope = await parseJson<WriteConflictEnvelope>(response);
+    return envelope ? { kind: "conflict", conflict: envelope.error } : { kind: "error", error: await apiError(response) };
+  }
+  if (response.status === 422) {
+    const envelope = await parseJson<UnsupportedEditEnvelope>(response);
+    return envelope ? { kind: "unsupported", unsupported: envelope.error } : { kind: "error", error: await apiError(response) };
+  }
+  if (response.status === 413) {
+    const envelope = await parseJson<BodyTooLargeEnvelope>(response);
+    return envelope ? { kind: "too-large", maxBytes: envelope.error.max_bytes } : { kind: "error", error: await apiError(response) };
+  }
   return { kind: "error", error: await apiError(response) };
 }
 
@@ -108,8 +136,14 @@ export async function createPage(request: CreatePageRequest): Promise<CreateResu
   } catch {
     return { kind: "error", error: networkError() };
   }
-  if (response.ok) return { kind: "created", created: (await response.json()) as CreatedResponse };
-  if (response.status === 409) return { kind: "exists", exists: ((await response.json()) as PageExistsEnvelope).error };
+  if (response.ok) {
+    const created = await parseJson<CreatedResponse>(response);
+    return created ? { kind: "created", created } : { kind: "error", error: await apiError(response) };
+  }
+  if (response.status === 409) {
+    const envelope = await parseJson<PageExistsEnvelope>(response);
+    return envelope ? { kind: "exists", exists: envelope.error } : { kind: "error", error: await apiError(response) };
+  }
   return { kind: "error", error: await apiError(response) };
 }
 
