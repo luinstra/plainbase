@@ -1,7 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.frameworks.ktor.RestServices
-import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -29,7 +28,7 @@ fun Route.docsRoutes(services: RestServices) {
             val target = services.aliasRegistry.find(path)
                 .takeIf { path !in snapshot.byUrlPath } // live canonical wins (§A4)
                 ?.let { snapshot.byId[it] }
-            if (target != null) return@get call.respondRedirect(target.url ?: target.permalink, permanent = true)
+            if (target != null) return@get call.respondRedirectPreservingQuery(target.url ?: target.permalink, permanent = true)
         }
         call.respondSpaShell()
     }

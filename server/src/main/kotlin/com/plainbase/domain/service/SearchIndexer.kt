@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.search.SearchProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -52,6 +53,17 @@ class SearchIndexer(
     fun rebuild(snapshot: PageIndex) {
         provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
         logger.info { "search reindex: rebuilt the engine for ${snapshot.pages.size} page(s)" }
+    }
+
+    /**
+     * Single-page upsert (the PB-WRITE-1 targeted-reindex path, debate MUST-FIX 3): one
+     * [com.plainbase.domain.search.PageDocuments] through the provider's already-per-page-transactional
+     * [SearchProvider.index] — genuine O(1), NOT the corpus-wide [indexedState] diff [sync] makes. Used
+     * only from `IndexBuilder.reindex`, under the rebuild monitor.
+     */
+    fun syncPage(page: IndexedPage) {
+        provider.index(listOf(splitter.split(page)))
+        logger.debug { "search syncPage: upserted ${page.id}" }
     }
 
     companion object {

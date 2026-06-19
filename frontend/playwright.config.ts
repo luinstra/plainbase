@@ -21,7 +21,12 @@ export default defineConfig({
   webServer: {
     command: "node scripts/smoke-server.mjs",
     url: `http://127.0.0.1:${SMOKE_PORT}/healthz`,
-    reuseExistingServer: !process.env.CI,
+    // NEVER reuse an already-running server (even locally). edit.spec.ts MUTATES content via PUT/POST;
+    // `smoke-server.mjs` always boots against a throwaway `.smoke-content` copy of fixtures/demo-docs, so
+    // a fresh boot guarantees writes can't land on a foreign server (e.g. a dev `plainbase serve` over real
+    // docs) squatting on this port. With reuse enabled a foreign server would silently absorb the writes;
+    // refusing reuse makes Playwright start its OWN isolated server (or fail loudly on a port clash) instead.
+    reuseExistingServer: false,
     stdout: "pipe",
     stderr: "pipe",
     timeout: 60_000,

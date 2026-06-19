@@ -1,0 +1,154 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
+import { fireEvent, render, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
+import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
+import { createAppRouter } from "../router";
+
+const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+
+/**
+ * W6 new-page creation (D-2 acceptance #4). `POST /api/v1/pages` returns the minted id + the
+ * server-authoritative canonical url; the client navigates DIRECTLY to that url (no tree re-resolve, no
+ * client slug derivation). A 409 page_exists surfaces the server `path`.
+ */
+
+const NEW_ID = "01900000-0000-7000-8000-000000000001";
+const NEW_URL = "/docs/guides/my-new-page";
+const HASH = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function pageResponse(): PageResponse {
+  return {
+    id: NEW_ID,
+    path: "guides/my-new-page.md",
+    slug: "my-new-page",
+    url: NEW_URL,
+    title: "My New Page",
+    markdown: "# My New Page\n",
+    frontmatter: {},
+    content_hash: HASH,
+    id_materialized: true,
+    commit: null,
+    citation: { page_id: NEW_ID, heading_id: null, path: "guides/my-new-page.md", content_hash: HASH, commit: null, uri: `plainbase://${NEW_ID}@${HASH}` },
+  };
+}
+
+function htmlResponse(): PageHtmlResponse {
+  return {
+    id: NEW_ID,
+    path: "guides/my-new-page.md",
+    slug: "my-new-page",
+    url: NEW_URL,
+    title: "My New Page",
+    html: '<h1 id="t">My New Page</h1>',
+    content_hash: HASH,
+    commit: null,
+    headings: [{ id: "t", level: 1, text: "My New Page" }],
+    citation: { page_id: NEW_ID, heading_id: null, path: "guides/my-new-page.md", content_hash: HASH, commit: null, uri: `plainbase://${NEW_ID}@${HASH}` },
+  };
+}
+
+function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = () => {}) {
+  const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "POST") return createResponse.clone();
+    return jsonResponse({ html: "", headings: [] });
+  });
+  vi.stubGlobal("fetch", fetchSpy);
+
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+  prime(queryClient);
+  const history = createMemoryHistory({ initialEntries: ["/new"] });
+  const router = createAppRouter(queryClient, history);
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return { view, history, fetchSpy };
+}
+
+function submitCreate(view: ReturnType<typeof render>) {
+  const title = view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!;
+  fireEvent.change(title, { target: { value: "My New Page" } });
+  fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("W6 new-page creation", () => {
+  it("creating a page POSTs /api/v1/pages and navigates directly to the server-returned url", async () => {
+    const { view, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      // Prime the destination so the post-navigation read renders without a live fetch.
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    // The navigation target is the SERVER url, verbatim — not a client-derived slug.
+    await waitFor(() => expect(history.location.pathname).toBe(NEW_URL));
+  });
+
+  it("a created-but-unindexed 201 shows the warning and does NOT navigate into a maybe-404 route (FIX 3)", async () => {
+    const { view, history } = renderNew(
+      jsonResponse(
+        { id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null, warning: { code: "written_but_unindexed", message: "Created, but not yet indexed." } },
+        201,
+      ),
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    // The warning is surfaced…
+    const notice = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-create-notice]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(notice.textContent).toContain("not yet indexed");
+    // …and the flow stays on /new rather than silently landing on a possibly-unresolvable route.
+    expect(history.location.pathname).toBe("/new");
+  });
+
+  it("a fetch rejection (offline) shows a save-failed notice instead of a silent error (FIX 4)", async () => {
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") throw new TypeError("Failed to fetch");
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+    const history = createMemoryHistory({ initialEntries: ["/new"] });
+    const router = createAppRouter(queryClient, history);
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    // The thrown fetch becomes a typed error result (not an unhandled rejection) — the form shows it.
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")?.textContent).toContain("Couldn't reach the server"));
+    // The form is still usable (the create button re-enables).
+    expect(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")?.disabled).toBe(false);
+  });
+
+  it("a create collision surfaces page_exists with the server path", async () => {
+    const { view } = renderNew(jsonResponse({ error: { code: "page_exists", message: "A page already exists at guides/my-new-page.md", path: "guides/my-new-page.md" } }, 409));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")?.textContent).toContain("guides/my-new-page.md"));
+  });
+});

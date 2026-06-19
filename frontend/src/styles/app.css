@@ -332,47 +332,71 @@ body {
 /*
  * highlight.js → semantic syntax tokens. hljs ships hex-literal themes; we deliberately
  * import none of them — the grammar classes are mapped onto the token tier instead, so
- * dark mode (and user themes) restyle code for free.
+ * dark mode (and user themes) restyle code for free. Scoped to BOTH `.pb-prose` (read view)
+ * and `.pb-diff` (W7 history diff, outside `.pb-prose`) so the token mappings are single-source.
  */
 .pb-prose .hljs-keyword,
+.pb-diff .hljs-keyword,
 .pb-prose .hljs-built_in,
+.pb-diff .hljs-built_in,
 .pb-prose .hljs-type,
-.pb-prose .hljs-operator {
+.pb-diff .hljs-type,
+.pb-prose .hljs-operator,
+.pb-diff .hljs-operator {
   color: var(--pb-syntax-keyword);
 }
 
 .pb-prose .hljs-string,
+.pb-diff .hljs-string,
 .pb-prose .hljs-regexp,
-.pb-prose .hljs-addition {
+.pb-diff .hljs-regexp,
+.pb-prose .hljs-addition,
+.pb-diff .hljs-addition {
   color: var(--pb-syntax-string);
 }
 
 .pb-prose .hljs-comment,
+.pb-diff .hljs-comment,
 .pb-prose .hljs-quote,
-.pb-prose .hljs-meta {
+.pb-diff .hljs-quote,
+.pb-prose .hljs-meta,
+.pb-diff .hljs-meta {
   color: var(--pb-syntax-comment);
   font-style: italic;
 }
 
 .pb-prose .hljs-number,
+.pb-diff .hljs-number,
 .pb-prose .hljs-literal,
-.pb-prose .hljs-symbol {
+.pb-diff .hljs-literal,
+.pb-prose .hljs-symbol,
+.pb-diff .hljs-symbol {
   color: var(--pb-syntax-literal);
 }
 
 .pb-prose .hljs-title,
+.pb-diff .hljs-title,
 .pb-prose .hljs-section,
+.pb-diff .hljs-section,
 .pb-prose .hljs-name,
-.pb-prose .hljs-selector-tag {
+.pb-diff .hljs-name,
+.pb-prose .hljs-selector-tag,
+.pb-diff .hljs-selector-tag {
   color: var(--pb-syntax-title);
 }
 
 .pb-prose .hljs-attr,
+.pb-diff .hljs-attr,
 .pb-prose .hljs-attribute,
+.pb-diff .hljs-attribute,
 .pb-prose .hljs-variable,
+.pb-diff .hljs-variable,
 .pb-prose .hljs-template-variable,
+.pb-diff .hljs-template-variable,
 .pb-prose .hljs-property,
-.pb-prose .hljs-deletion {
+.pb-diff .hljs-property,
+.pb-prose .hljs-deletion,
+.pb-diff .hljs-deletion {
   color: var(--pb-syntax-attr);
 }
 
@@ -776,4 +800,166 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--pb-text-faint);
+}
+.pb-docfoot-edit {
+  display: inline-block;
+  margin-bottom: 12px;
+  font-size: 14px;
+  color: var(--pb-link);
+}
+.pb-docfoot-edit:hover {
+  color: var(--pb-link-hover);
+}
+/* W7 history affordance — a sibling of the edit link, gated on PageResponse.commit (MF-1). */
+.pb-docfoot-history {
+  display: inline-block;
+  margin-bottom: 12px;
+  margin-left: 16px;
+  font-size: 14px;
+  color: var(--pb-link);
+}
+.pb-docfoot-history:hover {
+  color: var(--pb-link-hover);
+}
+
+/* ---- editor (W6: .pb-editor / data-pb-* are stable selectors + the public customization API) -------- */
+
+.pb-codemirror {
+  background: var(--pb-surface);
+}
+.pb-codemirror .cm-editor {
+  height: 100%;
+}
+
+/* Conflict / refusal banners consume the semantic danger surface — never a literal (token gate). */
+.pb-conflict {
+  border-color: var(--pb-danger);
+  background: var(--pb-danger-soft);
+}
+.pb-refusal {
+  border-color: var(--pb-warning);
+  background: var(--pb-warning-soft);
+}
+
+/* Byte-fidelity refusal (non-UTF-8 page) — a hard "can't save safely" block, the danger surface. */
+.pb-uneditable {
+  border-color: var(--pb-danger);
+  background: var(--pb-danger-soft);
+}
+
+/* Created-but-unindexed notice — a non-blocking warning the new-page form shows instead of navigating. */
+.pb-create-notice {
+  color: var(--pb-warning);
+}
+
+/* ---- history (W7: .pb-history / .pb-diff / data-pb-* are stable selectors; token-only) -------------- */
+
+.pb-history-back {
+  display: inline-block;
+  font-size: 14px;
+  color: var(--pb-link);
+}
+.pb-history-back:hover {
+  color: var(--pb-link-hover);
+}
+.pb-history-title {
+  margin-top: 16px;
+}
+.pb-history-notice {
+  margin-top: 8px;
+}
+.pb-history-truncated {
+  margin-top: 12px;
+}
+
+/* Token-only AT helper: visible to screen readers, removed from the visual flow (standard clip pattern). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.pb-history-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pb-commit {
+  border: 1px solid var(--pb-border);
+  border-radius: 6px;
+  background: var(--pb-surface-raised);
+}
+.pb-commit[data-pb-commit-selected] {
+  border-color: var(--pb-accent);
+  background: var(--pb-surface-hover);
+}
+.pb-commit-button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+}
+.pb-commit-msg {
+  color: var(--pb-text);
+  font-weight: 500;
+}
+.pb-commit-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--pb-text-muted);
+}
+.pb-commit-sha {
+  color: var(--pb-text-faint);
+}
+
+/* The diff block. Rows are pre-wrapped monospace; add/del tint via the new semantic tokens. */
+.pb-diff-pane {
+  margin-top: 24px;
+}
+.pb-diff {
+  border: 1px solid var(--pb-border);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.pb-diff-too-large {
+  padding: 16px;
+}
+.pb-diff-line {
+  display: flex;
+  white-space: pre;
+}
+.pb-diff-line[data-pb-diff-line="add"] {
+  background: var(--pb-diff-add-bg);
+}
+.pb-diff-line[data-pb-diff-line="del"] {
+  background: var(--pb-diff-del-bg);
+}
+.pb-diff-line[data-pb-diff-line="meta"] {
+  color: var(--pb-text-muted);
+  background: var(--pb-surface-raised);
+}
+.pb-diff-gutter {
+  flex: none;
+  width: 1.5em;
+  padding-left: 8px;
+  color: var(--pb-text-faint);
+  user-select: none;
+}
+.pb-diff-code {
+  flex: 1;
+  padding-right: 12px;
+  color: var(--pb-code-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

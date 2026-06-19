@@ -123,6 +123,12 @@ private class ReindexFailureHarness(
             searchService = com.plainbase.domain.service.SearchService(provider = engine, indexBuilder = harness.builder),
             aliasRegistry = harness.registry,
             contentStore = store,
+            writePipeline = harness.writePipeline(),
+            citations = com.plainbase.domain.service.CitationFactory(),
+            idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
+            maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            history = com.plainbase.frameworks.git.NoOpHistoryProvider,
         )
     }
 

@@ -14,6 +14,7 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -113,6 +114,9 @@ object ReindexCommand {
             aliasRegistry = registry,
             checkpoint = checkpoint,
             citations = CitationFactory(),
+            // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
+            // process is spawned here (the snapshot's commit fields stay null — harmless for this path).
+            history = NoOpHistoryProvider,
             // No search sync listener — only the §B3 checkpoint replace. The search engine is
             // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
             listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),

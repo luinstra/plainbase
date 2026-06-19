@@ -34,6 +34,7 @@ class SearchModuleWiringTest : FunSpec({
                         module { single { PlainbaseConfig.fromEnv(env) } }, // configModule, env pinned to temp dirs
                         contentModule,
                         repositoryModule,
+                        historyModule,
                         indexModule,
                         searchModule,
                     )

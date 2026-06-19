@@ -58,6 +58,7 @@ class SectionSplitterPropertyTest : FunSpec({
         materialized = false,
         markdown = "",
         contentHash = "sha256:" + "0".repeat(64),
+        commit = null,
         html = "",
         headings = headings,
         links = emptyList(),

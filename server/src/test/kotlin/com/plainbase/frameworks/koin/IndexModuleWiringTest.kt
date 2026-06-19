@@ -27,6 +27,7 @@ class IndexModuleWiringTest : FunSpec({
                 contentModule,
                 repositoryModule,
                 securityModule,
+                historyModule,
                 indexModule,
                 module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
             )

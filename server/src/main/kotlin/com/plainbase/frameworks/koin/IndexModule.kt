@@ -3,9 +3,9 @@ package com.plainbase.frameworks.koin
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
+import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
-import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -21,7 +21,9 @@ import org.koin.dsl.module
  */
 val indexModule = module {
     single<FrontmatterParser> { FrontmatterReader() }
-    single { PageIdentityService(UuidV7IdProvider()) }
+    // One UUIDv7 mint shared by the identity service (adopt-time ids) and the W2 create route.
+    single<IdProvider> { UuidV7IdProvider() }
+    single { PageIdentityService(get()) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }
     single { CitationFactory() }
@@ -36,6 +38,7 @@ val indexModule = module {
             aliasRegistry = get(),
             checkpoint = get(),
             citations = get(),
+            history = get(),
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),

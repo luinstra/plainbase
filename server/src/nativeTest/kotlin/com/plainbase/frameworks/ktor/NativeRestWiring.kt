@@ -10,12 +10,16 @@ import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
@@ -42,6 +46,9 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
             val database = DatabaseFactory.createDatabase(driver)
             val store = LocalContentStore(content)
             val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
+            // ONE id_map feeds both the IndexBuilder and the new WritePipeline.create, so the create's
+            // bind and the index see the same map (W2).
+            val idMap = SqlDelightIdMapRepository(database)
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
                 val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
@@ -51,20 +58,36 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
-                    idMap = SqlDelightIdMapRepository(database),
+                    idMap = idMap,
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
+                    history = NoOpHistoryProvider,
                     listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
                     searchIndexer = searchIndexer,
                 )
                 builder.rebuild()
+                val writeCitations = CitationFactory()
                 val services = RestServices(
                     indexBuilder = builder,
                     pageService = PageService(builder, registry, CitationFactory()),
                     searchService = SearchService(provider = searchProvider, indexBuilder = builder),
                     aliasRegistry = registry,
                     contentStore = store,
+                    writePipeline = WritePipeline(
+                        contentStore = store,
+                        indexBuilder = builder,
+                        citations = writeCitations,
+                        frontmatterParser = FrontmatterReader(),
+                        dirtyPages = SqlDelightDirtyPageRepository(database),
+                        idMap = idMap,
+                        aliasRegistry = registry,
+                    ),
+                    citations = CitationFactory(),
+                    idProvider = UuidV7IdProvider(),
+                    maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+                    maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                    history = NoOpHistoryProvider,
                 )
                 block(services)
             }

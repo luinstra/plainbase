@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.frameworks.ktor.RestServices
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -25,9 +26,17 @@ import io.ktor.server.routing.get
  * disk is the source of truth for binaries, and a just-deleted asset answering 404 is correct,
  * not a torn read. There is nothing per-asset to keep coherent with the snapshot.
  *
- * **Auth-phase note (stored XSS):** an SVG from the content tree is served same-origin and is
- * scriptable when navigated to directly. The CSP/sandbox decision (e.g. `Content-Security-Policy:
- * sandbox` on asset responses) belongs to the auth phase, alongside the rest of the trust model.
+ * **Serving safety (W3b — two orthogonal layers):**
+ *  - **MIME-sniff XSS — handled here now.** W3b's upload route lets any writer plant a file whose
+ *    bytes don't match its extension (e.g. HTML named `logo.png`, served `image/png`). Every asset
+ *    response carries `X-Content-Type-Options: nosniff` so a sniffing browser can't reinterpret it as
+ *    HTML. A pure win — no UX cost, no dependency, trust-model-independent — so it lands now.
+ *  - **Scriptable SVG/HTML on direct navigation — STAYS the auth-phase deferral.** An uploaded
+ *    `diagram.svg` is served `image/svg+xml` and is scriptable when navigated to directly. The real
+ *    mitigations (`Content-Disposition: attachment` to force-download, or `Content-Security-Policy:
+ *    sandbox`) carry a UX / trust-model dimension — forcing attachment breaks legitimate inline
+ *    `<img src=…foo.svg>` — so the CSP/sandbox decision belongs to the auth phase, alongside the rest
+ *    of the trust model. `nosniff` is the orthogonal first layer, not a substitute for it.
  */
 fun Route.assetRoute(services: RestServices) {
     get("/assets/{path...}") {
@@ -38,10 +47,15 @@ fun Route.assetRoute(services: RestServices) {
         if (path in services.indexBuilder.current.assets) {
             val bytes = services.contentStore.read(path)
                 ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
+            call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
             return@get call.respondBytes(bytes, assetContentType(path.name))
         }
         val bundled = staticResourceBytes(path.value)
             ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
+        call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
         call.respondBytes(bundled, assetContentType(path.name))
     }
 }
+
+// The MIME-sniff defense header (not a named constant in Ktor 3.5's HttpHeaders).
+private const val X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options"

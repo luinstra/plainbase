@@ -2,20 +2,32 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
+import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
+import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.RestJson
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.charset
 import io.ktor.http.decodeURLQueryComponent
 import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.request.queryString
+import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
+import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readRemaining
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
 import kotlinx.serialization.KSerializer
 
 /** Responds [value] through the scoped [RestJson] serializer (present-null guaranteed, §A4). */
@@ -23,9 +35,112 @@ internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>,
     respondText(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status)
 }
 
+/**
+ * Sets the PB-WRITE-1 read-half of the round-trip: `ETag: "<content_hash>"` — an RFC 7232 STRONG
+ * entity-tag (double-quoted, no `W/`), so the value a client `GET`s is byte-for-byte the `If-Match`
+ * the next `PUT` requires. The quotes are part of the frozen value; [contentHash] is the bare
+ * unquoted value. Shared by [pageRoutes] (read) and [pageCreateRoutes] (the 201 create response).
+ */
+internal fun ApplicationCall.setContentHashETag(contentHash: String) {
+    response.header(HttpHeaders.ETag, "\"$contentHash\"")
+}
+
+/**
+ * The §A4 canonical id shape: the 36-char hyphenated UUID form, ANY case (an UPPERCASE path param
+ * resolves to the same lowercase id — RestGoldenTest). Deliberately STRICTER than [PageId.of] /
+ * `Uuid.parseOrNull`, which also accepts the 32-char hyphenless hex form: the HTTP boundary admits
+ * only the canonical hyphenated shape, so a `1-1-1-1-1` AND a 32-hex-no-hyphen id are both
+ * `invalid_page_id`, never silently routed to the index lookup. The regex decides 400-vs-404, never
+ * JDK leniency.
+ */
+private val CANONICAL_PAGE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+/**
+ * Parses the `{id}` path parameter via the §A4 canonical-shape gate, or itself responds 400
+ * `invalid_page_id` and returns null. Shared by [pageRoutes] (read) and [pageWriteRoutes] (PUT) so
+ * both gates are byte-identical. The boundary check is the [CANONICAL_PAGE_ID] regex (the §A4
+ * canonical hyphenated shape) BEFORE [PageId.of]: a shape-valid id then parses to a [PageId]; a
+ * non-canonical one (including the JDK-lenient hex-32 form `PageId.of` would otherwise accept) is
+ * 400, never 404.
+ */
+internal suspend fun ApplicationCall.pageId(): PageId? {
+    val raw = parameters["id"].orEmpty()
+    val id = raw.takeIf(CANONICAL_PAGE_ID::matches)?.let(PageId::of)
+    if (id == null) respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
+    return id
+}
+
+/**
+ * Redirects to [target], carrying the request's RAW query string through verbatim — so a direct hit
+ * (cold load / refresh / pasted link) on `/docs/<alias>?mode=edit` lands on the canonical URL still
+ * in edit mode, not the read view. The query is appended unparsed (the SPA, not us, owns its grammar)
+ * and only when present, so a no-query redirect stays a clean `Location` with no trailing `?`. The
+ * client-side canonical redirect preserves the query the same way (router.history.replace); this is
+ * the server-side half of the same rename-stability guarantee, applied to every `/docs`-path hop.
+ */
+internal suspend fun ApplicationCall.respondRedirectPreservingQuery(target: String, permanent: Boolean) {
+    val query = request.queryString()
+    respondRedirect(if (query.isEmpty()) target else "$target?$query", permanent)
+}
+
+/**
+ * The bidi/directional-override controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`) a spoofed name would
+ * smuggle — e.g. `gpj.exe` rendered as a reversed `.exe` via U+202E. Shared by the asset-filename gate
+ * ([pageWriteRoutes]) and the create-folder gate ([pageCreateRoutes]) so neither drifts: both an asset
+ * name and a folder name must reject these on top of [Char.isISOControl].
+ */
+internal fun Char.isBidiControl(): Boolean = this in Char(0x202A)..Char(0x202E) || this in Char(0x2066)..Char(0x2069)
+
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
 internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) {
     respondRest(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(code, message)), status)
+}
+
+/**
+ * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the
+ * moment the count would exceed [limit] (so an over-cap body aborts BEFORE the whole thing is
+ * buffered). `Content-Length` is never trusted: it can lie, so the stream count is the only
+ * authority. Shared by the PB-WRITE-1 PUT (raw save) and POST (create) routes.
+ */
+internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? {
+    val channel: ByteReadChannel = receiveChannel()
+    val out = Buffer()
+    var count = 0L
+    while (!channel.isClosedForRead) {
+        // Read at most one chunk PAST the limit so an over-cap body aborts before the whole thing is
+        // buffered; Content-Length is never consulted (it can lie).
+        val chunk = channel.readRemaining(BODY_READ_CHUNK).readByteArray()
+        count += chunk.size
+        if (count > limit) {
+            channel.cancel(BodyTooLargeCancellation)
+            return null
+        }
+        out.write(chunk)
+    }
+    return out.readByteArray()
+}
+
+/** The cancellation cause when the body exceeds the cap — never surfaced; the route answers 413 itself. */
+private val BodyTooLargeCancellation = kotlinx.io.IOException("PB-WRITE-1 body exceeds the configured cap")
+
+private const val BODY_READ_CHUNK: Long = 64 * 1024
+
+/** The frozen 413 `body_too_large` envelope (`max_bytes` authoritative) — shared by PUT and POST. */
+internal suspend fun ApplicationCall.respondBodyTooLarge(maxBytes: Long) {
+    respondText(
+        RestJson.encodeToString(
+            BodyTooLargeEnvelope.serializer(),
+            BodyTooLargeEnvelope(
+                BodyTooLargeBody(
+                    code = ErrorCodes.BODY_TOO_LARGE,
+                    message = "Request body exceeds the $maxBytes-byte limit",
+                    maxBytes = maxBytes,
+                ),
+            ),
+        ),
+        ContentType.Application.Json,
+        HttpStatusCode.PayloadTooLarge,
+    )
 }
 
 /**

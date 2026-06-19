@@ -6,6 +6,7 @@ import com.plainbase.domain.content.ContentFile
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
@@ -14,6 +15,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
+import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -72,6 +74,7 @@ class IndexBuilder(
     private val aliasRegistry: UrlAliasRegistry,
     private val checkpoint: PageCheckpointRepository,
     private val citations: CitationFactory,
+    private val history: HistoryProvider,
     private val listeners: List<PublicationListener> = emptyList(),
     private val searchIndexer: SearchIndexer? = null,
 ) {
@@ -119,6 +122,11 @@ class IndexBuilder(
         )
         urls.issues.forEach(idMap::record)
 
+        // ONE batched last-commit read for the whole page set (W5 D-3 / fix-C corollary): never one query
+        // per page. NoOp → empty map → every commit null off Git (the frozen-golden invariant). The map
+        // is keyed by the same TreePath the draft carries; an uncommitted page is simply absent (→ null).
+        val commitMap = history.lastCommits(drafts.map { it.file.path })
+
         // Render against a URL-complete skeleton of the final snapshot type: identity and URLs are
         // already final, render fields are filled by the single render below.
         val provisional = drafts.map { draft ->
@@ -136,6 +144,7 @@ class IndexBuilder(
                 // payload a request answers with is coherent BY CONSTRUCTION (see IndexedPage doc).
                 markdown = String(draft.bytes, Charsets.UTF_8),
                 contentHash = citations.contentHash(draft.bytes),
+                commit = commitMap[draft.file.path]?.sha,
                 html = "",
                 headings = emptyList(),
                 links = emptyList(),
@@ -187,6 +196,86 @@ class IndexBuilder(
         indexer.rebuild(snapshot)
         return snapshot.pages.size
     }
+
+    /**
+     * Targeted single-page reindex (PB-WRITE-1 §B1 fix C): re-reads + re-renders ONLY [pageId]'s page,
+     * publishes a snapshot identical to the current one except for that page, and upserts that ONE page
+     * into search via [SearchIndexer.syncPage]. O(changed-page) END-TO-END — render O(1), search O(1)
+     * (single-page upsert, NOT the corpus-wide [SearchIndexer.sync] diff), checkpoint O(0) (skipped).
+     * Full [rebuild] stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher
+     * rebuild never interleaves.
+     *
+     * The caller (`WritePipeline.write`) has ALREADY rejected any id/slug/redirect_from change (the
+     * edit-classification guard), so this page's identity, urlPath, and aliases are unchanged — only
+     * its bytes-derived fields (markdown, contentHash, html, headings, links, sections, title) are
+     * recomputed. So this does NOT call [notifyPublished] (which would fire the O(corpus) checkpoint
+     * replace) and does NOT call [recordAliases]: there is nothing checkpoint- or alias-relevant to
+     * change. A genuine rename never reaches here — it is a deferred §H operation through full [rebuild].
+     *
+     * Rendered against the CURRENT published snapshot's view (URL-complete: every OTHER page's
+     * canonical URL is final), so this page's outbound links resolve exactly as in a full rebuild.
+     *
+     * **Cross-page render coherence — a documented invariant, not a tracked feature.** Re-rendering
+     * one page is correct iff a page's HTML/headings/links/sections are a pure function of its OWN
+     * content (plus the unchanged URL-complete view). That holds today: the renderer embeds other
+     * pages' URLs but never their content (no backlinks, no transclusion, no server-rendered
+     * child-lists), and folder landing pages are client-rendered (ADR-0003). TRIPWIRE for whoever
+     * later adds backlinks / transclusion / "pages that mention this one": that feature breaks the
+     * pure-function assumption and must either re-render dependents or route through full [rebuild].
+     *
+     * THROWS [IllegalStateException] if [pageId] is absent or its file is unreadable on the SAVE path:
+     * the CAS just wrote those bytes, so a missing page is a real invariant violation, never a silent
+     * success (debate MUST-FIX 4). `WritePipeline.reconcileDirtyPages` tolerates a vanished page at its
+     * OWN call site, never here.
+     */
+    @Synchronized
+    fun reindex(pageId: PageId): PageIndex {
+        val previous = holder.load()
+        val target = previous.byId[pageId]
+            ?: error("reindex($pageId): page not in the published snapshot — a save-path invariant violation")
+        val bytes = contentStore.read(target.path)
+            ?: error("reindex($pageId): ${target.path.value} unreadable just after a CAS write")
+        val parsed = frontmatterParser.parse(bytes)
+        val rendered = rendererFactory(previous).render(target.path, bytes)
+        // One genuinely O(1) last-commit lookup for just this page (D-3, reversed by re-review P2-1): a
+        // BOUNDED `git log --max-count=1 -- path`, NEVER `lastCommits` — which has no cap and buffers the
+        // page's FULL history before parsing, so for a heavily-edited page every save/reconcile would read
+        // the whole history (unbounded; can time out / null the commit). `log(path, 1)` shares `rebuild`'s
+        // first-parent attribution, so the citation SHA stays consistent between the two paths.
+        val commit = history.log(target.path, limit = 1).firstOrNull()?.sha
+        val reindexed = target.copy(
+            frontmatter = parsed,
+            markdown = String(bytes, Charsets.UTF_8),
+            contentHash = citations.contentHash(bytes),
+            commit = commit,
+            title = parsed.scalar("title") ?: rendered.headings.firstOrNull { it.level == 1 }?.text ?: target.path.stem,
+            html = rendered.html,
+            headings = rendered.headings.toList(),
+            links = rendered.links.toList(),
+            sections = rendered.sections.toList(),
+        )
+        val snapshot = PageIndex(
+            pages = previous.pages.map { if (it.id == pageId) reindexed else it },
+            folders = previous.folders,
+            assets = previous.assets,
+        )
+        holder.store(snapshot)
+        logger.info { "reindexed page ${pageId.value} (${target.path.value}); ${snapshot.pages.size} page(s) published" }
+        searchIndexer?.syncPage(reindexed) // genuine O(1) single-page upsert — NOT sync(snapshot), NOT notifyPublished
+        return snapshot
+    }
+
+    /**
+     * Renders a SUBMITTED Markdown buffer for the (private, non-contractual W3b) preview pane: PB-SLUG-1
+     * heading ids + PB-LINK-1 link rewriting via the SAME [rendererFactory] every index render uses (§3
+     * single-renderer rule — preview NEVER constructs its own renderer). Link resolution is against the
+     * CURRENT published snapshot [current] (so `[[other page]]` / relative links resolve as a reader would
+     * see them); [sourcePath] is the buffer's notional location for relative-href resolution (the editor's
+     * page path, or a synthetic root path when previewing a not-yet-saved buffer). READ-ONLY: nothing is
+     * read from disk, nothing is published, no snapshot swap — a pure function of [bytes] + the live view.
+     */
+    fun renderPreview(sourcePath: TreePath, bytes: ByteArray): RenderedPage =
+        rendererFactory(current).render(sourcePath, bytes)
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex) {

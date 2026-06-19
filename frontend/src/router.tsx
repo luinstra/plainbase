@@ -7,6 +7,8 @@ import {
   useRouterState,
   type RouterHistory,
 } from "@tanstack/react-router";
+import { EditorPage, NewPage } from "./components/EditorPage";
+import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
 import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
 import { Shell } from "./components/Shell";
@@ -17,7 +19,9 @@ import { Shell } from "./components/Shell";
  *   /          → redirect to /docs
  *   /docs      → the ROOT folder landing (the root node's `url` is /docs): root
  *                index/readme child if present, else the top-level listing
- *   /docs/$    → canonical page route; the splat is the by-path key
+ *   /docs/$    → canonical page route; the splat is the by-path key. `?mode=edit` mounts the
+ *                editor, `?mode=history` is the W7 history seam; absent = the clean read view.
+ *   /new       → new-page creation (no path exists pre-create — the server mints it)
  *   /p/$       → loser-permalink route. Winners never reach it (the server 302s
  *                /p/{id} → canonical), but a collision loser's permalink serves the
  *                shell (200), so the SPA fetches by id and renders in place.
@@ -46,10 +50,20 @@ const docsIndexRoute = createRoute({
   component: FolderLanding,
 });
 
+/** The `/docs/$` query mode: `edit` (the editor), `history` (W7 seam), or absent (the read view). */
+interface DocsSearch {
+  mode?: "edit" | "history";
+}
+
 const docsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/docs/$",
   component: DocsSplat,
+  // A bogus `?mode=foo` coerces to undefined → the read view; never an undefined/blank state (D-1).
+  validateSearch: (search: Record<string, unknown>): DocsSearch => {
+    const mode = search.mode;
+    return mode === "edit" || mode === "history" ? { mode } : {};
+  },
 });
 
 /**
@@ -64,16 +78,35 @@ function useHasEncodedSlash(): boolean {
   return /%2f/i.test(pathname);
 }
 
+/**
+ * The `/docs/$` dispatcher (D-1): a thin switch on `?mode=` delegating to sub-components that each own
+ * their own `useQuery` (component-level data-fetching — no route loader, so the lifecycle separation
+ * holds without separate routes). The editor lives UNDER the read route's canonical-redirect resolution
+ * (which preserves the query string), so `?mode=edit` is rename-stable.
+ */
 function DocsSplat() {
   const { _splat } = docsRoute.useParams();
+  const { mode } = docsRoute.useSearch();
   const encodedSlash = useHasEncodedSlash();
   if (encodedSlash) return <NotFoundView />;
   const path = _splat ?? "";
+  if (mode === "edit" && path) return <EditorPage path={path} />;
+  if (mode === "history" && path) return <History path={path} />;
   // An empty splat ("/docs/") is the root landing too; the trailing-slash pathname would
   // never match the root's verbatim `/docs` url, so it is passed explicitly.
   if (!path) return <FolderLanding url="/docs" />;
   return <DocsPage path={path} />;
 }
+
+// W7 landed: the per-page history surface (`?mode=history`) is the real `<History>` component
+// (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
+// dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
+
+const newRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/new",
+  component: NewPage,
+});
 
 const permalinkRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -89,7 +122,7 @@ function PermalinkSplat() {
   return <PermalinkPage splat={_splat ?? ""} />;
 }
 
-const routeTree = rootRoute.addChildren([indexRoute, docsIndexRoute, docsRoute, permalinkRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, docsIndexRoute, docsRoute, newRoute, permalinkRoute]);
 
 /** [history] is injectable for tests (memory history); the app default is browser history. */
 export function createAppRouter(queryClient: QueryClient, history?: RouterHistory) {

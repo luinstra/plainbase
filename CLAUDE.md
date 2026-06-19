@@ -33,7 +33,7 @@ Filesystem-native, agent-native internal docs product. Master plan:
 
 - `./gradlew build` = JAR floor: compile, tests, spotlessCheck, dependency allowlist.
 - `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
-  = the native gate (8/8 required). GraalVM comes from asdf (`.tool-versions`).
+  = the native gate (7/7 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
 
@@ -66,7 +66,7 @@ command string. Use these stable `./gradlew :*` invocations instead:
    BLOCKING.
 3. **Verify** — always through Gradle (§Verification): JVM floor `./gradlew build`; **server changes
    also run the native gate** (`:server:nativeTest` → `:server:nativeCompile` → `plainbase spike`,
-   8/8). Run the full floor, not just the native gate — a cross-cutting refactor can break a
+   7/7). Run the full floor, not just the native gate — a cross-cutting refactor can break a
    JVM-only test the native subset never compiles.
 4. **Commit on the owner's explicit word only** — logical commits (one concern each: decision /
    feature+its tests / tooling), conventional style, on `main`. Gitignored `.crew/` addenda stay
@@ -78,8 +78,23 @@ phase-closing** chunks:
 
 - **Before building:** a four-model `/octo:debate` on design soundness. (S7/S8: caught a silent
   data-correctness bug that measure-twice had approved.)
-- **After building:** a `/codex:review` cross-model pass. (S8: caught a misleading operator doc and a
-  CLI exit-code bug.)
+- **After building:** **review-until-clean**, two complementary fan-outs:
+  - **First pass — diverse fan-out, run in parallel to drain the latent-bug backlog in fewer rounds.**
+    Across *models* (cross-model diversity is the highest-yield: on W5 Codex caught a `git diff` RCE via
+    repo-local `diff.external` while Gemini caught an empty-message log-parser field-shift — neither caught
+    the other's, and the advisor verify caught neither) AND across *lenses* (≥3 reviewers with distinct
+    mandates — e.g. security/RCE · correctness+frozen-contract+concurrency · deployment/ops/scale —
+    since same-model instances share blind spots, the lens diversity buys back the correlation). Models:
+    `/codex:review` (or focused `codex exec -s read-only` per lens) + a Gemini-3.1-Pro pass via `agy`
+    (the `gemini` CLI is retired; run `agy` from the repo cwd with `--dangerously-skip-permissions` +
+    review instructions — it runs `git diff` itself; do NOT inline the diff).
+  - **Confirm rounds — fix → re-review until a round returns empty/cosmetic.** Some findings are
+    causally sequential (a fix exposes/creates the next — W5: throw-on-failure → diff-route taxonomy →
+    git-version gate), so a few rounds are inherent; parallelism can't collapse that tail. Drop a model
+    once it plateaus clean (W5: Gemini went clean by R2; Codex kept finding real items to R7). A final
+    parallel diverse-lens burst all-clean is strong evidence of earned-clean. Validate every finding
+    against real code before fixing; fix the CLASS not the instance.
+  (S8: `/codex:review` caught a misleading operator doc + a CLI exit-code bug.)
 
 The owner can say "always debate"/"always review" to make either automatic. **When a debate or
 review finds a hole the spec missed, widen the spec AND its tests — not just the code.**

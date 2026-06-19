@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "conflict",
+    "reason": "content_changed",
+    "message": "The page changed on disk since you loaded it.",
+    "current_content": "{{current_content}}",
+    "current_hash": "{{current_hash}}",
+    "current_path": "{{current_path}}"
+  }
+}

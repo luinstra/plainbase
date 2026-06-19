@@ -119,6 +119,17 @@ data class IndexedPage(
     val markdown: String,
     /** The frozen §5.3 content hash (`CitationFactory.contentHash`) over the same raw bytes. */
     val contentHash: String,
+    /**
+     * The last commit touching this file in Git mode (W5), captured at index time and served disk-free
+     * exactly like [contentHash]; null off Git, for an as-yet-uncommitted page, or in Phase 1-2.
+     *
+     * **As-of-the-last-reindex invariant:** `commit` reflects the page's history at the moment of its last
+     * (re)index, never a request-time Git read. During an in-flight save a citation may momentarily pair a
+     * NEW [contentHash] with the PRIOR `commit` (a watcher rebuild slipping into the post-CAS/pre-commit
+     * window) until the save's own reindex republishes a coherent snapshot — bounded, self-healing,
+     * sub-second, never a durable mismatch (W5 D-1 / debate MUST-FIX 4).
+     */
+    val commit: String?,
     val html: String,
     val headings: List<Heading>,
     val links: List<PageLink>,

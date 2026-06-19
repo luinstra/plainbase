@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
@@ -8,7 +9,10 @@ import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.client.HttpClient
@@ -30,6 +34,7 @@ import java.nio.file.Path
 class RestHarness(
     root: Path,
     seed: (IdMapRepository) -> Unit = {},
+    private val history: HistoryProvider = NoOpHistoryProvider,
 ) : AutoCloseable {
 
     private val store = LocalContentStore(root)
@@ -40,6 +45,7 @@ class RestHarness(
     private val harness = IndexHarness(
         root,
         contentStore = store,
+        history = history,
         listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
         searchIndexer = searchIndexer,
     )
@@ -59,6 +65,12 @@ class RestHarness(
             searchService = SearchService(provider = searchProvider, indexBuilder = harness.builder),
             aliasRegistry = harness.registry,
             contentStore = store,
+            writePipeline = harness.writePipeline(),
+            citations = CitationFactory(),
+            idProvider = UuidV7IdProvider(),
+            maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+            maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            history = history,
         )
     }
 
@@ -76,9 +88,10 @@ class RestHarness(
 fun restTest(
     root: Path,
     seed: (IdMapRepository) -> Unit = {},
+    history: HistoryProvider = NoOpHistoryProvider,
     block: suspend ApplicationTestBuilder.(RestHarness) -> Unit,
 ) {
-    RestHarness(root, seed).use { harness ->
+    RestHarness(root, seed, history).use { harness ->
         testApplication {
             application { plainbaseModule(harness.services) }
             block(harness)

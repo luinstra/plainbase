@@ -3,12 +3,16 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.TreeBuilder
 import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.ktor.dto.ReindexResponse
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.TreeResponse
@@ -28,6 +32,17 @@ class RestServices(
     val searchService: SearchService,
     val aliasRegistry: UrlAliasRegistry,
     val contentStore: ContentStore,
+    val writePipeline: WritePipeline,
+    /** The frozen content-hash (`CitationFactory.contentHash`) the W3a write route reuses — no second hash. */
+    val citations: CitationFactory,
+    /** PB-WRITE-1 (W2) id mint for `POST /api/v1/pages` — injected so tests mint deterministically. */
+    val idProvider: IdProvider,
+    /** PB-WRITE-1 body cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxWriteBodyBytes]. */
+    val maxWriteBodyBytes: Long,
+    /** W3b asset upload cap forwarded from [com.plainbase.frameworks.config.PlainbaseConfig.maxAssetBytes]. */
+    val maxAssetBytes: Long,
+    /** The W5 history read surface (`/history`, `/diff`); [HistoryProvider.enabled] is the `git_enabled` flag. */
+    val history: HistoryProvider,
 ) {
 
     /** The per-snapshot memoized `/api/v1/tree` JSON (§C4). */

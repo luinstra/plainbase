@@ -155,54 +155,5 @@
     "allDeclaredConstructors": true,
     "allDeclaredMethods": true,
     "allDeclaredFields": true
-  },
-
-  {
-    "name": "org.eclipse.jgit.diff.DiffAlgorithm$SupportedAlgorithm",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$AutoCRLF",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$EOL",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$CheckStat",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$SymLinks",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$HideDotFiles",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$LogRefUpdates",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
-  },
-  {
-    "name": "org.eclipse.jgit.lib.CoreConfig$TrustStat",
-    "allDeclaredConstructors": true,
-    "allDeclaredMethods": true,
-    "allDeclaredFields": true
   }
 ]

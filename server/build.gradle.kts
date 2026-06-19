@@ -17,6 +17,7 @@ plugins {
 // baseline style, but never restructures signatures, when-branches, or `=` wrapping.
 val ktlintDisabledRules =
     mapOf(
+        "ktlint_standard_no-unused-imports" to "enabled",
         "ktlint_standard_class-signature" to "disabled",
         "ktlint_standard_function-signature" to "disabled",
         "ktlint_standard_when-entry-bracing" to "disabled",
@@ -94,9 +95,6 @@ dependencies {
     // DI — Koin constructor DSL only
     implementation(libs.koin.core)
 
-    // Git layer
-    implementation(libs.jgit)
-
     // Markdown
     implementation(libs.flexmark)
     implementation(libs.flexmark.ext.gfm.tables)
@@ -145,6 +143,12 @@ dependencies {
     // extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so this never reaches the
     // native test image's classpath; the parser stays off the native gate. See FrontmatterPatcherOracleTest.
     testImplementation(libs.snakeyaml)
+    // JGit — JVM-test-ONLY differential oracle for the W4 Git-history layer (reads commits back via
+    // RevCommit to assert against the shell-`git` writes the production GitCliHistoryProvider makes).
+    // testImplementation-scoped, so it is absent from runtimeClasspath (allowlist unaffected); the
+    // nativeTest configurations extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so
+    // it never reaches the native test image. Production ships the system `git` binary, never JGit (ADR-0006).
+    testImplementation(libs.jgit)
     // JUnit Platform launcher API — the chunk-8 acceptance suites (Phase1AcceptanceTest,
     // ForeverApiGoldenSuite) run existing test classes by SELECTION through an in-process launcher
     // (suite-without-duplication, with executed-test floors against vacuous green). Already in the
@@ -271,7 +275,7 @@ graalvmNative {
         }
     }
     metadataRepository {
-        enabled.set(true) // pulls reachability metadata for sqlite-jdbc, jgit, etc.
+        enabled.set(true) // pulls reachability metadata for sqlite-jdbc, etc.
     }
 }
 

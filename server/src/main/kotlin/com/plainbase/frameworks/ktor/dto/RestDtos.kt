@@ -64,6 +64,48 @@ object ErrorCodes {
      * frozen §A5 vocabulary; appended here as a constant (codes are append-only).
      */
     const val REINDEX_IN_FLIGHT: String = "reindex_in_flight"
+
+    // ---- PB-WRITE-1 (W3a): the write/save vocabulary (append-only; froze when W3a landed) --------
+
+    /** 409: a save's base_hash no longer matches the on-disk bytes — the conflict envelope carries reason + current_*. */
+    const val CONFLICT: String = "conflict"
+
+    /** 422: a PUT body would change the frontmatter id (vs path-param, or vs the file's current id) — IDs are immutable. */
+    const val ID_CHANGE_UNSUPPORTED: String = "id_change_unsupported"
+
+    /** 422: a PUT body would change the slug — a re-slug is a move (deferred §H), never a save side effect. */
+    const val SLUG_CHANGE_UNSUPPORTED: String = "slug_change_unsupported"
+
+    /** 422: a PUT body would change redirect_from — an alias change is a move (deferred §H), never a save side effect. */
+    const val REDIRECT_FROM_CHANGE_UNSUPPORTED: String = "redirect_from_change_unsupported"
+
+    /** 503: the on-disk file could not be read at CAS time (locked/permission/transient FS) — retryable, nothing written. */
+    const val CONTENT_UNREADABLE: String = "content_unreadable"
+
+    /** 400: the base_hash (If-Match) header is missing, malformed, or not sha256:+64-hex. */
+    const val INVALID_BASE_HASH: String = "invalid_base_hash"
+
+    /** 413: a request body exceeding the configured PB-WRITE-1 max body size (the body carries the authoritative max_bytes). */
+    const val BODY_TOO_LARGE: String = "body_too_large"
+
+    /** 415: a PUT without the accepted text/markdown media type. */
+    const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"
+
+    // ---- PB-WRITE-1 (W2): the new-page-creation vocabulary (append-only) -----------------------------
+
+    /** 409: POST /api/v1/pages targets a path that already exists on disk — nothing written; the body carries the path. */
+    const val PAGE_EXISTS: String = "page_exists"
+
+    /** 400: a POST /api/v1/pages request is malformed — missing/blank title, an invalid folder, or unparseable JSON. */
+    const val INVALID_CREATE_REQUEST: String = "invalid_create_request"
+
+    /** 409: a POST /api/v1/pages would claim a canonical URL/slug another page already owns — nothing written; the body carries the URL. */
+    const val SLUG_CONFLICT: String = "slug_conflict"
+
+    // ---- W3b: the asset-upload vocabulary (append-only) ----------------------------------------------
+
+    /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
+    const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */
@@ -184,7 +226,7 @@ fun PagePayload.toDto(): PageResponse = PageResponse(
     frontmatter = page.frontmatter.toJsonObject(idMaterialized = page.materialized),
     contentHash = page.contentHash,
     idMaterialized = page.materialized,
-    commit = null, // always null in Phase 1 (Git layer is Phase 3); field present from day one
+    commit = page.commit, // the page's snapshot-resident last commit (W5); null off Git
     citation = citation.toDto(),
 )
 
@@ -196,7 +238,7 @@ fun PageHtmlPayload.toDto(): PageHtmlResponse = PageHtmlResponse(
     title = page.title,
     html = page.html,
     contentHash = page.contentHash,
-    commit = null,
+    commit = page.commit,
     headings = page.headings.map { it.toDto() },
     citation = citation.toDto(),
 )

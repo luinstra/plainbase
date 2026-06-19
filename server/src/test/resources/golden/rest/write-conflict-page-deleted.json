@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "conflict",
+    "reason": "page_deleted",
+    "message": "The page no longer exists on disk.",
+    "current_content": null,
+    "current_hash": null,
+    "current_path": null
+  }
+}

@@ -143,6 +143,16 @@
   --pb-status-review: var(--pb-blue-600);
   --pb-status-archived: var(--pb-gray-400);
   --pb-status-deprecated: var(--pb-red-600);
+
+  /* feedback surfaces — the W6 conflict banner (danger) and the deleted/moved notice (warning) */
+  --pb-danger: var(--pb-red-700);
+  --pb-danger-soft: color-mix(in srgb, var(--pb-red-600) 12%, transparent);
+  --pb-warning: var(--pb-amber-700);
+  --pb-warning-soft: color-mix(in srgb, var(--pb-amber-600) 14%, transparent);
+
+  /* diff line tinting — the W7 history diff (added/removed line backgrounds) */
+  --pb-diff-add-bg: color-mix(in srgb, var(--pb-green-600) 12%, transparent);
+  --pb-diff-del-bg: color-mix(in srgb, var(--pb-red-600) 12%, transparent);
 }
 
 [data-theme="dark"] {
@@ -198,4 +208,14 @@
   --pb-status-review: var(--pb-blue-400);
   --pb-status-archived: var(--pb-gray-500);
   --pb-status-deprecated: var(--pb-red-400);
+
+  /* feedback surfaces */
+  --pb-danger: var(--pb-red-300);
+  --pb-danger-soft: color-mix(in srgb, var(--pb-red-400) 16%, transparent);
+  --pb-warning: var(--pb-amber-300);
+  --pb-warning-soft: color-mix(in srgb, var(--pb-amber-400) 18%, transparent);
+
+  /* diff line tinting */
+  --pb-diff-add-bg: color-mix(in srgb, var(--pb-green-400) 16%, transparent);
+  --pb-diff-del-bg: color-mix(in srgb, var(--pb-red-400) 16%, transparent);
 }

@@ -10,7 +10,6 @@ co.touchlab:stately-concurrent-collections
 co.touchlab:stately-concurrent-collections-jvm
 co.touchlab:stately-strict
 co.touchlab:stately-strict-jvm
-com.googlecode.javaewah:JavaEWAH
 com.typesafe:config
 com.vladsch.flexmark:flexmark
 com.vladsch.flexmark:flexmark-ext-anchorlink
@@ -29,7 +28,6 @@ com.vladsch.flexmark:flexmark-util-misc
 com.vladsch.flexmark:flexmark-util-options
 com.vladsch.flexmark:flexmark-util-sequence
 com.vladsch.flexmark:flexmark-util-visitor
-commons-codec:commons-codec
 io.github.oshai:kotlin-logging
 io.github.oshai:kotlin-logging-jvm
 io.insert-koin:koin-core
@@ -87,7 +85,6 @@ io.modelcontextprotocol:kotlin-sdk-jvm
 io.modelcontextprotocol:kotlin-sdk-server
 io.modelcontextprotocol:kotlin-sdk-server-jvm
 org.bouncycastle:bcprov-jdk18on
-org.eclipse.jgit:org.eclipse.jgit
 org.jetbrains.kotlin:kotlin-reflect
 org.jetbrains.kotlin:kotlin-stdlib
 org.jetbrains.kotlinx:kotlinx-collections-immutable

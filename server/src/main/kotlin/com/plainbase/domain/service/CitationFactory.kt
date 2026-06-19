@@ -17,7 +17,8 @@ class CitationFactory {
     fun contentHash(rawBytes: ByteArray): String =
         "sha256:" + MessageDigest.getInstance("SHA-256").digest(rawBytes).toHexString()
 
-    /** A page-level citation ([Citation.headingId] null); `commit` is always null until the Phase-3 Git layer. */
+    /** A page-level citation ([Citation.headingId] null); `commit` rides the snapshot — the page's last
+     *  commit in Git mode (W5), null off Git. */
     fun pageLevel(page: IndexedPage, contentHash: String): Citation =
-        Citation(pageId = page.id, headingId = null, path = page.path, contentHash = contentHash, commit = null)
+        Citation(pageId = page.id, headingId = null, path = page.path, contentHash = contentHash, commit = page.commit)
 }

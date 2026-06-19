@@ -24,12 +24,37 @@ import java.util.HexFormat
  */
 object RestGolden {
 
-    /** Loads a golden JSON resource with `{{placeholder}}` substitutions applied. */
+    /**
+     * Loads a golden JSON resource with `{{placeholder}}` substitutions applied.
+     *
+     * Substitution happens in the PARSED JSON TREE, not in the raw text: the golden is parsed first,
+     * then within each string [JsonPrimitive]'s CONTENT every `{{key}}` occurrence is replaced and the
+     * primitive re-created via `JsonPrimitive(value)`. Because the replace runs on the already-decoded
+     * string and `kotlinx` re-encodes the result, an arbitrary substituted value (a `current_content`
+     * carrying a `"` or `\`, a literal newline, …) is escaped correctly — never spliced as raw text
+     * that could make the JSON invalid (the old pre-parse `text.replace` failure mode). Substituting
+     * into the string content (not only whole-value primitives) keeps embedded placeholders working
+     * too — e.g. the PB-REST-1 citation `uri` `plainbase://<id>@{{content_hash}}`.
+     */
     fun load(name: String, substitutions: Map<String, String> = emptyMap()): JsonElement {
         val resource = checkNotNull(javaClass.getResourceAsStream("/golden/rest/$name")) { "missing golden resource: $name" }
-        var text = resource.use { it.readBytes().toString(Charsets.UTF_8) }
-        for ((key, value) in substitutions) text = text.replace("{{$key}}", value)
-        return Json.parseToJsonElement(text)
+        val text = resource.use { it.readBytes().toString(Charsets.UTF_8) }
+        return substitute(Json.parseToJsonElement(text), substitutions)
+    }
+
+    /** Recursively replaces `{{key}}` occurrences inside string primitives (re-encoded, so any value is safe). */
+    private fun substitute(element: JsonElement, substitutions: Map<String, String>): JsonElement = when (element) {
+        is JsonObject -> JsonObject(element.mapValues { (_, value) -> substitute(value, substitutions) })
+        is JsonArray -> JsonArray(element.map { substitute(it, substitutions) })
+        is JsonPrimitive -> if (element.isString) substitutePrimitive(element, substitutions) else element
+        else -> element
+    }
+
+    private fun substitutePrimitive(primitive: JsonPrimitive, substitutions: Map<String, String>): JsonPrimitive {
+        var content = primitive.content
+        if ("{{" !in content) return primitive
+        for ((key, value) in substitutions) content = content.replace("{{$key}}", value)
+        return JsonPrimitive(content)
     }
 
     /** The frozen content-hash form, recomputed from the on-disk [file] — never a committed value. */

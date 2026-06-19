@@ -53,7 +53,7 @@ class SearchGoldenTest : FunSpec({
     }
     val runbookHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("infra/incident-runbook.md"))
 
-    fun goldenTest(block: suspend ApplicationTestBuilder.(RestHarness) -> Unit) = restTest(Fixtures.demoDocs, seed, block)
+    fun goldenTest(block: suspend ApplicationTestBuilder.(RestHarness) -> Unit) = restTest(Fixtures.demoDocs, seed, block = block)
 
     test("GET /api/v1/search matches the frozen sentinel single-hit golden (score-normalized)") {
         goldenTest { harness ->

@@ -109,13 +109,23 @@ class FrontmatterPatcherTest : FunSpec({
         patcher.readIdValue("---\nid:${id.value}\n---\nbody\n".toByteArray()) shouldBe null
     }
 
-    test("readIdValue is null without a block, without an id key, or on a non-UTF-8 block") {
+    test("readIdValue is null without a block, without an id key, or with no id line in an invalid-UTF-8 block") {
         patcher.readIdValue("just a body\n".toByteArray()) shouldBe null
         patcher.readIdValue("---\ntitle: x\n---\nbody\n".toByteArray()) shouldBe null
         patcher.readIdValue("---\nno closer".toByteArray()) shouldBe null
-        val invalidUtf8 = "---\n".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte(), '\n'.code.toByte()) +
+        // A block carrying invalid UTF-8 but NO id line still reads null — there is simply no id key.
+        val invalidUtf8NoId = "---\n".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte(), '\n'.code.toByte()) +
             "---\n".toByteArray()
-        patcher.readIdValue(invalidUtf8) shouldBe null
+        patcher.readIdValue(invalidUtf8NoId) shouldBe null
+    }
+
+    // PB-WRITE-1 round-trip law: the reader is lenient, so readIdValue must read a clean ASCII id line
+    // out of a block that ALSO carries leniently-accepted invalid bytes elsewhere — never a strict-decode
+    // null that would make such a file un-PUT-able (the id-inspection trap the W3a debate closed).
+    test("readIdValue reads a clean id line from an otherwise invalid-UTF-8 block (lenient, matching the reader)") {
+        val withId = "---\nid: ${id.value}\ndesc: ".toByteArray() + byteArrayOf(0xFF.toByte(), 0xFE.toByte()) +
+            "\n---\nbody\n".toByteArray()
+        patcher.readIdValue(withId) shouldBe id.value
     }
 })
 

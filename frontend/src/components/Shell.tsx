@@ -1,4 +1,4 @@
-import { Outlet, useRouter } from "@tanstack/react-router";
+import { Link, Outlet, useRouter } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
 import { interceptableHref } from "../lib/links";
 import { SearchPalette } from "./SearchPalette";
@@ -51,6 +51,15 @@ export function Shell() {
         </a>
         <div className="flex items-center gap-3">
           <SearchTrigger />
+          <Link
+            to="/new"
+            className="pb-new-page flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+            data-pb-new-page
+            aria-label="New page"
+          >
+            <span aria-hidden="true">+</span>
+            <span className="max-sm:hidden">New</span>
+          </Link>
           <ThemeToggle />
         </div>
       </header>

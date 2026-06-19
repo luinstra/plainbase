@@ -87,7 +87,13 @@ class SearchService(
             snippet = hit.snippet,
             highlights = hit.highlights,
             score = hit.score,
-            citation = Citation(pageId = page.id, headingId = headingId, path = page.path, contentHash = page.contentHash, commit = null),
+            citation = Citation(
+                pageId = page.id,
+                headingId = headingId,
+                path = page.path,
+                contentHash = page.contentHash,
+                commit = page.commit,
+            ),
         )
     }
 

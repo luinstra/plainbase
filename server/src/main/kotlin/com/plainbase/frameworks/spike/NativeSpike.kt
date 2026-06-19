@@ -42,11 +42,8 @@ import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
 import kotlinx.serialization.Serializable
-import org.eclipse.jgit.api.Git
-import org.eclipse.jgit.diff.DiffFormatter
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
-import java.io.ByteArrayOutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.nio.file.Files
@@ -69,10 +66,12 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerCon
  *     bm25 ordering, MATCH-builder prefix queries, snippet sentinels -> A3 offsets,
  *     a direct highlight() round-trip (the S0-proven aux surface stays in the gate),
  *     per-page replace + indexedState, and the trigram CJK-rescue fallback
- *  5. JGit init/commit/log/diff in a temp dir
- *  6. flexmark Markdown render (frontmatter + GFM + anchors)
- *  7. argon2 hash + verify (Bouncy Castle, pure Java)
- *  8. MCP Kotlin SDK stub handshake (initialize + listTools)
+ *  5. flexmark Markdown render (frontmatter + GFM + anchors)
+ *  6. argon2 hash + verify (Bouncy Castle, pure Java)
+ *  7. MCP Kotlin SDK stub handshake (initialize + listTools)
+ *
+ * The Git layer is NOT spiked here — it ships as the system `git` binary (ADR-0006), not a bundled
+ * library, so its native proof is the real-round-trip GitNativeSmokeTest (@Tag("native")), not this set.
  *
  * Runs inside the binary via `plainbase spike`; prints PASS/FAIL per check and
  * exits non-zero on any failure. Also executed by the JVM test suite and by the
@@ -87,7 +86,6 @@ object NativeSpike {
         check("koin-dsl-wiring") { koinWiring() },
         check("sqldelight-query") { sqlDelightQuery() },
         check("sqlite-fts5-match") { fts5Match() },
-        check("jgit-init-commit-log-diff") { jgit() },
         check("flexmark-render") { flexmarkRender() },
         check("argon2-hash-verify") { argon2() },
         check("mcp-stub-handshake") { mcpHandshake() },
@@ -299,42 +297,7 @@ object NativeSpike {
         return PageDocuments(pageId = pageId, contentHash = contentHash, path = treePath, sections = listOf(section))
     }
 
-    // ---- 5. JGit -------------------------------------------------------------------------
-
-    private fun jgit(): String {
-        val dir = Files.createTempDirectory("plainbase-spike-git").toFile()
-        try {
-            Git.init().setDirectory(dir).setInitialBranch("main").call().use { git ->
-                fun commit(message: String) = git.commit()
-                    .setMessage(message)
-                    .setAuthor("Spike", "spike@plainbase.local")
-                    .setCommitter("Spike", "spike@plainbase.local")
-                    .setSign(false)
-                    .call()
-                val file = dir.resolve("notes.md")
-                file.writeText("# Notes\n\nhello\n")
-                git.add().addFilepattern("notes.md").call()
-                val c1 = commit("init")
-                file.writeText("# Notes\n\nhello\nworld\n")
-                git.add().addFilepattern("notes.md").call()
-                val c2 = commit("update")
-                val log = git.log().call().toList()
-                require(log.size == 2) { "expected 2 commits, got ${log.size}" }
-                val out = ByteArrayOutputStream()
-                DiffFormatter(out).use { df ->
-                    df.setRepository(git.repository)
-                    df.scan(c1.tree, c2.tree).forEach { df.format(it) }
-                }
-                val diff = out.toString(Charsets.UTF_8)
-                require(diff.contains("+world")) { "diff missing '+world':\n$diff" }
-            }
-            return "init -> 2 commits -> log -> diff (+world) in temp repo"
-        } finally {
-            dir.deleteRecursively()
-        }
-    }
-
-    // ---- 6. flexmark ---------------------------------------------------------------------
+    // ---- 5. flexmark ---------------------------------------------------------------------
 
     private fun flexmarkRender(): String {
         val options = MutableDataSet()
@@ -374,7 +337,7 @@ object NativeSpike {
         return "frontmatter + GFM table + strikethrough + anchor ids rendered"
     }
 
-    // ---- 7. argon2 -----------------------------------------------------------------------
+    // ---- 6. argon2 -----------------------------------------------------------------------
 
     private fun argon2(): String {
         val hasher = Argon2PasswordHasher(memoryKb = 16384, iterations = 2)
@@ -387,7 +350,7 @@ object NativeSpike {
         return "argon2id hash + verify + reject + salted uniqueness (Bouncy Castle)"
     }
 
-    // ---- 8. MCP stub handshake -----------------------------------------------------------
+    // ---- 7. MCP stub handshake -----------------------------------------------------------
 
     private fun mcpHandshake(): String = runBlocking {
         val server = Server(
