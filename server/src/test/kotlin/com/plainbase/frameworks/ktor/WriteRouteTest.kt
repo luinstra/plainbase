@@ -266,6 +266,45 @@ class WriteRouteTest : FunSpec({
         }
     }
 
+    // 6c. SW-4: a DUPLICATE/adopted page that resolves NON-materialized (its in-file `id:` claim was
+    // rejected, the page minted a fresh id) still carries an on-disk `id:` line. A pure-body edit that
+    // PRESERVES that line must be 200, not a false 422 — the route id-check compares the file's CURRENT
+    // frontmatter id (`current.frontmatter.scalar("id")`), never the assigned pageId, matching
+    // WritePipeline.classifyEdit. Changing that on-disk id line is still a real tamper → 422.
+    test("a pure-body edit to a non-materialized duplicate page (on-disk id preserved) is 200; changing it is 422") {
+        val claimedId = "0190aaaa-bbbb-7ccc-8ddd-000000000040"
+        val owner = "---\nid: $claimedId\ntitle: Owner\n---\n\n# Owner\n\nbody.\n".toByteArray()
+        // `z-dup.md` sorts AFTER `a-owner.md`, so the owner wins the id and the dup is minted a fresh one.
+        val dup = "---\nid: $claimedId\ntitle: Dup\n---\n\n# Dup\n\nbody.\n".toByteArray()
+        writeWithFiles({}, "a-owner.md" to owner, "z-dup.md" to dup) { harness ->
+            val dupPage = harness.builder.current.byPath.getValue(TreePath.require("z-dup.md"))
+            dupPage.materialized shouldBe false // the rejected claim → non-materialized, fresh id
+            val dupId = dupPage.id.value
+            val hBase = citations.contentHash(dup)
+
+            // Pure-body edit that KEEPS the on-disk `id:` line verbatim — legitimate, must be 200.
+            val edited = "---\nid: $claimedId\ntitle: Dup\n---\n\n# Dup\n\nedited body.\n".toByteArray()
+            val ok = client.put("/api/v1/pages/$dupId") {
+                header(HttpHeaders.IfMatch, etag(hBase))
+                contentType(markdown())
+                setBody(edited)
+            }
+            ok.status shouldBe HttpStatusCode.OK
+            String(harness.diskBytes("z-dup.md")) shouldBe String(edited) // id: line intact, body changed
+
+            // Negative: changing that on-disk id line IS a real identity tamper → 422.
+            val hEdited = citations.contentHash(edited)
+            val tampered = "---\nid: 0190ffff-bbbb-7ccc-8ddd-000000000040\ntitle: Dup\n---\n\n# Dup\n\nedited body.\n".toByteArray()
+            val bad = client.put("/api/v1/pages/$dupId") {
+                header(HttpHeaders.IfMatch, etag(hEdited))
+                contentType(markdown())
+                setBody(tampered)
+            }
+            bad.status shouldBe HttpStatusCode.UnprocessableEntity
+            bad.errorJson().getValue("code").jsonPrimitive.content shouldBe "id_change_unsupported"
+        }
+    }
+
     // 7. ID-tamper, pipeline layer — slug + redirect_from changes.
     test("a slug change is 422 slug_change_unsupported; a redirect_from change is 422 redirect_from_change_unsupported") {
         val pageId = "0190aaaa-bbbb-7ccc-8ddd-000000000020"

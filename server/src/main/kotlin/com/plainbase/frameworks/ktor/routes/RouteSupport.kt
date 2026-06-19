@@ -83,6 +83,14 @@ internal suspend fun ApplicationCall.respondRedirectPreservingQuery(target: Stri
     respondRedirect(if (query.isEmpty()) target else "$target?$query", permanent)
 }
 
+/**
+ * The bidi/directional-override controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`) a spoofed name would
+ * smuggle — e.g. `gpj.exe` rendered as a reversed `.exe` via U+202E. Shared by the asset-filename gate
+ * ([pageWriteRoutes]) and the create-folder gate ([pageCreateRoutes]) so neither drifts: both an asset
+ * name and a folder name must reject these on top of [Char.isISOControl].
+ */
+internal fun Char.isBidiControl(): Boolean = this in Char(0x202A)..Char(0x202E) || this in Char(0x2066)..Char(0x2069)
+
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
 internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) {
     respondRest(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(code, message)), status)

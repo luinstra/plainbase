@@ -90,14 +90,16 @@ fun Route.pageCreateRoutes(services: RestServices) {
                 )
             }
 
-            // A control char in a client-supplied folder is bad CREATE input — reject it at the route.
-            // (TreePath's shared scan/read gate only rejects NUL, so a `\t`/`\n` in an EXISTING on-disk
-            // name still indexes; create input is held to the stricter single-line standard here.)
-            if (request.folder.any { it.isISOControl() }) {
+            // A control or bidi-override char in a client-supplied folder is bad CREATE input — reject it
+            // at the route. (TreePath's shared scan/read gate only rejects NUL, so a `\t`/`\n` in an
+            // EXISTING on-disk name still indexes; create input is held to the stricter single-line
+            // standard here.) The bidi-override reject mirrors the asset-filename gate's `isBidiControl`
+            // (shared in RouteSupport): a U+202E in a folder name spoofs the rendered path direction.
+            if (request.folder.any { it.isISOControl() || it.isBidiControl() }) {
                 return@post call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_CREATE_REQUEST,
-                    "folder must not contain control characters (NUL, newline, CR, tab, …)",
+                    "folder must not contain control characters (NUL, newline, CR, tab, …) or bidi overrides",
                 )
             }
 

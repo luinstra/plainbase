@@ -90,12 +90,19 @@ class WritePipeline(
      *
      * The critical section mirrors [write]'s write-ahead-then-post-steps shape:
      *  0. **Canonical-URL collision guard** (round-8/10/11): the prospective page/folder canonical URL,
-     *     evaluated UNDER this monitor against the FRESH published snapshot, must not be owned by a
-     *     DIFFERENT page/folder/live-alias — else a second concurrent URL-colliding create (serialized
-     *     after the first's rebuild) would displace it. A hit → [WriteOutcome.SlugConflict], NOTHING
-     *     written. This is the race-safe home for the check (not a route pre-check): slugs/URLs are
-     *     snapshot-authoritative, so the verdict must be taken under the same lock the rebuild publishes
-     *     under, exactly like the CAS for content.
+     *     read against the published snapshot, must not be owned by a DIFFERENT page/folder/live-alias —
+     *     a hit → [WriteOutcome.SlugConflict], NOTHING written. The race safety is the `@Synchronized`
+     *     monitor (shared with [write] and the watcher rebuild): it serializes WHOLE create sequences, so
+     *     two concurrent colliding creates can't interleave their check-then-create — the second sees the
+     *     first's published rebuild and loses cleanly. (The snapshot read itself is lock-free — an
+     *     `AtomicReference.get` of a deeply-immutable index — so this is NOT "read under the rebuild's
+     *     lock"; correctness comes from serializing the create, not from the read.) The residual window
+     *     is a create racing an EXTERNAL watcher-driven rebuild (a file appearing on disk between our
+     *     read and create) — accepted best-effort like the asset route's write-time TOCTOU (see
+     *     `PageWriteRoutes.kt`): never corruption, because the create's own rebuild + [CanonicalUrlBuilder]
+     *     deterministically resolve the collision afterward; only the HTTP status can be 201-instead-of-409.
+     *     This is the right home for the check (not a route pre-check): slugs/URLs are snapshot-authoritative,
+     *     so the verdict belongs inside the serialized create, exactly like the CAS for content.
      *  1. write-ahead dirty mark with the about-to-be-written bytes' hash (a fresh pageId has no prior
      *     journal row, so the no-write branches just clear);
      *  2. exclusive create — [CreateResult.Exists] → [WriteOutcome.AlreadyExists]; [CreateResult

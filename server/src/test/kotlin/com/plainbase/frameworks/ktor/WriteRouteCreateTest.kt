@@ -445,16 +445,18 @@ class WriteRouteCreateTest : FunSpec({
         }
     }
 
-    // 16. P2 (error determinism) — a control char in `folder` is a 400 invalid_create_request, never a
-    // 500, and leaves NO dangling write-ahead dirty row. Two layers prove it: a NUL (rejected by the
-    // shared TreePath gate, which keeps Path.resolve from throwing InvalidPathException → would-be 500)
-    // AND a tab (rejected by the create route's stricter control-char check, since TreePath now allows
-    // legal control chars on the shared scan/read path). Both → clean 400. Control chars are written via
-    // Char(...) so the source stays plain text (no literal control byte in the .kt file).
-    test("a control char in folder is 400 invalid_create_request, not 500, with no dangling dirty row") {
+    // 16. P2 (error determinism) — a control/bidi char in `folder` is a 400 invalid_create_request, never a
+    // 500, and leaves NO dangling write-ahead dirty row. Three layers prove it: a NUL (rejected by the
+    // shared TreePath gate, which keeps Path.resolve from throwing InvalidPathException → would-be 500),
+    // a tab (rejected by the create route's stricter control-char check, since TreePath now allows
+    // legal control chars on the shared scan/read path), AND a U+202E bidi override (SW-6: the spoofed-
+    // direction class the shared `isBidiControl` gate rejects on folders the same way it does asset names).
+    // All → clean 400. Chars are written via Char(...) so the source stays plain text (no literal control
+    // byte in the .kt file).
+    test("a control or bidi char in folder is 400 invalid_create_request, not 500, with no dangling dirty row") {
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             val before = countFiles(harness.root)
-            for (ctrl in listOf(Char(0), '\t')) {
+            for (ctrl in listOf(Char(0), '\t', Char(0x202E))) {
                 val request = Json.encodeToString(
                     JsonObject.serializer(),
                     kotlinx.serialization.json.buildJsonObject {

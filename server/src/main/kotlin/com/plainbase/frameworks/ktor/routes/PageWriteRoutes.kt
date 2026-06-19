@@ -77,19 +77,23 @@ fun Route.pageWriteRoutes(services: RestServices) {
             val current = services.indexBuilder.current.byId[id]
                 ?: return@put call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
 
-            // (6) Route-layer id-tamper check (R1): the IDENTITY the submitted buffer would be assigned
-            // must equal the page's currently-honored frontmatter identity. The comparison runs through
-            // the SAME grammar identity ASSIGNMENT uses — `PageId.of(readIdValue(bytes))`
-            // (`PageIdentityService.kt:61`, `IndexBuilder.kt:284`): the lenient-decoded raw id line
-            // parsed as a canonical UUID. That makes the check quote-tolerant (`id: "<uuid>"` and
-            // `id: <uuid>` denote the SAME PageId, never a false 422) and keeps it lenient (no strict-UTF-8
-            // trap). The page's honored identity is `current.id` when it was materialized from frontmatter
-            // (FRONTMATTER source ⇒ materialized, `IndexBuilder.kt:291`), else there is no honored on-disk
-            // id and the buffer must declare none. Adding/changing/removing the honored id is a rename →
-            // 422, before the pipeline runs; the path-param `{id}` stays the identity authority (R1).
-            val submittedId = PATCHER.readIdValue(bytes)?.let(PageId::of)
-            val honoredId = current.id.takeIf { current.materialized }
-            if (submittedId != honoredId) {
+            // (6) Route-layer id-tamper check (R1): the submitted buffer's `id:` line must denote the SAME
+            // identity as the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL
+            // `PATCHER.readIdValue` — over the submitted bytes and over `current.markdown` (the verbatim
+            // lenient decode the index captured; the `id:` line is pure ASCII by the patcher grammar, so the
+            // round-trip is faithful) — and the two raw values compare via [sameIdentity] (canonical-UUID when
+            // both parse, else byte-identical raw). Reading BOTH sides with the same reader is what keeps the
+            // check symmetric: a byte-identical save of a page whose on-disk id is QUOTED (`id: "<uuid>"`)
+            // round-trips to 200 because both raw values are the same quoted string, where the old
+            // `current.id`-vs-`readIdValue` compare relied on `materialized` and false-422'd. Comparing the
+            // file's CURRENT id — never `current.id`, the assigned pageId — is what lets a duplicate/adopted page
+            // whose on-disk id legitimately differs from its pageId (non-materialized, still carrying an `id:`
+            // line) take a pure-body edit, matching `WritePipeline.classifyEdit` exactly. Adding/changing/removing
+            // the honored id is a rename → 422 before the pipeline runs; the path-param `{id}` stays the identity
+            // authority (R1).
+            val submittedRaw = PATCHER.readIdValue(bytes)
+            val honoredRaw = PATCHER.readIdValue(current.markdown.toByteArray())
+            if (!sameIdentity(submittedRaw, honoredRaw)) {
                 return@put call.respondUnsupportedEdit("id")
             }
 
@@ -280,9 +284,6 @@ private fun isValidAssetSegment(name: String): Boolean {
  */
 private fun isAssetSkippedName(name: String): Boolean = name.equals(FOLDER_META_NAME, ignoreCase = true) || name.startsWith(".")
 
-/** The bidi/directional-override controls a spoofed filename (`gpj.exe` reversed via U+202E) would smuggle. */
-private fun Char.isBidiControl(): Boolean = this in Char(0x202A)..Char(0x202E) || this in Char(0x2066)..Char(0x2069)
-
 /** 409 `page_exists` for an asset name already taken — reuses W2's envelope (a thing exists at path). */
 private suspend fun ApplicationCall.respondAssetExists(path: TreePath) {
     respondText(
@@ -305,6 +306,21 @@ private val logger = KotlinLogging.logger {}
 
 /** The single frontmatter id-detection grammar (lenient decode — the id-inspection trap is closed in W3a). */
 private val PATCHER = FrontmatterPatcher()
+
+/**
+ * Two raw `id:` line values (each from [FrontmatterPatcher.readIdValue], surrounding quotes NOT stripped)
+ * denote the SAME identity iff they parse to the same canonical [PageId], OR — when one or both are not a
+ * bare UUID (`id: "<uuid>"`, garbage, or absent) — they are the byte-identical raw string. The UUID arm
+ * makes the check quote-TOLERANT across forms (`id: <uuid>` == `id: "<uuid>"` only if quoting didn't change
+ * the parse — but a quoted value parses to null, so cross-quote equality holds only via the raw arm when the
+ * quoting matches); the raw arm keeps a both-null (both-quoted/both-malformed/both-absent) comparison honest
+ * instead of collapsing every unparseable id to "equal".
+ */
+private fun sameIdentity(a: String?, b: String?): Boolean {
+    val pa = a?.let(PageId::of)
+    val pb = b?.let(PageId::of)
+    return if (pa != null && pb != null) pa == pb else a == b
+}
 
 /** The frozen `If-Match` form: a double-quoted strong entity-tag wrapping `sha256:` + 64 lowercase hex. */
 private val IF_MATCH_BASE_HASH = Regex("\"(sha256:[0-9a-f]{64})\"")
