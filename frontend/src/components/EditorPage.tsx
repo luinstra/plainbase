@@ -3,7 +3,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { EditorView, keymap } from "@codemirror/view";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -11,7 +11,10 @@ import { ApiError, createPage, putPageRaw, type SaveResult } from "../api/client
 import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } from "../api/queries";
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
+import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
 import { useDebounced } from "../lib/useDebounced";
+import { EditorToolbar } from "./EditorToolbar";
+import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
 
@@ -100,6 +103,15 @@ function Editor({
   const queryClient = useQueryClient();
 
   const [buffer, setBuffer] = useState(initialBuffer);
+  // The latest buffer, readable SYNCHRONOUSLY from an event handler that fires before the next render
+  // (the tag-input blur commits a new buffer, then a Save click reads it — the render hasn't flushed, so a
+  // closed-over `buffer` is stale; this ref is not). EVERY buffer write goes through `commitBuffer`, which
+  // updates the ref in the same tick it schedules the setState — so the ref always leads the rendered state.
+  const bufferRef = useRef(initialBuffer);
+  const commitBuffer = useRef((update: (prev: string) => string) => {
+    bufferRef.current = update(bufferRef.current);
+    setBuffer(bufferRef.current);
+  }).current;
   // The CAS token. ALWAYS server-issued — the initial GET, or a 200/409 response — never recomputed.
   const [baseHash, setBaseHash] = useState(initialHash);
   // The page's live content-relative path. page_moved updates it so the editor never drifts (D-5).
@@ -114,6 +126,15 @@ function Editor({
   const [refusal, setRefusal] = useState<{ field: string; message: string } | null>(null);
   const [deleted, setDeleted] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // The preview OVERLAYS the body editor (it's a preview *of the body*): the Page-info form rail stays
+  // visible the whole time, and CodeMirror stays mounted underneath the overlay (toggling off reveals it
+  // with cursor/scroll/undo intact). Preview off by default also gates its server fetch (below), so a
+  // normal edit session never POSTs `/api/v1/preview`.
+  const [showPreview, setShowPreview] = useState(false);
+  // The live body `EditorView`, lifted out of `CodeMirrorEditor` (private there) so the formatting
+  // toolbar can run commands against it (D-3). A callback prop (not a forwarded ref) so this `useState`
+  // re-renders the toolbar the moment the view mounts — and re-fires with the fresh view on a key-remount.
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
 
   // Byte-fidelity guard (W6): the read path serves `markdown` as a lossy UTF-8 decode of the
   // SAME bytes it hashes into `content_hash` (server IndexBuilder: `String(bytes, UTF_8)` +
@@ -125,13 +146,32 @@ function Editor({
   const editable = useEditableGuard(initialBuffer, initialHash);
 
   const debounced = useDebounced(buffer, 300);
-  const preview = useQuery(previewQuery(debounced, docPath));
+  // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
+  // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
+  const previewOptions = previewQuery(debounced, docPath);
+  const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
+
+  // Split-view (C2/D-3): the body CodeMirror holds the BODY SLICE only — the `---` fence and metadata
+  // lines never enter the CM doc, so the body editor shows prose only and the metadata form owns the
+  // frontmatter region. `body` is the exact tail `buffer.slice(bodyStart)`, so the frontmatter prefix is
+  // the head before it; a body edit recombines by splicing the body region (preserving the frontmatter
+  // region byte-for-byte). A FORM edit leaves `body` unchanged → CodeMirror's reconcile guard short-
+  // circuits → the body view/cursor/undo are untouched for free.
+  const { body } = splitFrontmatter(buffer);
+  // Recombine via a FUNCTIONAL updater over the LATEST buffer (not the render-scope `buffer`/`body`): a
+  // body edit and a form edit can land in the same React batch, so re-derive the frontmatter prefix from
+  // `prev` each time rather than the stale closed-over slice.
+  const recombineBody = (nextBody: string) => commitBuffer((prev) => prev.slice(0, prev.length - splitFrontmatter(prev).body.length) + nextBody);
 
   const save = useMutation({
-    // Capture the exact buffer being PUT so the saved baseline advances to it on success (even if the
-    // user keeps typing during the request) — `dirty` then compares against what actually landed.
-    mutationFn: (): Promise<{ result: SaveResult; sent: string }> =>
-      putPageRaw(id, buffer, baseHash).then((result) => ({ result, sent: buffer })),
+    // Read the LATEST buffer (bufferRef), not the render-scope `buffer`: a tag-input blur commits its draft
+    // via setBuffer and a Save click can fire before that re-render, so the closed-over `buffer` would be
+    // stale (the just-typed tag lost, the editor left dirty). The ref always leads the rendered state.
+    // Capture the exact sent bytes so the saved baseline advances to them on success (even mid-request).
+    mutationFn: (): Promise<{ result: SaveResult; sent: string }> => {
+      const sent = bufferRef.current;
+      return putPageRaw(id, sent, baseHash).then((result) => ({ result, sent }));
+    },
     onSuccess: ({ result, sent }) => applySaveResult(result, sent),
   });
 
@@ -204,18 +244,28 @@ function Editor({
     <div className="pb-editor flex min-w-0 flex-1 gap-8" data-pb-editor>
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
-          <span className="font-mono text-sm text-muted" data-pb-editor-path>
-            {docPath}
-          </span>
-          <button
-            type="button"
-            className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
-            data-pb-save
-            disabled={save.isPending || !dirty || !editable}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </button>
+          <Breadcrumb path={docPath} />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm font-medium text-muted hover:text-ink aria-pressed:bg-hovered aria-pressed:text-ink"
+              data-pb-preview-toggle
+              aria-pressed={showPreview}
+              onClick={() => setShowPreview((shown) => !shown)}
+            >
+              <EyeIcon />
+              Preview
+            </button>
+            <button
+              type="button"
+              className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+              data-pb-save
+              disabled={save.isPending || !dirty || !editable}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
 
         {!editable && <UneditableBanner />}
@@ -228,13 +278,61 @@ function Editor({
           </p>
         )}
 
-        <CodeMirrorEditor value={buffer} onChange={setBuffer} />
+        {/* Formatting toolbar (C3): body-only, edit-mode only; hidden while the preview overlay covers the
+            editing surface. Acts on the SAME body view the keymap binds, via CM dispatch → recombineBody. */}
+        <EditorToolbar view={editorView} disabled={showPreview} />
+
+        {/* The CodeMirror region is the positioning context for the preview overlay: CM stays mounted
+            (preserving cursor/scroll/undo) and the preview, when shown, covers it with an opaque surface. */}
+        <div className="relative min-h-0 flex-1">
+          <CodeMirrorEditor value={body} onChange={recombineBody} onViewChange={setEditorView} />
+          {showPreview && (
+            <div className="absolute inset-0 overflow-y-auto rounded-md bg-surface" data-pb-preview>
+              {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="hidden w-[clamp(18rem,32vw,40rem)] shrink-0 overflow-y-auto lg:block" data-pb-preview>
-        {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
-      </div>
+      <aside className="pb-rail hidden w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block" data-pb-edit-rail>
+        <MetaForm buffer={buffer} onChange={commitBuffer} />
+      </aside>
     </div>
+  );
+}
+
+/**
+ * The header path as a breadcrumb: dimmed parent folder segments + ` / ` separators + the bright filename
+ * (the last segment). Derived from the live content-relative `docPath` (e.g. `infra/kubernetes.md` →
+ * `infra / kubernetes.md`). Monospace, matching the C2 bare-path look; `data-pb-editor-path` is preserved
+ * as the stable hook (now wrapping the breadcrumb rather than the bare string).
+ */
+function Breadcrumb({ path }: { path: string }) {
+  const segments = path.split("/");
+  const file = segments[segments.length - 1];
+  const folders = segments.slice(0, -1);
+  return (
+    <span className="flex min-w-0 items-center font-mono text-sm" data-pb-editor-path>
+      {folders.map((folder, index) => (
+        <span key={index} className="flex items-center text-muted">
+          {folder}
+          <span className="px-1.5 text-faint" aria-hidden="true">
+            /
+          </span>
+        </span>
+      ))}
+      <span className="truncate text-ink">{file}</span>
+    </span>
+  );
+}
+
+/** A minimal outline eye icon (currentColor) for the Preview toggle. */
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth={1.6}>
+      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
   );
 }
 
@@ -472,22 +570,44 @@ const pbHighlightStyle = HighlightStyle.define([
 const pbEditorTheme = EditorView.theme({
   "&": { color: "var(--pb-text)", backgroundColor: "var(--pb-surface)" },
   ".cm-content": { fontFamily: "var(--font-mono)", caretColor: "var(--pb-accent)" },
-  ".cm-gutters": { backgroundColor: "var(--pb-surface-raised)", color: "var(--pb-text-faint)", border: "none" },
   ".cm-activeLine": { backgroundColor: "var(--pb-surface-raised)" },
-  ".cm-activeLineGutter": { backgroundColor: "var(--pb-surface-hover)" },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--pb-accent)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": { backgroundColor: "var(--pb-selection-bg)" },
   ".cm-scroller": { fontFamily: "var(--font-mono)" },
 });
 
+/**
+ * The C3 formatting keymap (D-2). PREPENDED before `defaultKeymap` in the extensions array so CM6's
+ * `runFor` reaches these first: `Mod-i` IS bound by default to `selectParentSyntax`, so the prepend plus
+ * `toggleItalic` returning `true` whenever it acts is what stops the default from clobbering italic.
+ * `Mod-b`/`Mod-k`/`Mod-e` are free. `Mod-` resolves to Cmd on macOS, Ctrl elsewhere (no branching).
+ */
+const formattingKeymap = keymap.of([
+  { key: "Mod-b", run: toggleBold },
+  { key: "Mod-i", run: toggleItalic },
+  { key: "Mod-e", run: toggleCode },
+  { key: "Mod-k", run: insertLink },
+]);
+
 /** Mounts a CodeMirror 6 Markdown EditorView over a ref; the React state is the source of truth for the buffer. */
-function CodeMirrorEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+function CodeMirrorEditor({
+  value,
+  onChange,
+  onViewChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onViewChange?: (view: EditorView | null) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   // The latest onChange, read inside the (mount-once) update listener without re-creating the view.
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  // The latest onViewChange, lifted the same way so the mount-once effect never re-runs on a new callback.
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
 
   useEffect(() => {
     if (!host.current) return;
@@ -496,8 +616,8 @@ function CodeMirrorEditor({ value, onChange }: { value: string; onChange: (next:
       state: EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(),
           history(),
+          formattingKeymap,
           keymap.of([...defaultKeymap, ...historyKeymap]),
           markdown(),
           syntaxHighlighting(pbHighlightStyle),
@@ -510,7 +630,9 @@ function CodeMirrorEditor({ value, onChange }: { value: string; onChange: (next:
       }),
     });
     view.current = editor;
+    onViewChangeRef.current?.(editor);
     return () => {
+      onViewChangeRef.current?.(null);
       editor.destroy();
       view.current = null;
     };

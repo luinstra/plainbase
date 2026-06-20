@@ -21,11 +21,13 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   const editor = page.locator("[data-pb-editor]");
   await expect(editor).toBeVisible();
 
-  // Type into CodeMirror's contenteditable, then assert the debounced server preview re-renders.
+  // Type into CodeMirror's contenteditable, open the on-demand preview, then assert the debounced server
+  // preview re-renders. (Preview is hidden by default — the form rail owns the right pane until toggled.)
   const content = page.locator("[data-pb-codemirror] .cm-content");
   await content.click();
   await page.keyboard.press("End");
   await content.pressSequentially(`\n\n${marker}\n`);
+  await page.locator("[data-pb-preview-toggle]").click();
   await expect(page.locator("[data-pb-preview] .pb-prose")).toContainText(marker);
 
   const save = page.locator("[data-pb-save]");
@@ -36,6 +38,50 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   // Return to the reading view; the saved marker is part of the rendered page.
   await page.goto(PAGE);
   await expect(page.locator(".pb-prose")).toContainText(marker);
+});
+
+test("format body text via the toolbar: bold persists and renders as <strong>", async ({ page }) => {
+  const word = `bold${Date.now()}`;
+
+  await page.goto(`${PAGE}?mode=edit`);
+  await expect(page.locator("[data-pb-editor]")).toBeVisible();
+
+  // Type a fresh word at the end of the body, then select it back so the Bold op wraps it.
+  const content = page.locator("[data-pb-codemirror] .cm-content");
+  await content.click();
+  await page.keyboard.press("End");
+  await content.pressSequentially(`\n\n${word}`);
+  // Select the just-typed word (it sits at the line end; Shift+Home would grab the blank lines too).
+  for (let i = 0; i < word.length; i++) await page.keyboard.press("Shift+ArrowLeft");
+
+  await page.locator("[data-pb-fmt-bold]").click();
+
+  const save = page.locator("[data-pb-save]");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
+
+  // The reading view renders the bolded word inside a <strong>.
+  await page.goto(PAGE);
+  await expect(page.locator(".pb-prose strong")).toContainText(word);
+});
+
+test("edit a metadata field via the rail form: save persists, the read view's rail reflects it", async ({ page }) => {
+  await page.goto(`${PAGE}?mode=edit`);
+  await expect(page.locator("[data-pb-meta-form]")).toBeVisible();
+
+  // Change the status via the rail form's dropdown (a surgical frontmatter edit, not a body edit).
+  const status = page.locator("[data-pb-field-status]");
+  await status.selectOption("review");
+
+  const save = page.locator("[data-pb-save]");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
+
+  // The read view's rail shows the new status chip.
+  await page.goto(PAGE);
+  await expect(page.locator('[data-pb-rail] [data-pb-chip-status="review"]')).toBeVisible();
 });
 
 test("a concurrent edit shows the content_changed conflict and keeps the buffer", async ({ page, request }) => {

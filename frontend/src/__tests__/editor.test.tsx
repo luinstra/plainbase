@@ -90,8 +90,12 @@ describe("W6 editor", () => {
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
-    expect(view.container.querySelector("[data-pb-preview]")).not.toBeNull();
+    // Preview is on-demand: hidden by default, revealed by the toggle as an overlay over the body editor.
+    expect(view.container.querySelector("[data-pb-preview]")).toBeNull();
+    expect(view.container.querySelector("[data-pb-preview-toggle]")).not.toBeNull();
     expect(view.container.querySelector("[data-pb-save]")).not.toBeNull();
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-preview-toggle]")!);
+    await waitFor(() => expect(view.container.querySelector("[data-pb-preview]")).not.toBeNull());
   });
 
   it("a debounced edit POSTs /api/v1/preview and renders the returned html in the preview pane", async () => {
@@ -106,6 +110,8 @@ describe("W6 editor", () => {
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
+    // Open the preview pane (off by default) so the gated fetch fires and the returned html renders.
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-preview-toggle]")!);
     await waitFor(() => expect(view.container.querySelector("[data-pb-preview] .pb-prose")?.textContent).toContain("rendered preview"));
     const previewCall = fetchSpy.mock.calls.find(([input]) => (typeof input === "string" ? input : input.toString()).includes("/api/v1/preview"));
     expect(previewCall).toBeDefined();

@@ -33,6 +33,8 @@ test("editing a page grows its history without a server restart", async ({ page 
   await content.click();
   await page.keyboard.press("End");
   await content.pressSequentially(`\n\n${marker}\n`);
+  // Confirm the edit registered via the on-demand preview (hidden by default — open it via the toggle).
+  await page.locator("[data-pb-preview-toggle]").click();
   await expect(page.locator("[data-pb-preview] .pb-prose")).toContainText(marker);
   const save = page.locator("[data-pb-save]");
   await expect(save).toBeEnabled();
