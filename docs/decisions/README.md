@@ -15,3 +15,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0005](0005-two-stage-search-palette.md) | Two-stage search palette (jump-to first, full-text on demand) | Accepted |
 | [0006](0006-git-via-system-binary-not-jgit.md) | Git history via the system `git` binary (not JGit), behind a hermetic executor | Accepted |
 | [0007](0007-tree-node-metadata-editorial-dates-provisional-fields.md) | Tree-node metadata: editorial dates now, provisional wire fields, Git last-modified stays distinct | Accepted |
+| [0008](0008-tls-terminates-at-an-external-reverse-proxy.md) | TLS terminates at an external reverse proxy (not in-process), with a fail-closed bind guard | Accepted |
