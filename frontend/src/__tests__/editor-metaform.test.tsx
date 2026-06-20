@@ -171,6 +171,50 @@ describe("C2 metadata form", () => {
     }
   });
 
+  it("renders the status as a pill whose dot maps to the chunk-1 status colors, the owner as an initials avatar", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const { view } = renderSeeded(); // status: draft, owner: Ada Lovelace
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-meta-form]")).not.toBeNull());
+    // The pill carries the status as `data-pb-chip-status` (the app.css dot-color hook) and the dot is present.
+    const pill = view.container.querySelector("[data-pb-field-status]")?.closest(".pb-chip");
+    expect(pill?.getAttribute("data-pb-chip-status")).toBe("draft");
+    expect(view.container.querySelector("[data-pb-status-dot]")).not.toBeNull();
+    // The owner avatar shows the first two uppercased initials.
+    expect(view.container.querySelector("[data-pb-owner-avatar]")?.textContent).toBe("AL");
+  });
+
+  it("an unknown status keeps the select editable but carries no status-color hook on the pill", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const weird = SEED.replace("status: draft", "status: experimental");
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(weird));
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-meta-form]")).not.toBeNull());
+    expect(view.container.querySelector<HTMLSelectElement>("[data-pb-field-status]")?.value).toBe("experimental");
+    const pill = view.container.querySelector("[data-pb-field-status]")?.closest(".pb-chip");
+    // Outside the known five → no `data-pb-chip-status` (neutral chip), still fully editable.
+    expect(pill?.getAttribute("data-pb-chip-status")).toBeNull();
+    expect(view.container.querySelector<HTMLSelectElement>("[data-pb-field-status]")?.disabled).toBe(false);
+  });
+
+  it("REVIEW BY falls back to a text input when `review` isn't an ISO date (so the value isn't hidden)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
+    const weird = SEED.replace("review: 2026-06-01", "review: 2026 Q3");
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(weird));
+    });
+
+    const review = await waitFor(() => {
+      const el = view.container.querySelector<HTMLInputElement>("[data-pb-field-review]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(review.getAttribute("type")).toBe("text");
+    expect(review.value).toBe("2026 Q3");
+  });
+
   it("editing a field surgically updates the buffer and marks the editor dirty (Save enables)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const { view } = renderSeeded();

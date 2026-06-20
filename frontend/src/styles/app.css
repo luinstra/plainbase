@@ -789,6 +789,55 @@ body {
   color: var(--pb-text);
 }
 
+/* Status as an editable pill: the chip frame + leading dot are CSS; a chromeless native <select> sits
+   inside so the dot color (via `data-pb-chip-status`) and the value-write stay in lockstep. A status
+   outside the known five carries no `data-pb-chip-status` → the neutral chip + this fallback dot color. */
+.pb-status-pill {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+.pb-status-pill .pb-chip-dot {
+  flex: none;
+  background: var(--pb-text-faint);
+}
+.pb-status-select {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: inherit;
+  cursor: pointer;
+}
+.pb-status-select:focus-visible {
+  outline: none;
+}
+
+/* Dashed `+ add` tag control — a type-then-commit input that reads as the mockup's add affordance. */
+.pb-tag-add {
+  width: 4.5rem;
+  padding: 2px 7px;
+  border: 1px dashed var(--pb-border-strong);
+  border-radius: 4px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--pb-text-muted);
+}
+.pb-tag-add::placeholder {
+  color: var(--pb-text-faint);
+}
+.pb-tag-add:focus-visible {
+  outline: none;
+  border-style: solid;
+  border-color: var(--pb-accent);
+}
+
+/* Formatting toolbar icon buttons — square icon affordances mirroring the C2 header buttons. */
+.pb-fmt-btn svg {
+  display: block;
+}
+
 /* Source file path. Collapsed: a single line truncated with a LEADING ellipsis (direction:rtl clips
    the START so the filename end stays visible) — fits the rail, no horizontal scrollbar. Click to
    expand to the full path wrapped; the full path is also the title tooltip. De-chromed button. */

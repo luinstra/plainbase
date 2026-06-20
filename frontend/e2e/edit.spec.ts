@@ -40,6 +40,32 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   await expect(page.locator(".pb-prose")).toContainText(marker);
 });
 
+test("format body text via the toolbar: bold persists and renders as <strong>", async ({ page }) => {
+  const word = `bold${Date.now()}`;
+
+  await page.goto(`${PAGE}?mode=edit`);
+  await expect(page.locator("[data-pb-editor]")).toBeVisible();
+
+  // Type a fresh word at the end of the body, then select it back so the Bold op wraps it.
+  const content = page.locator("[data-pb-codemirror] .cm-content");
+  await content.click();
+  await page.keyboard.press("End");
+  await content.pressSequentially(`\n\n${word}`);
+  // Select the just-typed word (it sits at the line end; Shift+Home would grab the blank lines too).
+  for (let i = 0; i < word.length; i++) await page.keyboard.press("Shift+ArrowLeft");
+
+  await page.locator("[data-pb-fmt-bold]").click();
+
+  const save = page.locator("[data-pb-save]");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
+
+  // The reading view renders the bolded word inside a <strong>.
+  await page.goto(PAGE);
+  await expect(page.locator(".pb-prose strong")).toContainText(word);
+});
+
 test("edit a metadata field via the rail form: save persists, the read view's rail reflects it", async ({ page }) => {
   await page.goto(`${PAGE}?mode=edit`);
   await expect(page.locator("[data-pb-meta-form]")).toBeVisible();
