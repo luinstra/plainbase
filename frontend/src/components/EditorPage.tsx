@@ -12,6 +12,7 @@ import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } f
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { useDebounced } from "../lib/useDebounced";
+import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
 
@@ -100,6 +101,15 @@ function Editor({
   const queryClient = useQueryClient();
 
   const [buffer, setBuffer] = useState(initialBuffer);
+  // The latest buffer, readable SYNCHRONOUSLY from an event handler that fires before the next render
+  // (the tag-input blur commits a new buffer, then a Save click reads it — the render hasn't flushed, so a
+  // closed-over `buffer` is stale; this ref is not). EVERY buffer write goes through `commitBuffer`, which
+  // updates the ref in the same tick it schedules the setState — so the ref always leads the rendered state.
+  const bufferRef = useRef(initialBuffer);
+  const commitBuffer = useRef((update: (prev: string) => string) => {
+    bufferRef.current = update(bufferRef.current);
+    setBuffer(bufferRef.current);
+  }).current;
   // The CAS token. ALWAYS server-issued — the initial GET, or a 200/409 response — never recomputed.
   const [baseHash, setBaseHash] = useState(initialHash);
   // The page's live content-relative path. page_moved updates it so the editor never drifts (D-5).
@@ -114,6 +124,11 @@ function Editor({
   const [refusal, setRefusal] = useState<{ field: string; message: string } | null>(null);
   const [deleted, setDeleted] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // The preview OVERLAYS the body editor (it's a preview *of the body*): the Page-info form rail stays
+  // visible the whole time, and CodeMirror stays mounted underneath the overlay (toggling off reveals it
+  // with cursor/scroll/undo intact). Preview off by default also gates its server fetch (below), so a
+  // normal edit session never POSTs `/api/v1/preview`.
+  const [showPreview, setShowPreview] = useState(false);
 
   // Byte-fidelity guard (W6): the read path serves `markdown` as a lossy UTF-8 decode of the
   // SAME bytes it hashes into `content_hash` (server IndexBuilder: `String(bytes, UTF_8)` +
@@ -125,13 +140,32 @@ function Editor({
   const editable = useEditableGuard(initialBuffer, initialHash);
 
   const debounced = useDebounced(buffer, 300);
-  const preview = useQuery(previewQuery(debounced, docPath));
+  // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
+  // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
+  const previewOptions = previewQuery(debounced, docPath);
+  const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
+
+  // Split-view (C2/D-3): the body CodeMirror holds the BODY SLICE only — the `---` fence and metadata
+  // lines never enter the CM doc, so the body editor shows prose only and the metadata form owns the
+  // frontmatter region. `body` is the exact tail `buffer.slice(bodyStart)`, so the frontmatter prefix is
+  // the head before it; a body edit recombines by splicing the body region (preserving the frontmatter
+  // region byte-for-byte). A FORM edit leaves `body` unchanged → CodeMirror's reconcile guard short-
+  // circuits → the body view/cursor/undo are untouched for free.
+  const { body } = splitFrontmatter(buffer);
+  // Recombine via a FUNCTIONAL updater over the LATEST buffer (not the render-scope `buffer`/`body`): a
+  // body edit and a form edit can land in the same React batch, so re-derive the frontmatter prefix from
+  // `prev` each time rather than the stale closed-over slice.
+  const recombineBody = (nextBody: string) => commitBuffer((prev) => prev.slice(0, prev.length - splitFrontmatter(prev).body.length) + nextBody);
 
   const save = useMutation({
-    // Capture the exact buffer being PUT so the saved baseline advances to it on success (even if the
-    // user keeps typing during the request) — `dirty` then compares against what actually landed.
-    mutationFn: (): Promise<{ result: SaveResult; sent: string }> =>
-      putPageRaw(id, buffer, baseHash).then((result) => ({ result, sent: buffer })),
+    // Read the LATEST buffer (bufferRef), not the render-scope `buffer`: a tag-input blur commits its draft
+    // via setBuffer and a Save click can fire before that re-render, so the closed-over `buffer` would be
+    // stale (the just-typed tag lost, the editor left dirty). The ref always leads the rendered state.
+    // Capture the exact sent bytes so the saved baseline advances to them on success (even mid-request).
+    mutationFn: (): Promise<{ result: SaveResult; sent: string }> => {
+      const sent = bufferRef.current;
+      return putPageRaw(id, sent, baseHash).then((result) => ({ result, sent }));
+    },
     onSuccess: ({ result, sent }) => applySaveResult(result, sent),
   });
 
@@ -207,15 +241,26 @@ function Editor({
           <span className="font-mono text-sm text-muted" data-pb-editor-path>
             {docPath}
           </span>
-          <button
-            type="button"
-            className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
-            data-pb-save
-            disabled={save.isPending || !dirty || !editable}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-edge bg-surface px-3 py-1.5 text-sm font-medium text-muted hover:text-ink aria-pressed:bg-hovered aria-pressed:text-ink"
+              data-pb-preview-toggle
+              aria-pressed={showPreview}
+              onClick={() => setShowPreview((shown) => !shown)}
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className="pb-editor-save rounded-md border border-edge bg-accent px-3 py-1.5 text-sm font-medium text-accent-contrast disabled:opacity-50"
+              data-pb-save
+              disabled={save.isPending || !dirty || !editable}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </button>
+          </div>
         </div>
 
         {!editable && <UneditableBanner />}
@@ -228,12 +273,21 @@ function Editor({
           </p>
         )}
 
-        <CodeMirrorEditor value={buffer} onChange={setBuffer} />
+        {/* The CodeMirror region is the positioning context for the preview overlay: CM stays mounted
+            (preserving cursor/scroll/undo) and the preview, when shown, covers it with an opaque surface. */}
+        <div className="relative min-h-0 flex-1">
+          <CodeMirrorEditor value={body} onChange={recombineBody} />
+          {showPreview && (
+            <div className="absolute inset-0 overflow-y-auto rounded-md bg-surface" data-pb-preview>
+              {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="hidden w-[clamp(18rem,32vw,40rem)] shrink-0 overflow-y-auto lg:block" data-pb-preview>
-        {preview.data ? <Prose html={preview.data.html} /> : <p className="text-sm text-faint">Preview appears as you type.</p>}
-      </div>
+      <aside className="pb-rail hidden w-[clamp(14rem,18vw,20rem)] shrink-0 overflow-y-auto xl:block" data-pb-edit-rail>
+        <MetaForm buffer={buffer} onChange={commitBuffer} />
+      </aside>
     </div>
   );
 }

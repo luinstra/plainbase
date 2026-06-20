@@ -759,6 +759,30 @@ body {
   content: "#";
   color: var(--pb-text-faint);
 }
+/* ---- edit-mode metadata form (chunk C2) --------------------------------------------------------
+ * The `?mode=edit` rail twin of the read-only Rail: it reuses the `.pb-rail*`/`.pb-meta*`/`.pb-chip`/
+ * `.pb-tag` structure and adds ONLY the minimal edit-control rules below (tokens only). `data-pb-meta-form`
+ * and the `data-pb-field-*` hooks are stable selectors for the edit surface (distinct from the read Rail's
+ * `data-pb-rail-meta`). */
+.pb-meta-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.pb-tag-remove {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 1px;
+  border: 0;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--pb-text-faint);
+  cursor: pointer;
+}
+.pb-tag-remove:hover {
+  color: var(--pb-text);
+}
 .pb-mono-val {
   font-family: var(--font-mono);
   font-size: 12px;
