@@ -1,0 +1,55 @@
+-- Agent `pb_` API tokens (Phase 4, chunk A2): the at-rest store for app-issued bearer tokens. App state
+-- (security truth) — NEVER disposable search.db (ADR-0004). Landed by 4.sqm (v4 -> v5).
+--
+-- `id` is the PUBLIC base64url lookup prefix (the `pb_<id>_…` segment), stored verbatim; PRIMARY KEY gives
+-- the indexed prefix->row lookup and a collision backstop. `secret_hash` is the raw 32-byte SHA-256 of the
+-- secret (a token hash, not the `sha256:` citation form). `(issuer, external_id)` is the identity A3's role
+-- table will key on (agent tokens default issuer='agent', external_id=id). `mode` is the AgentMode enum name
+-- (FIELD now, ENFORCEMENT Phase 5). Timestamps are epoch millis (NULL = none). All columns are primitive
+-- (TEXT/BLOB/INTEGER) so the table needs NO custom column adapter — the repository maps the enum name and the
+-- clock's Instant <-> Long at its boundary (the Stage idiom in SqlDelightDirtyPageRepository).
+
+CREATE TABLE api_tokens (
+  id TEXT NOT NULL PRIMARY KEY,
+  secret_hash BLOB NOT NULL,
+  agent_label TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  expires_at INTEGER,
+  revoked_at INTEGER
+);
+
+insert:
+INSERT INTO api_tokens(id, secret_hash, agent_label, issuer, external_id, mode, created_at, last_used_at, expires_at, revoked_at)
+VALUES (:id, :secretHash, :agentLabel, :issuer, :externalId, :mode, :createdAt, :lastUsedAt, :expiresAt, :revokedAt);
+
+selectById:
+SELECT *
+FROM api_tokens
+WHERE id = :id;
+
+-- List/CLI metadata surface: every column EXCEPT secret_hash, so the at-rest secret never rides the list type
+-- (it has no plaintext to return, and the hash is needed only by the by-id authenticate lookup). The selectById
+-- path keeps secret_hash for the constant-time verify; this path deliberately omits it.
+selectAllMeta:
+SELECT id, agent_label, issuer, external_id, mode, created_at, last_used_at, expires_at, revoked_at
+FROM api_tokens
+ORDER BY created_at;
+
+-- The atomic authenticate write (A2, TOCTOU fix): linearizes success through ONE conditional statement so a
+-- concurrent revoke/expiry committing between the by-id read and this stamp can never let a stale row through.
+-- Stamps last_used_at ONLY for a token that is, AT THIS instant, still active (not revoked, not expired); the
+-- caller reads the affected-row count and grants Agent only when the secret verified AND exactly one row was
+-- updated. expires_at is exclusive (now < expires_at), matching the service's `now >= expiresAt` rejection.
+touchIfActive:
+UPDATE api_tokens
+SET last_used_at = :now
+WHERE id = :id AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > :now);
+
+revoke:
+UPDATE api_tokens
+SET revoked_at = :revokedAt
+WHERE id = :id;

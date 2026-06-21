@@ -5,6 +5,7 @@ import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
 import com.plainbase.frameworks.cli.ReindexCommand
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -36,9 +37,10 @@ fun main(args: Array<String>) {
         "spike" -> exitProcess(NativeSpike.runAsMain())
         "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))
         "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1)))
+        "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1)))
         null, "serve" -> serve()
         else -> {
-            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex)")
+            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex | admin)")
             exitProcess(2)
         }
     }

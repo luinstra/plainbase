@@ -15,12 +15,13 @@ import java.sql.DriverManager
  * The full app-DB migration chain from the committed v2 baseline: a REAL v2 database file (the
  * SQLDelight `schema/2.db` baseline) opened through the production [DatabaseFactory] must migrate
  * cleanly to the current schema — `page_search` (the Phase-0 FTS5 spike table) dropped by `2.sqm`,
- * `page_checkpoint` (§B3) present and usable, and `dirty_page` (W1's `3.sqm` write-ahead journal)
- * present. `verifyMigrations` checks the DDL at build time; this proves the runtime path end to end.
+ * `page_checkpoint` (§B3) present and usable, `dirty_page` (W1's `3.sqm` write-ahead journal) present, and
+ * `api_tokens` (A2's `4.sqm` agent-token store) present and usable. `verifyMigrations` checks the DDL at build
+ * time; this proves the runtime path end to end.
  */
 class AppDbMigrationTest : FunSpec({
 
-    test("v2 baseline migrates to the current schema: page_search dropped, page_checkpoint + dirty_page created") {
+    test("v2 baseline migrates to the current schema: page_search dropped, checkpoint/dirty_page/api_tokens created") {
         val dir = Files.createTempDirectory("plainbase-migration-test")
         try {
             val dbPath = dir.resolve("plainbase.db")
@@ -43,6 +44,13 @@ class AppDbMigrationTest : FunSpec({
                 dirty.id shouldBe id
                 dirty.path.value shouldBe "docs/start"
                 dirty.stage shouldBe "WRITING"
+
+                db.apiTokensQueries.insert(
+                    id = "00ff", secretHash = ByteArray(32), agentLabel = "ci", issuer = "agent",
+                    externalId = "00ff", mode = "READ_ONLY", createdAt = 0, lastUsedAt = null,
+                    expiresAt = null, revokedAt = null,
+                )
+                db.apiTokensQueries.selectById("00ff").executeAsOne().agent_label shouldBe "ci"
             }
 
             DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
@@ -52,12 +60,13 @@ class AppDbMigrationTest : FunSpec({
                     }
                     tables shouldContain "page_checkpoint"
                     tables shouldContain "dirty_page"
+                    tables shouldContain "api_tokens"
                     tables shouldNotContain "page_search"
                     val version = statement.executeQuery("PRAGMA user_version").use { rows ->
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 4L
+                    version shouldBe 5L
                 }
             }
         } finally {
