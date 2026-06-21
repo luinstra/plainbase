@@ -43,7 +43,9 @@ class DomainPurityTest : FunSpec({
     test("the scan actually sees the domain tree (anti-vacuous floor, S1 files included)") {
         files.size shouldBeGreaterThan 20
         val names = files.map { it.name }.toSet()
-        names.containsAll(setOf("SectionSplitter.kt", "SearchIndexer.kt", "SearchProvider.kt", "IndexBuilder.kt")).shouldBeTrue()
+        names.containsAll(
+            setOf("SectionSplitter.kt", "SearchIndexer.kt", "SearchProvider.kt", "IndexBuilder.kt", "Principal.kt"),
+        ).shouldBeTrue()
     }
 
     test("no domain source imports a framework") {

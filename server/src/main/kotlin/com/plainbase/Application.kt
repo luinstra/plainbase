@@ -20,8 +20,11 @@ import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.spike.NativeSpike
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.koin.core.context.startKoin
 import kotlin.system.exitProcess
+
+private val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
     // kotlin-logging 8.x prints a startup banner from KotlinLogging's class initializer unless
@@ -53,6 +56,19 @@ private fun serve() {
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
+    // ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild work.
+    // Same idiom as the gates that follow (System.err + exitProcess(1), never a thrown stack trace) — a bind
+    // misconfiguration is an operator-actionable startup refusal, not an argument-precondition bug.
+    config.bindGuardRefusal()?.let {
+        System.err.println("serve: $it")
+        exitProcess(1)
+    }
+    if (config.auth.insecureHttp && config.isNonLoopbackBind()) {
+        logger.warn {
+            "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} — anyone on the " +
+                "network can capture them (ADR-0008)"
+        }
+    }
     // W4 gate-check (ADR-0006, M2 ordering): AFTER requireContentDir() and BEFORE the lock/rebuild/
     // reconcile block — rebuild() and reconcileDirtyPages() trigger commits, so a "git missing" failure
     // must fire FIRST with an actionable message, never as a doomed commit's stack trace. NoOp is a clean

@@ -79,7 +79,13 @@ dependencies {
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.server.status.pages)
+    // Sessions (A4a's opaque-string cookie); allowlisted + native-proven in A1 (SessionCookieNativeTest).
+    implementation(libs.ktor.server.sessions)
     implementation(libs.ktor.serialization.kotlinx.json)
+
+    // HOCON config (ADR-0009): explicit — already allowlisted transitively, so zero allowlist drift, but the
+    // direct ConfigFactory/Config use in PlainbaseConfig must not ride a transitive a Ktor bump could drop.
+    implementation(libs.typesafe.config)
 
     // kotlinx — the only serializer in the tree
     implementation(libs.kotlinx.serialization.json)
