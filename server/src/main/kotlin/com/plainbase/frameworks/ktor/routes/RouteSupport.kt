@@ -3,6 +3,10 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.AccessDenied
+import com.plainbase.frameworks.ktor.PrincipalExtraction
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
@@ -94,6 +98,86 @@ internal fun Char.isBidiControl(): Boolean = this in Char(0x202A)..Char(0x202E) 
 /** Responds the frozen error envelope `{"error":{"code":…,"message":…}}` (§A4). */
 internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String) {
     respondRest(ErrorEnvelope.serializer(), ErrorEnvelope(ErrorBody(code, message)), status)
+}
+
+/**
+ * The A3 principal extraction at the top of every GATED route (the A1/A2 seam's first live consumer). Returns the
+ * resolved [Principal], or responds the refusal itself and returns null when a `pb_` credential was presented over
+ * a non-secure transport ([PrincipalExtraction.InsecureTransportRefused] — 421, refused before the secret was
+ * touched). The caller does `val principal = ctx.principalOrRefuse(call) ?: return@get`.
+ */
+internal suspend fun RouteContext.principalOrRefuse(call: ApplicationCall): Principal? =
+    when (val extraction = call.extract()) {
+        is PrincipalExtraction.Resolved -> extraction.principal
+        PrincipalExtraction.InsecureTransportRefused -> {
+            call.respondTransportInsecure()
+            null
+        }
+    }
+
+/**
+ * The 421 refusal for an insecure-transport credential — the SINGLE rule for [PrincipalExtraction
+ * .InsecureTransportRefused] across EVERY gated route, including those with CUSTOM principal handling (the
+ * `/docs`, `/p`, `/browse` redirect / SPA-shell-fallback arms). A credential presented over a non-secure
+ * transport must be REFUSED (421), never silently downgraded to anonymous and served the shell/redirect — the
+ * route-specific deny behavior (serve shell / 302 / 301 / null) applies ONLY to a normal [AccessDenied], not to
+ * an insecure-transport refusal. Use [principalOrRefuseToShell] in a route whose deny behavior is "fall through
+ * to the public arm".
+ */
+internal suspend fun ApplicationCall.respondTransportInsecure() {
+    // 421 Misdirected Request — not a named constant in this Ktor; the bearer was refused before it was touched
+    // (a non-secure transport leaks the credential), so the request hit the wrong scheme/host.
+    respondError(
+        HttpStatusCode(421, "Misdirected Request"),
+        ErrorCodes.TRANSPORT_INSECURE,
+        "A bearer credential was presented over a non-secure transport; it was refused before being honored",
+    )
+}
+
+/**
+ * The principal source for a route whose deny behavior is to fall through to a PUBLIC arm (serve the SPA shell,
+ * 404, etc.) rather than 401/403. Maps the [PrincipalExtraction]: an insecure-transport credential is ALWAYS the
+ * 421 refusal (returns [ExtractedPrincipal.Refused] — the route returns immediately); a [PrincipalExtraction
+ * .Resolved] yields the principal for the route to proceed with. This is what stops a credential over plaintext
+ * from being silently downgraded to anonymous and served the shell instead of 421.
+ */
+internal suspend fun RouteContext.principalOrRefuseToShell(call: ApplicationCall): ExtractedPrincipal =
+    when (val extraction = call.extract()) {
+        is PrincipalExtraction.Resolved -> ExtractedPrincipal.Resolved(extraction.principal)
+        PrincipalExtraction.InsecureTransportRefused -> {
+            call.respondTransportInsecure()
+            ExtractedPrincipal.Refused
+        }
+    }
+
+/**
+ * The result of [principalOrRefuseToShell]: either a [Resolved] principal to proceed with, or [Refused] (the
+ * route already answered 421 and must return). Distinct from the raw [PrincipalExtraction] so the route's
+ * `when` is total and the 421 response is already sent.
+ */
+internal sealed interface ExtractedPrincipal {
+    data class Resolved(val principal: Principal) : ExtractedPrincipal
+
+    data object Refused : ExtractedPrincipal
+}
+
+/**
+ * Runs [body] under the A3 choke point, mapping a [AccessDenied] thrown by a facade `check*` to the frozen
+ * auth envelope: 401 `unauthorized` for an [Principal.Anonymous] (no credential), 403 `forbidden` for an
+ * authenticated-but-unauthorized principal (the role×action matrix denied it). Every gated route wraps its
+ * facade call(s) in this so the deny → status mapping lives in ONE place. The facade's [AccessDenied] is thrown
+ * BEFORE any resolve/membership work, so a denied read never leaks page existence.
+ */
+internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
+    try {
+        body()
+    } catch (denied: AccessDenied) {
+        if (denied.principal is Principal.Anonymous) {
+            respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
+        } else {
+            respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
+        }
+    }
 }
 
 /**

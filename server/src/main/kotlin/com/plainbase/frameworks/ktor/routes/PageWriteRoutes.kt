@@ -1,13 +1,13 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
-import com.plainbase.domain.service.FrontmatterPatcher
-import com.plainbase.domain.service.WriteIntent
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.domain.service.AssetWriteOutcome
+import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.SaveRequest
+import com.plainbase.domain.service.SaveResult
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AssetUploadResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageExistsBody
@@ -43,65 +43,53 @@ import io.ktor.server.routing.route
  * document through a string and made a BOM/invalid-UTF-8 file un-`PUT`-able forever.
  *
  * Every rejection is explicit and golden-pinnable — never a Ktor-default 500. The order matters:
- * id-shape → media type → `If-Match` shape → body-cap (streamed) → index lookup → route-layer id
- * check → pipeline.
+ * id-shape → media type → `If-Match` shape → body-cap (streamed) → the guarded facade `save`. The facade owns
+ * the AUTHORIZATION order from there: the audited EDIT check FIRST (so a denied PUT writes a denied-EDIT audit
+ * row, never swallowed by an unaudited read), THEN the snapshot index lookup + the id-tamper check + pipeline.
  */
-fun Route.pageWriteRoutes(services: RestServices) {
+fun Route.pageWriteRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         put("/{id}") {
-            val id = call.pageId() ?: return@put
+            val principal = ctx.principalOrRefuse(call) ?: return@put
+            call.guarded {
+                val id = call.pageId() ?: return@guarded
 
-            // (2) Media type — RAW body must be text/markdown.
-            if (call.request.contentType().withoutParameters() != ContentType.parse("text/markdown")) {
-                return@put call.respondError(
-                    HttpStatusCode.UnsupportedMediaType,
-                    ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
-                    "PUT requires Content-Type: text/markdown (the raw document bytes)",
-                )
+                // (2) Media type — RAW body must be text/markdown.
+                if (call.request.contentType().withoutParameters() != ContentType.parse("text/markdown")) {
+                    return@guarded call.respondError(
+                        HttpStatusCode.UnsupportedMediaType,
+                        ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
+                        "PUT requires Content-Type: text/markdown (the raw document bytes)",
+                    )
+                }
+
+                // (3) If-Match base_hash — must be a present, double-quoted, strong `"sha256:<64-hex>"`.
+                val baseHash = call.parseIfMatchBaseHash()
+                    ?: return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_BASE_HASH,
+                        "If-Match must be a strong entity-tag \"sha256:<64 lowercase hex>\" (the base_hash you last saw)",
+                    )
+
+                // (4) Stream the body counting bytes to limit+1; over the cap aborts BEFORE buffering it all.
+                val bytes = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
+                    ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
+
+                // (5+6+7) The guarded facade owns the WHOLE write decision in the correct AUDIT order: its EDIT check
+                // (audited, mint-or-throw) fires FIRST — BEFORE any read — so a denied PUT writes a denied-EDIT audit
+                // row instead of being swallowed by an unaudited read-check. Only after the grant is minted does the
+                // facade resolve the page from the snapshot (R1: id absent → 404 PageNotFound — the route never invents
+                // a path) and run the PB-WRITE-1 id-tamper check (a submitted `id:` denoting a different identity is a
+                // rename → 422 IdMismatch, before the pipeline runs). A Written outcome renders through the frozen wire
+                // mapping, applying the retry-idempotency shim (stale base_hash but on-disk == submitted → 200 no-op).
+                val submittedHash = CITATIONS.contentHash(bytes)
+                when (val result = ctx.mutate.save(principal, SaveRequest(id, baseHash, bytes))) {
+                    SaveResult.PageNotFound ->
+                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                    SaveResult.IdMismatch -> call.respondUnsupportedEdit("id")
+                    is SaveResult.Written -> call.respondWriteWire(result.outcome.toWire(submittedHash))
+                }
             }
-
-            // (3) If-Match base_hash — must be a present, double-quoted, strong `"sha256:<64-hex>"`.
-            val baseHash = call.parseIfMatchBaseHash()
-                ?: return@put call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_BASE_HASH,
-                    "If-Match must be a strong entity-tag \"sha256:<64 lowercase hex>\" (the base_hash you last saw)",
-                )
-
-            // (4) Stream the body counting bytes to limit+1; over the cap aborts BEFORE buffering it all.
-            val bytes = call.receiveBodyCapped(services.maxWriteBodyBytes)
-                ?: return@put call.respondBodyTooLarge(services.maxWriteBodyBytes)
-
-            // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 —
-            // the route never invents a path.
-            val current = services.indexBuilder.current.byId[id]
-                ?: return@put call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-
-            // (6) Route-layer id-tamper check (R1): the submitted buffer's `id:` line must denote the SAME
-            // identity as the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL
-            // `PATCHER.readIdValue` — over the submitted bytes and over `current.markdown` (the verbatim
-            // lenient decode the index captured; the `id:` line is pure ASCII by the patcher grammar, so the
-            // round-trip is faithful) — and the two raw values compare via [sameIdentity] (canonical-UUID when
-            // both parse, else byte-identical raw). Reading BOTH sides with the same reader is what keeps the
-            // check symmetric: a byte-identical save of a page whose on-disk id is QUOTED (`id: "<uuid>"`)
-            // round-trips to 200 because both raw values are the same quoted string, where the old
-            // `current.id`-vs-`readIdValue` compare relied on `materialized` and false-422'd. Comparing the
-            // file's CURRENT id — never `current.id`, the assigned pageId — is what lets a duplicate/adopted page
-            // whose on-disk id legitimately differs from its pageId (non-materialized, still carrying an `id:`
-            // line) take a pure-body edit, matching `WritePipeline.classifyEdit` exactly. Adding/changing/removing
-            // the honored id is a rename → 422 before the pipeline runs; the path-param `{id}` stays the identity
-            // authority (R1).
-            val submittedRaw = PATCHER.readIdValue(bytes)
-            val honoredRaw = PATCHER.readIdValue(current.markdown.toByteArray())
-            if (!sameIdentity(submittedRaw, honoredRaw)) {
-                return@put call.respondUnsupportedEdit("id")
-            }
-
-            // (7) The pipeline owns the write; render the outcome via the frozen wire mapping, applying
-            // the retry-idempotency shim (stale base_hash but on-disk == submitted → 200 no-op).
-            val submittedHash = services.citations.contentHash(bytes)
-            val outcome = services.writePipeline.write(WriteIntent(id, current.path, baseHash, bytes))
-            call.respondWriteWire(outcome.toWire(submittedHash))
         }
 
         // W3b (NON-FROZEN): `POST /api/v1/pages/{id}/assets` — uploads a raw binary into the page's OWN
@@ -110,103 +98,64 @@ fun Route.pageWriteRoutes(services: RestServices) {
         // never-creates-a-dir `ContentStore.writeAssetExclusive` (design call 2), which reuses W2's
         // containment guards as ONE source of truth.
         post("/{id}/assets") {
-            // (1) Page id — the shared §A4 canonical gate (400 invalid_page_id on a bad shape).
-            val id = call.pageId() ?: return@post
+            val principal = ctx.principalOrRefuse(call) ?: return@post
+            call.guarded {
+                // (1) Page id — the shared §A4 canonical gate (400 invalid_page_id on a bad shape).
+                val id = call.pageId() ?: return@guarded
 
-            // (2) Filename — the strict decode→NFC→cap→reject pipeline; the SOLE single-segment validator.
-            val filename = call.assetFilename()
-                ?: return@post call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_ASSET_REQUEST,
-                    "filename must be a single valid, non-`.md`, non-reserved name (see ?filename=)",
-                )
+                // (2) Filename — the strict decode→NFC→cap→reject pipeline; the SOLE single-segment validator.
+                val filename = call.assetFilename()
+                    ?: return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_ASSET_REQUEST,
+                        "filename must be a single valid, non-`.md`, non-reserved name (see ?filename=)",
+                    )
 
-            // (3) Body cap — the SEPARATE, larger asset cap (assets are binaries); streamed, 413 on over.
-            val bytes = call.receiveBodyCapped(services.maxAssetBytes)
-                ?: return@post call.respondBodyTooLarge(services.maxAssetBytes)
+                // (3) Body cap — the SEPARATE, larger asset cap (assets are binaries); streamed, 413 on over.
+                val bytes = call.receiveBodyCapped(ctx.maxAssetBytes)
+                    ?: return@guarded call.respondBodyTooLarge(ctx.maxAssetBytes)
 
-            // (4) Resolve the page's folder from the published snapshot; an unknown id is 404.
-            val page = services.indexBuilder.current.byId[id]
-                ?: return@post call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-
-            // (4b) Snapshot membership ≠ disk reality: the page's .md may have been externally deleted since
-            // the last rebuild while its FOLDER survives (always true for a top-level page, whose parent is the
-            // content root that writeAssetExclusive's parent-exists check always passes). Re-check the page file
-            // on disk so we don't write an asset — and return 201 — for a page that no longer exists. The
-            // residual write-time TOCTOU is best-effort (debate-ratified): the worst case is a folder-relative
-            // orphaned asset, never corruption.
-            val pageStillOnDisk = try {
-                services.contentStore.read(page.path) != null
-            } catch (e: Exception) {
-                // read() THROWS (file locked/unreadable after the last scan) — a transient FS fault, not a
-                // missing page. Surface the asset route's documented retryable failure, not a bare 500.
-                logger.warn(e) { "stale-page re-check failed reading '${page.path.value}'; treating as unreadable" }
-                return@post call.respondError(
-                    HttpStatusCode.ServiceUnavailable,
-                    ErrorCodes.CONTENT_UNREADABLE,
-                    "The page file could not be read; nothing was written. Retry.",
-                )
-            }
-            if (!pageStillOnDisk) {
-                return@post call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-            }
-
-            // (5) The asset path = the page's folder + the validated segment. UNCONDITIONAL: childOf is
-            // non-null and throws only on a bad segment, which step 2 has already excluded (no Elvis).
-            val assetPath = TreePath.childOf(page.path.parent, filename)
-
-            // (6) Atomic no-clobber write (NOT a check-then-write): writeAssetExclusive owns containment.
-            when (val result = services.contentStore.writeAssetExclusive(assetPath, bytes, services.citations::contentHash)) {
-                is CreateResult.Created -> {
-                    // Make the asset reachable: a full rebuild puts it in current.assets so the returned URL
-                    // serves (AssetRoute reads only from the snapshot). If the rebuild THROWS, the bytes are
-                    // durably on disk but not yet indexed — surface 503 written-but-unindexed, not a bare 500.
-                    try {
-                        services.indexBuilder.rebuild()
-                    } catch (e: Exception) {
-                        logger.error(e) { "asset written but rebuild failed for '${assetPath.value}'; bytes are durable" }
-                        return@post call.respondError(
+                // (4) The guarded facade owns the EDIT check + the WHOLE asset write: it resolves the page folder
+                // from the snapshot, the stale-page recheck, the no-clobber writeAssetExclusive(grant, …), and the
+                // post-write rebuild (the ungated internal rebuild — part of the write). It returns an
+                // AssetWriteOutcome the route maps to status; no raw mutator/snapshot access lives here.
+                when (val outcome = ctx.mutate.writeAsset(principal, id, filename, bytes, CITATIONS::contentHash)) {
+                    is AssetWriteOutcome.Created ->
+                        call.respondRest(
+                            AssetUploadResponse.serializer(),
+                            AssetUploadResponse(
+                                url = outcome.url,
+                                path = outcome.path.value,
+                                contentHash = outcome.contentHash,
+                            ),
+                            HttpStatusCode.Created,
+                        )
+                    is AssetWriteOutcome.WrittenButUnindexed -> {
+                        logger.error { "asset written but rebuild failed for '${outcome.path.value}'; bytes are durable" }
+                        call.respondError(
                             HttpStatusCode.ServiceUnavailable,
                             ErrorCodes.CONTENT_UNREADABLE,
                             "The asset was written to disk but the index update failed; it will become reachable after the next rebuild.",
                         )
                     }
-                    call.respondRest(
-                        AssetUploadResponse.serializer(),
-                        AssetUploadResponse(
-                            url = services.indexBuilder.current.assetUrl(assetPath),
-                            path = assetPath.value,
-                            contentHash = result.newHash,
-                        ),
-                        HttpStatusCode.Created,
-                    )
-                }
-                is CreateResult.Exists -> {
-                    // Self-heal a prior written-but-unindexed orphan: if the bytes are on disk but the
-                    // asset is NOT in current.assets (a previous upload's post-write rebuild threw → 503),
-                    // a plain 409 would leave it 404-unreachable forever. Best-effort rebuild FIRST so the
-                    // orphaned-but-on-disk file becomes reachable on this retry. runCatching: a failing
-                    // rebuild here must NOT turn the 409 into a 500. A path already in current.assets is a
-                    // genuine duplicate → plain 409, no rebuild.
-                    if (result.path !in services.indexBuilder.current.assets) {
-                        runCatching { services.indexBuilder.rebuild() }
+                    is AssetWriteOutcome.Exists ->
+                        // The existing file wins (no clobber; the retry's bytes were NOT written). The orphan
+                        // self-heal rebuild, if any, already ran inside the facade.
+                        call.respondAssetExists(outcome.path)
+                    AssetWriteOutcome.PageMissing ->
+                        // Unknown id, or the page's .md / folder vanished on disk — do NOT recreate it.
+                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                    is AssetWriteOutcome.Rejected -> {
+                        logger.warn { "Refusing asset upload for page ${id.value}: ${outcome.reason}" }
+                        call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "The asset location cannot hold content")
                     }
-                    // Either way the existing file wins (no clobber; the retry's bytes were NOT written).
-                    call.respondAssetExists(result.path)
+                    AssetWriteOutcome.Unreadable ->
+                        call.respondError(
+                            HttpStatusCode.ServiceUnavailable,
+                            ErrorCodes.CONTENT_UNREADABLE,
+                            "The asset could not be written to disk; nothing was written. Retry.",
+                        )
                 }
-                is CreateResult.ParentMissing ->
-                    // The page's folder vanished on disk between index time and upload — do NOT recreate it.
-                    call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-                is CreateResult.Rejected -> {
-                    logger.warn { "Refusing asset upload to '${assetPath.value}': ${result.reason}" }
-                    call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "The asset location cannot hold content")
-                }
-                is CreateResult.Unreadable ->
-                    call.respondError(
-                        HttpStatusCode.ServiceUnavailable,
-                        ErrorCodes.CONTENT_UNREADABLE,
-                        "The asset could not be written to disk; nothing was written. Retry.",
-                    )
             }
         }
     }
@@ -304,23 +253,8 @@ private suspend fun ApplicationCall.respondAssetExists(path: TreePath) {
 
 private val logger = KotlinLogging.logger {}
 
-/** The single frontmatter id-detection grammar (lenient decode — the id-inspection trap is closed in W3a). */
-private val PATCHER = FrontmatterPatcher()
-
-/**
- * Two raw `id:` line values (each from [FrontmatterPatcher.readIdValue], surrounding quotes NOT stripped)
- * denote the SAME identity iff they parse to the same canonical [PageId], OR — when one or both are not a
- * bare UUID (`id: "<uuid>"`, garbage, or absent) — they are the byte-identical raw string. The UUID arm
- * makes the check quote-TOLERANT across forms (`id: <uuid>` == `id: "<uuid>"` only if quoting didn't change
- * the parse — but a quoted value parses to null, so cross-quote equality holds only via the raw arm when the
- * quoting matches); the raw arm keeps a both-null (both-quoted/both-malformed/both-absent) comparison honest
- * instead of collapsing every unparseable id to "equal".
- */
-private fun sameIdentity(a: String?, b: String?): Boolean {
-    val pa = a?.let(PageId::of)
-    val pb = b?.let(PageId::of)
-    return if (pa != null && pb != null) pa == pb else a == b
-}
+/** The frozen content-hash for the PUT retry-idempotency shim's submitted-hash (stateless; A3 dropped the bundle). */
+private val CITATIONS = CitationFactory()
 
 /** The frozen `If-Match` form: a double-quoted strong entity-tag wrapping `sha256:` + 64 lowercase hex. */
 private val IF_MATCH_BASE_HASH = Regex("\"(sha256:[0-9a-f]{64})\"")

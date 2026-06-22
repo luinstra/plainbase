@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -71,7 +72,7 @@ class WritePipelineNativeTest {
 
                 val page = builder.current.pages.single()
                 val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nnatively saved.\n".toByteArray()
-                val outcome = pipeline.write(WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
 
                 assertTrue(outcome is WriteOutcome.Written, "expected Written, got $outcome")
                 assertEquals(citations.contentHash(saveBytes), (outcome as WriteOutcome.Written).newHash)

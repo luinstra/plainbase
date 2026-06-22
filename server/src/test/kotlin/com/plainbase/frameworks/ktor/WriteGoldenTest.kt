@@ -82,7 +82,7 @@ class WriteGoldenTest : FunSpec({
             // PB-WRITE-1 revision). The golden pins both; `url` is the published `IndexedPage.url`, NOT a
             // client-/path-derived slug — asserted against the snapshot below so the literal can't drift.
             post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
-            harness.services.indexBuilder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/golden-create"
+            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/golden-create"
         }
     }
 
@@ -102,7 +102,7 @@ class WriteGoldenTest : FunSpec({
             post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
             // The response url IS the published IndexedPage.url: the PercentCoding.encodePath(urlPath) form,
             // never a percent-encode of the raw on-disk filename nor a slug of the title.
-            harness.services.indexBuilder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/caf%C3%A9-%CF%89"
+            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/caf%C3%A9-%CF%89"
         }
     }
 
@@ -124,10 +124,10 @@ class WriteGoldenTest : FunSpec({
             writeRestTest(tree, seedCollision) { harness ->
                 val loser = PageId.require(loserId)
                 // The induction held: the loser really has a null canonical url.
-                harness.services.indexBuilder.current.byId[loser]?.url shouldBe null
+                harness.builder.current.byId[loser]?.url shouldBe null
                 // So createUrl serves the permalink — the SAME `/p/{id}` shape PermalinkRoute resolves and
                 // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication.
-                createUrl(loser, harness.services) shouldBe "/p/$loserId"
+                createUrl(loser, harness.builder.current) shouldBe "/p/$loserId"
             }
         } finally {
             tree.toFile().deleteRecursively()

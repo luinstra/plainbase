@@ -31,6 +31,13 @@ SELECT *
 FROM api_tokens
 WHERE id = :id;
 
+-- A3 role resolution reads ONLY the agent's `mode` (→ Role) — never the secret_hash. A narrow projection so the
+-- authZ path never loads the at-rest secret (defense-in-depth; the principal is already authenticated upstream).
+modeOf:
+SELECT mode
+FROM api_tokens
+WHERE id = :id;
+
 -- List/CLI metadata surface: every column EXCEPT secret_hash, so the at-rest secret never rides the list type
 -- (it has no plaintext to return, and the hash is needed only by the by-id authenticate lookup). The selectById
 -- path keeps secret_hash for the constant-time verify; this path deliberately omits it.

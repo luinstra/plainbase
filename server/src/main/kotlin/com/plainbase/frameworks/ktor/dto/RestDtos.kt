@@ -106,6 +106,17 @@ object ErrorCodes {
 
     /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
     const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
+
+    // ---- A3: the authorization vocabulary (append-only) ----------------------------------------------
+
+    /** 401: no (or anonymous) credential on a gated route under auth-on — the client must authenticate. */
+    const val UNAUTHORIZED: String = "unauthorized"
+
+    /** 403: an authenticated principal lacks the role for this action (the role×action matrix denied it). */
+    const val FORBIDDEN: String = "forbidden"
+
+    /** 421: a `pb_` credential was presented over a NON-secure transport — refused before it was honored (A2/A3). */
+    const val TRANSPORT_INSECURE: String = "transport_insecure"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

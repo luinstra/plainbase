@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.Stage
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -39,7 +40,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // A history hook that throws AFTER the CAS write succeeds (a post-write step failure).
                 val pipeline = harness.writePipeline(historyHook = { _, _ -> error("commit blew up") })
 
-                val outcome = pipeline.write(WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
 
                 val unindexed = outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 unindexed.newHash shouldBe citations.contentHash(saveBytes)
@@ -65,7 +66,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // leaving a dirty row whose expectedHash = hash(B).
                 val bytesB = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes B on disk, unindexed.\n".toByteArray()
                 harness.writePipeline(historyHook = { _, _ -> error("commit blew up") })
-                    .write(WriteIntent(page.id, page.path, page.contentHash, bytesB))
+                    .write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, bytesB))
                     .shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 val hashB = citations.contentHash(bytesB)
                 harness.dirtyPages.all().single().expectedHash shouldBe hashB
@@ -74,7 +75,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // row must survive: same expectedHash = hash(B), not this attempt's hash, not cleared.
                 val bytesC = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes C never written.\n".toByteArray()
                 harness.writePipeline()
-                    .write(WriteIntent(page.id, page.path, "sha256:stale-base", bytesC))
+                    .write(grantForTests(), WriteIntent(page.id, page.path, "sha256:stale-base", bytesC))
                     .shouldBeInstanceOf<WriteOutcome.Conflict>().reason shouldBe "content_changed"
                 val afterConflict = harness.dirtyPages.all().single()
                 afterConflict.expectedHash shouldBe hashB // not poisoned to hash(C), not cleared

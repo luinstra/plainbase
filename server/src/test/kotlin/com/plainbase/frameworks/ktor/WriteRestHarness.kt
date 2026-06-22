@@ -2,17 +2,13 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.repository.IdMapRepository
-import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
-import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.SearchIndexer
-import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WriteHistoryHook
-import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -75,7 +71,7 @@ class WriteRestHarness(
     val registry get() = harness.registry
     val dirtyPages get() = harness.dirtyPages
 
-    val services: RestServices
+    val services: RouteContext
 
     init {
         copyTree(fixtureRoot, root)
@@ -91,18 +87,13 @@ class WriteRestHarness(
         // explicit hook, the pipeline commits through `history` (NoOp → null; a Git provider → the SHA).
         val hook = historyHook ?: WriteHistoryHook { path, bytes -> history.commit(path, bytes)?.sha }
         val pipeline = harness.writePipeline(hook, store = pipelineStore)
-        services = RestServices(
-            indexBuilder = harness.builder,
-            pageService = PageService(harness.builder, harness.registry, CitationFactory()),
-            searchService = SearchService(provider = searchProvider, indexBuilder = harness.builder),
-            aliasRegistry = harness.registry,
+        // A3: auth ON, loopback-dev (OFF) open behavior — the write/golden suites run byte-identically to pre-auth.
+        services = harness.testRouteContext(
             contentStore = pipelineStore,
             writePipeline = pipeline,
-            citations = CitationFactory(),
-            idProvider = idProvider,
-            maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-            maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+            searchProvider = searchProvider,
             history = history,
+            idProvider = idProvider,
         )
     }
 

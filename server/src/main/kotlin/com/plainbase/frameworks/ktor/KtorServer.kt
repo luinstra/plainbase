@@ -39,12 +39,12 @@ import kotlinx.serialization.json.Json
  */
 class KtorServer(
     private val config: PlainbaseConfig,
-    private val services: RestServices,
+    private val routeContext: RouteContext,
 ) {
 
     fun start(wait: Boolean) {
         embeddedServer(CIO, host = config.host, port = config.port) {
-            plainbaseModule(services)
+            plainbaseModule(routeContext)
         }.start(wait = wait)
     }
 }
@@ -52,7 +52,7 @@ class KtorServer(
 private val logger = KotlinLogging.logger {}
 
 /** Shared between the real server and `testApplication` tests. */
-fun Application.plainbaseModule(services: RestServices) {
+fun Application.plainbaseModule(ctx: RouteContext) {
     install(ContentNegotiation) {
         // kotlinx.serialization is the only serializer in the tree (§3). This is the app-wide
         // default; the PB-REST-1 response DTOs encode through the scoped `RestJson` instead
@@ -96,25 +96,25 @@ fun Application.plainbaseModule(services: RestServices) {
         // prefix, so registration order and match order agree; the alias-before-shell ordering is
         // structural inside docsRoutes.
         healthRoute()
-        pageRoutes(services)
+        pageRoutes(ctx)
         // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
-        pageWriteRoutes(services)
+        pageWriteRoutes(ctx)
         // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
-        pageCreateRoutes(services)
+        pageCreateRoutes(ctx)
         // W5 per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
-        historyRoutes(services)
+        historyRoutes(ctx)
         // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.
-        previewRoute(services)
-        treeRoute(services)
-        searchRoute(services)
-        adminRoute(services)
+        previewRoute(ctx)
+        treeRoute(ctx)
+        searchRoute(ctx)
+        adminRoute(ctx)
         // Tailcard under /api: loses to every real API route by specificity, beats the static
         // fallback — an unknown API path must 404 in the envelope, never 200 the shell.
         apiFallbackRoute()
-        assetRoute(services)
-        permalinkRoute(services)
-        browseRedirectRoute(services)
-        docsRoutes(services)
+        assetRoute(ctx)
+        permalinkRoute(ctx)
+        browseRedirectRoute(ctx)
+        docsRoutes(ctx)
         // Built SPA shell, embedded as static resources by the :server build.
         staticResources("/", "static") {
             default("index.html")

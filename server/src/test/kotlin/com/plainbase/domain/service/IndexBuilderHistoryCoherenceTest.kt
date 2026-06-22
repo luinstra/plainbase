@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.providerOver
 import io.kotest.core.spec.style.FunSpec
@@ -46,7 +47,7 @@ class IndexBuilderHistoryCoherenceTest : FunSpec({
                 val pipeline = h.writePipeline(historyHook = { p, bytes -> provider.commit(p, bytes)?.sha })
                 val v2 = "---\ntitle: Page\n---\n\n# Page\n\nversion two.\n"
                 val baseHash = h.builder.current.byId.getValue(before.id).contentHash
-                val outcome = pipeline.write(WriteIntent(before.id, tree, baseHash, v2.toByteArray()))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, tree, baseHash, v2.toByteArray()))
                 outcome.shouldBeWritten()
 
                 val newSha = exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim()

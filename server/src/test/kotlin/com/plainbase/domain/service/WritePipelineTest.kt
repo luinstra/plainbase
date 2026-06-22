@@ -5,6 +5,8 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.createGrantForTests
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -46,7 +48,7 @@ class WritePipelineTest : FunSpec({
                 Files.write(root.resolve("guides/edit-me.md"), external)
 
                 val saveBytes = "---\ntitle: Edit Me\n---\n\n# Edit Me\n\nmy save.\n".toByteArray()
-                val outcome = harness.writePipeline().write(WriteIntent(page.id, page.path, baseHash, saveBytes))
+                val outcome = harness.writePipeline().write(grantForTests(), WriteIntent(page.id, page.path, baseHash, saveBytes))
 
                 outcome.shouldBeInstanceOf<WriteOutcome.Conflict>().reason shouldBe "content_changed"
                 // Disk-authoritative: the external bytes survive, NOT the save bytes.
@@ -63,7 +65,7 @@ class WritePipelineTest : FunSpec({
                 val page = targetOf(harness)
                 val saveBytes = "---\ntitle: Edit Me\n---\n\n# Edit Me\n\nverbatim new body.\n".toByteArray()
 
-                val outcome = harness.writePipeline().write(WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = harness.writePipeline().write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
 
                 val written = outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                 written.newHash shouldBe citations.contentHash(saveBytes)
@@ -95,13 +97,16 @@ class WritePipelineTest : FunSpec({
                 val urlBefore = page.urlPath
                 val pipeline = harness.writePipeline()
 
-                pipeline.write(WriteIntent(page.id, page.path, page.contentHash, doc(slug = "new-slug")))
+                pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, doc(slug = "new-slug")))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "slug"
 
-                pipeline.write(WriteIntent(page.id, page.path, page.contentHash, doc(redirect = "other/path")))
+                pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, doc(redirect = "other/path")))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "redirect_from"
 
-                pipeline.write(WriteIntent(page.id, page.path, page.contentHash, doc(id = "00000000-0000-0000-0000-000000000000")))
+                pipeline.write(
+                    grantForTests(),
+                    WriteIntent(page.id, page.path, page.contentHash, doc(id = "00000000-0000-0000-0000-000000000000")),
+                )
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
                 // File untouched on disk; the snapshot's urlPath unchanged; the journal stayed empty (no write happened).
@@ -126,12 +131,12 @@ class WritePipelineTest : FunSpec({
 
                 // (a) Removing the id line entirely (null ≠ present) — a rename, rejected.
                 val idRemoved = "---\ntitle: Stable\n---\n\n# Stable\n\nbody edited.\n".toByteArray()
-                pipeline.write(WriteIntent(page.id, page.path, page.contentHash, idRemoved))
+                pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, idRemoved))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
                 // (b) Changing the id to a different value — also rejected.
                 val idChanged = "---\nid: 0190ffff-bbbb-7ccc-8ddd-eeeeeeeeeeee\ntitle: Stable\n---\n\n# Stable\n\nbody.\n".toByteArray()
-                pipeline.write(WriteIntent(page.id, page.path, page.contentHash, idChanged))
+                pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, idChanged))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
                 Files.readAllBytes(root.resolve("guides/stable.md")) shouldBe before // nothing written either time
@@ -163,7 +168,7 @@ class WritePipelineTest : FunSpec({
 
                 // A body-only edit keeping the SAME on-disk id is a content edit — must be Written, not rejected.
                 val edited = dup(sharedId, "the copy, edited.").toByteArray()
-                harness.writePipeline().write(WriteIntent(copy.id, copy.path, copy.contentHash, edited))
+                harness.writePipeline().write(grantForTests(), WriteIntent(copy.id, copy.path, copy.contentHash, edited))
                     .shouldBeInstanceOf<WriteOutcome.Written>()
                 Files.readAllBytes(root.resolve("b-copy.md")) shouldBe edited
             }
@@ -191,7 +196,7 @@ class WritePipelineTest : FunSpec({
                     idMap = harness.idMap,
                     aliasRegistry = harness.registry,
                 )
-                val outcome = pipeline.write(WriteIntent(page.id, page.path, page.contentHash, "x".toByteArray()))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, "x".toByteArray()))
                 outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>().cause shouldBe "simulated permission denied"
                 harness.dirtyPages.all().isEmpty() shouldBe true // nothing written ⇒ mark cleared
             }
@@ -214,7 +219,7 @@ class WritePipelineTest : FunSpec({
                 val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
 
                 provider.failOnIndex = true
-                val outcome = pipeline.create(CreateIntent(pageId, TreePath.require("created.md"), bytes))
+                val outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, TreePath.require("created.md"), bytes))
 
                 outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 Files.readAllBytes(root.resolve("created.md")) shouldBe bytes // bytes ARE on disk

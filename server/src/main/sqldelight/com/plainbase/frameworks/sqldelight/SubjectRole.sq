@@ -1,0 +1,36 @@
+-- Subject → role table (Phase 4, chunk A3): the authZ choke point's role source for a human/agent identity.
+-- App state (security truth) — NEVER disposable search.db (ADR-0004). Landed by 5.sqm (v5 -> v6).
+--
+-- `(issuer, external_id)` is the SAME identity key the A2 api_tokens row uses (a Human's login subject, or an
+-- agent token's issuer='agent'/external_id=id). `role` is the Role enum NAME (VIEWER/EDITOR/ADMIN) — the
+-- repository maps it via `valueOf` at its boundary (the AgentMode idiom). The role×action MATRIX is hardcoded
+-- Kotlin in PolicyService, never data-driven from this table (the non-escalation guarantee): this table stores
+-- only WHICH role a subject has, never what a role may do. All columns are primitive (TEXT/INTEGER) so the table
+-- needs NO custom column adapter; the repository maps the enum name and the clock's Instant <-> Long at its
+-- boundary.
+
+CREATE TABLE subject_role (
+  issuer TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (issuer, external_id)
+);
+
+-- The role lookup `check()` runs per mutating/read request: the role for an identity, or no row (→ default deny).
+selectByIdentity:
+SELECT *
+FROM subject_role
+WHERE issuer = :issuer AND external_id = :externalId;
+
+-- Idempotent insert-or-replace — the A4b admin UI's grant/regrant write, and the test seeding path.
+upsert:
+INSERT INTO subject_role(issuer, external_id, role, created_at)
+VALUES (:issuer, :externalId, :role, :createdAt)
+ON CONFLICT(issuer, external_id) DO UPDATE SET role = excluded.role;
+
+-- The future A4b list surface.
+selectAll:
+SELECT *
+FROM subject_role
+ORDER BY created_at;

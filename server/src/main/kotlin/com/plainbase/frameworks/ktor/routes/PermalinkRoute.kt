@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.page.PageId
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -20,20 +20,26 @@ import io.ktor.server.routing.get
  * via its `/p/{id}` permalink". We therefore serve the SPA shell directly at the permalink (200):
  * the permalink IS the loser's only human URL, and the API surface (`/api/v1/pages/{id}`) resolves
  * it regardless. Redirecting (nowhere to go) or 404ing (breaks the promise) would both be wrong.
+ *
+ * A3: `read`-gated — the snapshot resolve goes through the guarded facade, so the gate fires (401/403)
+ * BEFORE the resolve and a redirect cannot leak page existence to an unauthorized caller.
  */
-fun Route.permalinkRoute(services: RestServices) {
-    get("/p/{id}") { call.handlePermalink(services) }
-    get("/p/{id}/{trailing...}") { call.handlePermalink(services) }
+fun Route.permalinkRoute(ctx: RouteContext) {
+    get("/p/{id}") { call.handlePermalink(ctx) }
+    get("/p/{id}/{trailing...}") { call.handlePermalink(ctx) }
 }
 
-private suspend fun ApplicationCall.handlePermalink(services: RestServices) {
-    val raw = parameters["id"].orEmpty()
-    val id = PageId.of(raw)
-        ?: return respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
-    val page = services.indexBuilder.current.byId[id]
-        ?: return respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-    when (val url = page.url) {
-        null -> respondSpaShell() // collision loser: the permalink is its only human URL (see class doc)
-        else -> respondRedirectPreservingQuery(url, permanent = false)
+private suspend fun ApplicationCall.handlePermalink(ctx: RouteContext) {
+    val principal = ctx.principalOrRefuse(this) ?: return
+    guarded {
+        val raw = parameters["id"].orEmpty()
+        val id = PageId.of(raw)
+            ?: return@guarded respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
+        val page = ctx.read.currentSnapshot(principal, id.value).byId[id]
+            ?: return@guarded respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+        when (val url = page.url) {
+            null -> respondSpaShell() // collision loser: the permalink is its only human URL (see class doc)
+            else -> respondRedirectPreservingQuery(url, permanent = false)
+        }
     }
 }

@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
@@ -18,18 +18,32 @@ import io.ktor.server.routing.get
  *
  * A live canonical path always shadows an alias; the indexer's shadow sweep drops such rows at
  * rebuild, and the belt-and-suspenders check here keeps the invariant even mid-rebuild.
+ *
+ * A3 (§WI-5): ONLY the alias-redirect arm is `read`-gated — [com.plainbase.domain.service.ReadFacade
+ * .resolveDocsRedirect] returns the target only when there IS a live alias AND the principal may read it; on no
+ * alias OR a deny it returns null and we fall through to the PUBLIC SPA-shell arm, so unauthenticated SPA
+ * navigation still loads the shell and a denied caller cannot tell an alias exists (no 301 existence-leak). The
+ * `/docs` shell and the shell fallback need no principal — they are public.
+ *
+ * An insecure-transport credential is the ONE exception to "fall through to the shell": it is REFUSED (421) via
+ * [principalOrRefuseToShell], never silently downgraded to anonymous and served the shell — a credential sent
+ * over plaintext must be refused before it is honored, just like every other gated route.
  */
-fun Route.docsRoutes(services: RestServices) {
-    get("/docs") { call.respondSpaShell() }
+fun Route.docsRoutes(ctx: RouteContext) {
+    get("/docs") {
+        // The shell is public, but a credential carried over insecure transport is REFUSED (421), never
+        // silently downgraded to the anonymous shell — the same secure-context rule as the path arm below.
+        if (ctx.principalOrRefuseToShell(call) is ExtractedPrincipal.Refused) return@get
+        call.respondSpaShell()
+    }
     get("/docs/{path...}") {
-        val path = call.rawPathAfter("/docs/")?.let(::decodedTreePath)
-        if (path != null) {
-            val snapshot = services.indexBuilder.current
-            val target = services.aliasRegistry.find(path)
-                .takeIf { path !in snapshot.byUrlPath } // live canonical wins (§A4)
-                ?.let { snapshot.byId[it] }
-            if (target != null) return@get call.respondRedirectPreservingQuery(target.url ?: target.permalink, permanent = true)
+        val principal = when (val extracted = ctx.principalOrRefuseToShell(call)) {
+            is ExtractedPrincipal.Resolved -> extracted.principal
+            ExtractedPrincipal.Refused -> return@get // 421 already sent (insecure-transport credential)
         }
+        val path = call.rawPathAfter("/docs/")?.let(::decodedTreePath)
+        val target = if (path != null) ctx.read.resolveDocsRedirect(principal, path) else null
+        if (target != null) return@get call.respondRedirectPreservingQuery(target, permanent = true)
         call.respondSpaShell()
     }
 }

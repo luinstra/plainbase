@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.domain.service.AssetReadOutcome
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.header
@@ -37,23 +38,49 @@ import io.ktor.server.routing.get
  *    sandbox`) carry a UX / trust-model dimension — forcing attachment breaks legitimate inline
  *    `<img src=…foo.svg>` — so the CSP/sandbox decision belongs to the auth phase, alongside the rest
  *    of the trust model. `nosniff` is the orthogonal first layer, not a substitute for it.
+ *
+ * A3 (§WI-5, the SPLIT): the read GATE fires on the content-tree branch BEFORE the membership test, so an
+ * anonymous request to a content asset gets 401/403 — never a 404 that distinguishes "exists but unauth" from
+ * "absent" (no existence leak). The order is: decode → `read.assetRead` (which checkRead-gates, throws→401/403,
+ * THEN tests content-tree membership). The outcome is a 3-way [com.plainbase.domain.service.AssetReadOutcome]:
+ *  - `NotContentAsset` — not in the content tree → fall through to the PUBLIC bundled-static fallback (the SPA's
+ *    own js/css), then 404 if that misses too.
+ *  - `Found` — an indexed asset's current on-disk bytes → serve.
+ *  - `IndexedButMissing` — an indexed asset whose file vanished → **404**, NEVER the bundled fallback. Conflating
+ *    this with `NotContentAsset` would let a vanished upload unmask a bundled-static name it shadowed (e.g. an
+ *    uploaded `favicon.ico` deleted on disk would serve the BUNDLED one — disk is source of truth, so it's a 404).
  */
-fun Route.assetRoute(services: RestServices) {
+fun Route.assetRoute(ctx: RouteContext) {
     get("/assets/{path...}") {
-        val raw = call.rawPathAfter("/assets/")
-            ?: return@get call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Expected an asset path: /assets/{path}")
-        val path = decodedTreePath(raw)
-            ?: return@get call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid asset path: '$raw'")
-        if (path in services.indexBuilder.current.assets) {
-            val bytes = services.contentStore.read(path)
-                ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
-            call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
-            return@get call.respondBytes(bytes, assetContentType(path.name))
+        val principal = ctx.principalOrRefuse(call) ?: return@get
+        call.guarded {
+            val raw = call.rawPathAfter("/assets/")
+                ?: return@guarded call.respondError(
+                    HttpStatusCode.BadRequest,
+                    ErrorCodes.INVALID_PATH,
+                    "Expected an asset path: /assets/{path}",
+                )
+            val path = decodedTreePath(raw)
+                ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid asset path: '$raw'")
+            // The read gate fires inside assetRead BEFORE the membership test (no existence leak). ONLY a
+            // NotContentAsset may fall through to the public bundled-static fallback; an IndexedButMissing (the
+            // indexed asset's file vanished) is a 404, never the fallback (disk is source of truth — no unmasking
+            // of a shadowed bundled name).
+            when (val outcome = ctx.read.assetRead(principal, path)) {
+                AssetReadOutcome.NotContentAsset -> {
+                    val bundled = staticResourceBytes(path.value)
+                        ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
+                    call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+                    call.respondBytes(bundled, assetContentType(path.name))
+                }
+                AssetReadOutcome.IndexedButMissing ->
+                    call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
+                is AssetReadOutcome.Found -> {
+                    call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+                    call.respondBytes(outcome.bytes, assetContentType(path.name))
+                }
+            }
         }
-        val bundled = staticResourceBytes(path.value)
-            ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
-        call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
-        call.respondBytes(bundled, assetContentType(path.name))
     }
 }
 

@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.service.SearchService
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.SearchResponse
 import com.plainbase.frameworks.ktor.dto.toDto
@@ -28,29 +28,33 @@ import kotlinx.coroutines.withContext
  * Grammar validation lives in [SearchService] (domain); this route only decodes and maps a
  * violation to the frozen envelope. Unknown parameters are ignored (§A1 additive evolution).
  */
-fun Route.searchRoute(services: RestServices) {
+fun Route.searchRoute(ctx: RouteContext) {
     get("/api/v1/search") {
-        val raw = call.request.rawQueryParameters
-        val decoded = HashMap<String, String?>()
-        // §A1 parameter NAMES are matched in raw form (deliberate): no real client percent-encodes
-        // ASCII names, and decoding names would re-open the throwing decode this handler avoids.
-        for (name in listOf("q", "limit", "offset")) {
-            decoded[name] = try {
-                raw[name]?.decodeURLQueryComponent(plusIsSpace = true)
-            } catch (cause: URLDecodeException) {
-                return@get call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, malformedQueryMessage(raw))
+        val principal = ctx.principalOrRefuse(call) ?: return@get
+        call.guarded {
+            val raw = call.request.rawQueryParameters
+            val decoded = HashMap<String, String?>()
+            // §A1 parameter NAMES are matched in raw form (deliberate): no real client percent-encodes
+            // ASCII names, and decoding names would re-open the throwing decode this handler avoids.
+            for (name in listOf("q", "limit", "offset")) {
+                decoded[name] = try {
+                    raw[name]?.decodeURLQueryComponent(plusIsSpace = true)
+                } catch (cause: URLDecodeException) {
+                    return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, malformedQueryMessage(raw))
+                }
             }
-        }
-        // Blocking JDBC must never park a CIO event-loop thread — the SearchDb contract makes this
-        // route own the hop to Dispatchers.IO before the engine query runs (§B5).
-        val outcome = withContext(Dispatchers.IO) {
-            services.searchService.search(q = decoded["q"], limit = decoded["limit"], offset = decoded["offset"])
-        }
-        when (outcome) {
-            is SearchService.Outcome.InvalidQuery ->
-                call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, outcome.message)
-            is SearchService.Outcome.Results ->
-                call.respondRest(SearchResponse.serializer(), outcome.payload.toDto())
+            // Blocking JDBC must never park a CIO event-loop thread — the SearchDb contract makes this
+            // route own the hop to Dispatchers.IO before the engine query runs (§B5). The read gate
+            // (checkRead, inside the facade) fires off the event loop on Dispatchers.IO with the rest.
+            val outcome = withContext(Dispatchers.IO) {
+                ctx.read.search(principal, q = decoded["q"], limit = decoded["limit"], offset = decoded["offset"])
+            }
+            when (outcome) {
+                is SearchService.Outcome.InvalidQuery ->
+                    call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, outcome.message)
+                is SearchService.Outcome.Results ->
+                    call.respondRest(SearchResponse.serializer(), outcome.payload.toDto())
+            }
         }
     }
 }

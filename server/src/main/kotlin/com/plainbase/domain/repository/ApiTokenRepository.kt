@@ -20,6 +20,13 @@ interface ApiTokenRepository {
     fun findById(id: String): ApiTokenRow?
 
     /**
+     * The agent token's [AgentMode], or null if unknown — A3 role resolution reads ONLY the mode (→ Role) for an
+     * already-authenticated [com.plainbase.domain.principal.Principal.Agent], never the secret hash. A narrow
+     * projection so the authZ path never loads the at-rest secret (defense-in-depth).
+     */
+    fun modeOf(id: String): AgentMode?
+
+    /**
      * The atomic authenticate stamp (TOCTOU-safe): sets [id]'s `last_used_at` to [at] in ONE conditional write
      * that fires ONLY while the token is still active (not revoked, not expired at [at]), and returns whether a
      * row was updated. A concurrent revoke/expiry committing first makes this a no-op (returns false), so a

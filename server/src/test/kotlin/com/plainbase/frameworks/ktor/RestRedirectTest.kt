@@ -1,15 +1,18 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.filesystem.Fixtures
+import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 
 /**
@@ -81,6 +84,38 @@ class RestRedirectTest : FunSpec({
         }
     }
 
+    test("an insecure-transport credential is REFUSED (421) on /docs, /browse, /p — never downgraded to the shell/redirect") {
+        // A credential presented over plaintext is InsecureTransportRefused; every gated route — including the
+        // deny-to-shell /docs arm — must answer 421, NOT silently treat it as anonymous and serve the shell/302.
+        // (BLOCKING 2: the route-specific deny behavior applies ONLY to a normal AccessDenied.)
+        val root = Files.createTempDirectory("plainbase-redirect-421")
+        try {
+            writePage(root, "guides/deploy-guide.md", "---\ntitle: Deploy\n---\n\n# Deploy\n")
+            IndexHarness(root, contentStore = LocalContentStore(root)).use { harness ->
+                harness.builder.rebuild()
+                val ctx = harness.testRouteContext(
+                    contentStore = LocalContentStore(root),
+                    searchProvider = redirectNoopSearchProvider(),
+                    enforced = true,
+                    extract = { PrincipalExtraction.InsecureTransportRefused },
+                )
+                val id = harness.builder.current.pages.single().id.value
+                testApplication {
+                    application { plainbaseModule(ctx) }
+                    val client = restClient()
+                    val misdirected = HttpStatusCode(421, "Misdirected Request")
+                    client.get("/docs/guides/deploy-guide").status shouldBe misdirected
+                    client.get("/docs/anything").status shouldBe misdirected // even the shell-fallback arm refuses
+                    client.get("/docs").status shouldBe misdirected // the bare /docs shell arm refuses too
+                    client.get("/browse/guides/deploy-guide.md").status shouldBe misdirected
+                    client.get("/p/$id").status shouldBe misdirected
+                }
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     test("/browse/{file-path} 302s the exact content-relative file path to the canonical URL") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
@@ -110,3 +145,12 @@ class RestRedirectTest : FunSpec({
         }
     }
 })
+
+/** A no-op SearchProvider so the 421 redirect-refusal test needs no FTS engine (no search is exercised). */
+private fun redirectNoopSearchProvider() = object : com.plainbase.domain.search.SearchProvider {
+    override fun index(pages: List<com.plainbase.domain.search.PageDocuments>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun search(query: com.plainbase.domain.search.SearchQuery) = com.plainbase.domain.search.SearchResults(0, emptyList())
+    override fun rebuild(pages: Sequence<com.plainbase.domain.search.PageDocuments>) = Unit
+    override fun indexedState() = emptyMap<com.plainbase.domain.page.PageId, com.plainbase.domain.search.PageSearchState>()
+}

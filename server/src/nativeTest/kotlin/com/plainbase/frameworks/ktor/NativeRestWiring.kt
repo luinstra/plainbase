@@ -1,10 +1,12 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.PageService
+import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
@@ -18,13 +20,19 @@ import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
+import com.plainbase.frameworks.security.ApiTokenMinter
+import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.time.Clock
 
 /**
  * The full production wiring of the REST read path over a runtime temp tree, for the native-smoke
@@ -33,7 +41,7 @@ import java.nio.file.Path
  * `searchModule` registers — `restModule`'s graph minus Koin. kotlin.test-compatible (no
  * Kotest/MockK; this source set feeds the native test image).
  */
-fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServices) -> Unit) {
+fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RouteContext) -> Unit) {
     val content = Files.createTempDirectory("pb-native-rest")
     val data = Files.createTempDirectory("pb-native-rest-data")
     try {
@@ -68,7 +76,25 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                 )
                 builder.rebuild()
                 val writeCitations = CitationFactory()
-                val services = RestServices(
+                // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log). Auth
+                // ON, loopback-dev (OFF) open mode — the native REST/write/asset/search smokes run byte-identically
+                // to pre-auth. The grant constructors stay reachable via the public src/main grantForTests* path.
+                val apiTokens = ApiTokenService(
+                    minter = ApiTokenMinter(),
+                    hasher = TokenHasher(),
+                    tokens = SqlDelightApiTokenRepository(database),
+                    clock = Clock.System,
+                )
+                val policy = PolicyService(
+                    roles = SqlDelightRoleRepository(database),
+                    apiTokens = SqlDelightApiTokenRepository(database),
+                    audit = SqlDelightAuditRepository(database),
+                    idProvider = UuidV7IdProvider(),
+                    clock = Clock.System,
+                    enforced = false,
+                )
+                val services = buildRouteContext(
+                    policy = policy,
                     indexBuilder = builder,
                     pageService = PageService(builder, registry, CitationFactory()),
                     searchService = SearchService(provider = searchProvider, indexBuilder = builder),
@@ -83,11 +109,12 @@ fun withRestServices(pages: Map<String, String> = emptyMap(), block: (RestServic
                         idMap = idMap,
                         aliasRegistry = registry,
                     ),
-                    citations = CitationFactory(),
+                    history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
+                    tokens = apiTokens,
+                    trustedProxyCidrs = emptyList(),
                     maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
                     maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-                    history = NoOpHistoryProvider,
                 )
                 block(services)
             }

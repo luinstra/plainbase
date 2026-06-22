@@ -1,17 +1,12 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.repository.IdMapRepository
-import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
-import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SearchIndexer
-import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SectionSplitter
-import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
-import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.server.testing.ApplicationTestBuilder
@@ -41,7 +36,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
     private val scheduler: RebuildScheduler
     private val watch: AutoCloseable
 
-    val services: RestServices
+    val services: RouteContext
 
     init {
         copyTree(fixtureRoot, root)
@@ -56,19 +51,8 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
         scheduler = RebuildScheduler(rebuild = { harness.builder.rebuild() })
         watch = store.watch { scheduler.schedule() }
         harness.builder.rebuild()
-        services = RestServices(
-            indexBuilder = harness.builder,
-            pageService = PageService(harness.builder, harness.registry, CitationFactory()),
-            searchService = SearchService(provider = searchProvider, indexBuilder = harness.builder),
-            aliasRegistry = harness.registry,
-            contentStore = store,
-            writePipeline = harness.writePipeline(),
-            citations = CitationFactory(),
-            idProvider = UuidV7IdProvider(),
-            maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-            history = NoOpHistoryProvider,
-        )
+        // A3: auth ON, loopback-dev (OFF) open behavior (this watcher harness exercises search-after-edit logic).
+        services = harness.testRouteContext(contentStore = store, searchProvider = searchProvider)
     }
 
     val idMap: IdMapRepository get() = harness.idMap
