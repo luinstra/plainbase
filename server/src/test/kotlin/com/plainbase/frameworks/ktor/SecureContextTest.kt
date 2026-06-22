@@ -43,4 +43,13 @@ class SecureContextTest : FunSpec({
     test("plain HTTP with no proxy config is not secure") {
         isSecureContext("203.0.113.7", emptyList(), emptyList()) shouldBe false
     }
+
+    test("WI-9 body-credential gate verdicts: a routable plaintext peer refuses; loopback + allowlisted-https admit") {
+        // The exact predicate the PUBLIC login/setup/reset body-credential routes evaluate before reading the body
+        // (frameworks/ktor/routes/RouteSupport.refuseIfInsecureContext): a non-loopback plaintext request (no
+        // X-Forwarded-Proto: https, no trusted proxy) is refused → 421; loopback dev and a properly-fronted proxy pass.
+        isSecureContext("203.0.113.7", emptyList(), emptyList()) shouldBe false // → 421 transport_insecure, body never read
+        isSecureContext("127.0.0.1", emptyList(), emptyList()) shouldBe true // loopback dev reaches the handler
+        isSecureContext("10.1.2.3", listOf("https"), listOf("10.0.0.0/8")) shouldBe true // allowlisted proxy https
+    }
 })

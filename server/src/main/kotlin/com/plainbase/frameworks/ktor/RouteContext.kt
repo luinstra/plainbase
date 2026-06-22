@@ -22,6 +22,8 @@ class RouteContext(
     val read: ReadFacade,
     val mutate: MutatingFacade,
     val tokens: ApiTokenService,
+    /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
+    val auth: AuthServices,
     val trustedProxyCidrs: List<String>,
     /** PB-WRITE-1 (W2) id mint for `POST /api/v1/pages` — injected so tests mint deterministically. */
     val idProvider: IdProvider,
@@ -29,6 +31,16 @@ class RouteContext(
     val maxWriteBodyBytes: Long,
     /** W3b asset upload cap (forwarded from config). */
     val maxAssetBytes: Long,
-    /** The per-route principal source; defaults to the real A1/A2 extraction over [tokens]/[trustedProxyCidrs]. */
-    val extract: ApplicationCall.() -> PrincipalExtraction = { extractPrincipal(tokens, trustedProxyCidrs) },
+    /**
+     * A4a (WI-7): true ONLY in `auth.mode=builtin`. Gates the builtin auth surface — the `pb_session` cookie source
+     * in [extract] is consulted only when true (in OFF/PROXY a stray cookie is ignored), and `plainbaseModule`
+     * registers the login/session/setup/admin-user routes only when true.
+     */
+    val builtinAuthEnabled: Boolean = true,
+    /**
+     * The per-route principal source; defaults to the real A1/A2/A4a extraction over [tokens] + the `pb_session`
+     * cookie (via [auth].session, gated by [builtinAuthEnabled]) + [trustedProxyCidrs].
+     */
+    val extract: ApplicationCall.() -> PrincipalExtraction =
+        { extractPrincipal(tokens, trustedProxyCidrs, auth.session, builtinAuthEnabled) },
 )

@@ -1,0 +1,61 @@
+-- Built-in human login users (Phase 4, chunk A4a): the at-rest store for password-authenticated humans. App
+-- state (security truth) — NEVER disposable search.db (ADR-0004). Landed by 6.sqm (v6 -> v7).
+--
+-- `id` is the `external_id` the `subject_role` grant + `Principal.Human(issuer="builtin", externalId=id)` key on
+-- (so a builtin login resolves its role exactly like an agent token resolves its mode). `password_hash` is the
+-- argon2 PHC string (Argon2PasswordHasher.hash output) — NEVER the plaintext; `username` is the login handle
+-- (UNIQUE). `disabled` is the soft-lock flag (a disabled user authenticates to the SAME 401 as a wrong password,
+-- never an oracle). Timestamps are epoch millis. All columns are primitive (TEXT/INTEGER) so the table needs NO
+-- custom column adapter — the repository maps the clock's Instant <-> Long at its boundary (the ApiTokens idiom).
+
+CREATE TABLE users (
+  id TEXT NOT NULL PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  display_name TEXT,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+insert:
+INSERT INTO users(id, username, password_hash, display_name, disabled, created_at, updated_at)
+VALUES (:id, :username, :passwordHash, :displayName, :disabled, :createdAt, :updatedAt);
+
+selectByUsername:
+SELECT *
+FROM users
+WHERE username = :username;
+
+selectById:
+SELECT *
+FROM users
+WHERE id = :id;
+
+-- Self-service change / admin reset both stamp the new argon2 hash + updated_at; the caller then revokes all the
+-- user's sessions (the §7 force-re-login).
+setPasswordHash:
+UPDATE users
+SET password_hash = :passwordHash, updated_at = :updatedAt
+WHERE id = :id;
+
+setDisabled:
+UPDATE users
+SET disabled = :disabled, updated_at = :updatedAt
+WHERE id = :id;
+
+-- Admin list surface: every column EXCEPT password_hash, so the at-rest secret never rides the list type (it has
+-- no plaintext to return, and the hash is needed only by the by-username/by-id authenticate lookup). The
+-- selectByUsername/selectById paths keep password_hash for the verify; this path deliberately omits it.
+selectAllMeta:
+SELECT id, username, display_name, disabled, created_at, updated_at
+FROM users
+ORDER BY created_at;
+
+-- The bootstrap/recovery gate (WI-13): how many ENABLED admins exist — a builtin user with an ADMIN role row that
+-- is not disabled. `admin setup-token` mints WITHOUT --force only when this is zero (an empty / locked-out DB).
+countEnabledAdmins:
+SELECT COUNT(*)
+FROM users u
+JOIN subject_role r ON r.issuer = 'builtin' AND r.external_id = u.id AND r.role = 'ADMIN'
+WHERE u.disabled = 0;

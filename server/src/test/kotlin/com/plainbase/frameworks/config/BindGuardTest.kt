@@ -71,4 +71,21 @@ class BindGuardTest : FunSpec({
         config(PlainbaseConfig.DEFAULT_HOST, AuthConfig(mode = AuthMode.OFF)).bindGuardRefusal().shouldBeNull()
         config(PlainbaseConfig.DEFAULT_HOST, AuthConfig(mode = AuthMode.BUILTIN)).bindGuardRefusal().shouldBeNull()
     }
+
+    // WI-8: the session cookie's `Secure` mirrors the secure context — TLS-fronted iff non-loopback OR a trusted
+    // proxy is declared (the canonical prod deployment is loopback-behind-TLS-proxy, which yields Secure=true). Only
+    // pure loopback-dev with no proxy stays false (so http://localhost dev login still works).
+    test("secureCookie: loopback + no proxy → false (dev http://localhost login works)") {
+        config("127.0.0.1", AuthConfig(mode = AuthMode.BUILTIN)).secureCookie() shouldBe false
+    }
+
+    test("secureCookie: loopback + trusted proxy → true (canonical prod: loopback behind a TLS proxy)") {
+        config("127.0.0.1", AuthConfig(mode = AuthMode.BUILTIN, trustedProxyCidrs = listOf("10.0.0.0/8")))
+            .secureCookie() shouldBe true
+    }
+
+    test("secureCookie: non-loopback → true (TLS-fronted)") {
+        config("0.0.0.0", AuthConfig(mode = AuthMode.BUILTIN, trustedProxyCidrs = listOf("10.0.0.0/8")))
+            .secureCookie() shouldBe true
+    }
 })

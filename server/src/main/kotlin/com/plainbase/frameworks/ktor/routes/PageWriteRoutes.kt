@@ -50,7 +50,7 @@ import io.ktor.server.routing.route
 fun Route.pageWriteRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         put("/{id}") {
-            val principal = ctx.principalOrRefuse(call) ?: return@put
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@put
             call.guarded {
                 val id = call.pageId() ?: return@guarded
 
@@ -98,7 +98,7 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
         // never-creates-a-dir `ContentStore.writeAssetExclusive` (design call 2), which reuses W2's
         // containment guards as ONE source of truth.
         post("/{id}/assets") {
-            val principal = ctx.principalOrRefuse(call) ?: return@post
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
             call.guarded {
                 // (1) Page id — the shared §A4 canonical gate (400 invalid_page_id on a bad shape).
                 val id = call.pageId() ?: return@guarded

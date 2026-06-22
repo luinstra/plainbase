@@ -1,0 +1,42 @@
+-- One-time setup + password-reset tokens (Phase 4, chunk A4a): ONE table serving BOTH the first-admin bootstrap
+-- AND admin-issued password resets (the synthesis §7 "reset reuses the setup-token mechanism" — same machinery, a
+-- `purpose` column discriminates). App state (security truth) — NEVER disposable search.db (ADR-0004). Landed by
+-- 6.sqm (v6 -> v7).
+--
+-- `token_hash` is the raw 32-byte SHA-256 of the one-time token; the PK lookup IS the match (no plaintext stored).
+-- `purpose` is the SetupTokenPurpose enum name (BOOTSTRAP | RESET). `user_id` is NULL for a bootstrap token (no
+-- user exists yet) and set for a reset (the target user). `expires_at` is the short TTL; `used_at` marks the
+-- single-use consume. All columns are primitive so the table needs NO custom column adapter.
+
+CREATE TABLE setup_tokens (
+  token_hash BLOB NOT NULL PRIMARY KEY,
+  purpose TEXT NOT NULL,
+  user_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+
+insert:
+INSERT INTO setup_tokens(token_hash, purpose, user_id, created_at, expires_at, used_at)
+VALUES (:tokenHash, :purpose, :userId, :createdAt, :expiresAt, :usedAt);
+
+selectByTokenHash:
+SELECT *
+FROM setup_tokens
+WHERE token_hash = :tokenHash;
+
+-- The atomic single-use consume (the touchIfActive shape): marks used_at in ONE conditional UPDATE that fires ONLY
+-- while the token is unused AND unexpired at `now`. The caller proceeds iff exactly one row was updated, so a
+-- concurrent double-consume admits exactly one (kills the count-then-insert TOCTOU, §5). expires_at is exclusive.
+markUsed:
+UPDATE setup_tokens
+SET used_at = :now
+WHERE token_hash = :tokenHash AND used_at IS NULL AND expires_at > :now;
+
+-- Startup-time prune (NOT per-write): the table is insert/update-only, so used / expired tokens would accumulate
+-- forever. Deletes only DEAD rows (already consumed OR past the TTL); a live (unused, unexpired) token is never
+-- touched. Run once inside the DataDirLock at boot.
+pruneDead:
+DELETE FROM setup_tokens
+WHERE used_at IS NOT NULL OR expires_at <= :now;

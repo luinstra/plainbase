@@ -214,6 +214,8 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                 tokens = SqlDelightApiTokenRepository(database),
                 clock = kotlin.time.Clock.System,
             ),
+            // 301 alias-redirects never touch the auth services; a relaxed mock satisfies the wiring.
+            auth = mockk(relaxed = true),
             trustedProxyCidrs = emptyList(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,

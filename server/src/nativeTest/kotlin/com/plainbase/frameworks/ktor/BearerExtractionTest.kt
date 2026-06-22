@@ -62,10 +62,12 @@ class BearerExtractionTest {
         val minted = service.mint("ci-bot", AgentMode.READ_ONLY)
         val result = decidePrincipalExtraction(
             bearer = minted.plaintext,
+            cookie = null,
             remoteHost = "127.0.0.1",
             forwardedProtoValues = emptyList(),
             trustedProxyCidrs = emptyList(),
-            authenticate = service::authenticate,
+            authenticateBearer = service::authenticate,
+            authenticateCookie = { null },
         )
         assertEquals(minted.id, result.resolvedPrincipal().agentId())
     }
@@ -74,17 +76,18 @@ class BearerExtractionTest {
     fun `a wrong-secret bearer over loopback resolves to Anonymous`() = withService { service ->
         val minted = service.mint("ci-bot", AgentMode.READ_ONLY)
         val wrong = minted.plaintext.dropLast(2) + if (minted.plaintext.last() == 'A') "BB" else "AA"
-        val result = decidePrincipalExtraction(wrong, "127.0.0.1", emptyList(), emptyList(), service::authenticate)
+        val result = decidePrincipalExtraction(wrong, null, "127.0.0.1", emptyList(), emptyList(), service::authenticate, { null })
         assertEquals(Principal.Anonymous, result.resolvedPrincipal())
     }
 
     @Test
     fun `no bearer resolves to Anonymous - the gate does not fire`() {
         var calls = 0
-        val result = decidePrincipalExtraction(null, "203.0.113.7", emptyList(), emptyList()) {
-            calls++
-            Principal.Anonymous
-        }
+        val result =
+            decidePrincipalExtraction(null, null, "203.0.113.7", emptyList(), emptyList(), {
+                calls++
+                Principal.Anonymous
+            }, { null })
         assertEquals(Principal.Anonymous, result.resolvedPrincipal())
         assertEquals(0, calls, "authenticate must not be called with no credential")
     }
@@ -92,10 +95,11 @@ class BearerExtractionTest {
     @Test
     fun `a non-pb bearer resolves to Anonymous, not misparsed`() {
         var calls = 0
-        val result = decidePrincipalExtraction("abc", "127.0.0.1", emptyList(), emptyList()) {
-            calls++
-            Principal.Anonymous
-        }
+        val result =
+            decidePrincipalExtraction("abc", null, "127.0.0.1", emptyList(), emptyList(), {
+                calls++
+                Principal.Anonymous
+            }, { null })
         assertEquals(Principal.Anonymous, result.resolvedPrincipal())
         assertEquals(0, calls, "a non-pb_ bearer is never authenticated")
     }
@@ -105,13 +109,16 @@ class BearerExtractionTest {
         var calls = 0
         val result = decidePrincipalExtraction(
             bearer = "pb_someid_c2VjcmV0c2VjcmV0c2VjcmV0c2VjcmV0c2Vjcg",
+            cookie = null,
             remoteHost = "203.0.113.7", // routable, non-loopback
             forwardedProtoValues = emptyList(), // no https
             trustedProxyCidrs = emptyList(), // no trusted proxy
-        ) {
-            calls++
-            Principal.Anonymous
-        }
+            authenticateBearer = {
+                calls++
+                Principal.Anonymous
+            },
+            authenticateCookie = { null },
+        )
         assertTrue(result is PrincipalExtraction.InsecureTransportRefused, "expected refusal, got $result")
         assertEquals(0, calls, "authenticate must NOT be called over a leaky transport")
     }
@@ -121,10 +128,12 @@ class BearerExtractionTest {
         val minted = service.mint("ci-bot", AgentMode.READ_ONLY)
         val result = decidePrincipalExtraction(
             bearer = minted.plaintext,
+            cookie = null,
             remoteHost = "10.1.2.3",
             forwardedProtoValues = listOf("https"),
             trustedProxyCidrs = listOf("10.0.0.0/8"),
-            authenticate = service::authenticate,
+            authenticateBearer = service::authenticate,
+            authenticateCookie = { null },
         )
         assertEquals(minted.id, result.resolvedPrincipal().agentId())
     }

@@ -5,6 +5,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
@@ -13,6 +14,7 @@ import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.RestJson
+import com.plainbase.frameworks.ktor.isSecureContext
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -38,6 +40,46 @@ import kotlinx.serialization.KSerializer
 internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>, value: T, status: HttpStatusCode = HttpStatusCode.OK) {
     respondText(RestJson.encodeToString(serializer, value), ContentType.Application.Json, status)
 }
+
+/** A bodiless 204 (logout / no-content admin actions). */
+internal suspend fun ApplicationCall.respondNoContent() {
+    respondText("", ContentType.Application.Json, HttpStatusCode.NoContent)
+}
+
+/**
+ * Reads + parses a small A4a auth JSON request body ([LoginRequest]/setup/reset/change/admin DTOs) through the
+ * scoped [RestJson] (the `PageCreateRoutes.parseCreateRequest` idiom — manual decode, NOT content-negotiation), or
+ * itself responds 400 `invalid_auth_request` and returns null. A strict-UTF8 decode rejects bad bytes (JSON is
+ * defined over valid Unicode); a malformed body is the route's 400, never a Ktor-default 500. The 1 MiB write cap
+ * is reused as a generous bound — an auth body is tiny.
+ */
+internal suspend fun <T : Any> ApplicationCall.receiveAuthRequest(serializer: KSerializer<T>): T? {
+    val raw = receiveBodyCapped(MAX_AUTH_BODY_BYTES) ?: run {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_AUTH_REQUEST, "Request body too large")
+        return null
+    }
+    val text = strictUtf8Decode(raw)
+    val parsed = text?.let { runCatching { RestJson.decodeFromString(serializer, it) }.getOrNull() }
+    if (parsed == null) {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_AUTH_REQUEST, "Malformed request body")
+    }
+    return parsed
+}
+
+/** Strict UTF-8 decode (the [com.plainbase.domain.content.PercentCoding]/PageCreateRoutes idiom): null on malformed input. */
+private fun strictUtf8Decode(bytes: ByteArray): String? {
+    val decoder = java.nio.charset.Charset.forName("UTF-8").newDecoder()
+        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+    return try {
+        decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+    } catch (_: java.nio.charset.CharacterCodingException) {
+        null
+    }
+}
+
+/** A generous bound for an auth JSON body (credentials/tokens are tiny); the same stream-count cap as a write. */
+private const val MAX_AUTH_BODY_BYTES: Long = 64 * 1024
 
 /**
  * Sets the PB-WRITE-1 read-half of the round-trip: `ETag: "<content_hash>"` — an RFC 7232 STRONG
@@ -107,13 +149,61 @@ internal suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: 
  * touched). The caller does `val principal = ctx.principalOrRefuse(call) ?: return@get`.
  */
 internal suspend fun RouteContext.principalOrRefuse(call: ApplicationCall): Principal? =
+    resolveOrRefuse(call)?.principal
+
+/**
+ * Like [principalOrRefuse] but surfaces the FULL [PrincipalExtraction.Resolved] (principal + the cookie session's
+ * CSRF token), or null after answering 421. The cookie-auth mutating routes (logout, password change) need the
+ * resolved session's CSRF token to run [enforceCsrf]; a bearer/anonymous resolution carries a null csrf and is
+ * CSRF-exempt by [CsrfGuard.requiresCsrf].
+ */
+internal suspend fun RouteContext.resolveOrRefuse(call: ApplicationCall): PrincipalExtraction.Resolved? =
     when (val extraction = call.extract()) {
-        is PrincipalExtraction.Resolved -> extraction.principal
+        is PrincipalExtraction.Resolved -> extraction
         PrincipalExtraction.InsecureTransportRefused -> {
             call.respondTransportInsecure()
             null
         }
     }
+
+/**
+ * The principal source for a MUTATING route (A4a §3): resolve (answering 421 on an insecure-transport credential),
+ * THEN enforce CSRF — a cookie-authenticated [Principal.Human] mutation must carry a valid `X-CSRF-Token` (+
+ * same-origin when present); a `pb_` bearer [Principal.Agent] is EXEMPT (no ambient cookie), and an anonymous
+ * principal is exempt (it has no session — the facade's `check*` will 401 it). Returns the principal, or null after
+ * answering 421/403. Every cookie-auth state mutation (page PUT/POST, asset upload, admin actions, logout, password
+ * change) routes through this so the CSRF rule lives in ONE place.
+ */
+internal suspend fun RouteContext.mutatingPrincipalOrRefuse(call: ApplicationCall): Principal? {
+    val resolved = resolveOrRefuse(call) ?: return null
+    if (!enforceCsrf(call, resolved)) return null
+    return resolved.principal
+}
+
+/**
+ * The CSRF gate for a cookie-authenticated state mutation (A4a §3). The discriminator is the SESSION CSRF token:
+ * a cookie-sourced [Principal.Human] carries a non-null [PrincipalExtraction.Resolved.csrfToken] (the seam pairs
+ * them), so it is enforced; a `pb_` bearer [Principal.Agent], an [com.plainbase.domain.principal.Principal.Anonymous],
+ * a test fixed-principal, and a future A4b proxy-header Human all carry a null csrf token (no ambient cookie) and
+ * are EXEMPT. A cookie-Human's request must carry a valid `X-CSRF-Token` matching the session token (constant-time)
+ * AND, when present, a same-origin `Origin`/`Referer`; on failure this responds 403 itself and returns false (the
+ * caller does `if (!enforceCsrf(call, resolved)) return@post`).
+ */
+internal suspend fun enforceCsrf(call: ApplicationCall, resolved: PrincipalExtraction.Resolved): Boolean {
+    if (!CsrfGuard.requiresCsrf(resolved.principal)) return true
+    val expected = resolved.csrfToken ?: return true // not a cookie-bound session (bearer/anon/proxy/test) → exempt
+    return when (CsrfGuard.validate(call, expected)) {
+        CsrfGuard.Outcome.Ok -> true
+        CsrfGuard.Outcome.TokenMismatch -> {
+            call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CSRF_FAILED, "Missing or invalid X-CSRF-Token")
+            false
+        }
+        CsrfGuard.Outcome.CrossOrigin -> {
+            call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CROSS_ORIGIN, "Cross-origin request rejected")
+            false
+        }
+    }
+}
 
 /**
  * The 421 refusal for an insecure-transport credential — the SINGLE rule for [PrincipalExtraction
@@ -125,13 +215,48 @@ internal suspend fun RouteContext.principalOrRefuse(call: ApplicationCall): Prin
  * to the public arm".
  */
 internal suspend fun ApplicationCall.respondTransportInsecure() {
-    // 421 Misdirected Request — not a named constant in this Ktor; the bearer was refused before it was touched
-    // (a non-secure transport leaks the credential), so the request hit the wrong scheme/host.
+    // 421 Misdirected Request — not a named constant in this Ktor; the credential (bearer OR cookie) was refused
+    // before it was touched (a non-secure transport leaks it), so the request hit the wrong scheme/host.
     respondError(
         HttpStatusCode(421, "Misdirected Request"),
         ErrorCodes.TRANSPORT_INSECURE,
-        "A bearer credential was presented over a non-secure transport; it was refused before being honored",
+        "A credential was presented over a non-secure transport; it was refused before being honored",
     )
+}
+
+/**
+ * The secure-context gate for a PUBLIC pre-auth route that carries its credential in the BODY (login, setup-consume,
+ * reset-consume — WI-9). The credential-conditional seam ([PrincipalExtraction]) only fires when a `pb_` bearer or
+ * `pb_session` cookie is PRESENT, so a body credential would otherwise slip past it and be read+verified over a leaky
+ * transport. This evaluates the SAME credential-AGNOSTIC [isSecureContext] predicate over the SAME socket-peer source
+ * the seam uses ([request.local.remoteAddress] — never a client header) + ALL `X-Forwarded-Proto` values + the
+ * configured [trustedProxyCidrs]; on a non-secure transport it responds 421 [respondTransportInsecure] and returns
+ * true (the caller does `if (call.refuseIfInsecureContext(ctx.trustedProxyCidrs)) return@post` BEFORE reading the body
+ * / calling the service). The ONE implementation the three body-credential routes share.
+ */
+internal suspend fun ApplicationCall.refuseIfInsecureContext(trustedProxyCidrs: List<String>): Boolean {
+    val secure = isSecureContext(
+        remoteHost = request.local.remoteAddress,
+        forwardedProtoValues = request.headers.getAll("X-Forwarded-Proto") ?: emptyList(),
+        trustedProxyCidrs = trustedProxyCidrs,
+    )
+    if (!secure) respondTransportInsecure()
+    return !secure
+}
+
+/**
+ * The route-layer non-blank guard for the A4a auth bodies (WI-9): the `invalid_auth_request` contract documents a
+ * blank field as malformed, but the DTO decode accepts blank strings. Each route passes the fields it requires
+ * non-blank ((name → value) pairs) — `username`/`token` always; `password`/`newPassword`/`currentPassword` where a
+ * blank secret is never valid (setup-consume always requires a password; reset/change set a NEW one). On the first
+ * blank field this responds 400 `invalid_auth_request` and returns true (the caller does
+ * `if (call.refuseIfBlank(…)) return@post` BEFORE calling the service). One implementation across login/setup/reset/
+ * change/admin-create.
+ */
+internal suspend fun ApplicationCall.refuseIfBlank(vararg fields: Pair<String, String>): Boolean {
+    val blank = fields.firstOrNull { it.second.isBlank() } ?: return false
+    respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_AUTH_REQUEST, "${blank.first} must not be blank")
+    return true
 }
 
 /**

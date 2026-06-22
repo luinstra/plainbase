@@ -119,26 +119,70 @@ fun IndexHarness.testRouteContext(
     enforced: Boolean = false,
     trustedProxyCidrs: List<String> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
-): RouteContext = buildRouteContext(
-    policy = PolicyService(
+): RouteContext {
+    val policy = PolicyService(
         roles = roleRepository,
         apiTokens = apiTokenRepository,
         audit = auditRepository,
         idProvider = UuidV7IdProvider(),
         clock = Clock.System,
         enforced = enforced,
-    ),
-    indexBuilder = builder,
-    pageService = PageService(builder, registry, CitationFactory()),
-    searchService = SearchService(provider = searchProvider, indexBuilder = builder),
-    aliasRegistry = registry,
-    contentStore = contentStore,
-    writePipeline = writePipeline,
-    history = history,
-    idProvider = idProvider,
-    tokens = apiTokens,
-    trustedProxyCidrs = trustedProxyCidrs,
-    maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-    maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-    extract = extract,
-)
+    )
+    return buildRouteContext(
+        policy = policy,
+        indexBuilder = builder,
+        pageService = PageService(builder, registry, CitationFactory()),
+        searchService = SearchService(provider = searchProvider, indexBuilder = builder),
+        aliasRegistry = registry,
+        contentStore = contentStore,
+        writePipeline = writePipeline,
+        history = history,
+        idProvider = idProvider,
+        tokens = apiTokens,
+        auth = authServices(policy),
+        trustedProxyCidrs = trustedProxyCidrs,
+        maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
+        maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+        extract = extract,
+    )
+}
+
+/** Builds the A4a [AuthServices] over the harness's in-memory repos, sharing [policy] for the admin checkManage. */
+fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.ktor.AuthServices {
+    val setup = com.plainbase.domain.service.SetupService(
+        minter = com.plainbase.frameworks.security.SetupTokenMinter(com.plainbase.frameworks.security.TokenHasher()),
+        hasher = com.plainbase.frameworks.security.TokenHasher(),
+        setupTokens = setupTokenRepository,
+        users = userRepository,
+        roles = roleRepository,
+        sessions = sessionService,
+        passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
+        idProvider = UuidV7IdProvider(),
+        transactions = transactionRunner,
+        clock = Clock.System,
+    )
+    val admin = com.plainbase.frameworks.ktor.GuardedAdminFacade(
+        policy = policy,
+        users = userRepository,
+        roles = roleRepository,
+        setup = setup,
+        sessions = sessionService,
+        passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
+        idProvider = UuidV7IdProvider(),
+        transactions = transactionRunner,
+        clock = Clock.System,
+    )
+    val login = com.plainbase.domain.service.LoginService(
+        users = userRepository,
+        passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
+        sessions = sessionService,
+        dummyHash = com.plainbase.frameworks.security.dummyPasswordHash(com.plainbase.frameworks.security.Argon2PasswordHasher()),
+    )
+    return com.plainbase.frameworks.ktor.AuthServices(
+        session = sessionService,
+        login = login,
+        setup = setup,
+        admin = admin,
+        rateLimiter = com.plainbase.frameworks.ktor.LoginRateLimiter(),
+    )
+}

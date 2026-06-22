@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.principal.PasswordHasher
+import com.plainbase.domain.principal.SessionTokenMinter
+import com.plainbase.domain.principal.SetupTokenMinter
 import com.plainbase.domain.principal.TokenMinter
 import com.plainbase.domain.principal.TokenSecretHasher
 import com.plainbase.domain.repository.ApiTokenRepository
@@ -15,5 +17,7 @@ val securityModule = module {
     single<PasswordHasher> { Argon2PasswordHasher() }
     single<TokenSecretHasher> { TokenHasher() }
     single<TokenMinter> { ApiTokenMinter(get()) }
+    single<SessionTokenMinter> { com.plainbase.frameworks.security.SessionTokenMinter(get()) }
+    single<SetupTokenMinter> { com.plainbase.frameworks.security.SetupTokenMinter(get()) }
     single { ApiTokenService(minter = get(), hasher = get(), tokens = get<ApiTokenRepository>(), clock = Clock.System) }
 }

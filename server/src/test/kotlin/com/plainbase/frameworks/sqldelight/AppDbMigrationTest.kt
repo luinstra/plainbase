@@ -16,13 +16,16 @@ import java.sql.DriverManager
  * SQLDelight `schema/2.db` baseline) opened through the production [DatabaseFactory] must migrate
  * cleanly to the current schema — `page_search` (the Phase-0 FTS5 spike table) dropped by `2.sqm`,
  * `page_checkpoint` (§B3) present and usable, `dirty_page` (W1's `3.sqm` write-ahead journal) present,
- * `api_tokens` (A2's `4.sqm` agent-token store) present and usable, and `subject_role` + `audit_log` (A3's
- * `5.sqm` authZ choke point) present and usable. `verifyMigrations` checks the DDL at build time; this proves
- * the runtime path end to end.
+ * `api_tokens` (A2's `4.sqm` agent-token store) present and usable, `subject_role` + `audit_log` (A3's `5.sqm`
+ * authZ choke point) present and usable, and `users` + `sessions` + `setup_tokens` (A4a's `6.sqm` human-login
+ * substrate) present and usable. `verifyMigrations` checks the DDL at build time; this proves the runtime path
+ * end to end.
  */
 class AppDbMigrationTest : FunSpec({
 
-    test("v2 baseline migrates to current: page_search dropped, checkpoint/dirty_page/api_tokens/subject_role/audit_log created") {
+    test(
+        "v2 baseline migrates to current: page_search dropped, checkpoint/dirty_page/api_tokens/subject_role/audit_log/users/sessions/setup_tokens created",
+    ) {
         val dir = Files.createTempDirectory("plainbase-migration-test")
         try {
             val dbPath = dir.resolve("plainbase.db")
@@ -67,6 +70,37 @@ class AppDbMigrationTest : FunSpec({
                     decision = "allowed",
                 )
                 db.auditLogQueries.selectRecent(10).executeAsOne().decision shouldBe "allowed"
+
+                // A4a (6.sqm): users + sessions + setup_tokens are live through the typed layer.
+                db.usersQueries.insert(
+                    id = "u1",
+                    username = "alice",
+                    passwordHash = "\$argon2id\$dummy",
+                    displayName = "Alice",
+                    disabled = 0,
+                    createdAt = 0,
+                    updatedAt = 0,
+                )
+                db.usersQueries.selectByUsername("alice").executeAsOne().id shouldBe "u1"
+                db.sessionsQueries.insert(
+                    tokenHash = ByteArray(32),
+                    userId = "u1",
+                    csrfToken = ByteArray(32) { 1 },
+                    createdAt = 0,
+                    idleExpiresAt = 1000,
+                    absoluteExpiresAt = 2000,
+                    revokedAt = null,
+                )
+                db.sessionsQueries.selectByTokenHash(ByteArray(32)).executeAsOne().user_id shouldBe "u1"
+                db.setupTokensQueries.insert(
+                    tokenHash = ByteArray(32) { 2 },
+                    purpose = "BOOTSTRAP",
+                    userId = null,
+                    createdAt = 0,
+                    expiresAt = 1000,
+                    usedAt = null,
+                )
+                db.setupTokensQueries.selectByTokenHash(ByteArray(32) { 2 }).executeAsOne().purpose shouldBe "BOOTSTRAP"
             }
 
             DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
@@ -79,12 +113,15 @@ class AppDbMigrationTest : FunSpec({
                     tables shouldContain "api_tokens"
                     tables shouldContain "subject_role"
                     tables shouldContain "audit_log"
+                    tables shouldContain "users"
+                    tables shouldContain "sessions"
+                    tables shouldContain "setup_tokens"
                     tables shouldNotContain "page_search"
                     val version = statement.executeQuery("PRAGMA user_version").use { rows ->
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 6L
+                    version shouldBe 7L
                 }
             }
         } finally {

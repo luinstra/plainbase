@@ -34,9 +34,11 @@ fun buildRouteContext(
     history: HistoryProvider,
     idProvider: IdProvider,
     tokens: ApiTokenService,
+    auth: AuthServices,
     trustedProxyCidrs: List<String>,
     maxWriteBodyBytes: Long,
     maxAssetBytes: Long,
+    builtinAuthEnabled: Boolean = true,
     extract: (ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val read = GuardedReadFacade(
@@ -58,11 +60,13 @@ fun buildRouteContext(
         read = read,
         mutate = mutate,
         tokens = tokens,
+        auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,
         idProvider = idProvider,
         maxWriteBodyBytes = maxWriteBodyBytes,
         maxAssetBytes = maxAssetBytes,
-        extract = extract ?: { extractPrincipal(tokens, trustedProxyCidrs) },
+        builtinAuthEnabled = builtinAuthEnabled,
+        extract = extract ?: { extractPrincipal(tokens, trustedProxyCidrs, auth.session, builtinAuthEnabled) },
     )
 }
 

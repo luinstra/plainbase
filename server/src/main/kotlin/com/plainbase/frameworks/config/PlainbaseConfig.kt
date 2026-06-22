@@ -96,6 +96,24 @@ data class PlainbaseConfig(
     /** True when [host] is a non-loopback / wildcard bind interface (the bind guard's exposure test, WI 3). */
     fun isNonLoopbackBind(): Boolean = RemoteAddress.isNonLoopbackBind(host)
 
+    /**
+     * The `Secure` attribute for the `pb_session` cookie (ADR-0008, WI-8). True whenever the transport is TLS-fronted
+     * — MIRRORING the bind guard's "proxy declared ⇒ TLS upstream" logic: a non-loopback bind is fronted by TLS, AND
+     * the canonical production deployment (LOOPBACK bind behind a TLS-terminating proxy, [bindGuardRefusal]) declares
+     * [AuthConfig.trustedProxyCidrs] — that too is TLS-fronted, so the cookie must carry `Secure`. ONLY pure
+     * loopback-dev with NO trusted proxy stays false (a `Secure` cookie would never be sent back over plain
+     * http://localhost, breaking dev login).
+     *
+     * Deliberately NOT relaxed by [AuthConfig.insecureHttp] (`PLAINBASE_INSECURE_HTTP`, review I): that flag is only
+     * the bind-guard escape for loopback-dev / agent-bearer scenarios — it lets the server bind plaintext, it does NOT
+     * make credentialed builtin HUMAN auth work over a plaintext network. A non-loopback insecure-http bind still
+     * marks the cookie `Secure` (so a browser won't send it over the plaintext), AND [isSecureContext] refuses the
+     * credential per-request regardless — so credentialed human login over insecure-http simply does not function by
+     * design. Serve human auth over loopback or behind a TLS-terminating reverse proxy; we do NOT make plaintext human
+     * auth easy.
+     */
+    fun secureCookie(): Boolean = isNonLoopbackBind() || auth.trustedProxyCidrs.isNotEmpty()
+
     companion object {
         const val VERSION: String = "0.1.0"
 

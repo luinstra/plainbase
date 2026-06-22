@@ -49,7 +49,7 @@ import java.nio.charset.CodingErrorAction
 fun Route.pageCreateRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         post {
-            val principal = ctx.principalOrRefuse(call) ?: return@post
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
             call.guarded {
                 // (1) Media type — the create request is JSON (NOT raw), so require application/json BEFORE
                 // reading the body (mirrors PUT's text/markdown guard). `withoutParameters()` ignores the

@@ -1,0 +1,34 @@
+-- v6 -> v7: Phase 4, chunk A4a — built-in human login: users + sessions + setup_tokens (bootstrap + reset). Same
+-- DDL as Users.sq / Sessions.sq / SetupTokens.sq minus the Kotlin `AS` type annotations (migrations are plain SQL);
+-- all columns are already primitive here, so this is a verbatim CREATE TABLE x3 + the sessions_user_id index. App
+-- state (security truth), never disposable search.db (ADR-0004).
+CREATE TABLE users (
+  id TEXT NOT NULL PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  display_name TEXT,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE sessions (
+  token_hash BLOB NOT NULL PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  csrf_token BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  idle_expires_at INTEGER NOT NULL,
+  absolute_expires_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+
+CREATE INDEX sessions_user_id ON sessions(user_id);
+
+CREATE TABLE setup_tokens (
+  token_hash BLOB NOT NULL PRIMARY KEY,
+  purpose TEXT NOT NULL,
+  user_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);

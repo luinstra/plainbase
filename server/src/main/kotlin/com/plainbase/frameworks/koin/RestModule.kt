@@ -1,13 +1,21 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.service.AdminFacade
+import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchService
+import com.plainbase.domain.service.SessionService
+import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.ktor.AuthServices
+import com.plainbase.frameworks.ktor.GuardedAdminFacade
+import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.security.dummyPasswordHash
 import org.koin.dsl.module
 import kotlin.time.Clock
 
@@ -44,6 +52,42 @@ val restModule = module {
             enforced = get<PlainbaseConfig>().auth.mode != AuthMode.OFF,
         )
     }
+    // A4a session/login/setup/admin services. Session id ROTATES on login/change/reset (§5); the TTLs use the
+    // SessionService build defaults (idle 7d, absolute 30d) — a config knob is a restart-only future addition.
+    single { SessionService(minter = get(), hasher = get(), sessions = get(), clock = Clock.System) }
+    single {
+        // The dummy PHC is precomputed once (anti-enumeration timing parity, §6); inlined as a constructor arg.
+        LoginService(users = get(), passwordHasher = get(), sessions = get(), dummyHash = dummyPasswordHash(get()))
+    }
+    single {
+        SetupService(
+            minter = get(),
+            hasher = get(),
+            setupTokens = get(),
+            users = get(),
+            roles = get(),
+            sessions = get(),
+            passwordHasher = get(),
+            idProvider = get(),
+            transactions = get(),
+            clock = Clock.System,
+        )
+    }
+    single<AdminFacade> {
+        GuardedAdminFacade(
+            policy = get(),
+            users = get(),
+            roles = get(),
+            setup = get(),
+            sessions = get(),
+            passwordHasher = get(),
+            idProvider = get(),
+            transactions = get(),
+            clock = Clock.System,
+        )
+    }
+    single { LoginRateLimiter() }
+    single { AuthServices(session = get(), login = get(), setup = get(), admin = get(), rateLimiter = get()) }
     single<RouteContext> {
         val config = get<PlainbaseConfig>()
         buildRouteContext(
@@ -57,9 +101,11 @@ val restModule = module {
             history = get(),
             idProvider = get(),
             tokens = get(),
+            auth = get(),
             trustedProxyCidrs = config.auth.trustedProxyCidrs,
             maxWriteBodyBytes = config.maxWriteBodyBytes,
             maxAssetBytes = config.maxAssetBytes,
+            builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
         )
     }
 }

@@ -12,6 +12,7 @@ import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.security.ApiTokenMinter
+import com.plainbase.frameworks.security.SessionTokenMinter
 import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
@@ -20,7 +21,11 @@ import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightTransactionRunner
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightUserRepository
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -60,6 +65,18 @@ class IndexHarness(
     val auditRepository = SqlDelightAuditRepository(database)
     val apiTokenRepository = SqlDelightApiTokenRepository(database)
     val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
+
+    // A4a human-auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
+    val userRepository = SqlDelightUserRepository(database)
+    val sessionRepository = SqlDelightSessionRepository(database)
+    val setupTokenRepository = SqlDelightSetupTokenRepository(database)
+    val transactionRunner = SqlDelightTransactionRunner(database)
+    val sessionService = SessionService(
+        minter = SessionTokenMinter(TokenHasher()),
+        hasher = TokenHasher(),
+        sessions = sessionRepository,
+        clock = Clock.System,
+    )
     private val frontmatter = frontmatterParser
     private val patcher = FrontmatterPatcher()
     val builder = IndexBuilder(

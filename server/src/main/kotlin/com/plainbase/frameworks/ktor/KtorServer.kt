@@ -3,8 +3,10 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.routes.adminRoute
+import com.plainbase.frameworks.ktor.routes.adminUserRoutes
 import com.plainbase.frameworks.ktor.routes.apiFallbackRoute
 import com.plainbase.frameworks.ktor.routes.assetRoute
+import com.plainbase.frameworks.ktor.routes.authRoutes
 import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
 import com.plainbase.frameworks.ktor.routes.docsRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
@@ -17,6 +19,8 @@ import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.searchRoute
+import com.plainbase.frameworks.ktor.routes.sessionRoutes
+import com.plainbase.frameworks.ktor.routes.setupRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.HttpStatusCode
@@ -31,6 +35,8 @@ import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.routing.routing
+import io.ktor.server.sessions.Sessions
+import io.ktor.server.sessions.cookie
 import kotlinx.serialization.json.Json
 
 /**
@@ -44,15 +50,33 @@ class KtorServer(
 
     fun start(wait: Boolean) {
         embeddedServer(CIO, host = config.host, port = config.port) {
-            plainbaseModule(routeContext)
+            plainbaseModule(routeContext, secureCookie = config.secureCookie())
         }.start(wait = wait)
     }
 }
 
 private val logger = KotlinLogging.logger {}
 
-/** Shared between the real server and `testApplication` tests. */
-fun Application.plainbaseModule(ctx: RouteContext) {
+/**
+ * Shared between the real server and `testApplication` tests. [secureCookie] mirrors the secure context (ADR-0008,
+ * WI-8): the `pb_session` cookie's `Secure` attribute is true whenever the transport is TLS-fronted — a non-loopback
+ * bind OR a loopback bind that declares a trusted proxy (the canonical prod deployment, see
+ * [PlainbaseConfig.secureCookie]) — and false ONLY on pure loopback-dev with no proxy (a `Secure` cookie would never
+ * be sent back over plain http://localhost). Defaults to false (the dev/test loopback default).
+ */
+fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false) {
+    install(Sessions) {
+        // The opaque session token (§1): a String round-tripped by identity — NO reflection serializer (the
+        // native-crash hazard SessionCookieNativeTest proves this avoids). HttpOnly + Path=/ + SameSite=Lax;
+        // Secure mirrors the bind transport (see [secureCookie]).
+        cookie<String>(SESSION_COOKIE_NAME) {
+            cookie.httpOnly = true
+            cookie.path = "/"
+            cookie.secure = secureCookie
+            cookie.extensions["SameSite"] = "Lax"
+            serializer = OpaqueStringSerializer
+        }
+    }
     install(ContentNegotiation) {
         // kotlinx.serialization is the only serializer in the tree (§3). This is the app-wide
         // default; the PB-REST-1 response DTOs encode through the scoped `RestJson` instead
@@ -96,6 +120,19 @@ fun Application.plainbaseModule(ctx: RouteContext) {
         // prefix, so registration order and match order agree; the alias-before-shell ordering is
         // structural inside docsRoutes.
         healthRoute()
+        // A4a builtin auth surface (WI-7): registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
+        // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
+        // (404) — leaving them live would let a leftover builtin user/session authenticate as Principal.Human and
+        // bypass the proxy/off identity path. login/session/setup/reset call NO facade `check*` (PolicyService
+        // denies Anonymous under enforced mode, so routing them through `check*` would make auth impossible); they
+        // run the secure-context gate + their own rate-limit/CSRF/single-use-token guards. Admin user CRUD is GATED
+        // through the `checkManage`-gated AdminFacade.
+        if (ctx.builtinAuthEnabled) {
+            authRoutes(ctx)
+            sessionRoutes(ctx)
+            setupRoutes(ctx)
+            adminUserRoutes(ctx)
+        }
         pageRoutes(ctx)
         // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.
         pageWriteRoutes(ctx)

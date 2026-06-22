@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
  */
 fun Route.adminRoute(ctx: RouteContext) {
     post("/api/v1/admin/rescan") {
-        val principal = ctx.principalOrRefuse(call) ?: return@post
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val snapshot = ctx.mutate.rescan(principal)
             call.respondRest(RescanResponse.serializer(), RescanResponse(status = "ok", pages = snapshot.pages.size))
@@ -33,7 +33,7 @@ fun Route.adminRoute(ctx: RouteContext) {
     }
 
     post("/api/v1/admin/reindex") {
-        val principal = ctx.principalOrRefuse(call) ?: return@post
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             // Blocking JDBC must never park a CIO event-loop thread (mirrors SearchRoute): the manage check +
             // single-flight + generation-swap rebuild all run on Dispatchers.IO inside the facade's reindex.
