@@ -53,7 +53,12 @@ jobs:
 
       - name: Smoke test image (health endpoint + SPA shell)
         run: |
+          # The image binds DEFAULT_HOST=127.0.0.1 (secure-by-default, ADR-0008), which a published
+          # port can't reach — so run the container as the local DEV tier: bind 0.0.0.0 with the
+          # explicit PLAINBASE_INSECURE_HTTP override that clears the fail-closed bind guard. This is an
+          # ephemeral localhost-only CI container; a real deployment is fronted by a TLS reverse proxy.
           docker run -d --name plainbase-smoke -p 8080:8080 \
+            -e PLAINBASE_HOST=0.0.0.0 -e PLAINBASE_INSECURE_HTTP=true \
             -v "$PWD/fixtures/demo-docs:/content" plainbase:ci
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/healthz; then ok=1; break; fi
