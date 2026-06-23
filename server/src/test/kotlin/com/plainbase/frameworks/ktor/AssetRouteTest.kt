@@ -1,8 +1,13 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.filesystem.Fixtures
+import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.search.Fts5SearchProvider
+import com.plainbase.frameworks.search.SearchDb
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -11,10 +16,13 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.server.testing.ApplicationTestBuilder
+import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * `GET /assets/{path}` (§A4): membership-gated serving, the extension content-type map, and the
@@ -120,4 +128,85 @@ class AssetRouteTest : FunSpec({
             }
         }
     }
+
+    // B1: under ENFORCED auth the asset route is gated, but the SPA's OWN bundle (its hashed js/css) must stay
+    // PUBLIC so the app shell — including the login page — loads for an anonymous user. The gated content read
+    // still 401s for an anonymous content asset (no existence leak: an absent non-bundle 401s identically).
+    test("enforced builtin: anonymous GET /assets/<bundle.js> → 200 (the shell + login page load)") {
+        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false) { app ->
+            val bundle = app.resolveBundleRef()
+            app.client.get(bundle).status shouldBe HttpStatusCode.OK
+        }
+    }
+
+    test("enforced proxy: anonymous GET /assets/<bundle.js> → 200") {
+        enforcedAnonApp(builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = "s") { app ->
+            val bundle = app.resolveBundleRef()
+            app.client.get(bundle).status shouldBe HttpStatusCode.OK
+        }
+    }
+
+    test("enforced: anonymous GET /assets/<non-colliding content asset> → 401 (NOT 404 — no existence leak)") {
+        // Seed a content asset whose name is NOT any bundle filename, so it cannot fall through to the public
+        // bundle. An anonymous read must 401 (gate denies before membership), never 404 (which would leak that
+        // the path is absent vs. present-but-unauthorized).
+        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false, seed = { root ->
+            Files.writeString(root.resolve("orphan-asset.bin"), "secret content bytes")
+        }) { app ->
+            val bundle = app.resolveBundleRef()
+            (bundle == "/assets/orphan-asset.bin") shouldBe false // the seed demonstrably does not match the bundle
+            app.client.get("/assets/orphan-asset.bin").status shouldBe HttpStatusCode.Unauthorized
+        }
+    }
+
+    test("enforced: anonymous GET /assets/<absent non-bundle> → 401 (same as a content asset — the oracle is closed)") {
+        enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false) { app ->
+            app.client.get("/assets/no/such/file.png").status shouldBe HttpStatusCode.Unauthorized
+        }
+    }
 })
+
+/** The shell's own hashed bundle `src`, resolved from the served HTML (never a hardcoded Vite hash). */
+private suspend fun ApplicationTestBuilder.resolveBundleRef(): String {
+    val shell = client.get("/docs/anything").bodyAsText()
+    val src = Regex("src=\"(/assets/[^\"]+)\"").find(shell)?.groupValues?.get(1)
+    src.shouldNotBeNull()
+    return src
+}
+
+/**
+ * Boots the route stack under ENFORCED auth with a fixed [Principal.Anonymous] over a real seeded tree (mirrors
+ * `AuthMatrixTest.withApp`). The default seed is a single `doc.md` so the shell renders; [seed] can add assets.
+ */
+private fun enforcedAnonApp(
+    builtinAuthEnabled: Boolean,
+    proxyAuthEnabled: Boolean,
+    proxySecret: String? = null,
+    seed: (Path) -> Unit = {},
+    block: suspend (ApplicationTestBuilder) -> Unit,
+) {
+    val root = Files.createTempDirectory("plainbase-asset-enforced")
+    try {
+        Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n")
+        seed(root)
+        IndexHarness(root, contentStore = LocalContentStore(root)).use { harness ->
+            harness.builder.rebuild()
+            val searchDb = SearchDb(Files.createTempDirectory("asset-enforced-search").resolve("search.db"))
+            val ctx = harness.testRouteContext(
+                contentStore = LocalContentStore(root),
+                searchProvider = Fts5SearchProvider(searchDb),
+                enforced = true,
+                builtinAuthEnabled = builtinAuthEnabled,
+                proxyAuthEnabled = proxyAuthEnabled,
+                proxySecret = proxySecret,
+                extract = fixedPrincipal(Principal.Anonymous),
+            )
+            testApplication {
+                application { plainbaseModule(ctx) }
+                block(this)
+            }
+        }
+    } finally {
+        root.toFile().deleteRecursively()
+    }
+}
