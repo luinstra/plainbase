@@ -12,7 +12,6 @@ import com.plainbase.frameworks.sqldelight.SqlDelightTransactionRunner
 import com.plainbase.frameworks.sqldelight.SqlDelightUserRepository
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
-import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.util.concurrent.CountDownLatch
@@ -85,13 +84,10 @@ class LoginRaceDisableTest : FunSpec({
             release.countDown() // let the login proceed into its txn; the in-txn re-read now sees disabled=true
             loginThread.join()
 
-            // The fixed code aborts (Disabled) and mints nothing. (Pre-fix code would mint a Success session here.)
+            // The fixed code aborts (Disabled) and mints nothing — pre-fix code (no in-txn re-read) would return
+            // Success here, so this outcome assertion is what makes the test non-vacuous (no session is created).
             outcome.shouldNotBeNull()
             outcome.shouldBeInstanceOf<LoginOutcome.Disabled>()
-
-            // No valid session exists for the user, regardless of the outcome shape.
-            val minted = (outcome as? LoginOutcome.Success)?.session
-            (minted == null || sessionService.authenticate(minted.plaintext) == null).shouldBeTrue()
         }
     }
 
@@ -136,9 +132,6 @@ class LoginRaceDisableTest : FunSpec({
             outcome.shouldNotBeNull()
             outcome.shouldBeInstanceOf<LoginOutcome.InvalidCredentials>()
             users.findById(userId).shouldNotBeNull().disabled.shouldBeFalse() // non-vacuous: only the hash drifted
-
-            val minted = (outcome as? LoginOutcome.Success)?.session
-            (minted == null || sessionService.authenticate(minted.plaintext) == null).shouldBeTrue()
         }
     }
 })
