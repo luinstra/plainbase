@@ -121,9 +121,22 @@ object RemoteAddress {
     fun isParseableCidr(cidr: String): Boolean {
         val slash = cidr.indexOf('/')
         if (slash < 0) return false // a bare address with no `/prefix` is NOT a CIDR
-        val network = parseNumericLiteral(cidr.substring(0, slash).trim()) ?: return false
+        val networkPart = cidr.substring(0, slash).trim()
+        // An IPv4 network MUST be a strict 4-octet dotted quad: `InetAddress.getByName` (in parseNumericLiteral)
+        // accepts legacy abbreviated forms (`10.0/8` → `10.0.0.0/8`, `192.168.1/24` → `192.168.0.1/24`), so a typo'd
+        // allowlist would be ADMITTED as a different range instead of failing fast — defeating A1-amber's intent.
+        // IPv6 (it contains `:`) keeps the numeric-literal parse.
+        if (':' !in networkPart && !isStrictIpv4(networkPart)) return false
+        val network = parseNumericLiteral(networkPart) ?: return false
         val prefix = cidr.substring(slash + 1).trim().toIntOrNull() ?: return false
         return prefix in 0..(network.address.size * 8)
+    }
+
+    /** A strict dotted quad: exactly four `0..255` octets, no abbreviation, no leading-zero (octal) ambiguity. */
+    private fun isStrictIpv4(s: String): Boolean {
+        val octets = s.split('.')
+        return octets.size == 4 &&
+            octets.all { o -> o.length in 1..3 && (o.length == 1 || o[0] != '0') && o.toIntOrNull()?.let { it in 0..255 } == true }
     }
 
     private fun matchesCidr(remoteBytes: ByteArray, cidr: String): Boolean {

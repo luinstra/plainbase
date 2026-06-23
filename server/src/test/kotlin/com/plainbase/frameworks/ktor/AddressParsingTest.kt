@@ -114,6 +114,11 @@ class AddressParsingTest : FunSpec({
             "10.0.0.0" to false, // a bare address with no /prefix is NOT a CIDR
             "not-a-cidr" to false,
             "10.0.0.0/33" to false, // out-of-range IPv4 prefix
+            "10.0/8" to false, // legacy abbreviated IPv4 — getByName would expand to 10.0.0.0, masking a typo
+            "192.168.1/24" to false, // a dropped octet must fail fast, not silently expand
+            "10/8" to false, // single component
+            "010.0.0.0/8" to false, // leading-zero octet (octal ambiguity)
+            "10.0.0.256/8" to false, // octet out of range
             "2001:db8::/129" to false, // out-of-range IPv6 prefix
             "10.0.0.0/-1" to false, // negative prefix
             "10.0.0.0/abc" to false, // non-numeric prefix
