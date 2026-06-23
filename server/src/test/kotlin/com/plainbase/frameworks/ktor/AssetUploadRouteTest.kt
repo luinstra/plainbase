@@ -4,6 +4,8 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -199,13 +201,13 @@ class AssetUploadRouteTest : FunSpec({
             val hasher: (ByteArray) -> String = citations::contentHash
 
             // A _folder.yaml leaf is a scan-skipped name → Rejected.
-            store.writeAssetExclusive(TreePath.require("guides/_folder.yaml"), png, hasher)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("guides/_folder.yaml"), png, hasher)
                 .let { (it is CreateResult.Rejected) shouldBe true }
             // A dot-prefixed leaf is ignored → Rejected.
-            store.writeAssetExclusive(TreePath.require("guides/.secret.png"), png, hasher)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("guides/.secret.png"), png, hasher)
                 .let { (it is CreateResult.Rejected) shouldBe true }
             // A normal asset under an existing dir → Created.
-            store.writeAssetExclusive(TreePath.require("guides/ok.png"), png, hasher)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("guides/ok.png"), png, hasher)
                 .let { (it is CreateResult.Created) shouldBe true }
         } finally {
             root.toFile().deleteRecursively()
@@ -218,7 +220,7 @@ class AssetUploadRouteTest : FunSpec({
             Files.createDirectories(root2.resolve("guides"))
             val store = LocalContentStore(root2, exclusions = listOf(parent)) // DATA_DIR above root → no-op
             store.scan()
-            store.writeAssetExclusive(TreePath.require("guides/fine.png"), png, citations::contentHash)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("guides/fine.png"), png, citations::contentHash)
                 .let { (it is CreateResult.Created) shouldBe true }
         } finally {
             parent.toFile().deleteRecursively()
@@ -360,7 +362,7 @@ class AssetUploadRouteTest : FunSpec({
     test("writeAssetExclusive Unreadable (incl. fail-closed no-hardlink) is 503 content_unreadable") {
         val unreadable: (ContentStore) -> ContentStore = { real ->
             object : ContentStore by real {
-                override fun writeAssetExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String) =
+                override fun writeAssetExclusive(grant: EditGrant, path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String) =
                     CreateResult.Unreadable("simulated fail-closed (no hardlink support)")
             }
         }
@@ -419,7 +421,7 @@ class AssetUploadRouteTest : FunSpec({
         try {
             val store = LocalContentStore(root)
             store.scan()
-            val result = store.writeAssetExclusive(TreePath.require("gone/x.png"), png, citations::contentHash)
+            val result = store.writeAssetExclusive(grantForTests(), TreePath.require("gone/x.png"), png, citations::contentHash)
             (result is CreateResult.ParentMissing) shouldBe true
             Files.exists(root.resolve("gone")) shouldBe false // the dir was NOT created
             Files.exists(root.resolve("gone/x.png")) shouldBe false

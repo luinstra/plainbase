@@ -1,5 +1,7 @@
 package com.plainbase.domain.content
 
+import com.plainbase.domain.principal.EditGrant
+
 /**
  * The single internal interface to the content tree (master plan §2.2): a small port over a
  * directory of Markdown files, assets, and metadata. The only implemented adapter is
@@ -119,8 +121,11 @@ interface ContentStore {
      *     uploads behind a 409 — fail closed instead.
      *
      * [hasher] is the frozen `CitationFactory.contentHash` (passed in so this adapter never imports it).
+     *
+     * [grant] is an unused compile-time witness that `PolicyService.checkEdit()` ran (A3): the asset write is an
+     * EDIT, so the gated mutator cannot be reached without a minted [EditGrant].
      */
-    fun writeAssetExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
+    fun writeAssetExclusive(grant: EditGrant, path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
 
     /**
      * Watches the content tree for changes, invoking [onChange] with each changed path until the

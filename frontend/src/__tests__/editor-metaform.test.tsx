@@ -251,12 +251,20 @@ describe("C2 metadata form", () => {
 
   it("a body edit changes only the body region — the frontmatter bytes are byte-identical (a body `---` is not re-parsed)", async () => {
     let putBody: string | null = null;
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    let saved = SEED;
+    // Route the page GET so the post-save invalidation refetch returns a valid PageResponse (not the
+    // preview payload) — otherwise the query errors and the editor unmounts; with the async-CSRF save hop
+    // that error-unmount's React work can land after jsdom teardown ("window is not defined").
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
       if (init?.method === "PUT") {
         putBody = init.body as string;
-        return jsonResponse({ content_hash: hashOf("x"), commit: null });
+        saved = init.body as string;
+        return jsonResponse({ content_hash: hashOf(saved), commit: null });
       }
-      return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/preview")) return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/tree")) return jsonResponse(emptyTree);
+      return jsonResponse(pageResponse(saved));
     });
     vi.stubGlobal("fetch", fetchSpy);
     const { view } = renderSeeded();
@@ -275,18 +283,29 @@ describe("C2 metadata form", () => {
     // The frontmatter region is byte-identical to the seed's — the body edit never re-parsed a `---`.
     expect(splitFrontmatter(putBody!).frontmatter).toBe(splitFrontmatter(SEED).frontmatter);
     expect(putBody!).toContain("trailing.");
+    // Await the post-save settle (Save disabled = saved baseline advanced) so no React work from the
+    // invalidation refetch is scheduled after the test returns and teardown nulls `window`.
+    await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
   });
 
   it("saving after a form edit PUTs the reassembled full buffer with the existing If-Match base_hash", async () => {
     let putBody: string | null = null;
     let putHeaders: Record<string, string> = {};
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    let saved = SEED;
+    // Route the page GET so the post-save invalidation refetch returns a valid PageResponse (not the
+    // preview payload) — otherwise the query errors and the editor unmounts; with the async-CSRF save hop
+    // that error-unmount's React work can land after jsdom teardown ("window is not defined").
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
       if (init?.method === "PUT") {
         putBody = init.body as string;
         putHeaders = init.headers as Record<string, string>;
-        return jsonResponse({ content_hash: hashOf("next"), commit: null });
+        saved = init.body as string;
+        return jsonResponse({ content_hash: hashOf(saved), commit: null });
       }
-      return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/preview")) return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/tree")) return jsonResponse(emptyTree);
+      return jsonResponse(pageResponse(saved));
     });
     vi.stubGlobal("fetch", fetchSpy);
     const { view } = renderSeeded();
@@ -310,6 +329,9 @@ describe("C2 metadata form", () => {
     expect(putBody!).toBe(SEED.replace("status: draft\n", "status: active\n"));
     expect(putHeaders["if-match"]).toBe(`"${hashOf(SEED)}"`);
     expect(putHeaders["content-type"]).toBe("text/markdown");
+    // Await the post-save settle (Save disabled = saved baseline advanced) so no React work from the
+    // invalidation refetch is scheduled after the test returns and teardown nulls `window`.
+    await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
   });
 
   it("a tag typed then committed via blur, then Save, lands in the PUT and leaves the editor clean (blur-vs-Save race #3)", async () => {
@@ -362,12 +384,20 @@ describe("C2 metadata form", () => {
 
   it("two field edits compose over the latest buffer — neither clobbers the other (functional updater #2)", async () => {
     let putBody: string | null = null;
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    let saved = SEED;
+    // Route the page GET so the post-save invalidation refetch returns a valid PageResponse (not the
+    // preview payload) — otherwise the query errors and the editor unmounts; with the async-CSRF save hop
+    // that error-unmount's React work can land after jsdom teardown ("window is not defined").
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
       if (init?.method === "PUT") {
         putBody = init.body as string;
-        return jsonResponse({ content_hash: hashOf(init.body as string), commit: null });
+        saved = init.body as string;
+        return jsonResponse({ content_hash: hashOf(saved), commit: null });
       }
-      return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/preview")) return jsonResponse({ html: "", headings: [] });
+      if (url.includes("/tree")) return jsonResponse(emptyTree);
+      return jsonResponse(pageResponse(saved));
     });
     vi.stubGlobal("fetch", fetchSpy);
     const { view } = renderSeeded();
@@ -392,6 +422,9 @@ describe("C2 metadata form", () => {
     // BOTH edits survived — the second write composed over the first's buffer, not the stale render prop.
     expect(putBody!).toContain("status: active\n");
     expect(putBody!).toContain("owner: Grace Hopper\n");
+    // Await the post-save settle (Save disabled = saved baseline advanced) so no React work from the
+    // invalidation refetch is scheduled after the test returns and teardown nulls `window`.
+    await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(true));
   });
 
   it("falls back to a text input when `updated` isn't an ISO date (so the value isn't hidden #7)", async () => {

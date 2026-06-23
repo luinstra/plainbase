@@ -1,8 +1,12 @@
 # Operating Plainbase
 
 Operator notes for running Plainbase in production and on a dev box. This document covers search
-freshness, the manual-reindex paths, and the filesystem-native virtue. (Auth, backups, and the Git
-layer are later phases.)
+freshness, the manual-reindex paths, and the filesystem-native virtue. (Backups and the Git layer
+are later phases.)
+
+For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
+[`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
+reference stack under `deploy/proxy/`.
 
 ## The content tree is plain Markdown on disk
 
@@ -62,6 +66,8 @@ engine — distinct from `POST /api/v1/admin/rescan`, which re-runs the page-ind
 restoring or replacing `search.db`).
 
 ```
+# auth.mode=off (the local-dev tier) — no auth/CSRF. Behind a proxy or with builtin auth, this
+# admin mutation needs an authenticated session + the X-CSRF-Token from GET /api/v1/session.
 curl -X POST http://localhost:8080/api/v1/admin/reindex
 # {"status":"ok","pages":42}
 ```

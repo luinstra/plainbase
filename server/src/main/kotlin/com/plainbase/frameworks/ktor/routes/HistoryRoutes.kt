@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.frameworks.git.UnknownRevisionException
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.DiffResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.HistoryResponse
@@ -33,39 +33,45 @@ import kotlinx.coroutines.withContext
  * self-hosted model; a bounded git-read semaphore (+ 503 on saturation) is a tracked follow-up hardening
  * item, deliberately NOT bolted onto W5 (concurrency-limiting is a cross-cutting server concern).
  */
-fun Route.historyRoutes(services: RestServices) {
+fun Route.historyRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         get("/{id}/history") {
-            val id = call.pageId() ?: return@get
-            val page = services.pageService.byId(id)
-                ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-            // Bound the response by default (defense-in-depth over the GitExecutor byte cap): a page with very
-            // deep history would otherwise return an unbounded list. DEFAULT_HISTORY_LIMIT newest-first commits
-            // is plenty for the UI; cursor/pagination is the documented future grow (not built here).
-            val commits = withContext(Dispatchers.IO) { services.history.log(page.page.path, DEFAULT_HISTORY_LIMIT) }
-            call.respondRest(
-                HistoryResponse.serializer(),
-                HistoryResponse(gitEnabled = services.history.enabled, commits = commits.map { it.toDto() }),
-            )
+            val principal = ctx.principalOrRefuse(call) ?: return@get
+            call.guarded {
+                val id = call.pageId() ?: return@guarded
+                val page = ctx.read.pageById(principal, id)
+                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                // Bound the response by default (defense-in-depth over the GitExecutor byte cap): a page with very
+                // deep history would otherwise return an unbounded list. DEFAULT_HISTORY_LIMIT newest-first commits
+                // is plenty for the UI; cursor/pagination is the documented future grow (not built here).
+                val commits = withContext(Dispatchers.IO) { ctx.read.history(principal, page.page.path, DEFAULT_HISTORY_LIMIT) }
+                call.respondRest(
+                    HistoryResponse.serializer(),
+                    HistoryResponse(gitEnabled = ctx.read.gitEnabled(principal), commits = commits.map { it.toDto() }),
+                )
+            }
         }
         get("/{id}/diff") {
-            val id = call.pageId() ?: return@get
-            val from = call.commitRef("from") ?: return@get
-            val to = call.commitRef("to") ?: return@get
-            val page = services.pageService.byId(id)
-                ?: return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-            // Off Git the no-op provider returns an empty diff; the flag tells the client to render its own
-            // "Git off" copy rather than treat the empty diff as a real one.
-            // Only an UNRESOLVABLE ref is a 404 (W5 P2): an operational diff failure (timeout, corrupt repo,
-            // unsupported flag) is a plain GitCommandException that propagates to the default 500 path —
-            // collapsing it to 404 would hide a real failure as "no diff / not found".
-            val diff = try {
-                withContext(Dispatchers.IO) { services.history.diff(from, to, page.page.path) }
-            } catch (e: UnknownRevisionException) {
-                logger.debug(e) { "diff $from..$to of ${page.page.path.value} failed (unknown/unresolvable ref)" }
-                return@get call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No diff between $from and $to")
+            val principal = ctx.principalOrRefuse(call) ?: return@get
+            call.guarded {
+                val id = call.pageId() ?: return@guarded
+                val from = call.commitRef("from") ?: return@guarded
+                val to = call.commitRef("to") ?: return@guarded
+                val page = ctx.read.pageById(principal, id)
+                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                // Off Git the no-op provider returns an empty diff; the flag tells the client to render its own
+                // "Git off" copy rather than treat the empty diff as a real one.
+                // Only an UNRESOLVABLE ref is a 404 (W5 P2): an operational diff failure (timeout, corrupt repo,
+                // unsupported flag) is a plain GitCommandException that propagates to the default 500 path —
+                // collapsing it to 404 would hide a real failure as "no diff / not found".
+                val diff = try {
+                    withContext(Dispatchers.IO) { ctx.read.diff(principal, from, to, page.page.path) }
+                } catch (e: UnknownRevisionException) {
+                    logger.debug(e) { "diff $from..$to of ${page.page.path.value} failed (unknown/unresolvable ref)" }
+                    return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No diff between $from and $to")
+                }
+                call.respondRest(DiffResponse.serializer(), diff.toDto(gitEnabled = ctx.read.gitEnabled(principal)))
             }
-            call.respondRest(DiffResponse.serializer(), diff.toDto(gitEnabled = services.history.enabled))
         }
     }
 }

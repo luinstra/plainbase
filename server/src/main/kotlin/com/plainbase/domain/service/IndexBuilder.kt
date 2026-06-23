@@ -14,6 +14,7 @@ import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.PageIndexView
+import com.plainbase.domain.principal.ManageGrant
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.IdMapRepository
@@ -179,6 +180,15 @@ class IndexBuilder(
     }
 
     /**
+     * The MANAGE-gated rescan entry (A3): the admin `rescan` route reaches the full pass ONLY through this thin
+     * wrapper, which requires a [ManageGrant] minted by `PolicyService.checkManage()`. The no-arg [rebuild] stays
+     * for the MANY internal callers (the watcher loop, startup reconcile, the W2 create's post-write index, the
+     * asset facade's post-write rebuild) — they are not a manage admin action, so they keep the ungated path.
+     * "Gain a grant param, keep the logic": the gated overload is the new surface, the body is the shared no-arg.
+     */
+    fun rebuild(@Suppress("UNUSED_PARAMETER") grant: ManageGrant): PageIndex = rebuild()
+
+    /**
      * Search-only full rebuild (the S8 reindex path): reads the CURRENT published snapshot AND
      * rebuilds the search engine from it, both inside the SAME monitor [rebuild]/[notifyPublished]
      * use. So a concurrent watcher rebuild either fully precedes this (the reindex sees its
@@ -196,6 +206,13 @@ class IndexBuilder(
         indexer.rebuild(snapshot)
         return snapshot.pages.size
     }
+
+    /**
+     * The MANAGE-gated reindex entry (A3): the admin `reindex` route + the `plainbase reindex` CLI reach the
+     * engine generation-swap ONLY through this thin wrapper, which requires a [ManageGrant]. The no-arg
+     * [rebuildSearchIndex] stays the internal surface (same gain-a-param-keep-the-logic shape as [rebuild]).
+     */
+    fun rebuildSearchIndex(@Suppress("UNUSED_PARAMETER") grant: ManageGrant): Int = rebuildSearchIndex()
 
     /**
      * Targeted single-page reindex (PB-WRITE-1 §B1 fix C): re-reads + re-renders ONLY [pageId]'s page,

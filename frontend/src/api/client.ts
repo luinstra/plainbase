@@ -1,3 +1,4 @@
+import { withCsrf } from "./csrf";
 import type {
   BodyTooLargeEnvelope,
   CreatePageRequest,
@@ -78,16 +79,19 @@ export type SaveResult =
  * Saves the FULL document buffer verbatim (W6 / D-4): the body is the EXACT bytes as `text/markdown`,
  * `baseHash` rides the `If-Match` strong ETag `"sha256:<hex>"` (echoed from the GET's `content_hash`,
  * never re-derived). The 200 carries the next CAS token; the typed conflict/refusal results drive the
- * editor's UX without losing the buffer.
+ * editor's UX without losing the buffer. A logged-in (cookie/proxy-Human) save is CSRF-enforced server-side,
+ * so the `X-CSRF-Token` rides along via [withCsrf] (refresh-and-retry-once on a stale-token 403).
  */
 export async function putPageRaw(id: string, body: string, baseHash: string): Promise<SaveResult> {
   let response: Response;
   try {
-    response = await fetch(`/api/v1/pages/${id}`, {
-      method: "PUT",
-      headers: { "content-type": "text/markdown", "if-match": `"${baseHash}"` },
-      body,
-    });
+    response = await withCsrf((csrfHeaders) =>
+      fetch(`/api/v1/pages/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "text/markdown", "if-match": `"${baseHash}"`, ...csrfHeaders },
+        body,
+      }),
+    );
   } catch {
     // fetch rejects on offline/timeout (TypeError) — surface it as the transient error the editor retries.
     return { kind: "error", error: networkError() };
@@ -123,16 +127,19 @@ export type CreateResult =
  * Creates a page (W6 / D-2): a JSON request; the server mints the id, derives the path/slug, and the
  * 201 returns the minted `id` + the server-authoritative canonical `url` (the client navigates straight
  * to it — no tree re-resolve, no client slug derivation). A 409 `page_exists`/`slug_conflict` carries
- * the attempted `path`.
+ * the attempted `path`. A logged-in create is CSRF-enforced server-side, so the `X-CSRF-Token` rides along
+ * via [withCsrf] (refresh-and-retry-once on a stale-token 403).
  */
 export async function createPage(request: CreatePageRequest): Promise<CreateResult> {
   let response: Response;
   try {
-    response = await fetch("/api/v1/pages", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(request),
-    });
+    response = await withCsrf((csrfHeaders) =>
+      fetch("/api/v1/pages", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...csrfHeaders },
+        body: JSON.stringify(request),
+      }),
+    );
   } catch {
     return { kind: "error", error: networkError() };
   }

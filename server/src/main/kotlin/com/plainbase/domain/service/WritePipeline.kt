@@ -7,6 +7,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.CreateGrant
+import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.DirtyPageRepository
@@ -51,7 +53,9 @@ class WritePipeline(
 ) {
 
     @Synchronized
-    fun write(intent: WriteIntent): WriteOutcome {
+    fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
+        // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3): the gated mutator
+        // CANNOT be reached without a minted grant. The body is unchanged.
         // (0) Edit-classification guard — a rename is rejected, never half-applied (MUST-FIX 1).
         classifyEdit(intent)?.let { return it }
 
@@ -115,7 +119,8 @@ class WritePipeline(
      *     caught → [WriteOutcome.WrittenButUnindexed] (the bytes ARE on disk, the page IS dirty).
      */
     @Synchronized
-    fun create(intent: CreateIntent): WriteOutcome {
+    fun create(@Suppress("UNUSED_PARAMETER") grant: CreateGrant, intent: CreateIntent): WriteOutcome {
+        // [grant] is an unused compile-time witness that PolicyService.checkCreate() ran (A3). Body unchanged.
         // (0) Canonical-URL collision guard, under the monitor against the fresh snapshot — BEFORE any
         // write or dirty mark, so a no-write conflict never touches the journal at all.
         canonicalUrlCollision(intent)?.let { return WriteOutcome.SlugConflict(it) }

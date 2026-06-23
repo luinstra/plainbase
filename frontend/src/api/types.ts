@@ -227,3 +227,74 @@ export interface DiffResponse {
   path: string;
   unified_diff: string;
 }
+
+// ---- A4b: auth session + admin management wire shapes (server: AuthDtos.kt) -------------------
+
+/** `GET /api/v1/session` — the auth state + a fresh CSRF token + the auth mode (drives the UI hint). */
+export interface SessionResponse {
+  authenticated: boolean;
+  username: string | null;
+  csrf_token: string | null;
+  auth_mode: string; // "builtin" | "proxy" | "off"
+}
+
+/** One API token — metadata only (never a secret/plaintext). */
+export interface TokenMeta {
+  id: string;
+  label: string;
+  mode: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface TokenListResponse {
+  tokens: TokenMeta[];
+}
+
+/** `POST /api/v1/admin/tokens` — the minted token's id + the one-time plaintext (shown ONCE). */
+export interface CreatedTokenResponse {
+  id: string;
+  plaintext: string;
+}
+
+/** One audit decision row. */
+export interface AuditEntry {
+  id: string;
+  ts: string;
+  principal_kind: string;
+  issuer: string | null;
+  external_id: string | null;
+  action: string;
+  resource: string;
+  decision: string;
+}
+
+export interface AuditListResponse {
+  entries: AuditEntry[];
+}
+
+/** One subject→role row. */
+export interface RoleRow {
+  issuer: string;
+  external_id: string;
+  role: string;
+  created_at: string;
+}
+
+export interface RoleListResponse {
+  roles: RoleRow[];
+}
+
+/** One admin-list user — metadata only. */
+export interface UserMeta {
+  id: string;
+  username: string;
+  display_name: string | null;
+  disabled: boolean;
+}
+
+export interface UserListResponse {
+  users: UserMeta[];
+}

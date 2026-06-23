@@ -2,11 +2,16 @@ package com.plainbase
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.repository.SessionRepository
+import com.plainbase.domain.repository.SetupTokenRepository
+import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
 import com.plainbase.frameworks.cli.ReindexCommand
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.koin.checkpointModule
@@ -20,8 +25,12 @@ import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
 import com.plainbase.frameworks.spike.NativeSpike
+import io.github.oshai.kotlinlogging.KotlinLogging
 import org.koin.core.context.startKoin
 import kotlin.system.exitProcess
+import kotlin.time.Clock
+
+private val logger = KotlinLogging.logger {}
 
 fun main(args: Array<String>) {
     // kotlin-logging 8.x prints a startup banner from KotlinLogging's class initializer unless
@@ -33,9 +42,10 @@ fun main(args: Array<String>) {
         "spike" -> exitProcess(NativeSpike.runAsMain())
         "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))
         "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1)))
+        "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1)))
         null, "serve" -> serve()
         else -> {
-            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex)")
+            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex | admin)")
             exitProcess(2)
         }
     }
@@ -53,6 +63,24 @@ private fun serve() {
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
+    // ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild work.
+    // Same idiom as the gates that follow (System.err + exitProcess(1), never a thrown stack trace) — a bind
+    // misconfiguration is an operator-actionable startup refusal, not an argument-precondition bug.
+    config.bindGuardRefusal()?.let {
+        System.err.println("serve: $it")
+        exitProcess(1)
+    }
+    if (config.auth.insecureHttp && config.isNonLoopbackBind()) {
+        logger.warn {
+            "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} — anyone on the " +
+                "network can capture them (ADR-0008)"
+        }
+    } else if (config.auth.insecureHttp) {
+        logger.info {
+            "PLAINBASE_INSECURE_HTTP set but the bind is loopback (${config.host}) — the override is redundant here " +
+                "(loopback HTTP is always allowed)"
+        }
+    }
     // W4 gate-check (ADR-0006, M2 ordering): AFTER requireContentDir() and BEFORE the lock/rebuild/
     // reconcile block — rebuild() and reconcileDirtyPages() trigger commits, so a "git missing" failure
     // must fire FIRST with an actionable message, never as a doomed commit's stack trace. NoOp is a clean
@@ -77,6 +105,22 @@ private fun serve() {
     // that also leaks the lock. Startup ORDER is unchanged: gateCheck (pre-lock) → lock → prepare() →
     // watcher → rebuild.
     try {
+        val now = Clock.System.now()
+        // Startup-time prune (WI-13), INSIDE the lock so no other process races the DB: drop dead session/setup-token
+        // rows that accumulate in the insert/update-only tables. Once at boot, never per-write (write amplification).
+        koin.get<SessionRepository>().prune(now)
+        koin.get<SetupTokenRepository>().prune(now)
+        // A4b: load-or-generate the proxy-CSRF HMAC server key NOW — inside the lock — so a concurrent boot can never
+        // race a double-generate into app_meta (WI-9). Resolving the ProxyCsrf single forces the key load here rather
+        // than relying on the lazy RouteContext resolution timing.
+        koin.get<com.plainbase.frameworks.security.ProxyCsrf>()
+        // A4a (WI-7/WI-13): on an empty / no-enabled-admin builtin DB, emit ONLY a NON-SECRET hint — NEVER a token on
+        // the boot path (stdout/stderr are the scraped log under docker/systemd). The secret comes ONLY from the CLI.
+        // Reads `countEnabledAdmins` only AFTER the lock is held + validated (fix D: never open/migrate the DB before
+        // the lock, so a second process can't open+migrate before losing the lock race).
+        if (config.auth.mode == AuthMode.BUILTIN && koin.get<UserRepository>().countEnabledAdmins() == 0L) {
+            logger.warn { "Setup required: run `plainbase admin setup-token` to mint the first-admin bootstrap token" }
+        }
         // W5 P1: ready the history backing store now — AFTER the lock validates/owns DATA_DIR (P1-3: never
         // touch it before the lock; this is why repo init was lazy) and BEFORE the watcher and the first
         // rebuild. The startup rebuild reads (lastCommits) before any save commits, and `git -C workTree log`

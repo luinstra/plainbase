@@ -31,6 +31,10 @@ ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negoti
 # StatusPages: pure-Kotlin Ktor plugin (no reflection, no extra transitives beyond ktor-server-core)
 # — native-image safe; the §A4 error-envelope wiring (chunk 6).
 ktor-server-status-pages = { module = "io.ktor:ktor-server-status-pages", version.ref = "ktor" }
+# Sessions: pure-Kotlin Ktor plugin (A4a's opaque-string session cookie). Allowlisted + native-proven in A1
+# WITH an opaque-String SessionSerializer (NOT the default reflection serializer — a native-crash hazard).
+# ktor-server-auth is deliberately NOT taken (Jackson-transitive risk; extraction is hand-rolled).
+ktor-server-sessions = { module = "io.ktor:ktor-server-sessions", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
@@ -42,6 +46,12 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 # kotlinx-datetime — real ISO calendar validity for the editorial page `updated` field (rejects 2026-02-30).
 # LocalDate.parse is reflection-free / native-image safe. Owner-approved server dependency.
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
+
+# HOCON config (ADR-0009) — typesafe-config. Already on the allowlist transitively (via Ktor); declared
+# EXPLICITLY here so the direct API use (ConfigFactory/Config in PlainbaseConfig) does not depend on a
+# transitive that a Ktor bump could drop. No version: the resolved (Ktor-supplied) one is used, so the module
+# set — and the allowlist — is unchanged (zero drift).
+typesafe-config = { module = "com.typesafe:config" }
 
 # Persistence — SQLDelight (compile-time SQL codegen, zero reflection), NOT Exposed
 sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }

@@ -2,17 +2,20 @@
 
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SearchResults
+import com.plainbase.domain.service.ReindexResult
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
@@ -20,14 +23,17 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.thread
 
 /**
- * `POST /api/v1/admin/reindex` (S8 Resolution 1, acceptance criteria 1/2/4-endpoint-half). The
- * route mirrors rescan: same `Route.adminRoute` home, R7-unauthenticated, the single-flight 409
- * `reindex_in_flight` guard, and the `finally` flag release. The flag-release-after-failure leg
- * drives the route over a deliberately-throwing search engine.
+ * `POST /api/v1/admin/reindex` (S8 Resolution 1, A3-gated). The route mirrors rescan: same `Route.adminRoute`
+ * home, the manage `check()` gate, the single-flight 409 `reindex_in_flight` guard (now INSIDE the facade), and
+ * the flag-release-after-failure leg. Re-pinned auth-on under loopback-dev (the harness's open mode), so a manage
+ * call reaches the rebuild byte-identically to pre-auth.
  */
 class AdminRouteTest : FunSpec({
 
@@ -45,28 +51,36 @@ class AdminRouteTest : FunSpec({
         }
     }
 
-    test("concurrent reindex returns 409 reindex_in_flight; the flag releases for the next request") {
-        restTest(Fixtures.demoDocs) { harness ->
-            // The flag IS the contract under test — set it directly to simulate an in-flight reindex,
-            // avoiding a flaky race between two real rebuilds (the addendum's deterministic approach).
-            harness.services.reindexInFlight.store(true)
-            val conflict = client.post("/api/v1/admin/reindex")
-            conflict.status shouldBe HttpStatusCode.Conflict
-            val error = Json.parseToJsonElement(conflict.bodyAsText()).jsonObject.getValue("error").jsonObject
-            error.getValue("code").jsonPrimitive.content shouldBe "reindex_in_flight"
+    test("the single-flight returns InFlight to a concurrent reindex; the flag releases for the next call") {
+        // The §A5 single-flight lives inside GuardedMutatingFacade; drive it deterministically by parking the
+        // first reindex on a blocking search engine and firing a second from another thread.
+        val engine = BlockingProvider()
+        ReindexFacadeHarness(Fixtures.demoDocs, engine).use { h ->
+            val firstStarted = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            engine.onRebuild = {
+                firstStarted.countDown()
+                release.await()
+            }
+            val first = thread { h.mutate.reindex(Principal.Anonymous) }
+            firstStarted.await(5, TimeUnit.SECONDS) shouldBe true
 
-            harness.services.reindexInFlight.store(false)
-            client.post("/api/v1/admin/reindex").status shouldBe HttpStatusCode.OK
+            // A concurrent reindex sees the flip fail → InFlight (the route's 409).
+            h.mutate.reindex(Principal.Anonymous).shouldBeInstanceOf<ReindexResult.InFlight>()
+
+            release.countDown()
+            first.join()
+            // The flag released, so the next reindex proceeds to Done.
+            engine.onRebuild = {}
+            h.mutate.reindex(Principal.Anonymous).shouldBeInstanceOf<ReindexResult.Done>()
         }
     }
 
     test("a thrown rebuild yields a 500 envelope but releases the flag; a follow-up POST succeeds") {
-        // First failing rebuild (the engine throws), then a healthy one, drives both legs.
         val engine = FailThenPassProvider()
-        val harness = ReindexFailureHarness(Fixtures.demoDocs, engine)
-        harness.use {
+        ReindexFacadeHarness(Fixtures.demoDocs, engine).use { harness ->
             testApplication {
-                application { plainbaseModule(harness.services) }
+                application { plainbaseModule(harness.routeContext) }
 
                 engine.fail.store(true)
                 val failed = client.post("/api/v1/admin/reindex")
@@ -75,7 +89,6 @@ class AdminRouteTest : FunSpec({
                     .getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe "internal_error"
 
                 // The finally{} released the flag despite the throw — a follow-up is not wedged at 409.
-                harness.services.reindexInFlight.load() shouldBe false
                 engine.fail.store(false)
                 client.post("/api/v1/admin/reindex").status shouldBe HttpStatusCode.OK
             }
@@ -96,11 +109,23 @@ private class FailThenPassProvider : SearchProvider {
     override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
 }
 
+/** A search engine whose [rebuild] runs [onRebuild] — used to park the first reindex so the second sees InFlight. */
+private class BlockingProvider : SearchProvider {
+    var onRebuild: () -> Unit = {}
+
+    override fun index(pages: List<PageDocuments>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun search(query: SearchQuery): SearchResults = SearchResults(0, emptyList())
+    override fun rebuild(pages: Sequence<PageDocuments>) = onRebuild()
+    override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
+}
+
 /**
- * A [RestServices] over the real index pass but a controllable search engine, so the reindex
- * failure path (flag release) can be exercised without a real FTS5 throw.
+ * A [RouteContext] over the real index pass but a controllable search engine, so the reindex single-flight + the
+ * failure path (flag release) can be exercised without a real FTS5 throw. Exposes the [MutatingFacade] directly
+ * for the unit-level single-flight assertion.
  */
-private class ReindexFailureHarness(
+private class ReindexFacadeHarness(
     root: java.nio.file.Path,
     engine: SearchProvider,
 ) : AutoCloseable {
@@ -109,27 +134,12 @@ private class ReindexFailureHarness(
     private val indexer = SearchIndexer(engine, SectionSplitter())
     private val harness = com.plainbase.domain.service.IndexHarness(root, contentStore = store, searchIndexer = indexer)
 
-    val services: RestServices
+    val routeContext: RouteContext
+    val mutate get() = routeContext.mutate
 
     init {
         harness.builder.rebuild()
-        services = RestServices(
-            indexBuilder = harness.builder,
-            pageService = com.plainbase.domain.service.PageService(
-                harness.builder,
-                harness.registry,
-                com.plainbase.domain.service.CitationFactory(),
-            ),
-            searchService = com.plainbase.domain.service.SearchService(provider = engine, indexBuilder = harness.builder),
-            aliasRegistry = harness.registry,
-            contentStore = store,
-            writePipeline = harness.writePipeline(),
-            citations = com.plainbase.domain.service.CitationFactory(),
-            idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
-            maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
-            maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-            history = com.plainbase.frameworks.git.NoOpHistoryProvider,
-        )
+        routeContext = harness.testRouteContext(contentStore = store, searchProvider = engine)
     }
 
     override fun close() = harness.close()

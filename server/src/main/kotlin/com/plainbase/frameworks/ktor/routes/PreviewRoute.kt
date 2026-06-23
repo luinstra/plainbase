@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PreviewResponse
 import com.plainbase.frameworks.ktor.dto.toDto
@@ -23,32 +23,35 @@ import io.ktor.server.routing.post
  * shared [receiveBodyCapped] (the same `maxWriteBodyBytes` PUT uses — a preview buffer is the same
  * size class as a saved document). NOT in `ForeverApiGoldenSuite`; no byte-equal-to-`/html` claim.
  */
-fun Route.previewRoute(services: RestServices) {
+fun Route.previewRoute(ctx: RouteContext) {
     post("/api/v1/preview") {
-        // (1) Media type — the RAW body is a Markdown document (mirror the PUT guard).
-        if (call.request.contentType().withoutParameters() != ContentType.parse("text/markdown")) {
-            return@post call.respondError(
-                HttpStatusCode.UnsupportedMediaType,
-                ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
-                "Preview requires Content-Type: text/markdown (the raw document buffer)",
+        val principal = ctx.principalOrRefuse(call) ?: return@post
+        call.guarded {
+            // (1) Media type — the RAW body is a Markdown document (mirror the PUT guard).
+            if (call.request.contentType().withoutParameters() != ContentType.parse("text/markdown")) {
+                return@guarded call.respondError(
+                    HttpStatusCode.UnsupportedMediaType,
+                    ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
+                    "Preview requires Content-Type: text/markdown (the raw document buffer)",
+                )
+            }
+
+            // (2) Stream the body counting bytes to limit+1; over the cap aborts BEFORE buffering it all.
+            val bytes = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
+                ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
+
+            // (3) The buffer's notional location for relative-href resolution: an optional ?path= (validated
+            // content-relative), else a fixed synthetic root path for a not-yet-saved buffer.
+            val sourcePath = call.previewPath()
+
+            // (4) Single-renderer reuse against the current published snapshot (READ-ONLY, read-gated).
+            val rendered = ctx.read.preview(principal, sourcePath, bytes)
+
+            call.respondRest(
+                PreviewResponse.serializer(),
+                PreviewResponse(html = rendered.html, headings = rendered.headings.map { it.toDto() }),
             )
         }
-
-        // (2) Stream the body counting bytes to limit+1; over the cap aborts BEFORE buffering it all.
-        val bytes = call.receiveBodyCapped(services.maxWriteBodyBytes)
-            ?: return@post call.respondBodyTooLarge(services.maxWriteBodyBytes)
-
-        // (3) The buffer's notional location for relative-href resolution: an optional ?path= (validated
-        // content-relative), else a fixed synthetic root path for a not-yet-saved buffer.
-        val sourcePath = call.previewPath()
-
-        // (4) Single-renderer reuse against the current published snapshot (READ-ONLY).
-        val rendered = services.indexBuilder.renderPreview(sourcePath, bytes)
-
-        call.respondRest(
-            PreviewResponse.serializer(),
-            PreviewResponse(html = rendered.html, headings = rendered.headings.map { it.toDto() }),
-        )
     }
 }
 

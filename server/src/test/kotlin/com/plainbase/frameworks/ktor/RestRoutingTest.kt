@@ -94,11 +94,11 @@ class RestRoutingTest : FunSpec({
 
     test("tree JSON is memoized per snapshot and invalidated by a rescan (§C4)") {
         restTest(Fixtures.demoDocs, seed) { harness ->
-            val first = harness.services.treeJson.current()
-            harness.services.treeJson.current() shouldBeSameInstanceAs first
+            val first = harness.treeJson.current()
+            harness.treeJson.current() shouldBeSameInstanceAs first
 
             client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.OK
-            val second = harness.services.treeJson.current()
+            val second = harness.treeJson.current()
             second shouldNotBeSameInstanceAs first
             second shouldBe first // same tree content; only the snapshot identity changed
         }

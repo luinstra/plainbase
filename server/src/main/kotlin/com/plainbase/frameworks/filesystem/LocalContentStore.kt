@@ -15,6 +15,7 @@ import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.principal.EditGrant
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.charset.MalformedInputException
@@ -467,7 +468,13 @@ class LocalContentStore(
         return writeIfAbsent(path, resolvedTarget, bytes, hasher)
     }
 
-    override fun writeAssetExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
+    override fun writeAssetExclusive(
+        @Suppress("UNUSED_PARAMETER") grant: EditGrant,
+        path: TreePath,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): CreateResult {
+        // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3). Body unchanged.
         val target = resolveOnDisk(path, snapshot.load())
         // Asset difference (1): require the parent to ALREADY exist and be a directory — never create it
         // (an external rm of the page's folder must not be papered over by recreating it under the asset).

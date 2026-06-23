@@ -1,0 +1,179 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
+package com.plainbase.frameworks.ktor
+
+import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.AssetWriteOutcome
+import com.plainbase.domain.service.CreateIntent
+import com.plainbase.domain.service.FrontmatterPatcher
+import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.MutatingFacade
+import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ReindexResult
+import com.plainbase.domain.service.SaveRequest
+import com.plainbase.domain.service.SaveResult
+import com.plainbase.domain.service.WriteIntent
+import com.plainbase.domain.service.WritePipeline
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+
+/**
+ * The frameworks-side [MutatingFacade] impl (A3): it holds the raw [WritePipeline]/[ContentStore]/[IndexBuilder]
+ * + the [PolicyService] as PRIVATE deps. Every method calls the matching `PolicyService.check*` FIRST (which
+ * mints the unforgeable grant + records the pre-effect audit row, throwing [com.plainbase.domain.service
+ * .AccessDenied] on deny), then delegates WITH the grant. No route can reach the raw mutators.
+ *
+ * The §A5 reindex single-flight lives here (the manage op owns it, never exposed to a route); the asset write's
+ * INTERNAL post-write `IndexBuilder.rebuild()` uses the UNGATED no-arg overload (it is part of the EDIT write,
+ * not a manage admin action — §WI-3).
+ */
+class GuardedMutatingFacade(
+    private val policy: PolicyService,
+    private val writePipeline: WritePipeline,
+    private val contentStore: ContentStore,
+    private val indexBuilder: IndexBuilder,
+) : MutatingFacade {
+
+    /**
+     * §A5 reindex single-flight: the first request flips this with `compareAndSet(false, true)` and proceeds; a
+     * concurrent request sees the flip fail and gets [ReindexResult.InFlight] (the route's 409). Never `@Volatile`,
+     * never `java.util.concurrent.atomic` (kotlin.concurrent.atomics house style; commit 9c78ca0).
+     */
+    private val reindexInFlight = AtomicBoolean(false)
+
+    override fun save(principal: Principal, request: SaveRequest): SaveResult {
+        // The AUDITED edit-check is the FIRST authorization on the write path — a denied save writes the denied-EDIT
+        // audit row (PolicyService.checkEdit) BEFORE any read, so an unauthorized PUT can never escape the audit log
+        // via an unaudited read-check. Only after the grant is minted do we resolve the snapshot + id-tamper-check.
+        val grant = policy.checkEdit(principal, request.pageId.value)
+
+        // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 — the route never
+        // invents a path. The snapshot resolution lives HERE (post-grant), not in a route read-check.
+        val current = indexBuilder.current.byId[request.pageId] ?: return SaveResult.PageNotFound
+
+        // (6) id-tamper check (R1, PB-WRITE-1): the submitted buffer's `id:` line must denote the SAME identity as
+        // the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL `PATCHER.readIdValue` — over
+        // the submitted bytes and over `current.markdown` (the verbatim lenient decode the index captured; the `id:`
+        // line is pure ASCII by the patcher grammar, so the round-trip is faithful) — and the two raw values compare
+        // via [sameIdentity] (canonical-UUID when both parse, else byte-identical raw). Comparing the file's CURRENT
+        // id — never `current.id`, the assigned pageId — lets a duplicate/adopted page whose on-disk id legitimately
+        // differs from its pageId take a pure-body edit, matching `WritePipeline.classifyEdit` exactly. Adding/
+        // changing/removing the honored id is a rename → 422 before the pipeline runs.
+        val submittedRaw = PATCHER.readIdValue(request.bytes)
+        val honoredRaw = PATCHER.readIdValue(current.markdown.toByteArray())
+        if (!sameIdentity(submittedRaw, honoredRaw)) return SaveResult.IdMismatch
+
+        return SaveResult.Written(
+            writePipeline.write(grant, WriteIntent(request.pageId, current.path, request.baseHash, request.bytes)),
+        )
+    }
+
+    override fun create(principal: Principal, intent: CreateIntent): WriteOutcome {
+        val grant = policy.checkCreate(principal, intent.path.value)
+        return writePipeline.create(grant, intent)
+    }
+
+    override fun writeAsset(
+        principal: Principal,
+        pageId: PageId,
+        filename: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): AssetWriteOutcome {
+        // EDIT-gate on the page id (the asset belongs to the page); the grant authorizes the asset write AND the
+        // internal post-write rebuild (the rebuild is part of the write, reached via the ungated no-arg overload).
+        val grant = policy.checkEdit(principal, pageId.value)
+
+        // Resolve the page's folder from the published snapshot; an unknown id is a missing page.
+        val page = indexBuilder.current.byId[pageId] ?: return AssetWriteOutcome.PageMissing
+
+        // Snapshot membership ≠ disk reality: re-check the page file on disk so we don't write an asset (and
+        // return Created) for a page whose .md was externally deleted since the last rebuild. A throwing read is a
+        // transient FS fault (Unreadable), not a missing page.
+        val pageStillOnDisk = try {
+            contentStore.read(page.path) != null
+        } catch (e: Exception) {
+            logger.warn(e) { "stale-page re-check failed reading '${page.path.value}'; treating as unreadable" }
+            return AssetWriteOutcome.Unreadable
+        }
+        if (!pageStillOnDisk) return AssetWriteOutcome.PageMissing
+
+        // The asset path = the page's folder + the validated segment (childOf throws only on a bad segment, which
+        // the route's filename validator already excluded).
+        val assetPath = TreePath.childOf(page.path.parent, filename)
+
+        return when (val result = contentStore.writeAssetExclusive(grant, assetPath, bytes, hasher)) {
+            is CreateResult.Created -> {
+                // Make the asset reachable: a full rebuild puts it in current.assets. A throw leaves the bytes
+                // durably on disk but unindexed (the route's 503). Uses the UNGATED rebuild (part of the write).
+                try {
+                    indexBuilder.rebuild()
+                } catch (e: Exception) {
+                    logger.error(e) { "asset written but rebuild failed for '${assetPath.value}'; bytes are durable" }
+                    return AssetWriteOutcome.WrittenButUnindexed(assetPath)
+                }
+                AssetWriteOutcome.Created(
+                    path = assetPath,
+                    url = indexBuilder.current.assetUrl(assetPath),
+                    contentHash = result.newHash,
+                )
+            }
+            is CreateResult.Exists -> {
+                // Self-heal a prior written-but-unindexed orphan: if the bytes are on disk but the asset is NOT in
+                // current.assets, best-effort rebuild FIRST so it becomes reachable on this retry. A failing
+                // rebuild here must NOT turn the 409 into a 500 (runCatching). A genuine duplicate skips it.
+                if (result.path !in indexBuilder.current.assets) {
+                    runCatching { indexBuilder.rebuild() }
+                }
+                AssetWriteOutcome.Exists(result.path)
+            }
+            is CreateResult.ParentMissing -> AssetWriteOutcome.PageMissing
+            is CreateResult.Rejected -> AssetWriteOutcome.Rejected(result.reason)
+            is CreateResult.Unreadable -> AssetWriteOutcome.Unreadable
+        }
+    }
+
+    override fun rescan(principal: Principal): PageIndex {
+        val grant = policy.checkManage(principal)
+        return indexBuilder.rebuild(grant)
+    }
+
+    override fun reindex(principal: Principal): ReindexResult {
+        // The manage check (mint + audit) fires BEFORE the single-flight flag, so a denied caller never touches
+        // the flag (and a deny is audited). The finally release means a thrown rebuild never wedges the flag.
+        val grant = policy.checkManage(principal)
+        if (!reindexInFlight.compareAndSet(expectedValue = false, newValue = true)) return ReindexResult.InFlight
+        return try {
+            ReindexResult.Done(indexBuilder.rebuildSearchIndex(grant))
+        } finally {
+            reindexInFlight.store(false)
+        }
+    }
+
+    private companion object {
+        val logger = KotlinLogging.logger {}
+
+        /** The single frontmatter id-detection grammar (lenient decode — the id-inspection trap is closed in W3a). */
+        val PATCHER = FrontmatterPatcher()
+
+        /**
+         * Two raw `id:` line values (each from [FrontmatterPatcher.readIdValue], surrounding quotes NOT stripped)
+         * denote the SAME identity iff they parse to the same canonical [PageId], OR — when one or both are not a
+         * bare UUID (`id: "<uuid>"`, garbage, or absent) — they are the byte-identical raw string. The UUID arm makes
+         * the check quote-TOLERANT across forms; the raw arm keeps a both-null (both-quoted/both-malformed/both-
+         * absent) comparison honest instead of collapsing every unparseable id to "equal".
+         */
+        fun sameIdentity(a: String?, b: String?): Boolean {
+            val pa = a?.let(PageId::of)
+            val pb = b?.let(PageId::of)
+            return if (pa != null && pb != null) pa == pb else a == b
+        }
+    }
+}

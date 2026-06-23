@@ -106,6 +106,49 @@ object ErrorCodes {
 
     /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
     const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
+
+    // ---- A3: the authorization vocabulary (append-only) ----------------------------------------------
+
+    /** 401: no (or anonymous) credential on a gated route under auth-on — the client must authenticate. */
+    const val UNAUTHORIZED: String = "unauthorized"
+
+    /** 403: an authenticated principal lacks the role for this action (the role×action matrix denied it). */
+    const val FORBIDDEN: String = "forbidden"
+
+    /** 421: a credential (bearer OR cookie) was presented over a NON-secure transport — refused before it was honored (A2/A4a). */
+    const val TRANSPORT_INSECURE: String = "transport_insecure"
+
+    // ---- A4a: the human-login vocabulary (append-only) -----------------------------------------------
+
+    /** 400: a login/setup/reset/change request body is malformed (missing field, blank, or unparseable JSON). */
+    const val INVALID_AUTH_REQUEST: String = "invalid_auth_request"
+
+    /** 401: wrong username/password — OR a disabled user (mapped to the SAME 401, never an oracle). */
+    const val INVALID_CREDENTIALS: String = "invalid_credentials"
+
+    /** 403: a cookie-auth state mutation is missing or carries a wrong `X-CSRF-Token` (the §3 synchronizer guard). */
+    const val CSRF_FAILED: String = "csrf_failed"
+
+    /** 403: a cookie-auth state mutation's present `Origin`/`Referer` is cross-origin (fail-closed-when-present). */
+    const val CROSS_ORIGIN: String = "cross_origin"
+
+    /** 400: a setup/reset token is unknown, already used, or expired (single-use consume failed). */
+    const val SETUP_TOKEN_INVALID: String = "setup_token_invalid"
+
+    /** 429: the login rate limiter is throttling this source (per-IP or per-(IP,username)); retry after the backoff. */
+    const val RATE_LIMITED: String = "rate_limited"
+
+    /** 409: a create-user request targets a username that already exists. */
+    const val USERNAME_EXISTS: String = "username_exists"
+
+    // ---- A4b: the proxy-auth vocabulary (append-only) ------------------------------------------------
+
+    /**
+     * 400: in proxy mode, a trusted proxy passed the secret+transport gate but sent a malformed identity header
+     * (multi-value/duplicate, blank, control chars, or oversized) — an operator MISCONFIG signal, never a 401. The
+     * message names the class of problem, never the offending value.
+     */
+    const val INVALID_PROXY_IDENTITY: String = "invalid_proxy_identity"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

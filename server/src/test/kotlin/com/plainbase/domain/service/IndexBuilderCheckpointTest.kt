@@ -6,13 +6,18 @@ import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.buildRouteContext
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.security.ApiTokenMinter
+import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.maps.shouldBeEmpty
@@ -184,19 +189,36 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
         val registry: UrlAliasRegistry,
         val builder: IndexBuilder,
     ) {
-        /** The production route graph over this process's services (the 301 assertion). */
-        fun services() = RestServices(
+        /** The A3 route graph (RouteContext) over this process's services (the 301 alias-redirect assertion). */
+        fun services() = buildRouteContext(
+            // Loopback-dev (OFF) open mode: the 301 path is read-gated, so a real (open) read gate must pass.
+            policy = PolicyService(
+                roles = SqlDelightRoleRepository(database),
+                apiTokens = SqlDelightApiTokenRepository(database),
+                audit = SqlDelightAuditRepository(database),
+                idProvider = UuidV7IdProvider(),
+                clock = kotlin.time.Clock.System,
+                enforced = false,
+            ),
             indexBuilder = builder,
             pageService = PageService(builder, registry, CitationFactory()),
             searchService = SearchService(mockk(relaxed = true), builder), // 301s never touch search
             aliasRegistry = registry,
             contentStore = store,
             writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
-            citations = CitationFactory(),
+            history = NoOpHistoryProvider,
             idProvider = UuidV7IdProvider(),
+            tokens = ApiTokenService(
+                minter = ApiTokenMinter(),
+                hasher = TokenHasher(),
+                tokens = SqlDelightApiTokenRepository(database),
+                clock = kotlin.time.Clock.System,
+            ),
+            // 301 alias-redirects never touch the auth services; a relaxed mock satisfies the wiring.
+            auth = mockk(relaxed = true),
+            trustedProxyCidrs = emptyList(),
             maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
             maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
-            history = NoOpHistoryProvider,
         )
     }
 }

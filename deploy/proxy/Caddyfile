@@ -1,0 +1,40 @@
+# Plainbase reverse-proxy SSO reference Caddyfile (A4b, auth.mode=proxy).
+#
+# Caddy is the ONLY published service. It terminates TLS, delegates authentication to
+# oauth2-proxy (OIDC against your IdP) via forward_auth, then STRIPS any client-sent copy
+# of the trusted headers and SETS them from the authenticated subject + the shared secret.
+#
+# Replace `docs.example.com` with your hostname. For local lint/dev, `:80`/`:443` work too.
+
+docs.example.com {
+	# 1) Let oauth2-proxy own its own /oauth2/* endpoints (the sign-in / callback flow). This is
+	#    handled FIRST and is NOT gated by forward_auth — otherwise the sign-in flow would itself
+	#    require auth and loop. (forward_auth lives inside the catch-all below, never at the site root.)
+	handle /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	# 2) Everything else: authenticate, then proxy the app. forward_auth runs INSIDE this catch-all
+	#    (after /oauth2/* is already peeled off), so it gates app traffic but never the login endpoints.
+	#    On success oauth2-proxy returns 202 + the X-Auth-Request-* headers; copy_headers lifts the
+	#    authenticated subject out for the strip-then-set below.
+	#
+	#    strip-then-set is the ONLY safe pattern: delete any client-supplied copy of the identity +
+	#    secret headers FIRST, THEN set them from the authenticated subject (a STABLE id, never email)
+	#    + the shared secret. A client that sends its own X-Forwarded-User / X-Plainbase-Proxy-Secret
+	#    cannot smuggle them past this.
+	handle {
+		forward_auth oauth2-proxy:4180 {
+			uri /oauth2/auth
+			copy_headers X-Auth-Request-User X-Auth-Request-Preferred-Username
+		}
+		reverse_proxy plainbase:8080 {
+			header_up -X-Forwarded-User
+			header_up -X-Plainbase-Proxy-Secret
+			header_up -X-Forwarded-Proto
+			header_up X-Forwarded-User {http.request.header.X-Auth-Request-User}
+			header_up X-Plainbase-Proxy-Secret {env.PLAINBASE_PROXY_SECRET}
+			header_up X-Forwarded-Proto https
+		}
+	}
+}

@@ -1,0 +1,35 @@
+-- Authorization audit log (Phase 4, chunk A3): ONE pre-effect decision row per MUTATING check() (allowed AND
+-- denied) — NOT per-request reads (volume). App state (security truth), never disposable search.db (ADR-0004).
+-- Landed by 5.sqm (v5 -> v6).
+--
+-- The filesystem effect and this SQLite row cannot be one atomic txn, so the GUARANTEED row is the authorization
+-- DECISION (a permitted-then-crashed write is correctly logged `allowed`); post-effect success/failure
+-- observability is a separate, deferred event. `resource` is a primitive STRING descriptor (a page id, an asset
+-- path, or a fixed token like "page"/"admin") — a typed resource column would force an adapter and couple the
+-- row to a domain type. `id` is a minted UUID (IdProvider). All columns are primitive so the table needs NO
+-- custom adapter; the repository maps the clock's Instant <-> epoch-millis Long at its boundary.
+
+CREATE TABLE audit_log (
+  id TEXT NOT NULL PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  principal_kind TEXT NOT NULL,
+  issuer TEXT,
+  external_id TEXT,
+  action TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  decision TEXT NOT NULL
+);
+
+-- The only write: one pre-effect decision row.
+insert:
+INSERT INTO audit_log(id, ts, principal_kind, issuer, external_id, action, resource, decision)
+VALUES (:id, :ts, :principalKind, :issuer, :externalId, :action, :resource, :decision);
+
+-- The A4b audit-view read surface: the most recent N decisions, newest-first. The `id` secondary key makes the
+-- order DETERMINISTIC when rows share a `ts` (UUIDv7 ids are time-ordered, so id DESC keeps the within-ts tie-break
+-- newest-first too). Query-only change (no schema/migration).
+selectRecent:
+SELECT *
+FROM audit_log
+ORDER BY ts DESC, id DESC
+LIMIT :limit;

@@ -7,6 +7,7 @@ import {
   useRouterState,
   type RouterHistory,
 } from "@tanstack/react-router";
+import { Admin } from "./components/Admin";
 import { EditorPage, NewPage } from "./components/EditorPage";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
@@ -108,6 +109,12 @@ const newRoute = createRoute({
   component: NewPage,
 });
 
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: Admin,
+});
+
 const permalinkRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/p/$",
@@ -122,7 +129,7 @@ function PermalinkSplat() {
   return <PermalinkPage splat={_splat ?? ""} />;
 }
 
-const routeTree = rootRoute.addChildren([indexRoute, docsIndexRoute, docsRoute, newRoute, permalinkRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, docsIndexRoute, docsRoute, newRoute, adminRoute, permalinkRoute]);
 
 /** [history] is injectable for tests (memory history); the app default is browser history. */
 export function createAppRouter(queryClient: QueryClient, history?: RouterHistory) {

@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.git
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.WriteHistoryHook
@@ -52,7 +53,7 @@ class WritePipelineGitConcurrencyTest : FunSpec({
                 val threads = listOf(intentA, intentB).map { intent ->
                     Thread {
                         go.await()
-                        pipeline.write(intent)
+                        pipeline.write(grantForTests(), intent)
                     }
                 }
                 threads.forEach { it.start() }

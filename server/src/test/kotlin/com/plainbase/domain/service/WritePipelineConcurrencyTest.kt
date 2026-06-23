@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.principal.grantForTests
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -37,11 +38,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val outB = AtomicReference<WriteOutcome>()
                 val ta = thread {
                     start.await()
-                    outA.set(pipeline.write(WriteIntent(pageA.id, pageA.path, pageA.contentHash, saveA)))
+                    outA.set(pipeline.write(grantForTests(), WriteIntent(pageA.id, pageA.path, pageA.contentHash, saveA)))
                 }
                 val tb = thread {
                     start.await()
-                    outB.set(pipeline.write(WriteIntent(pageB.id, pageB.path, pageB.contentHash, saveB)))
+                    outB.set(pipeline.write(grantForTests(), WriteIntent(pageB.id, pageB.path, pageB.contentHash, saveB)))
                 }
                 start.countDown()
                 ta.join(10_000)
@@ -70,11 +71,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val out2 = AtomicReference<WriteOutcome>()
                 val t1 = thread {
                     start.await()
-                    out1.set(pipeline.write(WriteIntent(page.id, page.path, baseHash, save1)))
+                    out1.set(pipeline.write(grantForTests(), WriteIntent(page.id, page.path, baseHash, save1)))
                 }
                 val t2 = thread {
                     start.await()
-                    out2.set(pipeline.write(WriteIntent(page.id, page.path, baseHash, save2)))
+                    out2.set(pipeline.write(grantForTests(), WriteIntent(page.id, page.path, baseHash, save2)))
                 }
                 start.countDown()
                 t1.join(10_000)

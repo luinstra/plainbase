@@ -4,6 +4,7 @@ import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.principal.grantForTests
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
@@ -626,7 +627,7 @@ class LocalContentStoreTest : FunSpec({
             val bytes = "binary-asset".toByteArray()
 
             // A top-level asset whose parent IS the symlinked root: must be Created, not ParentMissing.
-            store.writeAssetExclusive(TreePath.require("diagram.png"), bytes, hasher)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("diagram.png"), bytes, hasher)
                 .shouldBeInstanceOf<CreateResult.Created>()
             // Bytes landed on disk under the (real) root.
             Files.readAllBytes(realRoot.resolve("diagram.png")) shouldBe bytes
@@ -651,7 +652,7 @@ class LocalContentStoreTest : FunSpec({
             val store = LocalContentStore(root)
             store.scan()
 
-            store.writeAssetExclusive(TreePath.require("guides/diagram.png"), "binary".toByteArray(), hasher)
+            store.writeAssetExclusive(grantForTests(), TreePath.require("guides/diagram.png"), "binary".toByteArray(), hasher)
                 .shouldBeInstanceOf<CreateResult.ParentMissing>()
             // Nothing landed: the file-parent is untouched, no child created under it.
             Files.readAllBytes(root.resolve("guides")) shouldBe "not a directory".toByteArray()

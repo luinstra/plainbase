@@ -3,9 +3,10 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.service.CreateIntent
-import com.plainbase.frameworks.ktor.RestServices
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.CreatePageRequest
 import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.CreatedResponse
@@ -45,96 +46,101 @@ import java.nio.charset.CodingErrorAction
  * to the server's url, never a client-derived slug). The create-specific failure codes (`page_exists`,
  * `invalid_create_request`) are append-only additions to the frozen `ErrorCodes`.
  */
-fun Route.pageCreateRoutes(services: RestServices) {
+fun Route.pageCreateRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         post {
-            // (1) Media type — the create request is JSON (NOT raw), so require application/json BEFORE
-            // reading the body (mirrors PUT's text/markdown guard). `withoutParameters()` ignores the
-            // charset param, so `application/json; charset=utf-8` matches; a missing/other type is 415.
-            if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
-                return@post call.respondError(
-                    HttpStatusCode.UnsupportedMediaType,
-                    ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
-                    "POST requires Content-Type: application/json",
-                )
-            }
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+            call.guarded {
+                // (1) Media type — the create request is JSON (NOT raw), so require application/json BEFORE
+                // reading the body (mirrors PUT's text/markdown guard). `withoutParameters()` ignores the
+                // charset param, so `application/json; charset=utf-8` matches; a missing/other type is 415.
+                if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
+                    return@guarded call.respondError(
+                        HttpStatusCode.UnsupportedMediaType,
+                        ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
+                        "POST requires Content-Type: application/json",
+                    )
+                }
 
-            // (2) Body cap — stream-count to limit+1 (Content-Length advisory only), the SAME PB-WRITE-1
-            // 413 the PUT enforces, so a giant create JSON can never be fully buffered.
-            val rawBody = call.receiveBodyCapped(services.maxWriteBodyBytes)
-                ?: return@post call.respondBodyTooLarge(services.maxWriteBodyBytes)
+                // (2) Body cap — stream-count to limit+1 (Content-Length advisory only), the SAME PB-WRITE-1
+                // 413 the PUT enforces, so a giant create JSON can never be fully buffered.
+                val rawBody = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
+                    ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
 
-            val request = parseCreateRequest(rawBody)
-                ?: return@post call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_CREATE_REQUEST,
-                    "Request body must be JSON: {folder?, title, slug?, body?}",
-                )
-
-            if (request.title.isBlank()) {
-                return@post call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_CREATE_REQUEST,
-                    "title is required and must be non-blank",
-                )
-            }
-
-            // (P3) title/slug are single-line metadata: a control char (newline/CR/tab/…) in either
-            // could inject a `---` delimiter line into the composed frontmatter (or otherwise corrupt
-            // the block), so REJECT them outright rather than emit ambiguous YAML.
-            controlCharField(request.title, request.slug)?.let { field ->
-                return@post call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_CREATE_REQUEST,
-                    "$field must not contain control characters (newline, CR, tab, …)",
-                )
-            }
-
-            // A control or bidi-override char in a client-supplied folder is bad CREATE input — reject it
-            // at the route. (TreePath's shared scan/read gate only rejects NUL, so a `\t`/`\n` in an
-            // EXISTING on-disk name still indexes; create input is held to the stricter single-line
-            // standard here.) The bidi-override reject mirrors the asset-filename gate's `isBidiControl`
-            // (shared in RouteSupport): a U+202E in a folder name spoofs the rendered path direction.
-            if (request.folder.any { it.isISOControl() || it.isBidiControl() }) {
-                return@post call.respondError(
-                    HttpStatusCode.BadRequest,
-                    ErrorCodes.INVALID_CREATE_REQUEST,
-                    "folder must not contain control characters (NUL, newline, CR, tab, …) or bidi overrides",
-                )
-            }
-
-            // The folder is the content-relative parent; "" (or omitted) is the content root. A folder
-            // that fails TreePath validation (traversal/absolute/empty segment) is the client's 400.
-            val folderPath = if (request.folder.isEmpty()) {
-                null
-            } else {
-                TreePath.of(request.folder)
-                    ?: return@post call.respondError(
+                val request = parseCreateRequest(rawBody)
+                    ?: return@guarded call.respondError(
                         HttpStatusCode.BadRequest,
                         ErrorCodes.INVALID_CREATE_REQUEST,
-                        "folder is not a valid content-relative path: '${request.folder}'",
+                        "Request body must be JSON: {folder?, title, slug?, body?}",
                     )
+
+                if (request.title.isBlank()) {
+                    return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_CREATE_REQUEST,
+                        "title is required and must be non-blank",
+                    )
+                }
+
+                // (P3) title/slug are single-line metadata: a control char (newline/CR/tab/…) in either
+                // could inject a `---` delimiter line into the composed frontmatter (or otherwise corrupt
+                // the block), so REJECT them outright rather than emit ambiguous YAML.
+                controlCharField(request.title, request.slug)?.let { field ->
+                    return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_CREATE_REQUEST,
+                        "$field must not contain control characters (newline, CR, tab, …)",
+                    )
+                }
+
+                // A control or bidi-override char in a client-supplied folder is bad CREATE input — reject it
+                // at the route. (TreePath's shared scan/read gate only rejects NUL, so a `\t`/`\n` in an
+                // EXISTING on-disk name still indexes; create input is held to the stricter single-line
+                // standard here.) The bidi-override reject mirrors the asset-filename gate's `isBidiControl`
+                // (shared in RouteSupport): a U+202E in a folder name spoofs the rendered path direction.
+                if (request.folder.any { it.isISOControl() || it.isBidiControl() }) {
+                    return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_CREATE_REQUEST,
+                        "folder must not contain control characters (NUL, newline, CR, tab, …) or bidi overrides",
+                    )
+                }
+
+                // The folder is the content-relative parent; "" (or omitted) is the content root. A folder
+                // that fails TreePath validation (traversal/absolute/empty segment) is the client's 400.
+                val folderPath = if (request.folder.isEmpty()) {
+                    null
+                } else {
+                    TreePath.of(request.folder)
+                        ?: return@guarded call.respondError(
+                            HttpStatusCode.BadRequest,
+                            ErrorCodes.INVALID_CREATE_REQUEST,
+                            "folder is not a valid content-relative path: '${request.folder}'",
+                        )
+                }
+
+                // Server-owned path: the filename is the §A4-slugified slug intent (else the title), `.md`.
+                val filename = HeadingSlugger.slugify(request.slug ?: request.title, HeadingSlugger.PAGE_FALLBACK) + ".md"
+                val path = TreePath.childOf(folderPath, filename)
+
+                // NOTE: the canonical-URL/slug-collision check (page/folder/alias) is NOT a route pre-check —
+                // it lives in WritePipeline.create UNDER the create monitor (race-safe against a concurrent
+                // URL-colliding create), surfaced here as WriteOutcome.SlugConflict → 409 `slug_conflict`.
+                val id = ctx.idProvider.next()
+                val bytes = composeDocument(id.value, request.title, request.slug, request.body)
+
+                // (P2) Composed-document cap — the server ADDS frontmatter, so a request just under the cap can
+                // compose a document OVER it (unlike PUT, where the capped body is exactly what lands). Enforce
+                // the SAME 413 body_too_large on the composed bytes before writing.
+                if (bytes.size > ctx.maxWriteBodyBytes) {
+                    return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
+                }
+
+                // The guarded facade owns the CREATE check + the write. The clean-create 201 url is looked up
+                // from the now-published snapshot via the read facade (a creator is an EDITOR who may read).
+                val outcome = ctx.mutate.create(principal, CreateIntent(pageId = id, path = path, bytes = bytes))
+                call.respondCreateOutcome(outcome, id) { ctx.read.currentSnapshot(principal, id.value) }
             }
-
-            // Server-owned path: the filename is the §A4-slugified slug intent (else the title), `.md`.
-            val filename = HeadingSlugger.slugify(request.slug ?: request.title, HeadingSlugger.PAGE_FALLBACK) + ".md"
-            val path = TreePath.childOf(folderPath, filename)
-
-            // NOTE: the canonical-URL/slug-collision check (page/folder/alias) is NOT a route pre-check —
-            // it lives in WritePipeline.create UNDER the create monitor (race-safe against a concurrent
-            // URL-colliding create), surfaced here as WriteOutcome.SlugConflict → 409 `slug_conflict`.
-            val id = services.idProvider.next()
-            val bytes = composeDocument(id.value, request.title, request.slug, request.body)
-
-            // (P2) Composed-document cap — the server ADDS frontmatter, so a request just under the cap can
-            // compose a document OVER it (unlike PUT, where the capped body is exactly what lands). Enforce
-            // the SAME 413 body_too_large on the composed bytes before writing.
-            if (bytes.size > services.maxWriteBodyBytes) {
-                return@post call.respondBodyTooLarge(services.maxWriteBodyBytes)
-            }
-
-            val outcome = services.writePipeline.create(CreateIntent(pageId = id, path = path, bytes = bytes))
-            call.respondCreateOutcome(outcome, id, services)
         }
     }
 }
@@ -243,7 +249,7 @@ private fun yamlDoubleQuoted(value: String): String =
  * unpublished, so no reliable canonical url exists until reconciliation and fabricating one from the raw
  * path would diverge (slug override / unicode / collision-de-dup) — the client doesn't navigate there.
  */
-private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, id: PageId, services: RestServices) {
+private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, id: PageId, snapshot: () -> PageIndex) {
     when (outcome) {
         is WriteOutcome.Written -> {
             setContentHashETag(outcome.newHash)
@@ -253,7 +259,7 @@ private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, 
                     CreatedResponse.serializer(),
                     CreatedResponse(
                         id = id.value,
-                        url = createUrl(id, services),
+                        url = createUrl(id, snapshot()),
                         contentHash = outcome.newHash,
                         commit = outcome.commit,
                     ),
@@ -335,8 +341,8 @@ private suspend fun ApplicationCall.respondWriteWire(wire: WriteWire) {
  * clean `Written` branch, where the rebuild has already published the page; the unindexed branch returns
  * a `null` url instead (the client doesn't navigate there).
  */
-internal fun createUrl(id: PageId, services: RestServices): String =
-    services.indexBuilder.current.byId[id]?.url ?: "/p/${id.value}"
+internal fun createUrl(id: PageId, snapshot: PageIndex): String =
+    snapshot.byId[id]?.url ?: "/p/${id.value}"
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */
 private const val REINDEX_DEFERRED_MESSAGE =

@@ -1,0 +1,16 @@
+-- v4 -> v5: Phase 4, chunk A2 — agent `pb_` API tokens.
+-- Same DDL as ApiTokens.sq minus the Kotlin `AS` type annotations (migrations are plain SQL); all columns are
+-- already primitive here, so this is a verbatim CREATE TABLE. App state (security truth), never disposable
+-- search.db (ADR-0004).
+CREATE TABLE api_tokens (
+  id TEXT NOT NULL PRIMARY KEY,
+  secret_hash BLOB NOT NULL,
+  agent_label TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  expires_at INTEGER,
+  revoked_at INTEGER
+);
