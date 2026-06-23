@@ -3,6 +3,7 @@ package com.plainbase.frameworks.config
 import com.plainbase.frameworks.ktor.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
+import com.typesafe.config.ConfigResolveOptions
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -14,7 +15,8 @@ import java.nio.file.Path
  *
  * Environment variables override defaults; `DATA_DIR/plainbase.conf` (HOCON, ADR-0009) is layered in by
  * [fromEnvAndFile] — **env always wins**, the file only supplies values env omits. Secrets stay in env,
- * never the file. [fromEnv] is the env-only fast path the CLIs/spike use.
+ * never the file. [fromEnv] is the env-only fast path the spike + content-only CLIs (reindex, adopt) use; the
+ * server and the `admin` CLI use [fromEnvAndFile] (admin needs the file-configured `auth.mode`).
  */
 data class PlainbaseConfig(
     val contentDir: Path,
@@ -164,7 +166,15 @@ data class PlainbaseConfig(
         fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig {
             val dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()
             val confPath = dataDir.resolve("plainbase.conf")
-            val file = if (Files.isRegularFile(confPath)) ConfigFactory.parseFile(confPath.toFile()) else ConfigFactory.empty()
+            // `.resolve()` so the ADR-0009 `${?…}` substitution the docs advertise actually resolves instead of
+            // throwing ConfigException.NotResolved at the first typed getter (B3). ConfigResolveOptions.defaults()
+            // resolves within-file refs then falls back to the JVM system ENV (not system properties); the optional
+            // `${?…}` form drops silently when its var is unset (a bare `${…}` still throws by design).
+            val file = if (Files.isRegularFile(confPath)) {
+                ConfigFactory.parseFile(confPath.toFile()).resolve(ConfigResolveOptions.defaults())
+            } else {
+                ConfigFactory.empty()
+            }
             return build(env, file)
         }
 
@@ -184,16 +194,16 @@ data class PlainbaseConfig(
             maxAssetBytes = env.positiveLongStrict("PLAINBASE_MAX_ASSET_BYTES")
                 ?: file.longOrNull("maxAssetBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
             git = GitConfig(
-                enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.stringOrNull("git.enabled")?.toBooleanStrictOrNull(),
+                enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
                 authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: file.stringOrNull("git.authorName") ?: DEFAULT_GIT_AUTHOR_NAME,
                 authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: file.stringOrNull("git.authorEmail") ?: DEFAULT_GIT_AUTHOR_EMAIL,
             ),
             auth = AuthConfig(
                 mode = AuthMode.parse(env["PLAINBASE_AUTH_MODE"] ?: file.stringOrNull("auth.mode")),
-                trustedProxyCidrs =
-                env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
-                insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP")
-                    ?: file.stringOrNull("auth.insecureHttp")?.toBooleanStrictOrNull() ?: false,
+                trustedProxyCidrs = requireParseableCidrs(
+                    env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
+                ),
+                insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP") ?: file.boolStrict("auth.insecureHttp") ?: false,
                 agentDirectCommitGlobs = env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
                     ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
                 // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
@@ -203,6 +213,22 @@ data class PlainbaseConfig(
                     ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
             ),
         )
+
+        /**
+         * Fail-fast on a malformed `trustedProxyCidrs` entry (A1-amber): a present-but-unparseable CIDR (a bare
+         * address with no `/prefix`, or an out-of-range prefix) is rejected at LOAD — not silently dropped (which
+         * would shrink/empty the allowlist and flip the fail-closed bind guard, exposing a plaintext bind). After
+         * this, "non-empty `trustedProxyCidrs`" provably means "≥1 PARSEABLE CIDR". CIDR parsing stays in ONE place
+         * ([RemoteAddress.isParseableCidr]); the config layer never re-implements it.
+         */
+        private fun requireParseableCidrs(cidrs: List<String>): List<String> {
+            cidrs.firstOrNull { !RemoteAddress.isParseableCidr(it) }?.let {
+                throw IllegalArgumentException(
+                    "PLAINBASE_TRUSTED_PROXY contains an unparseable CIDR: '$it' (expected a.b.c.d/n or IPv6/n)",
+                )
+            }
+            return cidrs
+        }
 
         /**
          * Strict env-wins numeric read: if [key] is ABSENT returns null (fall through to file/default); if it is
@@ -252,6 +278,21 @@ private fun Config.intOrNull(path: String): Int? = if (hasPath(path)) getInt(pat
 private fun Config.longOrNull(path: String): Long? = if (hasPath(path)) getLong(path) else null
 
 private fun Config.stringListOrNull(path: String): List<String>? = if (hasPath(path)) getStringList(path) else null
+
+/**
+ * Strict file-side bool read mirroring the env `boolStrict`: ABSENT → null (fall through to default); PRESENT →
+ * MUST parse one of 1/0/true/false, else fail-fast. Closes the env-vs-file inconsistency where the file path
+ * `toBooleanStrictOrNull()` SWALLOWED a typo'd bool to null while the env path threw (a typo silently disabling a
+ * security flag is the opposite of fail-fast). Read as a HOCON string so `auth.insecureHttp = "1"` is accepted.
+ */
+private fun Config.boolStrict(path: String): Boolean? {
+    val raw = stringOrNull(path) ?: return null
+    return when (raw.trim().lowercase()) {
+        "1", "true" -> true
+        "0", "false" -> false
+        else -> throw IllegalArgumentException("$path must be one of 1/0/true/false, got '$raw'")
+    }
+}
 
 /**
  * W4 Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in CONTENT_DIR

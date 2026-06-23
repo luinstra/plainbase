@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -108,5 +109,41 @@ class BindGuardTest : FunSpec({
     test("secureCookie: non-loopback → true (TLS-fronted)") {
         config("0.0.0.0", AuthConfig(mode = AuthMode.BUILTIN, trustedProxyCidrs = listOf("10.0.0.0/8")))
             .secureCookie() shouldBe true
+    }
+
+    // A1-amber: the guard returns null (PERMITS) whenever trustedProxyCidrs.isNotEmpty(), so a GARBAGE CIDR used to
+    // defeat it — a plaintext bind to the world while no request ever matched the garbage CIDR. The fix moves the
+    // refusal EARLIER: config LOAD fails fast on an unparseable CIDR, so the bind guard never even runs.
+    test("a garbage CIDR + a non-loopback host → config load throws (the guard can no longer be defeated)") {
+        val failure = shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "not-a-cidr"))
+        }
+        failure.message shouldContain "not-a-cidr"
+    }
+
+    test("a no-prefix address as the only CIDR → config load throws (a bare address is not a CIDR)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
+        }.message shouldContain "10.0.0.0"
+    }
+
+    test("an out-of-range prefix (/33) → config load throws") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
+        }.message shouldContain "10.0.0.0/33"
+    }
+
+    test("a garbage CIDR in PROXY mode also throws at load (before the bind guard runs)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(
+                mapOf("PLAINBASE_AUTH_MODE" to "proxy", "PLAINBASE_PROXY_SECRET" to "s", "PLAINBASE_TRUSTED_PROXY" to "garbage"),
+            )
+        }.message shouldContain "garbage"
+    }
+
+    test("a valid /32 loads + the guard permits a non-loopback bind") {
+        val cfg = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "0.0.0.0", "PLAINBASE_TRUSTED_PROXY" to "10.0.0.1/32"))
+        cfg.auth.trustedProxyCidrs shouldBe listOf("10.0.0.1/32")
+        cfg.bindGuardRefusal().shouldBeNull()
     }
 })

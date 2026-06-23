@@ -36,7 +36,9 @@ config parsing, not wire serialization, and involves no reflection on app types.
 
 **The Plainbase config file is HOCON, named `DATA_DIR/plainbase.conf`, read via the already-present
 `com.typesafe:config`.** Precedence is **env-always-wins**: the file supplies values, environment variables
-override them (12-factor; preserves `fromEnv()` as the env-only fast path for the CLIs and the native spike).
+override them (12-factor). `fromEnv()` remains the env-only fast path for the native spike and the
+content-only CLIs (`reindex`, `adopt`); the `admin` CLI reads `plainbase.conf` via `fromEnvAndFile()` so a
+file-configured `auth.mode=builtin` is visible to the setup-token path it drives.
 **Secrets stay in the environment, never the committed file.** Values are read through Typesafe Config's typed
 getters (no reflection on app types). Because Ktor uses Typesafe Config programmatically today rather than
 loading a `.conf` from disk, A1 must **native-confirm the file-parse path** as part of its native-gate proof

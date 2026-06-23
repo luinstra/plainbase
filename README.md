@@ -42,7 +42,7 @@ Java 21+.
 |---|---|---|
 | `CONTENT_DIR` | `./content` | Canonical, user-owned Markdown tree. Plainbase only writes here on explicit save/approve. |
 | `DATA_DIR` | `./data` | App-owned state: SQLite DB, config, caches, search index. |
-| `PLAINBASE_HOST` | `0.0.0.0` | Bind address. |
+| `PLAINBASE_HOST` | `127.0.0.1` | Bind address. |
 | `PLAINBASE_PORT` | `8080` | HTTP port. |
 | `PLAINBASE_LOG_LEVEL` | `INFO` | Root log level (`ERROR`/`WARN`/`INFO`/`DEBUG`). |
 

@@ -11,7 +11,8 @@
 ## Context
 
 `KtorServer.kt` runs `embeddedServer(CIO, host = config.host, port = config.port)` over **plain HTTP**,
-with `host` defaulting to **0.0.0.0** — there is no TLS/SSL/keystore code anywhere, and no committed TLS
+with `host` defaulting to **127.0.0.1** (loopback; exposing the server requires an explicit non-loopback
+`PLAINBASE_HOST`, which trips the fail-closed bind guard) — there is no TLS/SSL/keystore code anywhere, and no committed TLS
 decision on `main`. Phase 4 adds human authentication (built-in password login + an opt-in reverse-proxy
 trusted-header adapter; see the Phase 4 plan). Credentials and session cookies on the wire make TLS a
 prerequisite for any networked deployment, not an optional nicety.

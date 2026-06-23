@@ -186,4 +186,76 @@ class PlainbaseConfigTest : FunSpec({
         PlainbaseConfig.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "true")).auth.insecureHttp shouldBe true
         PlainbaseConfig.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
     }
+
+    // --- B3: HOCON substitutions resolve (ADR-0009). ConfigResolveOptions.defaults() resolves within-file refs and
+    //     falls back to the JVM system ENVIRONMENT (not system properties); the optional `${?…}` form drops silently
+    //     when its var is unset (a bare `${…}` would throw by design — the supported form is the optional one) ------
+
+    test("an optional \${?…} substitution for an UNSET var parses without throwing and falls to the default") {
+        // PLAINBASE_HOST_FROM_FILE is not set in the test env, so the optional substitution drops to absent; before
+        // .resolve() this threw ConfigException.NotResolved at the first typed getter.
+        withDataDir("host = \${?PLAINBASE_HOST_FROM_FILE}") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).host shouldBe PlainbaseConfig.DEFAULT_HOST
+        }
+    }
+
+    test("a WITHIN-FILE substitution resolves: the value flows through (proves .resolve() ran)") {
+        // A within-file ref needs no env/props (parseFile().resolve(defaults()) falls back to ENV, not properties),
+        // so this exercises the resolve() call path the absent-\${?…} case alone may skip.
+        withDataDir("proxyHost = \"127.0.0.1\"\nhost = \${proxyHost}") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).host shouldBe "127.0.0.1"
+        }
+    }
+
+    // --- A1-amber: a malformed trustedProxyCidrs entry fails fast at config load (never silently dropped, which
+    //     would shrink/empty the allowlist and flip the fail-closed bind guard) ----------------------------------
+
+    test("a mix of valid + invalid CIDRs fails fast (not filtered), naming the offending value") {
+        val failure = shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/8, not-a-cidr"))
+        }
+        failure.message shouldContain "PLAINBASE_TRUSTED_PROXY"
+        failure.message shouldContain "not-a-cidr"
+    }
+
+    test("a no-prefix address (no /n) fails fast: a bare address is not a CIDR") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0"))
+        }.message shouldContain "10.0.0.0"
+    }
+
+    test("an out-of-range prefix (/33) fails fast") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "10.0.0.0/33"))
+        }.message shouldContain "10.0.0.0/33"
+    }
+
+    test("a single valid CIDR parses; an empty/absent PLAINBASE_TRUSTED_PROXY loads with emptyList") {
+        PlainbaseConfig.fromEnv(mapOf("PLAINBASE_TRUSTED_PROXY" to "192.168.0.0/16")).auth.trustedProxyCidrs shouldBe
+            listOf("192.168.0.0/16")
+        PlainbaseConfig.fromEnv(emptyMap()).auth.trustedProxyCidrs shouldBe emptyList()
+    }
+
+    test("a malformed CIDR in the FILE also fails fast at load") {
+        withDataDir("""auth { trustedProxy = ["bad-cidr"] }""") { env ->
+            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }.message shouldContain "bad-cidr"
+        }
+    }
+
+    // --- file-side boolStrict parity (A1 minor): a typo'd bool in the FILE throws, like the env path (no swallow) ---
+
+    test("a typo'd bool in plainbase.conf fails fast (parity with the env boolStrict)") {
+        withDataDir("""auth { insecureHttp = "yes" }""") { env ->
+            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }.message shouldContain "auth.insecureHttp"
+        }
+    }
+
+    test("a well-formed bool in plainbase.conf still parses (1/0/true/false)") {
+        withDataDir("""auth { insecureHttp = "1" }""") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).auth.insecureHttp shouldBe true
+        }
+        withDataDir("""git { enabled = "false" }""") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).git.enabled shouldBe false
+        }
+    }
 })

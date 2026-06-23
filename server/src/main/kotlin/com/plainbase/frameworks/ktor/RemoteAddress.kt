@@ -101,10 +101,29 @@ object RemoteAddress {
      */
     private fun parseNumericLiteral(host: String): InetAddress? {
         if (host.isEmpty()) return null
-        val looksNumeric = host.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' || it == '%' }
+        // Drop a trailing `%zone` (e.g. `fe80::1%eth0`): a zone id is meaningless for a CIDR/loopback verdict and is
+        // attacker-controllable on a remote, so it never reaches getByName (and `%` leaves the numeric screen).
+        val literal = host.substringBefore('%')
+        if (literal.isEmpty()) return null
+        val looksNumeric = literal.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' }
         if (!looksNumeric) return null
-        if ('.' !in host && ':' !in host) return null // a bare hex word like "abc" is a hostname, not a literal
-        return runCatching { InetAddress.getByName(host) }.getOrNull()
+        if ('.' !in literal && ':' !in literal) return null // a bare hex word like "abc" is a hostname, not a literal
+        return runCatching { InetAddress.getByName(literal) }.getOrNull()
+    }
+
+    /**
+     * Does [cidr] parse as a well-formed CIDR (`a.b.c.d/n` or IPv6 `…/n`)? The config layer (A1-amber) requires
+     * every `trustedProxyCidrs` entry pass this at LOAD — a present-but-malformed CIDR fails fast rather than
+     * silently contributing no match (which would defeat the fail-closed bind guard). The SAME split + numeric-
+     * literal parse + prefix-bounds logic [matchesCidr] uses (one source of truth), minus the remote: a MISSING
+     * `/prefix` (a bare address) and an OUT-OF-RANGE prefix (`/33`, `/129`, negative/non-numeric) both reject.
+     */
+    fun isParseableCidr(cidr: String): Boolean {
+        val slash = cidr.indexOf('/')
+        if (slash < 0) return false // a bare address with no `/prefix` is NOT a CIDR
+        val network = parseNumericLiteral(cidr.substring(0, slash).trim()) ?: return false
+        val prefix = cidr.substring(slash + 1).trim().toIntOrNull() ?: return false
+        return prefix in 0..(network.address.size * 8)
     }
 
     private fun matchesCidr(remoteBytes: ByteArray, cidr: String): Boolean {

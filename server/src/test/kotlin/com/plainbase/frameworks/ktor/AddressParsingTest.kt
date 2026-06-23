@@ -31,6 +31,10 @@ class AddressParsingTest : FunSpec({
             "localhost.localdomain" to false, // a name that classically resolves to 127.0.0.1 — still non-loopback (no DNS)
             "[::1" to false, // unterminated bracket → unparseable → non-loopback (fail-closed)
             "[::1]junk" to false, // garbage suffix after `]` → unparseable → non-loopback (fail-closed)
+            "::1%lo0" to true, // a zone id is stripped before classification → same as `::1` (loopback)
+            "fe80::1%eth0" to false, // link-local + zone → non-loopback, same as its zoneless form
+            "%eth0" to false, // a bare `%zone` with no literal → unparseable → non-loopback (fail-closed)
+            "garbage%eth0" to false, // a `%`-bearing garbage string → non-loopback
             "" to false,
         ).forEach { (input, expected) ->
             test("'$input' loopback == $expected") {
@@ -92,6 +96,32 @@ class AddressParsingTest : FunSpec({
         test("a /32 host match is exact") {
             RemoteAddress.isInAnyCidr("10.1.2.3", listOf("10.1.2.3/32")) shouldBe true
             RemoteAddress.isInAnyCidr("10.1.2.4", listOf("10.1.2.3/32")) shouldBe false
+        }
+        test("a remote bearing a %zone classifies the same as its zoneless form (the zone is stripped)") {
+            RemoteAddress.isInAnyCidr("fe80::1%eth0", listOf("fe80::/16")) shouldBe true
+            RemoteAddress.isInAnyCidr("fe80::1%eth0", listOf("2001:db8::/32")) shouldBe false
+        }
+    }
+
+    context("isParseableCidr (config-load fail-fast, A1-amber)") {
+        listOf(
+            "10.0.0.0/8" to true,
+            "192.168.0.0/16" to true,
+            "10.1.2.3/32" to true, // a /32 host CIDR
+            "2001:db8::/32" to true,
+            "::/0" to true, // prefix 0 is in range
+            "2001:db8::/128" to true,
+            "10.0.0.0" to false, // a bare address with no /prefix is NOT a CIDR
+            "not-a-cidr" to false,
+            "10.0.0.0/33" to false, // out-of-range IPv4 prefix
+            "2001:db8::/129" to false, // out-of-range IPv6 prefix
+            "10.0.0.0/-1" to false, // negative prefix
+            "10.0.0.0/abc" to false, // non-numeric prefix
+            "" to false,
+        ).forEach { (input, expected) ->
+            test("'$input' parseableCidr == $expected") {
+                RemoteAddress.isParseableCidr(input) shouldBe expected
+            }
         }
     }
 
