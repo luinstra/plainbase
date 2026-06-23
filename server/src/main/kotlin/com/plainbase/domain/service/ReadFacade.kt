@@ -39,7 +39,11 @@ interface ReadFacade {
 
     fun diff(principal: Principal, from: String, to: String, path: TreePath): FileDiff
 
-    /** Whether the history layer is Git-backed (the `git_enabled` flag) — a gated read like the rest. */
+    /**
+     * Whether the history layer is Git-backed (the `git_enabled` flag). Intentionally UNGATED — it is a server
+     * CAPABILITY flag, not page existence, so it leaks nothing about the content tree. The [principal] is kept only
+     * for port-signature uniformity with the gated reads above (the impl ignores it); do NOT read it as enforced.
+     */
     fun gitEnabled(principal: Principal): Boolean
 
     /**

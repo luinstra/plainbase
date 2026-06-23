@@ -27,9 +27,14 @@ import kotlin.io.path.readText
  */
 class ChokePointArchitectureTest : FunSpec({
 
-    val routes = routesSourceRoot()
-    val files = Files.walk(routes).use { stream ->
-        stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
+    // The choke-point guarantee covers EVERY route-facing surface: `frameworks/ktor/routes` today, plus a future
+    // `frameworks/mcp` the moment it lands (KDoc §1) — so the scan walks a LIST of roots, extending automatically.
+    val roots = routeFacingSourceRoots()
+    val mainRoot = mainSourceRoot()
+    val files = roots.flatMap { root ->
+        Files.walk(root).use { stream ->
+            stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
+        }
     }
 
     // Raw mutator TYPES + facade IMPLs a route must never name; plus the grant-forgery patterns.
@@ -68,7 +73,7 @@ class ChokePointArchitectureTest : FunSpec({
         val violations = files.flatMap { file ->
             val text = file.readText()
             forbiddenReferences.filter { token -> referencesToken(text, token) }
-                .map { "${routes.relativize(file)}: forbidden reference to '$it'" }
+                .map { "${mainRoot.relativize(file)}: forbidden reference to '$it'" }
         }
         violations.shouldBeEmpty()
     }
@@ -99,6 +104,18 @@ private fun stripComments(text: String): String {
 
 /** Locates `server/src/main/kotlin/com/plainbase/frameworks/ktor/routes` by walking up from the test CWD. */
 internal fun routesSourceRoot(): Path = mainSourceRoot().resolve("frameworks/ktor/routes")
+
+/**
+ * Every route-facing source root the choke-point scan must cover: `frameworks/ktor/routes` always, plus
+ * `frameworks/mcp` IF it exists (it does not yet — the scan extends automatically the moment it lands, per KDoc §1).
+ */
+internal fun routeFacingSourceRoots(): List<Path> {
+    val main = mainSourceRoot()
+    return listOfNotNull(
+        main.resolve("frameworks/ktor/routes"),
+        main.resolve("frameworks/mcp").takeIf { Files.isDirectory(it) },
+    )
+}
 
 /** Locates `server/src/main/kotlin/com/plainbase` by walking up from the test CWD (the Fixtures pattern). */
 internal fun mainSourceRoot(): Path {

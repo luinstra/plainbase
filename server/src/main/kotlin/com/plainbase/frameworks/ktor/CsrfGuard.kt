@@ -82,6 +82,12 @@ object CsrfGuard {
      *
      * A malformed present Origin is rejected. Origin is the SECONDARY defense; the synchronizer/double-submit token is
      * load-bearing.
+     *
+     * DEPLOY REQUIREMENT (fail-closed, intentional): a trusted-proxy deployment MUST forward `X-Forwarded-Host` (the
+     * `docs/deploy/reverse-proxy-sso.md` reference already does). Without it, a proxy-fronted request falls to the
+     * direct branch and a same-origin mutation may FALSE-REJECT because the external port (443) differs from the
+     * internal hop port (8080). This is deliberate fail-closed behavior — it rejects, never admits — so relaxing the
+     * port compare to recover the missing-`X-Forwarded-Host` case would weaken the Origin secondary, not strengthen it.
      */
     fun originVerdict(
         originOrReferer: String?,

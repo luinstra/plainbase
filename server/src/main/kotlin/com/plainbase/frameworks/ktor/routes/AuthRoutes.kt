@@ -17,6 +17,7 @@ import io.ktor.server.sessions.get
 import io.ktor.server.sessions.sessions
 import io.ktor.server.sessions.set
 import kotlinx.coroutines.delay
+import kotlin.time.Duration
 
 /**
  * A4a login + logout (`frameworks/ktor/routes`). `POST /api/v1/login` is PUBLIC pre-auth (WI-7): it calls NO
@@ -40,7 +41,10 @@ fun Route.authRoutes(ctx: RouteContext) {
 
         when (val decision = ctx.auth.rateLimiter.check(ip, request.username)) {
             is LoginRateLimiter.Decision.Throttle -> {
-                delay(decision.backoff) // CIO-safe (NOT Thread.sleep); slows a brute-force without blocking the loop
+                // CIO-safe (NOT Thread.sleep); slows a brute-force without blocking the loop. coerceAtLeast guards a
+                // negative Duration (clock skew / an already-elapsed window) — delay(negative) is harmless but the
+                // coerce is the defensive contract.
+                delay(decision.backoff.coerceAtLeast(Duration.ZERO))
                 return@post call.respondError(
                     HttpStatusCode.TooManyRequests,
                     ErrorCodes.RATE_LIMITED,

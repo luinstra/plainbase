@@ -59,4 +59,14 @@ class SqlDelightAuditRepositoryTest : FunSpec({
             repo.recent(2).map { it.id } shouldBe listOf("new", "mid")
         }
     }
+
+    test("rows sharing a ts are ordered deterministically by id DESC (no nondeterministic tie-break)") {
+        withRepo { repo ->
+            // Three rows at the SAME ts: the `ORDER BY ts DESC, id DESC` secondary key fixes their order.
+            repo.record(entry("aaa", 5_000, "human", "builtin", "a", "allowed"))
+            repo.record(entry("ccc", 5_000, "human", "builtin", "a", "allowed"))
+            repo.record(entry("bbb", 5_000, "human", "builtin", "a", "allowed"))
+            repo.recent(10).map { it.id } shouldBe listOf("ccc", "bbb", "aaa")
+        }
+    }
 })

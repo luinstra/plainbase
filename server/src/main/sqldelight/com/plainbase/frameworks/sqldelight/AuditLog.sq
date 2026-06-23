@@ -25,9 +25,11 @@ insert:
 INSERT INTO audit_log(id, ts, principal_kind, issuer, external_id, action, resource, decision)
 VALUES (:id, :ts, :principalKind, :issuer, :externalId, :action, :resource, :decision);
 
--- The A4b audit-view read surface: the most recent N decisions, newest-first.
+-- The A4b audit-view read surface: the most recent N decisions, newest-first. The `id` secondary key makes the
+-- order DETERMINISTIC when rows share a `ts` (UUIDv7 ids are time-ordered, so id DESC keeps the within-ts tie-break
+-- newest-first too). Query-only change (no schema/migration).
 selectRecent:
 SELECT *
 FROM audit_log
-ORDER BY ts DESC
+ORDER BY ts DESC, id DESC
 LIMIT :limit;

@@ -5,8 +5,8 @@ freshness, the manual-reindex paths, and the filesystem-native virtue. (Backups 
 are later phases.)
 
 For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
-[`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the reference overlay under
-`deploy/proxy/`.
+[`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
+reference stack under `deploy/proxy/`.
 
 ## The content tree is plain Markdown on disk
 

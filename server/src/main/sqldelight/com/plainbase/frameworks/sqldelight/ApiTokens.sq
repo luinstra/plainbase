@@ -1,7 +1,8 @@
 -- Agent `pb_` API tokens (Phase 4, chunk A2): the at-rest store for app-issued bearer tokens. App state
 -- (security truth) — NEVER disposable search.db (ADR-0004). Landed by 4.sqm (v4 -> v5).
 --
--- `id` is the PUBLIC base64url lookup prefix (the `pb_<id>_…` segment), stored verbatim; PRIMARY KEY gives
+-- `id` is the PUBLIC hex lookup prefix (the `pb_<id>_…` segment; base64url is the SECRET alphabet only),
+-- stored verbatim; PRIMARY KEY gives
 -- the indexed prefix->row lookup and a collision backstop. `secret_hash` is the raw 32-byte SHA-256 of the
 -- secret (a token hash, not the `sha256:` citation form). `(issuer, external_id)` is the identity A3's role
 -- table will key on (agent tokens default issuer='agent', external_id=id). `mode` is the AgentMode enum name

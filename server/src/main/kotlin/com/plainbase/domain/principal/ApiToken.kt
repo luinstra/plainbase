@@ -81,7 +81,7 @@ class MintedToken(val id: String, val plaintext: String, val secretHash: ByteArr
 
 /**
  * Port for minting a `pb_<id>_<secret>` token from a CSPRNG. Implemented by
- * `frameworks/security/SecureRandomApiTokenMinter`.
+ * `frameworks/security/ApiTokenMinter`.
  */
 interface TokenMinter {
 

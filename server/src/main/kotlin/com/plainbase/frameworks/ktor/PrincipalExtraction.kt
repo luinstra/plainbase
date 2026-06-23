@@ -147,12 +147,12 @@ fun decidePrincipalExtraction(
     proxyAuthEnabled: Boolean = false,
 ): PrincipalExtraction {
     val pbBearer = bearer?.takeIf { it.startsWith(TOKEN_PREFIX) }
-    val cookie = cookie?.takeIf { builtinAuthEnabled } // OFF/PROXY: ignore a stray session cookie (resolve as absent)
+    val effectiveCookie = cookie?.takeIf { builtinAuthEnabled } // OFF/PROXY: ignore a stray session cookie (resolve as absent)
     // The proxy identity header is the credential in PROXY mode, so the "any credential present?" short-circuit must
     // count it — otherwise a proxy request carrying ONLY the identity header would early-return Anonymous before the
     // transport gate fires (WI-3).
     val proxyIdentityPresent = proxyAuthEnabled && proxyIdentityValues.isNotEmpty()
-    if (pbBearer == null && cookie == null && !proxyIdentityPresent) {
+    if (pbBearer == null && effectiveCookie == null && !proxyIdentityPresent) {
         return PrincipalExtraction.Resolved(Principal.Anonymous) // gate does not fire — no credential present
     }
     if (!isSecureContext(remoteHost, forwardedProtoValues, trustedProxyCidrs)) {
@@ -167,8 +167,8 @@ fun decidePrincipalExtraction(
         val agent = authenticateBearer(pbBearer)
         if (agent !is Principal.Anonymous) return PrincipalExtraction.Resolved(agent)
     }
-    if (cookie != null) {
-        val session = authenticateCookie(cookie)
+    if (effectiveCookie != null) {
+        val session = authenticateCookie(effectiveCookie)
         if (session != null) return PrincipalExtraction.Resolved(session.principal, session.csrfToken, Source.COOKIE)
     }
     if (proxyIdentityPresent) {

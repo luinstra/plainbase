@@ -8,8 +8,9 @@ import type { SessionResponse } from "./types";
  *
  * The token is fetched once and CACHED (a per-session value rarely changes); [withCsrf] attaches it to a
  * request and, on a 403 `csrf_failed` (a token that went stale after a session change), re-fetches `/session`
- * ONCE and retries. `off` mode answers `csrf_token: null` and never enforces, so a null token is sent as an
- * empty header and the (un-enforced) mutation still succeeds.
+ * ONCE and retries. `off` mode does NOT register `/session` (it is wired only when builtin or proxy auth is
+ * enabled), so the helper maps the resulting non-ok response to a null token; off-mode mutations are unenforced,
+ * so the null token is sent as an empty header and the mutation still succeeds.
  */
 
 let cached: Promise<string | null> | null = null;
@@ -22,7 +23,7 @@ async function fetchCsrfToken(): Promise<string | null> {
   return session.csrf_token;
 }
 
-/** The cached CSRF token, fetching `/session` on first use. [forceRefresh] re-fetches (a stale-token retry). */
+/** The cached CSRF token, fetching `/session` on first use (null in `off` mode). [forceRefresh] re-fetches (a stale-token retry). */
 export async function csrfToken(forceRefresh = false): Promise<string | null> {
   if (forceRefresh || cached === null) {
     cached = fetchCsrfToken().catch(() => null);

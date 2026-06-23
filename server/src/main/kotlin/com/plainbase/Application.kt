@@ -75,6 +75,11 @@ private fun serve() {
             "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} — anyone on the " +
                 "network can capture them (ADR-0008)"
         }
+    } else if (config.auth.insecureHttp) {
+        logger.info {
+            "PLAINBASE_INSECURE_HTTP set but the bind is loopback (${config.host}) — the override is redundant here " +
+                "(loopback HTTP is always allowed)"
+        }
     }
     // W4 gate-check (ADR-0006, M2 ordering): AFTER requireContentDir() and BEFORE the lock/rebuild/
     // reconcile block — rebuild() and reconcileDirtyPages() trigger commits, so a "git missing" failure

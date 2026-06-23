@@ -31,6 +31,9 @@ class TokenHasher : TokenSecretHasher {
 
     private companion object {
         const val HASH_BYTES = 32
+
+        // Read-only: MessageDigest.isEqual never mutates its inputs, so this shared all-zero allocation is safe to
+        // reuse across calls (a fresh per-verify ByteArray would be a pointless allocation on the hot auth path).
         val DUMMY_HASH = ByteArray(HASH_BYTES)
     }
 }

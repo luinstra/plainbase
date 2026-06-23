@@ -31,6 +31,7 @@ docs.example.com {
 		reverse_proxy plainbase:8080 {
 			header_up -X-Forwarded-User
 			header_up -X-Plainbase-Proxy-Secret
+			header_up -X-Forwarded-Proto
 			header_up X-Forwarded-User {http.request.header.X-Auth-Request-User}
 			header_up X-Plainbase-Proxy-Secret {env.PLAINBASE_PROXY_SECRET}
 			header_up X-Forwarded-Proto https
