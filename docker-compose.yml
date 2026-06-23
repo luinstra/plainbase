@@ -18,8 +18,11 @@ services:
   plainbase:
     build: .
     # Published to the HOST LOOPBACK only — reachable at http://localhost:8080, not on the LAN.
+    # (The 127.0.0.1 prefix is load-bearing: a bare "8080:8080" would publish on 0.0.0.0 — every
+    # interface — which, with the insecure-http + auth.mode=off dev posture below, would expose an
+    # unauthenticated plaintext server to the whole LAN.)
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       CONTENT_DIR: /content
       DATA_DIR: /data
