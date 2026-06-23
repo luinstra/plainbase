@@ -54,8 +54,16 @@ function htmlResponse(): PageHtmlResponse {
 }
 
 function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = () => {}) {
-  const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+  // Route the destination page reads to VALID responses: after a successful create the editor invalidates
+  // and navigates to the new page, whose refetch would otherwise hit the generic `{html,headings}` stub,
+  // error, and unmount — with the async-CSRF create hop that error-unmount's React work can land after
+  // jsdom teardown ("window is not defined"). Non-page reads (preview/tree) keep the benign stub.
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") return createResponse.clone();
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/pages/by-path/")) return jsonResponse(pageResponse());
+    if (url.endsWith("/html")) return jsonResponse(htmlResponse());
+    if (url.includes(`/pages/${NEW_ID}`)) return jsonResponse(pageResponse());
     return jsonResponse({ html: "", headings: [] });
   });
   vi.stubGlobal("fetch", fetchSpy);
