@@ -35,44 +35,64 @@ import kotlin.time.Clock
  */
 object AdminCommand {
 
-    /** Entry point for the `main` dispatch: real env config, exit-code result. */
-    fun runAsMain(args: List<String>): Int = run(args, PlainbaseConfig.fromEnv())
+    /**
+     * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf` config, exit-code result. Uses
+     * `fromEnvAndFile` (not `fromEnv`) so a FILE-configured `auth.mode=builtin` is visible to the setup-token
+     * bootstrap gate (A4a minor) — it only READS the conf file (no DB driver), so it runs before the DataDirLock
+     * with no migration race.
+     */
+    fun runAsMain(args: List<String>): Int = run(args, PlainbaseConfig.fromEnvAndFile())
 
     fun run(args: List<String>, config: PlainbaseConfig): Int {
         // setup-token mutates DB state on DATA_DIR shared with a live server, so it MUST hold the DataDirLock BEFORE
         // any driver opens + migrates the DB (fix D: a second process opening/migrating before losing the lock race
-        // is the exact hazard). It owns its driver lifecycle inside the lock; the read-mostly token/role subcommands
-        // keep the shared open-driver path below.
+        // is the exact hazard). It owns its driver lifecycle inside the lock.
         if (args.firstOrNull() == "setup-token") return setupToken(config, args.drop(1))
-        val driver = DatabaseFactory.createDriver(config.appDatabasePath)
-        try {
-            val database = DatabaseFactory.createDatabase(driver)
-            val tokenService = ApiTokenService(
-                minter = ApiTokenMinter(),
-                hasher = TokenHasher(),
-                tokens = SqlDelightApiTokenRepository(database),
-                clock = Clock.System,
-            )
-            val roleRepo = SqlDelightRoleRepository(database)
-            return when (args.firstOrNull()) {
-                "mint-token" -> mintToken(tokenService, args.drop(1))
-                "revoke-token" -> revokeToken(tokenService, args.drop(1))
-                "list-tokens" -> listTokens(tokenService, args.drop(1))
-                "grant-role" -> grantRole(roleRepo, args.drop(1))
-                else -> {
-                    System.err.println(USAGE)
-                    2
+        // Validate the subcommand is known BEFORE acquiring the lock, so an unknown subcommand returns exit 2 (usage)
+        // even when a server holds the lock — not exit 1 (a silent exit-code shift). (Fix B2c.)
+        val sub = args.firstOrNull()
+        if (sub !in LOCKED_SUBCOMMANDS) {
+            System.err.println(USAGE)
+            return 2
+        }
+        // mint/revoke/grant WRITE and ALL four trigger DatabaseFactory.createDriver's implicit, non-idempotent migrate
+        // (DDL + a user_version bump) — racing a starting server's migration corrupts/throws. Hold the DataDirLock
+        // FIRST, exactly like setup-token + reindex (fix B2c).
+        val lock = DataDirLock.tryAcquire(config.dataDir)
+        if (lock == null) {
+            System.err.println("admin $sub: a Plainbase server is holding ${config.dataDir} — stop it before running this command")
+            return 1
+        }
+        return lock.use {
+            val driver = DatabaseFactory.createDriver(config.appDatabasePath)
+            try {
+                val database = DatabaseFactory.createDatabase(driver)
+                val tokenService = ApiTokenService(
+                    minter = ApiTokenMinter(),
+                    hasher = TokenHasher(),
+                    tokens = SqlDelightApiTokenRepository(database),
+                    clock = Clock.System,
+                )
+                val roleRepo = SqlDelightRoleRepository(database)
+                when (sub) {
+                    "mint-token" -> mintToken(tokenService, args.drop(1))
+                    "revoke-token" -> revokeToken(tokenService, args.drop(1))
+                    "list-tokens" -> listTokens(tokenService, args.drop(1))
+                    "grant-role" -> grantRole(roleRepo, args.drop(1))
+                    // Unreachable: sub is in LOCKED_SUBCOMMANDS (validated above before the lock).
+                    else -> error("unreachable: $sub")
                 }
+            } finally {
+                driver.close()
             }
-        } finally {
-            driver.close()
         }
     }
 
     /** `mint-token <label> [mode]` — mode defaults to read-only; prints the plaintext ONCE. */
     private fun mintToken(service: ApiTokenService, args: List<String>): Int {
         val label = args.getOrNull(0)
-        if (label == null) {
+        if (label == null || args.size > 2) {
+            // Reject surplus positionals (A2-amber): a typo'd 3rd arg must be a usage error, not silently ignored.
             System.err.println("usage: plainbase admin mint-token <label> [${modeUsage()}]")
             return 2
         }
@@ -90,7 +110,8 @@ object AdminCommand {
     /** `revoke-token <id>` — sets revoked_at; idempotent for an unknown/already-revoked id. */
     private fun revokeToken(service: ApiTokenService, args: List<String>): Int {
         val id = args.getOrNull(0)
-        if (id == null) {
+        if (id == null || args.size > 1) {
+            // Reject surplus positionals (A2-amber): a typo'd 2nd arg must be a usage error, not silently ignored.
             System.err.println("usage: plainbase admin revoke-token <id>")
             return 2
         }
@@ -231,6 +252,9 @@ object AdminCommand {
     private fun modeUsage(): String = AgentMode.entries.joinToString("|") { it.name.lowercase().replace('_', '-') }
 
     private fun roleUsage(): String = Role.entries.joinToString("|") { it.name.lowercase() }
+
+    /** The lock-guarded subcommand group (NOT setup-token, which has its own lock path) — the dispatch `when` mirror. */
+    private val LOCKED_SUBCOMMANDS = setOf("mint-token", "revoke-token", "list-tokens", "grant-role")
 
     private val USAGE = "usage: plainbase admin <mint-token <label> [${modeUsage()}] | revoke-token <id> | " +
         "list-tokens | grant-role <issuer> <external_id> <${roleUsage()}> | setup-token [--force]>"
