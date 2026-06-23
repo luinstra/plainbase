@@ -143,6 +143,7 @@ fun withRestServices(
                         users = SqlDelightUserRepository(database),
                         passwordHasher = passwordHasher,
                         sessions = sessionService,
+                        transactions = SqlDelightTransactionRunner(database),
                         dummyHash = dummyPasswordHash(passwordHasher),
                     ),
                     setup = setupService,

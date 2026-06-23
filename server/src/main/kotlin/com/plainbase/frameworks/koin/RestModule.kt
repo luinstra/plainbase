@@ -60,7 +60,7 @@ val restModule = module {
     single { SessionService(minter = get(), hasher = get(), sessions = get(), clock = Clock.System) }
     single {
         // The dummy PHC is precomputed once (anti-enumeration timing parity, §6); inlined as a constructor arg.
-        LoginService(users = get(), passwordHasher = get(), sessions = get(), dummyHash = dummyPasswordHash(get()))
+        LoginService(users = get(), passwordHasher = get(), sessions = get(), transactions = get(), dummyHash = dummyPasswordHash(get()))
     }
     single {
         SetupService(

@@ -88,10 +88,17 @@ class GuardedAdminFacade(
 
     override fun disableUser(principal: Principal, userId: String): Boolean {
         policy.checkManage(principal)
+        // The existence pre-check stays OUTSIDE the txn: a read, and the early return false must short-circuit before
+        // opening a transaction.
         if (users.findById(userId) == null) return false
-        users.setDisabled(userId, disabled = true, at = clock.now())
-        sessions.revokeAllForUser(userId) // the lock takes effect immediately — kill any live session
-        return true
+        // Atomic flag + revoke (B2a-2): `authenticate` does NOT re-read `disabled` per request (its sole gate is the
+        // session-row touch), so revocation is what kills a disabled user's live sessions. A crash between the two
+        // writes would leave the user disabled-but-sessions-live — so they MUST commit together (all-or-nothing).
+        return transactions.inTransaction {
+            users.setDisabled(userId, disabled = true, at = clock.now())
+            sessions.revokeAllForUser(userId)
+            true
+        }
     }
 
     override fun resetUser(principal: Principal, userId: String): String? {

@@ -190,6 +190,7 @@ fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.k
         users = userRepository,
         passwordHasher = com.plainbase.frameworks.security.Argon2PasswordHasher(),
         sessions = sessionService,
+        transactions = transactionRunner,
         dummyHash = com.plainbase.frameworks.security.dummyPasswordHash(com.plainbase.frameworks.security.Argon2PasswordHasher()),
     )
     return com.plainbase.frameworks.ktor.AuthServices(
