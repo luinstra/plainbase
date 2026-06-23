@@ -93,14 +93,28 @@ class SetupService(
     /**
      * Self-service change: verify [current] against the stored hash FIRST; on success set the new hash THEN revoke
      * ALL the user's sessions (§7 force-re-login). A wrong current password leaves the hash + sessions untouched.
+     * A concurrent change/reset that lands during the verify window is detected by an in-txn hash-drift re-read and
+     * reported as [ChangeOutcome.WrongCurrentPassword] (the stale proof loses, the newer hash is never clobbered).
      * The caller owns + zeroes both arrays.
      */
     fun changePassword(userId: String, current: CharArray, new: CharArray): ChangeOutcome {
         val user = users.findById(userId) ?: return ChangeOutcome.UserNotFound
         if (!passwordHasher.verify(current, user.passwordHash)) return ChangeOutcome.WrongCurrentPassword
-        users.setPasswordHash(userId, passwordHasher.hash(new), clock.now())
-        sessions.revokeAllForUser(userId)
-        return ChangeOutcome.Changed
+        val newHash = passwordHasher.hash(new) // argon2 OUTSIDE the txn (keeps the txn short — single write connection)
+        // The hash-update + revoke-all are ONE transaction (B2b): a crash between them would leave the new password
+        // active but the old sessions un-revoked (a stolen session surviving a password change). Re-read inside the
+        // txn so a concurrent delete is reported, not silently mis-reported as Changed.
+        return transactions.inTransaction {
+            val fresh = users.findById(userId) ?: return@inTransaction ChangeOutcome.UserNotFound
+            // Hash-drift guard (B2b, same class as B2a): a change/reset that committed during the argon2 verify
+            // window already won; the `current` proof was verified against a now-stale hash. Treat the stale proof
+            // as a wrong current password rather than clobbering the newer hash. Both are server-side stored hashes
+            // (no attacker secret), so plain `!=` is correct — do NOT route this through the password hasher.
+            if (fresh.passwordHash != user.passwordHash) return@inTransaction ChangeOutcome.WrongCurrentPassword
+            users.setPasswordHash(userId, newHash, clock.now())
+            sessions.revokeAllForUser(userId)
+            ChangeOutcome.Changed
+        }
     }
 
     /**
@@ -121,6 +135,11 @@ class SetupService(
      * Like [consumeBootstrap], the CHEAP token pre-check runs BEFORE the argon2 hash (fix E) — the public
      * `/setup/consume` reset path must not force an argon2 per bogus token. The atomic `markUsed` in the transaction
      * stays the authority.
+     *
+     * No hash-drift guard here (unlike [login]/[changePassword]): a reset proves no current password — it is
+     * authorized solely by the single-use token, whose atomic `markUsed` already serializes consumers. An admin
+     * reset is a suspected-compromise override and is meant to WIN over a racing self-service change, so writing the
+     * reset hash over a hash that drifted under it is the intended outcome, not a race to defend against.
      */
     fun consumeReset(rawToken: String, newPassword: CharArray): ResetOutcome {
         val now = clock.now()
