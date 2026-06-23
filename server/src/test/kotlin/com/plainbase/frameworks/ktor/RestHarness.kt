@@ -118,6 +118,12 @@ fun IndexHarness.testRouteContext(
     idProvider: com.plainbase.domain.service.IdProvider = UuidV7IdProvider(),
     enforced: Boolean = false,
     trustedProxyCidrs: List<String> = emptyList(),
+    builtinAuthEnabled: Boolean = true,
+    proxyAuthEnabled: Boolean = false,
+    proxySecret: String? = null,
+    proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
+    secureCookie: Boolean = false,
+    proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf = com.plainbase.frameworks.security.ProxyCsrf(ByteArray(32) { 7 }),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val policy = PolicyService(
@@ -143,6 +149,12 @@ fun IndexHarness.testRouteContext(
         trustedProxyCidrs = trustedProxyCidrs,
         maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+        builtinAuthEnabled = builtinAuthEnabled,
+        proxyAuthEnabled = proxyAuthEnabled,
+        proxySecret = proxySecret,
+        proxyIdentityHeader = proxyIdentityHeader,
+        secureCookie = secureCookie,
+        proxyCsrf = proxyCsrf,
         extract = extract,
     )
 }
@@ -171,6 +183,8 @@ fun IndexHarness.authServices(policy: PolicyService): com.plainbase.frameworks.k
         idProvider = UuidV7IdProvider(),
         transactions = transactionRunner,
         clock = Clock.System,
+        tokens = apiTokens,
+        audit = auditRepository,
     )
     val login = com.plainbase.domain.service.LoginService(
         users = userRepository,

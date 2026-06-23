@@ -1,6 +1,13 @@
-# Plainbase — Docker Compose tier.
+# Plainbase — Docker Compose: the LOCAL DEV / single-user tier.
 #
-# `docker compose up --build` serves the SPA shell on http://localhost:8080.
+# `docker compose up --build` serves the SPA shell at http://localhost:8080 — published to the
+# HOST LOOPBACK only (127.0.0.1), so it is reachable for local dev but NOT exposed to the LAN.
+# This tier runs plaintext with auth.mode=off (no login) — a knowing dev posture, not production.
+#
+# For a real MULTI-USER deployment, do NOT publish this app directly: front it with a
+# TLS-terminating reverse proxy that authenticates users. The reference SSO topology
+# (Caddy + oauth2-proxy) is the STANDALONE stack under `deploy/proxy/` — see
+# `docs/deploy/reverse-proxy-sso.md`.
 #
 # NOTE: Meilisearch is the OPTIONAL search tier (§2.4/§5.6). Plainbase defaults to
 # embedded SQLite FTS5 and needs no containers at all (single native binary).
@@ -10,11 +17,18 @@
 services:
   plainbase:
     build: .
+    # Published to the HOST LOOPBACK only — reachable at http://localhost:8080, not on the LAN.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       CONTENT_DIR: /content
       DATA_DIR: /data
+      # 0.0.0.0 binds every interface INSIDE the container so the published loopback port reaches
+      # the app. A non-loopback bind without TLS/proxy/override is REFUSED by the A1 fail-closed
+      # bind guard — PLAINBASE_INSECURE_HTTP below is the explicit, knowing dev override (it logs
+      # loudly). auth.mode stays off (the default — no login in this single-user dev tier).
+      PLAINBASE_HOST: 0.0.0.0
+      PLAINBASE_INSECURE_HTTP: "true"
       # Search engine selection lands in Phase 2:
       # SEARCH_ENGINE: meilisearch
       # MEILI_URL: http://meilisearch:7700

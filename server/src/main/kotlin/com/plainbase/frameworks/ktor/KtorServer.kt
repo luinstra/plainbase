@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.routes.adminRoute
+import com.plainbase.frameworks.ktor.routes.adminTokenRoutes
 import com.plainbase.frameworks.ktor.routes.adminUserRoutes
 import com.plainbase.frameworks.ktor.routes.apiFallbackRoute
 import com.plainbase.frameworks.ktor.routes.assetRoute
@@ -129,9 +130,16 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         // through the `checkManage`-gated AdminFacade.
         if (ctx.builtinAuthEnabled) {
             authRoutes(ctx)
-            sessionRoutes(ctx)
             setupRoutes(ctx)
             adminUserRoutes(ctx)
+        }
+        // /session is the CSRF-bootstrap read in BOTH builtin (synchronizer token) and proxy (double-submit token)
+        // modes — public, pre-identity (A4b WIDEN). login/setup/admin-user stay builtin-only above.
+        if (ctx.builtinAuthEnabled || ctx.proxyAuthEnabled) {
+            sessionRoutes(ctx)
+            // The token/audit/role management surface is `manage`-gated and mode-INDEPENDENT (a proxy admin needs it
+            // too) — registered when EITHER auth mode is active; user CRUD (adminUserRoutes) stays builtin-only.
+            adminTokenRoutes(ctx)
         }
         pageRoutes(ctx)
         // PUT save coexists with the GETs by method on the same `/api/v1/pages/{id}` path.

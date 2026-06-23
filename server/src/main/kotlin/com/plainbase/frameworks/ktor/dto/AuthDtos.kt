@@ -18,12 +18,18 @@ data class LoginRequest(val username: String, val password: String)
 @Serializable
 data class LoginResponse(@SerialName("csrf_token") val csrfToken: String)
 
-/** `GET /api/v1/session` response: the current cookie-auth state + a FRESH read of the session's CSRF token. */
+/**
+ * `GET /api/v1/session` response: the current auth state + a FRESH CSRF token (the cookie-mode session synchronizer
+ * token, or the A4b proxy double-submit token). [authMode] (`"builtin"|"proxy"|"off"`) lets the SPA hide builtin-only
+ * panels (user CRUD) in proxy mode — the server stays authoritative (it still 404/403s the builtin-only routes), this
+ * only drives the UI hint (BLOCKING-2).
+ */
 @Serializable
 data class SessionResponse(
     val authenticated: Boolean,
     val username: String?,
     @SerialName("csrf_token") val csrfToken: String?,
+    @SerialName("auth_mode") val authMode: String,
 )
 
 /** `POST /api/v1/setup/consume` request: a bootstrap token + the first admin's chosen credentials. */
@@ -76,3 +82,67 @@ data class UserListResponse(val users: List<UserResponse>)
 /** `POST /api/v1/admin/sessions/revoke` request: revoke all of a target user's sessions (the admin-revoke hook). */
 @Serializable
 data class SessionRevokeRequest(@SerialName("user_id") val userId: String)
+
+// ---- A4b: the admin token / audit / role management wire shapes (manage-gated, mode-independent) --------------
+
+/** One API-token row — metadata only, NEVER a `secret_hash`/plaintext (the list discipline). */
+@Serializable
+data class TokenMetaResponse(
+    val id: String,
+    val label: String,
+    val mode: String,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("last_used_at") val lastUsedAt: String?,
+    @SerialName("expires_at") val expiresAt: String?,
+    @SerialName("revoked_at") val revokedAt: String?,
+)
+
+/** `GET /api/v1/admin/tokens` response. */
+@Serializable
+data class TokenListResponse(val tokens: List<TokenMetaResponse>)
+
+/** `POST /api/v1/admin/tokens` request: the label + the agent mode (read-only/propose/commit). */
+@Serializable
+data class MintTokenRequest(val label: String, val mode: String)
+
+/** `POST /api/v1/admin/tokens` response: the minted token's id + the one-time plaintext (returned ONCE). */
+@Serializable
+data class CreatedTokenResponse(val id: String, val plaintext: String)
+
+/** One audit decision row — WHO/WHAT/decision (no secret fields). */
+@Serializable
+data class AuditEntryResponse(
+    val id: String,
+    val ts: String,
+    @SerialName("principal_kind") val principalKind: String,
+    val issuer: String?,
+    @SerialName("external_id") val externalId: String?,
+    val action: String,
+    val resource: String,
+    val decision: String,
+)
+
+/** `GET /api/v1/admin/audit` response. */
+@Serializable
+data class AuditListResponse(val entries: List<AuditEntryResponse>)
+
+/** One subject→role row. */
+@Serializable
+data class RoleResponse(
+    val issuer: String,
+    @SerialName("external_id") val externalId: String,
+    val role: String,
+    @SerialName("created_at") val createdAt: String,
+)
+
+/** `GET /api/v1/admin/roles` response. */
+@Serializable
+data class RoleListResponse(val roles: List<RoleResponse>)
+
+/** `POST /api/v1/admin/roles` request: grant/regrant a role to an `(issuer, external_id)` identity. */
+@Serializable
+data class GrantRoleRequest(
+    val issuer: String,
+    @SerialName("external_id") val externalId: String,
+    val role: String,
+)

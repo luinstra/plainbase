@@ -50,8 +50,8 @@ class ChokePointArchitectureTest : FunSpec({
 
     test("the scan sees every registered route file (anti-vacuous floor)") {
         // The route source files registered in KtorServer.plainbaseModule (the route fns + RouteSupport glue);
-        // A4a added AuthRoutes/SessionRoutes/SetupRoutes/AdminUserRoutes, so the floor rises.
-        files.size shouldBeGreaterThanOrEqual 18
+        // A4a added AuthRoutes/SessionRoutes/SetupRoutes/AdminUserRoutes; A4b adds AdminTokenRoutes, so the floor rises.
+        files.size shouldBeGreaterThanOrEqual 19
         val names = files.map { it.name }.toSet()
         names.containsAll(
             setOf(
@@ -59,6 +59,7 @@ class ChokePointArchitectureTest : FunSpec({
                 "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "AliasRoute.kt",
                 "HistoryRoutes.kt", "SearchRoute.kt", "TreeRoute.kt", "PreviewRoute.kt",
                 "AuthRoutes.kt", "SessionRoutes.kt", "SetupRoutes.kt", "AdminUserRoutes.kt",
+                "AdminTokenRoutes.kt",
             ),
         ).shouldBeTrue()
     }

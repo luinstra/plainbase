@@ -15,7 +15,10 @@ import com.plainbase.frameworks.ktor.GuardedAdminFacade
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.dummyPasswordHash
+import com.plainbase.frameworks.security.loadOrCreateProxyCsrfKey
+import com.plainbase.frameworks.sqldelight.PlainbaseDb
 import org.koin.dsl.module
 import kotlin.time.Clock
 
@@ -84,10 +87,16 @@ val restModule = module {
             idProvider = get(),
             transactions = get(),
             clock = Clock.System,
+            tokens = get(),
+            audit = get(),
         )
     }
     single { LoginRateLimiter() }
     single { AuthServices(session = get(), login = get(), setup = get(), admin = get(), rateLimiter = get()) }
+    // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
+    // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
+    // KtorServer), so two processes never race a double-generate (WI-9 fold-in). The key bytes never log.
+    single { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
     single<RouteContext> {
         val config = get<PlainbaseConfig>()
         buildRouteContext(
@@ -106,6 +115,11 @@ val restModule = module {
             maxWriteBodyBytes = config.maxWriteBodyBytes,
             maxAssetBytes = config.maxAssetBytes,
             builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
+            proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
+            proxySecret = config.auth.proxySecret,
+            proxyIdentityHeader = config.auth.proxyIdentityHeader,
+            secureCookie = config.secureCookie(),
+            proxyCsrf = get(),
         )
     }
 }

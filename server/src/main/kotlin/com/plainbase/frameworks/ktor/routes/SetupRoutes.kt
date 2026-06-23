@@ -78,7 +78,7 @@ fun Route.setupRoutes(ctx: RouteContext) {
 
     post("/api/v1/password/change") {
         val resolved = ctx.resolveOrRefuse(call) ?: return@post
-        if (!enforceCsrf(call, resolved)) return@post
+        if (!ctx.enforceCsrf(call, resolved)) return@post
         val human = resolved.principal as? Principal.Human
             ?: return@post call.respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
         val request = call.receiveAuthRequest(ChangePasswordRequest.serializer()) ?: return@post

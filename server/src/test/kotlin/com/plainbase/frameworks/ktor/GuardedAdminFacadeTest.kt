@@ -3,11 +3,13 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.principal.PasswordHasher
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.manageGrantForTests
+import com.plainbase.domain.repository.AuditRepository
 import com.plainbase.domain.repository.DuplicateUsernameException
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.RoleRepository
 import com.plainbase.domain.repository.TransactionRunner
 import com.plainbase.domain.repository.UserRepository
+import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CreateUserOutcome
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.PolicyService
@@ -55,6 +57,8 @@ class GuardedAdminFacadeTest : FunSpec({
             idProvider = idProvider,
             transactions = transactions,
             clock = Clock.System,
+            tokens = mockk<ApiTokenService>(relaxed = true),
+            audit = mockk<AuditRepository>(relaxed = true),
         )
 
         facade.createUser(Principal.Human("builtin", "admin"), "taken", displayName = null, role = Role.EDITOR)

@@ -140,6 +140,15 @@ object ErrorCodes {
 
     /** 409: a create-user request targets a username that already exists. */
     const val USERNAME_EXISTS: String = "username_exists"
+
+    // ---- A4b: the proxy-auth vocabulary (append-only) ------------------------------------------------
+
+    /**
+     * 400: in proxy mode, a trusted proxy passed the secret+transport gate but sent a malformed identity header
+     * (multi-value/duplicate, blank, control chars, or oversized) — an operator MISCONFIG signal, never a 401. The
+     * message names the class of problem, never the offending value.
+     */
+    const val INVALID_PROXY_IDENTITY: String = "invalid_proxy_identity"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

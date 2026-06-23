@@ -105,6 +105,10 @@ private fun serve() {
         // rows that accumulate in the insert/update-only tables. Once at boot, never per-write (write amplification).
         koin.get<SessionRepository>().prune(now)
         koin.get<SetupTokenRepository>().prune(now)
+        // A4b: load-or-generate the proxy-CSRF HMAC server key NOW — inside the lock — so a concurrent boot can never
+        // race a double-generate into app_meta (WI-9). Resolving the ProxyCsrf single forces the key load here rather
+        // than relying on the lazy RouteContext resolution timing.
+        koin.get<com.plainbase.frameworks.security.ProxyCsrf>()
         // A4a (WI-7/WI-13): on an empty / no-enabled-admin builtin DB, emit ONLY a NON-SECRET hint — NEVER a token on
         // the boot path (stdout/stderr are the scraped log under docker/systemd). The secret comes ONLY from the CLI.
         // Reads `countEnabledAdmins` only AFTER the lock is held + validated (fix D: never open/migrate the DB before

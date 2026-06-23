@@ -63,6 +63,27 @@ class BindGuardTest : FunSpec({
         config("0.0.0.0", AuthConfig(mode = AuthMode.PROXY)).bindGuardRefusal().shouldNotBeNull()
     }
 
+    // A4b WI-2: a PROXY mode without BOTH a CIDR allowlist AND a secret is refused — even on a loopback bind (a
+    // loopback proxy with no secret still trusts any loopback sibling). The refusal names both env vars.
+    test("proxy mode + empty trustedProxyCidrs (even loopback) → refuse, naming both env vars") {
+        val message = config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, proxySecret = "s")).bindGuardRefusal()
+        message.shouldNotBeNull()
+        message shouldContain "PLAINBASE_TRUSTED_PROXY"
+        message shouldContain "PLAINBASE_PROXY_SECRET"
+    }
+
+    test("proxy mode + CIDRs but a blank/absent secret (even loopback) → refuse") {
+        config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, trustedProxyCidrs = listOf("10.0.0.0/8")))
+            .bindGuardRefusal().shouldNotBeNull()
+        config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, trustedProxyCidrs = listOf("10.0.0.0/8"), proxySecret = "  "))
+            .bindGuardRefusal().shouldNotBeNull()
+    }
+
+    test("proxy mode + CIDRs + a secret → null (boot permitted)") {
+        config("127.0.0.1", AuthConfig(mode = AuthMode.PROXY, trustedProxyCidrs = listOf("10.0.0.0/8"), proxySecret = "s"))
+            .bindGuardRefusal().shouldBeNull()
+    }
+
     // The default host must be loopback so out-of-the-box `serve` is dev/off-safe; exposing demands an explicit
     // non-loopback PLAINBASE_HOST, which then trips the guard above (BLOCKING-1 fix).
     test("the default bind host is loopback (out-of-the-box serve never silently exposes)") {

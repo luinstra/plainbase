@@ -11,6 +11,8 @@ import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
 
 /**
@@ -39,6 +41,13 @@ fun buildRouteContext(
     maxWriteBodyBytes: Long,
     maxAssetBytes: Long,
     builtinAuthEnabled: Boolean = true,
+    proxyAuthEnabled: Boolean = false,
+    proxySecret: String? = null,
+    proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
+    secureCookie: Boolean = false,
+    // TEST-ONLY default: production wiring (Application.kt) ALWAYS passes the real key-derived ProxyCsrf, so this
+    // zero-key fallback is never reached in prod — it only spares non-proxy route tests from constructing one.
+    proxyCsrf: ProxyCsrf = ProxyCsrf(ByteArray(32)),
     extract: (ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val read = GuardedReadFacade(
@@ -66,7 +75,22 @@ fun buildRouteContext(
         maxWriteBodyBytes = maxWriteBodyBytes,
         maxAssetBytes = maxAssetBytes,
         builtinAuthEnabled = builtinAuthEnabled,
-        extract = extract ?: { extractPrincipal(tokens, trustedProxyCidrs, auth.session, builtinAuthEnabled) },
+        proxyAuthEnabled = proxyAuthEnabled,
+        proxySecret = proxySecret,
+        proxyIdentityHeader = proxyIdentityHeader,
+        secureCookie = secureCookie,
+        proxyCsrf = proxyCsrf,
+        extract = extract ?: {
+            extractPrincipal(
+                tokens,
+                trustedProxyCidrs,
+                auth.session,
+                builtinAuthEnabled,
+                proxyAuthEnabled = proxyAuthEnabled,
+                proxySecret = proxySecret,
+                proxyIdentityHeader = proxyIdentityHeader,
+            )
+        },
     )
 }
 

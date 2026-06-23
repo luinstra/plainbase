@@ -107,6 +107,26 @@ class PlainbaseConfigTest : FunSpec({
             config.auth.trustedProxyCidrs shouldBe emptyList()
             config.auth.insecureHttp shouldBe false
             config.auth.agentDirectCommitGlobs shouldBe emptyList()
+            // A4b: proxy fields default to no secret + the X-Forwarded-User identity header.
+            config.auth.proxySecret shouldBe null
+            config.auth.proxyIdentityHeader shouldBe "X-Forwarded-User"
+        }
+    }
+
+    // A4b WI-2: the proxy secret + identity-header config (env-wins over file over the default).
+    test("PLAINBASE_PROXY_SECRET reads from env; the identity header defaults to X-Forwarded-User") {
+        PlainbaseConfig.fromEnv(mapOf("PLAINBASE_PROXY_SECRET" to "s3cr3t")).auth.proxySecret shouldBe "s3cr3t"
+        PlainbaseConfig.fromEnv(emptyMap()).auth.proxyIdentityHeader shouldBe "X-Forwarded-User"
+    }
+
+    test("PLAINBASE_PROXY_IDENTITY_HEADER env-wins over file over the default; a blank config falls back") {
+        withDataDir("""auth { proxyIdentityHeader = "X-Auth-Request-User" }""") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).auth.proxyIdentityHeader shouldBe "X-Auth-Request-User"
+            PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_PROXY_IDENTITY_HEADER" to "X-SSO-Subject"))
+                .auth.proxyIdentityHeader shouldBe "X-SSO-Subject"
+            // A blank env value falls back to the default, never an empty header name.
+            PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_PROXY_IDENTITY_HEADER" to "   "))
+                .auth.proxyIdentityHeader shouldBe "X-Forwarded-User"
         }
     }
 

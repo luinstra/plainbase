@@ -22,8 +22,9 @@ class AuthDtoRoundTripTest : FunSpec({
         (resp.contains("csrf_token")) shouldBe true
         RestJson.decodeFromString(LoginResponse.serializer(), resp) shouldBe LoginResponse("abc")
 
-        val session = SessionResponse(authenticated = true, username = "alice", csrfToken = "abc")
+        val session = SessionResponse(authenticated = true, username = "alice", csrfToken = "abc", authMode = "builtin")
         val sj = RestJson.encodeToString(SessionResponse.serializer(), session)
+        sj.contains("auth_mode") shouldBe true
         RestJson.decodeFromString(SessionResponse.serializer(), sj) shouldBe session
     }
 

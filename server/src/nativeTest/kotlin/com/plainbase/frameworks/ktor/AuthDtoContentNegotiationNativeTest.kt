@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.ktor
 
+import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -49,6 +51,52 @@ class AuthDtoContentNegotiationNativeTest {
                     setBody("""{"username":"alice"}""")
                 }
                 assertEquals(HttpStatusCode.BadRequest, bad.status)
+            }
+        }
+    }
+
+    /**
+     * A4b §0.12 proof: the NEW admin token/audit/role DTOs (MintTokenRequest decode, CreatedTokenResponse /
+     * TokenListResponse / AuditListResponse / RoleListResponse encode) round-trip through the REAL proxy routes over
+     * the scoped RestJson natively — so they need NO reflect-config triple either. Driven over the proxy harness with
+     * the double-submit CSRF, which also exercises the HMAC `Mac` + the app_meta key load in the image.
+     */
+    @Test
+    fun `the A4b admin token + audit + role DTOs round-trip through RestJson natively`() {
+        withRestServices(proxyMode = true, seedProxyAdmin = "alice") { services ->
+            testApplication {
+                application { plainbaseModule(services) }
+                val client = createClient { install(HttpCookies) }
+                val proxy = arrayOf("X-Forwarded-User" to "alice", PROXY_SECRET_HEADER to "native-proxy-secret")
+
+                val session = client.get("/api/v1/session") { proxy.forEach { header(it.first, it.second) } }
+                val token = Regex("\"csrf_token\":\"([^\"]+)\"").find(session.bodyAsText())!!.groupValues[1]
+
+                // MintTokenRequest decode + CreatedTokenResponse encode.
+                val mint = client.post("/api/v1/admin/tokens") {
+                    proxy.forEach { header(it.first, it.second) }
+                    header("X-CSRF-Token", token)
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"label":"native","mode":"read-only"}""")
+                }
+                assertEquals(HttpStatusCode.Created, mint.status)
+
+                // TokenListResponse / AuditListResponse / RoleListResponse encode.
+                assertTrue(
+                    client.get("/api/v1/admin/tokens") {
+                        proxy.forEach { header(it.first, it.second) }
+                    }.bodyAsText().contains("tokens"),
+                )
+                assertTrue(
+                    client.get("/api/v1/admin/audit") {
+                        proxy.forEach { header(it.first, it.second) }
+                    }.bodyAsText().contains("entries"),
+                )
+                assertTrue(
+                    client.get("/api/v1/admin/roles") {
+                        proxy.forEach { header(it.first, it.second) }
+                    }.bodyAsText().contains("roles"),
+                )
             }
         }
     }

@@ -2,15 +2,22 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.PasswordHasher
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.repository.ApiTokenMeta
+import com.plainbase.domain.repository.AuditEntry
+import com.plainbase.domain.repository.AuditRepository
 import com.plainbase.domain.repository.DuplicateUsernameException
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.RoleRepository
+import com.plainbase.domain.repository.SubjectRoleRow
 import com.plainbase.domain.repository.TransactionRunner
 import com.plainbase.domain.repository.UserMeta
 import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.repository.UserRow
 import com.plainbase.domain.service.AdminFacade
+import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CreateUserOutcome
+import com.plainbase.domain.service.CreatedApiToken
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.SessionService
@@ -34,6 +41,8 @@ class GuardedAdminFacade(
     private val idProvider: IdProvider,
     private val transactions: TransactionRunner,
     private val clock: Clock,
+    private val tokens: ApiTokenService,
+    private val audit: AuditRepository,
 ) : AdminFacade {
 
     override fun createUser(principal: Principal, username: String, displayName: String?, role: Role): CreateUserOutcome {
@@ -98,6 +107,32 @@ class GuardedAdminFacade(
     override fun grantRole(principal: Principal, issuer: String, externalId: String, role: Role) {
         policy.checkManage(principal)
         roles.upsert(issuer, externalId, role, clock.now())
+    }
+
+    override fun listTokens(principal: Principal): List<ApiTokenMeta> {
+        policy.checkManage(principal)
+        return tokens.list()
+    }
+
+    override fun mintToken(principal: Principal, label: String, mode: AgentMode): CreatedApiToken {
+        policy.checkManage(principal)
+        val minted = tokens.mint(label = label, mode = mode)
+        return CreatedApiToken(id = minted.id, plaintext = minted.plaintext)
+    }
+
+    override fun revokeToken(principal: Principal, id: String) {
+        policy.checkManage(principal)
+        tokens.revoke(id)
+    }
+
+    override fun recentAudit(principal: Principal, limit: Int): List<AuditEntry> {
+        policy.checkManage(principal)
+        return audit.recent(limit)
+    }
+
+    override fun listRoles(principal: Principal): List<SubjectRoleRow> {
+        policy.checkManage(principal)
+        return roles.all()
     }
 
     /** A throwaway high-entropy passphrase for a not-yet-activated user — never conveyed, never usable to log in. */

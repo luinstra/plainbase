@@ -8,6 +8,7 @@ import com.plainbase.domain.service.AccessDenied
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
+import com.plainbase.frameworks.ktor.Source
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
@@ -164,6 +165,10 @@ internal suspend fun RouteContext.resolveOrRefuse(call: ApplicationCall): Princi
             call.respondTransportInsecure()
             null
         }
+        is PrincipalExtraction.ProxyIdentityRejected -> {
+            call.respondProxyIdentityRejected()
+            null
+        }
     }
 
 /**
@@ -181,27 +186,43 @@ internal suspend fun RouteContext.mutatingPrincipalOrRefuse(call: ApplicationCal
 }
 
 /**
- * The CSRF gate for a cookie-authenticated state mutation (A4a §3). The discriminator is the SESSION CSRF token:
- * a cookie-sourced [Principal.Human] carries a non-null [PrincipalExtraction.Resolved.csrfToken] (the seam pairs
- * them), so it is enforced; a `pb_` bearer [Principal.Agent], an [com.plainbase.domain.principal.Principal.Anonymous],
- * a test fixed-principal, and a future A4b proxy-header Human all carry a null csrf token (no ambient cookie) and
- * are EXEMPT. A cookie-Human's request must carry a valid `X-CSRF-Token` matching the session token (constant-time)
- * AND, when present, a same-origin `Origin`/`Referer`; on failure this responds 403 itself and returns false (the
- * caller does `if (!enforceCsrf(call, resolved)) return@post`).
+ * The CSRF gate for a state mutation, branching on the credential [Source] (A4a §3 + A4b). A cookie-sourced
+ * [Principal.Human] runs the A4a SYNCHRONIZER token (the session row's `csrf_token`, unchanged); a proxy-sourced
+ * Human (A4b) runs the STATELESS DOUBLE-SUBMIT (`pb_proxy_csrf` cookie == `X-CSRF-Token` header, HMAC-verified by
+ * [ProxyCsrf] — no `sessions` row); a `pb_` bearer [Principal.Agent], an [Principal.Anonymous], and a test
+ * fixed-principal (`source == null`) are EXEMPT (no ambient credential to forge). Both Human paths also require a
+ * same-origin `Origin`/`Referer` when present (fail-closed-WHEN-PRESENT). On failure this responds 403 itself and
+ * returns false (the caller does `if (!enforceCsrf(call, resolved)) return@post`).
  */
-internal suspend fun enforceCsrf(call: ApplicationCall, resolved: PrincipalExtraction.Resolved): Boolean {
+internal suspend fun RouteContext.enforceCsrf(call: ApplicationCall, resolved: PrincipalExtraction.Resolved): Boolean {
     if (!CsrfGuard.requiresCsrf(resolved.principal)) return true
-    val expected = resolved.csrfToken ?: return true // not a cookie-bound session (bearer/anon/proxy/test) → exempt
-    return when (CsrfGuard.validate(call, expected)) {
-        CsrfGuard.Outcome.Ok -> true
-        CsrfGuard.Outcome.TokenMismatch -> {
-            call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CSRF_FAILED, "Missing or invalid X-CSRF-Token")
-            false
+    return when (resolved.source) {
+        Source.COOKIE -> mapCsrfOutcome(call, CsrfGuard.validate(call, resolved.csrfToken!!, trustedProxyCidrs))
+        Source.PROXY -> {
+            val tokenOk = proxyCsrf.validate(
+                presentedCookie = call.request.cookies["pb_proxy_csrf"],
+                presentedHeader = call.request.headers["X-CSRF-Token"],
+            )
+            // The double-submit token is primary; the Origin secondary stays fail-closed-WHEN-PRESENT (reused). Behind
+            // a trusted proxy the Origin matches the EXTERNAL host via X-Forwarded-Host (port-agnostic), not the hop.
+            val outcome = if (!tokenOk) CsrfGuard.Outcome.TokenMismatch else CsrfGuard.validateOrigin(call, trustedProxyCidrs)
+            mapCsrfOutcome(call, outcome)
         }
-        CsrfGuard.Outcome.CrossOrigin -> {
-            call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CROSS_ORIGIN, "Cross-origin request rejected")
-            false
-        }
+        // A Human with no source is a test fixed-principal (production never produces one) — exempt, as A4a.
+        null -> true
+    }
+}
+
+/** Maps a [CsrfGuard.Outcome] to true (Ok) or a 403 (token/origin), the shared shape for both CSRF mechanisms. */
+private suspend fun mapCsrfOutcome(call: ApplicationCall, outcome: CsrfGuard.Outcome): Boolean = when (outcome) {
+    CsrfGuard.Outcome.Ok -> true
+    CsrfGuard.Outcome.TokenMismatch -> {
+        call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CSRF_FAILED, "Missing or invalid X-CSRF-Token")
+        false
+    }
+    CsrfGuard.Outcome.CrossOrigin -> {
+        call.respondError(HttpStatusCode.Forbidden, ErrorCodes.CROSS_ORIGIN, "Cross-origin request rejected")
+        false
     }
 }
 
@@ -273,7 +294,25 @@ internal suspend fun RouteContext.principalOrRefuseToShell(call: ApplicationCall
             call.respondTransportInsecure()
             ExtractedPrincipal.Refused
         }
+        is PrincipalExtraction.ProxyIdentityRejected -> {
+            call.respondProxyIdentityRejected()
+            ExtractedPrincipal.Refused
+        }
     }
+
+/**
+ * The 400 for a malformed proxy identity header ([PrincipalExtraction.ProxyIdentityRejected], A4b WI-6): a trusted
+ * proxy passed the secret+transport gate but sent a malformed subject — operator MISCONFIG, not an attacker, so 400
+ * not 401/421. The message names the CLASS of problem; it NEVER echoes the offending value (the reason category is in
+ * the operator log, not the wire).
+ */
+private suspend fun ApplicationCall.respondProxyIdentityRejected() {
+    respondError(
+        HttpStatusCode.BadRequest,
+        ErrorCodes.INVALID_PROXY_IDENTITY,
+        "Proxy identity header is malformed; check the reverse-proxy configuration",
+    )
+}
 
 /**
  * The result of [principalOrRefuseToShell]: either a [Resolved] principal to proceed with, or [Refused] (the

@@ -71,7 +71,7 @@ fun Route.authRoutes(ctx: RouteContext) {
 
     post("/api/v1/logout") {
         val resolved = ctx.resolveOrRefuse(call) ?: return@post
-        if (!enforceCsrf(call, resolved)) return@post
+        if (!ctx.enforceCsrf(call, resolved)) return@post
         // Revoke the current session (idempotent for an absent/garbage cookie) and clear the cookie.
         call.currentSessionCookie()?.let(ctx.auth.session::revoke)
         call.sessions.clear(SESSION_COOKIE_NAME)

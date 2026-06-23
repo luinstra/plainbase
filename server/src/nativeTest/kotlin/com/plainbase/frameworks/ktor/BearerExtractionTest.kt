@@ -148,6 +148,7 @@ class BearerExtractionTest {
                         is PrincipalExtraction.Resolved ->
                             call.respondText((result.principal as? Principal.Agent)?.tokenId ?: "anonymous")
                         PrincipalExtraction.InsecureTransportRefused -> call.respondText("refused")
+                        is PrincipalExtraction.ProxyIdentityRejected -> call.respondText("proxy-rejected")
                     }
                 }
             }

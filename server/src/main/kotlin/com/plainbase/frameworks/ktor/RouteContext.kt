@@ -4,6 +4,8 @@ import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.ReadFacade
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.security.ProxyCsrf
 import io.ktor.server.application.ApplicationCall
 
 /**
@@ -38,9 +40,39 @@ class RouteContext(
      */
     val builtinAuthEnabled: Boolean = true,
     /**
-     * The per-route principal source; defaults to the real A1/A2/A4a extraction over [tokens] + the `pb_session`
-     * cookie (via [auth].session, gated by [builtinAuthEnabled]) + [trustedProxyCidrs].
+     * A4b: true ONLY in `auth.mode=proxy`. Gates the proxy identity source in [extract] + the proxy `GET /session`
+     * + (with [builtinAuthEnabled]) the mode-independent admin token/audit/role routes.
+     */
+    val proxyAuthEnabled: Boolean = false,
+    /** A4b: the REQUIRED proxy shared secret (proxy mode); null outside proxy mode. */
+    val proxySecret: String? = null,
+    /** A4b: the operator-configurable proxy identity header name (default `X-Forwarded-User`). */
+    val proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
+    /**
+     * A4b: the `Secure` attribute for the `pb_proxy_csrf` cookie (mirrors [PlainbaseConfig.secureCookie] — TLS-fronted
+     * iff a non-loopback bind OR a trusted proxy is declared). Defaults false (loopback-dev/test).
+     */
+    val secureCookie: Boolean = false,
+    /**
+     * A4b: the stateless proxy-CSRF double-submit minter/validator (built from the persisted server key). Always
+     * present (even outside proxy mode) so `enforceCsrf` needn't null-check; only the [Source.PROXY] branch uses it.
+     */
+    val proxyCsrf: ProxyCsrf,
+    /**
+     * The per-route principal source; defaults to the real A1/A2/A4a/A4b extraction over [tokens] + the `pb_session`
+     * cookie (gated by [builtinAuthEnabled]) + the proxy identity header (gated by [proxyAuthEnabled]) +
+     * [trustedProxyCidrs].
      */
     val extract: ApplicationCall.() -> PrincipalExtraction =
-        { extractPrincipal(tokens, trustedProxyCidrs, auth.session, builtinAuthEnabled) },
+        {
+            extractPrincipal(
+                tokens,
+                trustedProxyCidrs,
+                auth.session,
+                builtinAuthEnabled,
+                proxyAuthEnabled = proxyAuthEnabled,
+                proxySecret = proxySecret,
+                proxyIdentityHeader = proxyIdentityHeader,
+            )
+        },
 )

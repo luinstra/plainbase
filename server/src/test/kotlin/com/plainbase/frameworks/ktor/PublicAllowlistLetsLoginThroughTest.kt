@@ -72,19 +72,17 @@ class PublicAllowlistLetsLoginThroughTest : FunSpec({
         }
     }
 
-    // WI-7: in OFF/PROXY the builtin auth surface is NOT registered — a leftover builtin login path must be ABSENT
-    // (404), never a live bypass of the proxy/off identity. The §A4 routing matrix's api-fallback answers an unknown
-    // /api path with a 404 envelope, so these resolve to the fallback's `not_found`, never their own handler.
-    test("under proxy mode (builtin auth disabled) the auth routes are ABSENT (404), not live") {
-        authRouteTest(enforced = true, builtinAuthEnabled = false) {
+    // WI-7: in OFF/PROXY the builtin LOGIN/SETUP/USER-CRUD surface is NOT registered — a leftover builtin login path
+    // must be ABSENT (404), never a live bypass of the proxy/off identity. A4b WIDENS this: `/session` is now PUBLIC
+    // in proxy mode (the CSRF-bootstrap read, 200 for an anonymous proxy request), while login/setup/admin-users STAY
+    // 404. The §A4 routing matrix's api-fallback answers an unknown /api path with a 404 envelope.
+    test("under proxy mode: login/setup/admin-users STAY 404, but /session is PUBLIC (200, authenticated=false)") {
+        authRouteTest(enforced = true, builtinAuthEnabled = false, proxyAuthEnabled = true, proxySecret = "s") {
             val login = client.post("/api/v1/login") {
                 contentType(ContentType.Application.Json)
                 setBody("""{"username":"ghost","password":"pw"}""")
             }
             login.status shouldBe HttpStatusCode.NotFound
-
-            val session = client.get("/api/v1/session")
-            session.status shouldBe HttpStatusCode.NotFound
 
             val setup = client.post("/api/v1/setup/consume") {
                 contentType(ContentType.Application.Json)
@@ -92,10 +90,17 @@ class PublicAllowlistLetsLoginThroughTest : FunSpec({
             }
             setup.status shouldBe HttpStatusCode.NotFound
 
-            // The GATED admin user surface is part of the same builtin-only block — it too must be ABSENT (404), not
-            // reachable as a 401/403, so a proxy/off deployment exposes no builtin-management route at all.
+            // The builtin USER-CRUD surface stays ABSENT (404) in proxy mode (user CRUD is builtin-only, locked pt 3).
             val adminUsers = client.get("/api/v1/admin/users")
             adminUsers.status shouldBe HttpStatusCode.NotFound
+
+            // A4b WIDEN: /session is PUBLIC in proxy mode — an anonymous proxy request gets 200 authenticated=false,
+            // with authMode=proxy so the SPA hides builtin-only panels.
+            val session = client.get("/api/v1/session")
+            session.status shouldBe HttpStatusCode.OK
+            val body = Json.parseToJsonElement(session.bodyAsText()).jsonObject
+            body["authenticated"]!!.jsonPrimitive.content shouldBe "false"
+            body["auth_mode"]!!.jsonPrimitive.content shouldBe "proxy"
         }
     }
 })

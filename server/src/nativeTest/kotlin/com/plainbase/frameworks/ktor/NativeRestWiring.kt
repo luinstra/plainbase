@@ -25,10 +25,12 @@ import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.ApiTokenMinter
 import com.plainbase.frameworks.security.Argon2PasswordHasher
+import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.SessionTokenMinter
 import com.plainbase.frameworks.security.SetupTokenMinter
 import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.security.dummyPasswordHash
+import com.plainbase.frameworks.security.loadOrCreateProxyCsrfKey
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
@@ -55,8 +57,13 @@ import kotlin.time.Clock
 fun withRestServices(
     pages: Map<String, String> = emptyMap(),
     seedAdmin: Pair<String, String>? = null, // (username, password) — seeds a builtin ADMIN before the block runs
+    proxyMode: Boolean = false, // A4b: PROXY auth (builtin off, a test secret, a loopback-trusted transport)
+    seedProxyAdmin: String? = null, // A4b: grant ADMIN to a proxy/<subject> identity (the grant-role first-admin seam)
     block: (RouteContext) -> Unit,
 ) {
+    // A4b: in proxy mode the loopback test client (127.0.0.1) counts as loopback-secure, so a request can present the
+    // identity header + secret and authenticate. builtinAuthEnabled goes off; the proxy secret/header are fixed.
+    val proxySecret = if (proxyMode) "native-proxy-secret" else null
     val content = Files.createTempDirectory("pb-native-rest")
     val data = Files.createTempDirectory("pb-native-rest-data")
     try {
@@ -106,7 +113,9 @@ fun withRestServices(
                     audit = SqlDelightAuditRepository(database),
                     idProvider = UuidV7IdProvider(),
                     clock = Clock.System,
-                    enforced = false,
+                    // Proxy mode enforces the matrix (so a no-role proxy human is denied); the OFF native smokes keep
+                    // the open dev behavior.
+                    enforced = proxyMode,
                 )
                 // A4a auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
                 val passwordHasher = Argon2PasswordHasher()
@@ -147,6 +156,8 @@ fun withRestServices(
                         idProvider = UuidV7IdProvider(),
                         transactions = SqlDelightTransactionRunner(database),
                         clock = Clock.System,
+                        tokens = apiTokens,
+                        audit = SqlDelightAuditRepository(database),
                     ),
                     rateLimiter = LoginRateLimiter(),
                 )
@@ -165,6 +176,11 @@ fun withRestServices(
                         ),
                     )
                     SqlDelightRoleRepository(database).upsert("builtin", userId, com.plainbase.domain.repository.Role.ADMIN, now)
+                }
+                seedProxyAdmin?.let { subject ->
+                    SqlDelightRoleRepository(
+                        database,
+                    ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
                 val services = buildRouteContext(
                     policy = policy,
@@ -189,6 +205,12 @@ fun withRestServices(
                     trustedProxyCidrs = emptyList(),
                     maxWriteBodyBytes = PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
                     maxAssetBytes = PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
+                    builtinAuthEnabled = !proxyMode,
+                    proxyAuthEnabled = proxyMode,
+                    proxySecret = proxySecret,
+                    // Exercise the real app_meta key load + persistence path in the native image (the §0.12 proof
+                    // that SecureRandom + app_meta.upsert work closed-world).
+                    proxyCsrf = ProxyCsrf(loadOrCreateProxyCsrfKey(database)),
                 )
                 block(services)
             }

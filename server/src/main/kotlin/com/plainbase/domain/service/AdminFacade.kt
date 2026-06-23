@@ -1,7 +1,11 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.repository.ApiTokenMeta
+import com.plainbase.domain.repository.AuditEntry
 import com.plainbase.domain.repository.Role
+import com.plainbase.domain.repository.SubjectRoleRow
 import com.plainbase.domain.repository.UserMeta
 
 /**
@@ -36,6 +40,21 @@ interface AdminFacade {
 
     /** MANAGE: grant/regrant [role] to the `(issuer, externalId)` identity (the same upsert path the CLI uses). */
     fun grantRole(principal: Principal, issuer: String, externalId: String, role: Role)
+
+    /** MANAGE: every API token's metadata — NO secret hash, NO plaintext (the list discipline). Mode-independent. */
+    fun listTokens(principal: Principal): List<ApiTokenMeta>
+
+    /** MANAGE: mint a new agent token; the plaintext rides [CreatedApiToken] ONCE, never re-derivable. */
+    fun mintToken(principal: Principal, label: String, mode: AgentMode): CreatedApiToken
+
+    /** MANAGE: revoke a token by its public id (idempotent — a no-op for an unknown/already-revoked id). */
+    fun revokeToken(principal: Principal, id: String)
+
+    /** MANAGE: the most recent [limit] authorization decisions, newest-first (the audit-view read). */
+    fun recentAudit(principal: Principal, limit: Int): List<AuditEntry>
+
+    /** MANAGE: every subject's role row (the role-list surface). */
+    fun listRoles(principal: Principal): List<SubjectRoleRow>
 }
 
 /** The outcome of [AdminFacade.createUser]. [Created.resetToken] is the one-time plaintext (returned ONCE). */
@@ -44,3 +63,6 @@ sealed interface CreateUserOutcome {
 
     data object UsernameExists : CreateUserOutcome
 }
+
+/** A freshly minted API token: its public [id] + the one-time [plaintext] (returned ONCE, never re-readable). */
+data class CreatedApiToken(val id: String, val plaintext: String)

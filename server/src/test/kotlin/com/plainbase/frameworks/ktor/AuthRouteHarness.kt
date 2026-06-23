@@ -22,6 +22,11 @@ import kotlin.time.Clock
 class AuthRouteHarness(
     private val enforced: Boolean = true,
     builtinAuthEnabled: Boolean = true,
+    proxyAuthEnabled: Boolean = false,
+    proxySecret: String? = null,
+    trustedProxyCidrs: List<String> = emptyList(),
+    val proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf =
+        com.plainbase.frameworks.security.ProxyCsrf(ByteArray(32) { 7 }),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
 ) : AutoCloseable {
 
@@ -59,10 +64,13 @@ class AuthRouteHarness(
         idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
         tokens = harness.apiTokens,
         auth = auth,
-        trustedProxyCidrs = emptyList(),
+        trustedProxyCidrs = trustedProxyCidrs,
         maxWriteBodyBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_WRITE_BODY_BYTES,
         maxAssetBytes = com.plainbase.frameworks.config.PlainbaseConfig.DEFAULT_MAX_ASSET_BYTES,
         builtinAuthEnabled = builtinAuthEnabled,
+        proxyAuthEnabled = proxyAuthEnabled,
+        proxySecret = proxySecret,
+        proxyCsrf = proxyCsrf,
         extract = extract,
     )
 
@@ -88,6 +96,19 @@ class AuthRouteHarness(
         harness.roleRepository.upsert("builtin", id, role, now)
         return id
     }
+
+    /** Grant [role] to a PROXY identity `(issuer="proxy", externalId=subject)` — the grant-role first-admin seam. */
+    fun seedProxyRole(subject: String, role: Role) {
+        harness.roleRepository.upsert("proxy", subject, role, Clock.System.now())
+    }
+
+    /** Grant [role] to an arbitrary `(issuer, externalId)` identity — for a fixed-principal route test. */
+    fun grantRole(issuer: String, externalId: String, role: Role) {
+        harness.roleRepository.upsert(issuer, externalId, role, Clock.System.now())
+    }
+
+    /** Mint a fresh proxy double-submit token (the cookie/header value a test echoes on a proxy-Human mutation). */
+    fun issueProxyCsrf(): String = proxyCsrf.issue()
 
     /** Mint a bootstrap setup token directly (for the setup-consume route tests). */
     fun mintBootstrapToken(): String = auth.setup.mintBootstrapToken().plaintext
@@ -117,10 +138,13 @@ class AuthRouteHarness(
 fun authRouteTest(
     enforced: Boolean = true,
     builtinAuthEnabled: Boolean = true,
+    proxyAuthEnabled: Boolean = false,
+    proxySecret: String? = null,
+    trustedProxyCidrs: List<String> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     block: suspend ApplicationTestBuilder.(AuthRouteHarness) -> Unit,
 ) {
-    AuthRouteHarness(enforced, builtinAuthEnabled, extract).use { harness ->
+    AuthRouteHarness(enforced, builtinAuthEnabled, proxyAuthEnabled, proxySecret, trustedProxyCidrs, extract = extract).use { harness ->
         testApplication {
             application { plainbaseModule(harness.context) }
             block(harness)

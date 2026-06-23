@@ -1,0 +1,109 @@
+# Plainbase — reverse-proxy SSO reference STACK (A4b, `auth.mode=proxy`).
+#
+# REFERENCE MATERIAL, not a CI-runnable stack. Validated ONLY by `docker compose config`
+# (a lint), never `docker compose up` in CI (named-subnet/IPAM allocation is environment-
+# specific). It shows the ONE secure topology where an operator/tenant CANNOT self-spoof
+# the identity header:
+#
+#   browser ──TLS──> caddy (the ONLY published service)
+#                      │ forward_auth ──> oauth2-proxy (does OIDC against your IdP)
+#                      │ strip-then-set X-Forwarded-User + X-Plainbase-Proxy-Secret
+#                      └──────────────> plainbase:8080  (in-network only, never published)
+#
+# This is a STANDALONE stack — NOT an overlay on the base `docker-compose.yml`. Layering the
+# base here would inherit its host-loopback publish, which must NOT happen in proxy mode (Caddy
+# is the only published service). Run it on its OWN, from the REPO ROOT (the project dir compose
+# resolves the `build:`/bind-mount paths against), loading the env file beside this file:
+#   docker compose -f deploy/proxy/docker-compose.proxy.yml --env-file deploy/proxy/.env config
+#
+# THE TRUST ANCHOR IS THE SECRET, NOT THE CIDR. plainbase + the proxy share a dedicated
+# `internal` network with a pinned subnet; PLAINBASE_TRUSTED_PROXY is that subnet. Trusting
+# the isolated compose subnet is acceptable HERE only because (a) nothing else is published
+# and (b) PLAINBASE_PROXY_SECRET is the real authenticator — a sibling on the subnet that
+# does NOT know the secret cannot stamp a valid identity header.
+#
+# Set these in a `.env` next to this file (NEVER inline a secret in the compose file):
+#   PLAINBASE_PROXY_SECRET=<a long random shared value>
+#   OAUTH2_PROXY_CLIENT_ID / _CLIENT_SECRET / _COOKIE_SECRET / OIDC_ISSUER_URL  (your IdP)
+
+services:
+  plainbase:
+    # Full standalone definition — NOT merged with the base file. In-network only (NO `ports:`):
+    # Caddy is the sole published service. Build context is the repo root (this file lives two
+    # dirs down under deploy/proxy/).
+    build: ../..
+    networks:
+      internal:
+    environment:
+      CONTENT_DIR: /content
+      DATA_DIR: /data
+      PLAINBASE_AUTH_MODE: proxy
+      # Bind every interface inside the container so Caddy (on the internal network) can reach the
+      # app. No bind-guard override is needed: proxy mode with a trusted-proxy CIDR + secret IS the
+      # secure context the guard requires.
+      PLAINBASE_HOST: 0.0.0.0
+      # The dedicated internal subnet (see `networks:` below) — the secret is the trust anchor,
+      # this CIDR only scopes WHICH peers may even attempt the trusted path.
+      PLAINBASE_TRUSTED_PROXY: 172.31.7.0/24
+      PLAINBASE_PROXY_SECRET: ${PLAINBASE_PROXY_SECRET:?set PLAINBASE_PROXY_SECRET in deploy/proxy/.env}
+      # Map a STABLE IdP subject (oauth2-proxy's authenticated user id), NOT email — email
+      # reassignment would transfer roles. Default header name is X-Forwarded-User.
+    volumes:
+      # Point this bind mount at your own Markdown tree; the demo fixtures are the default.
+      - ../../fixtures/demo-docs:/content
+      - plainbase-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    # The ONLY published service. Terminates TLS, runs forward_auth to oauth2-proxy, then
+    # strips-then-sets the identity + secret headers before proxying to plainbase.
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      # Run standalone (single `-f deploy/proxy/docker-compose.proxy.yml`), so the PROJECT dir compose
+      # resolves bind mounts against is THIS file's dir (deploy/proxy/) — name the Caddyfile from here.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      PLAINBASE_PROXY_SECRET: ${PLAINBASE_PROXY_SECRET:?set PLAINBASE_PROXY_SECRET in deploy/proxy/.env}
+    networks:
+      internal:
+    depends_on:
+      - plainbase
+      - oauth2-proxy
+    restart: unless-stopped
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    command:
+      - --http-address=0.0.0.0:4180
+      - --reverse-proxy=true
+      - --provider=oidc
+      - --oidc-issuer-url=${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL in deploy/proxy/.env}
+      - --email-domain=*
+      - --upstream=static://202 # forward_auth mode: only authenticate, never proxy content
+      - --set-xauthrequest=true # emit X-Auth-Request-User / -Preferred-Username for Caddy to read
+      - --skip-provider-button=true
+    environment:
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID:?set in deploy/proxy/.env}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET:?set in deploy/proxy/.env}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?set in deploy/proxy/.env}
+    networks:
+      internal:
+    restart: unless-stopped
+
+networks:
+  # A dedicated, pinned-subnet network so PLAINBASE_TRUSTED_PROXY names a CONCRETE CIDR
+  # (compose's default network has an environment-assigned subnet that the app config can't know).
+  internal:
+    ipam:
+      config:
+        - subnet: 172.31.7.0/24
+
+volumes:
+  plainbase-data:
+  caddy-data:
+  caddy-config:

@@ -60,6 +60,8 @@ class TokenAntiEnumerationTest {
                         }
                     PrincipalExtraction.InsecureTransportRefused ->
                         call.respondText("insecure", status = HttpStatusCode.UpgradeRequired)
+                    is PrincipalExtraction.ProxyIdentityRejected ->
+                        call.respondText("proxy-rejected", status = HttpStatusCode.BadRequest)
                 }
             }
         }

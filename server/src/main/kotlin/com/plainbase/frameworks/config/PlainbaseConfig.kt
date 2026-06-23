@@ -84,6 +84,14 @@ data class PlainbaseConfig(
      * internet serving an open surface — exactly what must be refused, never exempted.
      */
     fun bindGuardRefusal(): String? {
+        // A4b: a PROXY-mode misconfig is refused even on a LOOPBACK bind — a loopback PROXY with no CIDR/secret still
+        // trusts any loopback sibling. So this completeness check runs BEFORE the loopback early-return below. The
+        // secret is the real trust anchor (CIDR alone trusts a whole subnet), so BOTH are required; the message
+        // names both remedies.
+        if (auth.mode == AuthMode.PROXY && (auth.trustedProxyCidrs.isEmpty() || auth.proxySecret.isNullOrBlank())) {
+            return "auth.mode=proxy requires both a trusted-proxy allowlist and a shared secret. " +
+                "Remedies: set PLAINBASE_TRUSTED_PROXY to the proxy's /32; set PLAINBASE_PROXY_SECRET to a shared value the proxy stamps."
+        }
         if (!isNonLoopbackBind()) return null // loopback HTTP always allowed (dev)
         if (auth.trustedProxyCidrs.isNotEmpty()) return null // proxy mode declared (A4b terminates TLS)
         if (auth.insecureHttp) return null // explicit, knowing override (logs loudly)
@@ -137,6 +145,9 @@ data class PlainbaseConfig(
         const val DEFAULT_GIT_AUTHOR_NAME: String = "Plainbase"
         const val DEFAULT_GIT_AUTHOR_EMAIL: String = "plainbase@localhost"
 
+        /** A4b default proxy identity header (the IdP subject the trusted proxy stamps); operator-configurable. */
+        const val DEFAULT_PROXY_IDENTITY_HEADER: String = "X-Forwarded-User"
+
         /**
          * Env-only construction (the CLIs/spike fast path). No file is read; this is exactly the
          * env-and-defaults behavior [fromEnvAndFile] falls back to when no `plainbase.conf` is present.
@@ -185,6 +196,11 @@ data class PlainbaseConfig(
                     ?: file.stringOrNull("auth.insecureHttp")?.toBooleanStrictOrNull() ?: false,
                 agentDirectCommitGlobs = env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
                     ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
+                // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
+                // completeness; the deploy docs steer operators to env.
+                proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
+                proxyIdentityHeader = (env["PLAINBASE_PROXY_IDENTITY_HEADER"] ?: file.stringOrNull("auth.proxyIdentityHeader"))
+                    ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
             ),
         )
 
@@ -294,4 +310,12 @@ data class AuthConfig(
     val trustedProxyCidrs: List<String> = emptyList(),
     val insecureHttp: Boolean = false,
     val agentDirectCommitGlobs: List<String> = emptyList(),
+    /**
+     * A4b PROXY mode: the shared secret the trusted proxy stamps as `X-Plainbase-Proxy-Secret`. REQUIRED in proxy
+     * mode (the [bindGuardRefusal] enforces it) — it is the real trust anchor: a CIDR alone trusts a whole subnet,
+     * so a sibling on a shared net could stamp the identity header. Stays in env, never logged.
+     */
+    val proxySecret: String? = null,
+    /** A4b PROXY mode: the operator-configurable identity header name (default `X-Forwarded-User`). */
+    val proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
 )
