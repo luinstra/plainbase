@@ -27,6 +27,13 @@ interface ApiTokenRepository {
     fun modeOf(id: String): AgentMode?
 
     /**
+     * The agent token's `agent_label`, or null if unknown — C4 author labeling reads ONLY the label (→ the snapshot
+     * attribution) for an already-authenticated [com.plainbase.domain.principal.Principal.Agent], never the secret
+     * hash. A narrow projection (the [modeOf] discipline) so the non-auth propose path never loads the at-rest secret.
+     */
+    fun agentLabelById(id: String): String?
+
+    /**
      * The atomic authenticate stamp (TOCTOU-safe): sets [id]'s `last_used_at` to [at] in ONE conditional write
      * that fires ONLY while the token is still active (not revoked, not expired at [at]), and returns whether a
      * row was updated. A concurrent revoke/expiry committing first makes this a no-op (returns false), so a

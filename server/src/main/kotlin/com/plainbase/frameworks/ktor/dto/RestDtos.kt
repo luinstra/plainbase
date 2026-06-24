@@ -149,6 +149,17 @@ object ErrorCodes {
      * message names the class of problem, never the offending value.
      */
     const val INVALID_PROXY_IDENTITY: String = "invalid_proxy_identity"
+
+    // ---- PB-PROPOSE-1 (P1a): the proposal vocabulary (append-only) -----------------------------------
+
+    /** 400: an `edit` proposal's claimed `base_hash` no longer matches the live content, OR the target page no longer exists; nothing persisted. */
+    const val STALE_BASE: String = "stale_base"
+
+    /** 400: a malformed propose request — missing/blank/contradictory field, empty content, unknown operation, unparseable JSON, malformed UTF-8 envelope, traversal `target_path`, or a client `target_path` disagreeing with the `page_id`-resolved path. */
+    const val INVALID_PROPOSE_REQUEST: String = "invalid_propose_request"
+
+    /** 409: a `reject` (or future P1b decision) targeted a proposal no longer `PENDING` (already terminal/in-flight); no state change. */
+    const val NOT_PENDING: String = "not_pending"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

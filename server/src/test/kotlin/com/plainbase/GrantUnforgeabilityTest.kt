@@ -32,9 +32,11 @@ class GrantUnforgeabilityTest : FunSpec({
         "EditGrant(",
         "CreateGrant(",
         "ManageGrant(",
+        "ApproveGrant(",
         "grantForTests",
         "createGrantForTests",
         "manageGrantForTests",
+        "approveGrantForTests",
     )
 
     // The ONLY production files allowed to reference the mint: PolicyService (the sole production mint site) and
@@ -43,7 +45,16 @@ class GrantUnforgeabilityTest : FunSpec({
 
     test("the scan sees the production tree and the grant + policy files (anti-vacuous floor)") {
         val names = files.map { it.name }.toSet()
-        names.containsAll(setOf("PolicyService.kt", "Grants.kt", "WritePipeline.kt", "GuardedMutatingFacade.kt")).shouldBeTrue()
+        names.containsAll(
+            setOf(
+                "PolicyService.kt",
+                "Grants.kt",
+                "WritePipeline.kt",
+                "GuardedMutatingFacade.kt",
+                "GuardedProposalFacade.kt",
+                "ProposalService.kt",
+            ),
+        ).shouldBeTrue()
     }
 
     test("no production file outside PolicyService mints a grant or calls grantForTests*") {

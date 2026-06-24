@@ -3,6 +3,8 @@ package com.plainbase.acceptance
 import com.plainbase.domain.render.HeadingIdsGoldenTest
 import com.plainbase.domain.service.FrontmatterPatcherGoldenTest
 import com.plainbase.domain.service.LinkResolutionGoldenTest
+import com.plainbase.domain.service.UnifiedDiffGoldenTest
+import com.plainbase.frameworks.ktor.ProposalGoldenTest
 import com.plainbase.frameworks.ktor.RestGoldenTest
 import com.plainbase.frameworks.ktor.SearchGoldenTest
 import com.plainbase.frameworks.ktor.WriteGoldenTest
@@ -93,6 +95,19 @@ import io.kotest.core.spec.style.FunSpec
  * (the url-divergence guard), so WriteGoldenTest is now 11 tests (incl. the path-space-loser
  * permalink fallback: a null-canonical-url create addresses the `/p/{id}` permalink, never a
  * fabricated `/docs/<raw path>`).
+ *
+ * PB-PROPOSE-1 + PB-DIFF-1 freeze ledger (froze when P1a landed, Phase 5): the agent proposal wire
+ * (`POST/GET /api/v1/changes` + `…/{id}` + `…/{id}/reject`) is frozen — the propose/get/list/reject
+ * shapes, the wrapper-object `{proposals:[…]}` (never a bare array, so pagination is additive), the
+ * `base_drifted` LIVE triage field, and the reject success body (200 `ChangeDetail`, status REJECTED).
+ * Three append-only codes joined `ErrorCodes`: `stale_base` (400), `invalid_propose_request` (400),
+ * `not_pending` (409); `not_found` (404) is REUSED. The status vocabulary is append-only six
+ * {PENDING, APPLYING, APPLIED, REJECTED, CONFLICTED, FAILED}; the operation vocabulary is the two
+ * lowercase wire values {edit, create}. PB-DIFF-1 freezes the server-computed unified-diff ALGORITHM
+ * OUTPUT and its format rules (3-line context, explicit `,<n>` counts, elided file headers, git's
+ * `\ No newline` marker, empty-string no-op) via the six canonical byte-pair goldens; the benign-rare
+ * adversarial tail (CRLF/BOM/no-final-newline/non-UTF8) is frozen by INVARIANTS, not exact goldens
+ * (freeze-surface policy). A diff-algo or format change is a CONTRACT break, not a fix.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -125,5 +140,13 @@ class ForeverApiGoldenSuite : FunSpec({
         "PB-WRITE-1: the write snapshot corpus (11 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback)",
     ) {
         SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 11)
+    }
+
+    test("PB-PROPOSE-1: propose/get/list/reject wire shapes are frozen (incl. the reject wire + status/operation vocabularies)") {
+        SelectedSuite.run(ProposalGoldenTest::class).shouldHavePassed("ProposalGoldenTest", atLeastTests = 11)
+    }
+
+    test("PB-DIFF-1: the unified-diff algorithm output + its frozen format rules are frozen") {
+        SelectedSuite.run(UnifiedDiffGoldenTest::class).shouldHavePassed("UnifiedDiffGoldenTest", atLeastTests = 7)
     }
 })

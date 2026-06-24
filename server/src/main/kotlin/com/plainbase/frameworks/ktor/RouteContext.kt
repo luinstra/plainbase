@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
+import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.security.ProxyCsrf
@@ -23,6 +24,8 @@ import io.ktor.server.application.ApplicationCall
 class RouteContext(
     val read: ReadFacade,
     val mutate: MutatingFacade,
+    /** PB-PROPOSE-1 (P1a) the guarded proposal surface for `/api/v1/changes` (propose/list/get/reject). */
+    val proposals: ProposalFacade,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,

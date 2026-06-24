@@ -37,6 +37,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -183,6 +184,21 @@ fun withRestServices(
                         database,
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
+                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, contentStore = store)
+                val proposalFacade = GuardedProposalFacade(
+                    policy = policy,
+                    proposals = com.plainbase.domain.service.ProposalService(
+                        repository = SqlDelightProposalRepository(database),
+                        citations = CitationFactory(),
+                        baseReader = proposalBaseReader,
+                        proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+                        clock = Clock.System,
+                    ),
+                    labeler = com.plainbase.domain.service.ProposalAuthorLabeler(
+                        tokens = SqlDelightApiTokenRepository(database),
+                        users = SqlDelightUserRepository(database),
+                    ),
+                )
                 val services = buildRouteContext(
                     policy = policy,
                     indexBuilder = builder,
@@ -201,6 +217,7 @@ fun withRestServices(
                     ),
                     history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
+                    proposals = proposalFacade,
                     tokens = apiTokens,
                     auth = authServices,
                     trustedProxyCidrs = emptyList(),

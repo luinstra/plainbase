@@ -6,8 +6,10 @@ import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.ProposalIdProvider
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.UuidV7ProposalIdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import org.koin.dsl.module
@@ -23,6 +25,8 @@ val indexModule = module {
     single<FrontmatterParser> { FrontmatterReader() }
     // One UUIDv7 mint shared by the identity service (adopt-time ids) and the W2 create route.
     single<IdProvider> { UuidV7IdProvider() }
+    // The P1a proposal-id mint — a SEPARATE port (IdProvider is typed to PageId, can't mint a ProposalId).
+    single<ProposalIdProvider> { UuidV7ProposalIdProvider() }
     single { PageIdentityService(get()) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }

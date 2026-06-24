@@ -17,14 +17,14 @@ import java.sql.DriverManager
  * cleanly to the current schema — `page_search` (the Phase-0 FTS5 spike table) dropped by `2.sqm`,
  * `page_checkpoint` (§B3) present and usable, `dirty_page` (W1's `3.sqm` write-ahead journal) present,
  * `api_tokens` (A2's `4.sqm` agent-token store) present and usable, `subject_role` + `audit_log` (A3's `5.sqm`
- * authZ choke point) present and usable, and `users` + `sessions` + `setup_tokens` (A4a's `6.sqm` human-login
- * substrate) present and usable. `verifyMigrations` checks the DDL at build time; this proves the runtime path
- * end to end.
+ * authZ choke point) present and usable, `users` + `sessions` + `setup_tokens` (A4a's `6.sqm` human-login
+ * substrate) present and usable, and `proposals` (P1a's `7.sqm` agent-proposal store) present and usable.
+ * `verifyMigrations` checks the DDL at build time; this proves the runtime path end to end.
  */
 class AppDbMigrationTest : FunSpec({
 
     test(
-        "v2 baseline migrates to current: page_search dropped, checkpoint/dirty_page/api_tokens/subject_role/audit_log/users/sessions/setup_tokens created",
+        "v2 baseline migrates to current: page_search dropped, checkpoint/dirty_page/api_tokens/subject_role/audit_log/users/sessions/setup_tokens/proposals created",
     ) {
         val dir = Files.createTempDirectory("plainbase-migration-test")
         try {
@@ -101,6 +101,17 @@ class AppDbMigrationTest : FunSpec({
                     usedAt = null,
                 )
                 db.setupTokensQueries.selectByTokenHash(ByteArray(32) { 2 }).executeAsOne().purpose shouldBe "BOOTSTRAP"
+
+                // P1a (7.sqm): proposals is live through the typed layer — a row round-trips with its adapted columns.
+                val proposalId = com.plainbase.domain.page.ProposalId.require("01900000-0000-7000-9000-000000000001")
+                db.proposalsQueries.insert(
+                    id = proposalId, operation = "EDIT", pageId = id, baseHash = "sha256:abc",
+                    targetPath = TreePath.require("docs/start"), proposedContent = ByteArray(3) { 1 }, rationale = "r",
+                    diffArtifact = "", status = "PENDING", authorIssuer = "agent", authorExternalId = "00ff",
+                    authorLabel = "ci", approverIssuer = null, approverExternalId = null, decisionComment = null,
+                    createdAt = 0, decidedAt = null, appliedCommit = null,
+                )
+                db.proposalsQueries.selectById(proposalId).executeAsOne().status shouldBe "PENDING"
             }
 
             DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
@@ -116,12 +127,13 @@ class AppDbMigrationTest : FunSpec({
                     tables shouldContain "users"
                     tables shouldContain "sessions"
                     tables shouldContain "setup_tokens"
+                    tables shouldContain "proposals"
                     tables shouldNotContain "page_search"
                     val version = statement.executeQuery("PRAGMA user_version").use { rows ->
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 7L
+                    version shouldBe 8L
                 }
             }
         } finally {

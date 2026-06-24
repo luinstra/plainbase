@@ -8,6 +8,7 @@ import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
@@ -35,6 +36,7 @@ fun buildRouteContext(
     writePipeline: WritePipeline,
     history: HistoryProvider,
     idProvider: IdProvider,
+    proposals: ProposalFacade,
     tokens: ApiTokenService,
     auth: AuthServices,
     trustedProxyCidrs: List<String>,
@@ -68,6 +70,7 @@ fun buildRouteContext(
     return RouteContext(
         read = read,
         mutate = mutate,
+        proposals = proposals,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

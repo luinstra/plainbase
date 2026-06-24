@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.principal.ApproveGrant
 import com.plainbase.domain.principal.CreateGrant
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.ManageGrant
@@ -62,6 +63,14 @@ class PolicyService(
     fun checkManage(principal: Principal): ManageGrant =
         gate(principal, Action.MANAGE, MANAGE_RESOURCE) { ManageGrant() }
 
+    /**
+     * APPROVE gate (the proposal status transition, P1a): mints + returns an [ApproveGrant]; records the decision
+     * row + throws on deny. ADMIN-only via the [permits] matrix (`Role.ADMIN -> true` already covers it; VIEWER/
+     * EDITOR exclude it, so an agent — PROPOSE/COMMIT -> EDITOR — can never approve its own proposal, D1).
+     */
+    fun checkApprove(principal: Principal, resource: String): ApproveGrant =
+        gate(principal, Action.APPROVE, resource) { ApproveGrant() }
+
     /** The shared mutating gate: record the pre-effect decision row, then mint the grant or throw [AccessDenied]. */
     private inline fun <G> gate(principal: Principal, action: Action, resource: String, mint: () -> G): G {
         val allowed = allows(principal, action)
@@ -110,7 +119,10 @@ class PolicyService(
         const val MANAGE_RESOURCE = "admin"
         const val AGENT_ISSUER = "agent"
 
-        /** VIEWER: READ. EDITOR: READ + EDIT + CREATE. ADMIN: all. Anonymous / no-row: deny everything. */
+        /**
+         * VIEWER: READ. EDITOR: READ + EDIT + CREATE. ADMIN: all (incl. MANAGE + APPROVE — the proposal
+         * status transition rides `Role.ADMIN -> true`, D1, no new arm). Anonymous / no-row: deny everything.
+         */
         fun permits(role: Role?, action: Action): Boolean = when (role) {
             null -> false
             Role.VIEWER -> action == Action.READ
@@ -125,8 +137,8 @@ class PolicyService(
     }
 }
 
-/** The authZ verbs. READ is gated by the ReadFacade; EDIT/CREATE/MANAGE require a typed grant. */
-enum class Action { READ, EDIT, CREATE, MANAGE }
+/** The authZ verbs. READ is gated by the ReadFacade; EDIT/CREATE/MANAGE/APPROVE require a typed grant. */
+enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE }
 
 /**
  * A denied authorization decision (A3) — thrown by [PolicyService] AFTER the denied audit row is written. The

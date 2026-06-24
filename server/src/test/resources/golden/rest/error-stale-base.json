@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "stale_base",
+    "message": "The base you proposed against is no longer current; re-read the page and re-propose."
+  }
+}

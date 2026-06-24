@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_propose_request",
+    "message": "an edit requires page_id"
+  }
+}

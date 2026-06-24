@@ -48,6 +48,11 @@ class SqlDelightUserRepository(private val db: PlainbaseDb) : UserRepository {
     override fun findById(id: String): UserRow? =
         queries.selectById(id).executeAsOneOrNull()?.toRow()
 
+    // The query column is nullable, so a found row with a NULL display_name and an unknown id both surface as null —
+    // identical to the labeler's externalId fallback for both (the ambiguity is harmless, as the port doc notes).
+    override fun displayNameById(id: String): String? =
+        queries.displayNameById(id).executeAsOneOrNull()?.display_name
+
     override fun setPasswordHash(id: String, hash: String, at: Instant) {
         queries.setPasswordHash(passwordHash = hash, updatedAt = at.toEpochMilliseconds(), id = id)
     }

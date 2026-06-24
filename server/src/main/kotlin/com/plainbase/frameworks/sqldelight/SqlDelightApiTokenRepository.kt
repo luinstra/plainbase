@@ -40,6 +40,9 @@ class SqlDelightApiTokenRepository(private val db: PlainbaseDb) : ApiTokenReposi
     override fun modeOf(id: String): AgentMode? =
         queries.modeOf(id).executeAsOneOrNull()?.let(AgentMode::valueOf)
 
+    override fun agentLabelById(id: String): String? =
+        queries.agentLabelById(id).executeAsOneOrNull()
+
     override fun touchIfActive(id: String, at: Instant): Boolean =
         // SQLDelight mutations return the affected-row count in QueryResult.value (synchronous JDBC driver);
         // exactly one row means the token was still active when the conditional UPDATE committed.

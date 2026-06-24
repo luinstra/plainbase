@@ -27,6 +27,15 @@ interface UserRepository {
     /** The by-id lookup (incl. [UserRow.passwordHash]) — the password-change/reset path resolves the user here. */
     fun findById(id: String): UserRow?
 
+    /**
+     * The user's `display_name` (nullable column), or null if the user is unknown — C4 author labeling reads ONLY the
+     * display name (→ the snapshot attribution), never the `password_hash`. A narrow projection so the non-auth
+     * propose path never loads the at-rest hash (the [findByUsername]/[findById] verify paths keep it; this omits it).
+     * A null result is ambiguous (unknown user OR a user with no display name) — the labeler falls back to externalId
+     * for both, so the ambiguity is harmless.
+     */
+    fun displayNameById(id: String): String?
+
     /** Set a new argon2 [hash] for [id], stamping `updated_at` to [at] (self-service change + admin reset). */
     fun setPasswordHash(id: String, hash: String, at: Instant)
 

@@ -18,6 +18,7 @@ import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
+import com.plainbase.frameworks.ktor.routes.proposalRoutes
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.sessionRoutes
@@ -146,6 +147,8 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         pageWriteRoutes(ctx)
         // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
         pageCreateRoutes(ctx)
+        // PB-PROPOSE-1 (P1a): the agent proposal surface under `/api/v1/changes` (distinct constant prefix).
+        proposalRoutes(ctx)
         // W5 per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
         historyRoutes(ctx)
         // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.

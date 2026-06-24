@@ -134,6 +134,19 @@ fun IndexHarness.testRouteContext(
         clock = Clock.System,
         enforced = enforced,
     )
+    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, contentStore = contentStore)
+    val proposalService = com.plainbase.domain.service.ProposalService(
+        repository = proposalRepository,
+        citations = CitationFactory(),
+        baseReader = proposalReader,
+        proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+        clock = Clock.System,
+    )
+    val proposalFacade = com.plainbase.frameworks.ktor.GuardedProposalFacade(
+        policy = policy,
+        proposals = proposalService,
+        labeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),
+    )
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
@@ -144,6 +157,7 @@ fun IndexHarness.testRouteContext(
         writePipeline = writePipeline,
         history = history,
         idProvider = idProvider,
+        proposals = proposalFacade,
         tokens = apiTokens,
         auth = authServices(policy),
         trustedProxyCidrs = trustedProxyCidrs,

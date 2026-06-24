@@ -32,6 +32,14 @@ SELECT *
 FROM users
 WHERE id = :id;
 
+-- C4 author labeling reads ONLY the user's `display_name` — never the password_hash. A narrow projection so the
+-- (non-auth) propose-attribution path never loads the at-rest hash (defense-in-depth; the selectById path keeps
+-- password_hash for the verify, this one deliberately omits it).
+displayNameById:
+SELECT display_name
+FROM users
+WHERE id = :id;
+
 -- Self-service change / admin reset both stamp the new argon2 hash + updated_at; the caller then revokes all the
 -- user's sessions (the §7 force-re-login).
 setPasswordHash:

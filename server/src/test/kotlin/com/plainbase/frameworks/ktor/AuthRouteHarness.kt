@@ -62,6 +62,17 @@ class AuthRouteHarness(
         writePipeline = harness.writePipeline(),
         history = com.plainbase.frameworks.git.NoOpHistoryProvider,
         idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
+        proposals = com.plainbase.frameworks.ktor.GuardedProposalFacade(
+            policy = policy,
+            proposals = com.plainbase.domain.service.ProposalService(
+                repository = harness.proposalRepository,
+                citations = com.plainbase.domain.service.CitationFactory(),
+                baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, store),
+                proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+                clock = Clock.System,
+            ),
+            labeler = com.plainbase.domain.service.ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository),
+        ),
         tokens = harness.apiTokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,
