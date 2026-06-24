@@ -26,6 +26,16 @@ interface ProposalFacade {
     /** Authorize (checkApprove, ADMIN-only) + reject the PENDING proposal [id]. */
     fun reject(principal: Principal, id: ProposalId, comment: String?): RejectOutcome
 
+    /**
+     * Authorize (checkApprove, ADMIN-only) + APPLY the PENDING proposal [id] (P1b): claim PENDING->APPLYING, drive
+     * the guarded EDIT content write, and stamp the terminal status. A CREATE proposal is short-circuited to terminal
+     * FAILED ([ApplyOutcome.CreateUnsupported]) — create-apply is deferred to 5.5.
+     */
+    fun approve(principal: Principal, id: ProposalId): ApplyOutcome
+
+    /** Authorize (checkApprove, ADMIN-only) + REBASE the CONFLICTED proposal [id] (P1b): re-pin base + recompute diff. */
+    fun rebase(principal: Principal, id: ProposalId): RebaseOutcome
+
     /** Authorize (checkRead) + list every proposal (summary + live `base_drifted`), newest-first. */
     fun list(principal: Principal): List<ProposalSummaryView>
 
@@ -45,6 +55,12 @@ object ProposalCommandResource {
     fun detail(id: com.plainbase.domain.page.ProposalId): String = "proposal:${id.value}"
 
     fun approve(id: com.plainbase.domain.page.ProposalId): String = "proposal:${id.value}:approve"
+
+    // P1b: the approve-that-APPLIES path uses a DISTINCT resource from `approve` (which reject's checkApprove uses)
+    // so the audit row disambiguates an apply's APPROVE from a reject's APPROVE — both ride checkApprove.
+    fun apply(id: com.plainbase.domain.page.ProposalId): String = "proposal:${id.value}:apply"
+
+    fun rebase(id: com.plainbase.domain.page.ProposalId): String = "proposal:${id.value}:rebase"
 }
 
 /**

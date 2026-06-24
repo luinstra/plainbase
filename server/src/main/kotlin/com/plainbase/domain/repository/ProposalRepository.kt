@@ -47,6 +47,68 @@ interface ProposalRepository {
      * the QUERY only; the crash-recovery SEMANTICS (inspect-then-decide) are DEFERRED to P1b, which owns apply.
      */
     fun reconcileApplyingToPending(): Int
+
+    /**
+     * Terminal CAS: APPLYING -> APPLIED, stamping the commit + the optional reindex_deferred/recovered reason +
+     * approver. [approverIssuer]/[approverExternalId] are NULL on the crash-recovery path (the original approver is
+     * not recorded at claim time), the real approver on the live apply path. Returns true iff exactly one row moved.
+     */
+    fun markApplied(
+        id: ProposalId,
+        appliedCommit: String?,
+        statusReason: String?,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean
+
+    /** Terminal CAS: APPLYING -> CONFLICTED (rebasable), stamping the conflict reason + approver. */
+    fun markConflicted(
+        id: ProposalId,
+        statusReason: String?,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean
+
+    /** Terminal CAS: APPLYING -> FAILED, stamping the failure reason + approver. */
+    fun markFailed(
+        id: ProposalId,
+        statusReason: String,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean
+
+    /**
+     * DIRECT terminal CAS: PENDING -> FAILED (the create-unsupported path — NEVER claims APPLYING, so a CREATE
+     * proposal can never enter APPLYING; mirrors the `reject` PENDING->REJECTED idiom). Returns true iff one row moved.
+     */
+    fun failPending(
+        id: ProposalId,
+        statusReason: String,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean
+
+    /**
+     * Terminal CAS: CONFLICTED -> FAILED (the rebase `Gone` path — the target page was deleted; stamps a durable
+     * reason so the row is not a dangling CONFLICTED. No approver — the rebase actor lives in the audit row).
+     */
+    fun failConflicted(id: ProposalId, statusReason: String, at: Instant): Boolean
+
+    /**
+     * One-step rebase CAS: CONFLICTED -> PENDING, re-pinning base_hash + diff_artifact + target_path (the page may
+     * have MOVED since propose; the rebase resolved the CURRENT path by page_id), clearing status_reason.
+     */
+    fun rebaseToPending(id: ProposalId, baseHash: String, diffArtifact: String, targetPath: TreePath): Boolean
+
+    /** Per-row reconcile CAS: APPLYING -> PENDING (the inspect-then-decide recovery "write did not land" arm). */
+    fun markPendingFromApplying(id: ProposalId): Boolean
+
+    /** Every APPLYING row (the inspect-then-decide reconciler reads each one's disk hash to choose the terminal). */
+    fun allApplying(): List<ProposalRow>
 }
 
 /** The proposal operation discriminator. Stored as the enum NAME (uppercase); the wire serializes lowercase (§B5). */
@@ -65,7 +127,9 @@ enum class ProposalStatus { PENDING, APPLYING, APPLIED, REJECTED, CONFLICTED, FA
  * and [baseHash] present; for a `create` both are null. [targetPath] is the on-disk content-file path
  * ([com.plainbase.domain.page.PageIndex.byPath] space), resolved from [pageId] for an edit. The three `author*`
  * columns are the snapshotted proposer attribution; `approver*`/`decisionComment`/`decidedAt` are null until decided;
- * `appliedCommit` is filled by P1b (shipped now, append-only freeze).
+ * `appliedCommit` + `statusReason` are filled by P1b (apply-on-approve; append-only freeze). [statusReason] carries
+ * the human-facing reason a proposal landed in a terminal non-applied state (a FAILED reason / a CONFLICTED note /
+ * the `reindex_deferred`/`recovered` apply warning), null while PENDING.
  */
 class ProposalRow(
     val id: ProposalId,
@@ -86,6 +150,7 @@ class ProposalRow(
     val createdAt: Instant,
     val decidedAt: Instant?,
     val appliedCommit: String?,
+    val statusReason: String?,
 )
 
 /**

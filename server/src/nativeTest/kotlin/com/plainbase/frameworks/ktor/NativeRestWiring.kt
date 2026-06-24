@@ -185,19 +185,12 @@ fun withRestServices(
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
                 val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, contentStore = store)
-                val proposalFacade = GuardedProposalFacade(
-                    policy = policy,
-                    proposals = com.plainbase.domain.service.ProposalService(
-                        repository = SqlDelightProposalRepository(database),
-                        citations = CitationFactory(),
-                        baseReader = proposalBaseReader,
-                        proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
-                        clock = Clock.System,
-                    ),
-                    labeler = com.plainbase.domain.service.ProposalAuthorLabeler(
-                        tokens = SqlDelightApiTokenRepository(database),
-                        users = SqlDelightUserRepository(database),
-                    ),
+                val proposalService = com.plainbase.domain.service.ProposalService(
+                    repository = SqlDelightProposalRepository(database),
+                    citations = CitationFactory(),
+                    baseReader = proposalBaseReader,
+                    proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+                    clock = Clock.System,
                 )
                 val services = buildRouteContext(
                     policy = policy,
@@ -217,7 +210,11 @@ fun withRestServices(
                     ),
                     history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
-                    proposals = proposalFacade,
+                    proposalService = proposalService,
+                    proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(
+                        tokens = SqlDelightApiTokenRepository(database),
+                        users = SqlDelightUserRepository(database),
+                    ),
                     tokens = apiTokens,
                     auth = authServices,
                     trustedProxyCidrs = emptyList(),

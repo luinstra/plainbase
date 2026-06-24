@@ -16,5 +16,6 @@
   "approver_external_id": "alice",
   "decision_comment": "not now",
   "decided_at": "2023-11-14T22:13:20Z",
-  "applied_commit": null
+  "applied_commit": null,
+  "status_reason": null
 }

@@ -104,7 +104,7 @@ class IndexHarness(
      * a failing/wrapping stand-in while the index/search wiring keeps using the real copy.
      */
     fun writePipeline(
-        historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> null },
+        historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _ -> null },
         store: ContentStore = contentStore,
     ): WritePipeline =
         WritePipeline(

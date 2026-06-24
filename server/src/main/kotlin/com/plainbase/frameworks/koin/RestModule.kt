@@ -6,7 +6,6 @@ import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalBaseReader
-import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SessionService
@@ -16,7 +15,6 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.AuthServices
 import com.plainbase.frameworks.ktor.GuardedAdminFacade
-import com.plainbase.frameworks.ktor.GuardedProposalFacade
 import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
@@ -113,7 +111,9 @@ val restModule = module {
             clock = Clock.System,
         )
     }
-    single<ProposalFacade> { GuardedProposalFacade(policy = get(), proposals = get(), labeler = get()) }
+    // P1b: the GuardedProposalFacade is no longer a standalone single — it needs the guarded MutatingFacade (built
+    // inside buildRouteContext) for the apply-on-approve content write, so it is assembled there with `mutate` in
+    // scope (RouteContextFactory option (b)). RestModule passes the raw ProposalService + the labeler in.
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
     // KtorServer), so two processes never race a double-generate (WI-9 fold-in). The key bytes never log.
@@ -130,7 +130,8 @@ val restModule = module {
             writePipeline = get(),
             history = get(),
             idProvider = get(),
-            proposals = get(),
+            proposalService = get(),
+            proposalLabeler = get(),
             tokens = get(),
             auth = get(),
             trustedProxyCidrs = config.auth.trustedProxyCidrs,

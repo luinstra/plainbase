@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
@@ -65,8 +66,17 @@ interface MutatingFacade {
  * the `If-Match` [baseHash], and the EXACT submitted document [bytes]. The facade resolves the page's current
  * path from the snapshot INTERNALLY — the route never reads it ahead of the audited edit-check (so a denied save
  * is audited as a denied EDIT, not swallowed by an unaudited read).
+ *
+ * [author]/[committer] (P1b) carry the optional git attribution the apply coordinator supplies (the proposer +
+ * approver); they DEFAULT to null so the existing PUT route constructs a [SaveRequest] unchanged (server identity).
  */
-class SaveRequest(val pageId: PageId, val baseHash: String, val bytes: ByteArray)
+class SaveRequest(
+    val pageId: PageId,
+    val baseHash: String,
+    val bytes: ByteArray,
+    val author: CommitIdentity? = null,
+    val committer: CommitIdentity? = null,
+)
 
 /**
  * The outcome of [MutatingFacade.save]. A DENIED edit never reaches here — the facade's `checkEdit` throws

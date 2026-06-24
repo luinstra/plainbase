@@ -44,7 +44,9 @@ class IndexBuilderHistoryCoherenceTest : FunSpec({
 
                 // Drive a real save: the pipeline's history hook is the SAME provider, so the save makes a
                 // NEW commit, then its targeted reindex republishes the snapshot with the new commit.
-                val pipeline = h.writePipeline(historyHook = { p, bytes -> provider.commit(p, bytes)?.sha })
+                val pipeline = h.writePipeline(historyHook = { p, bytes, author, committer ->
+                    provider.commit(p, bytes, author, committer)?.sha
+                })
                 val v2 = "---\ntitle: Page\n---\n\n# Page\n\nversion two.\n"
                 val baseHash = h.builder.current.byId.getValue(before.id).contentHash
                 val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, tree, baseHash, v2.toByteArray()))

@@ -356,7 +356,7 @@ class WriteRouteTest : FunSpec({
 
     // 9. WrittenButUnindexed (R2) — a throwing post-write hook → 200 + warning, bytes on disk.
     test("a post-write hook failure is 200 with warning reindex_deferred; the bytes are on disk") {
-        val throwingHook = WriteHistoryHook { _, _ -> throw RuntimeException("history boom") }
+        val throwingHook = WriteHistoryHook { _, _, _, _ -> throw RuntimeException("history boom") }
         writeRestTest(Fixtures.demoDocs, seed, historyHook = throwingHook) { harness ->
             val original = harness.diskBytes("guides/deploy-guide.md")
             val hBase = citations.contentHash(original)

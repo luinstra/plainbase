@@ -108,6 +108,14 @@ import io.kotest.core.spec.style.FunSpec
  * `\ No newline` marker, empty-string no-op) via the six canonical byte-pair goldens; the benign-rare
  * adversarial tail (CRLF/BOM/no-final-newline/non-UTF8) is frozen by INVARIANTS, not exact goldens
  * (freeze-surface policy). A diff-algo or format change is a CONTRACT break, not a fix.
+ *
+ * PB-PROPOSE-1 grew in P1b (apply-on-approve, Phase 5): the apply (200 applied / 409 conflicted / 409 not_pending /
+ * 422 apply_failed / 404 not_found / 422 create_apply_unsupported) + rebase (200 pending / 409 not_conflicted / 422
+ * apply_failed-gone) wire shapes + the append-only codes `conflicted`/`apply_failed`/`not_conflicted`/
+ * `create_apply_unsupported` + the `status_reason` field (now present-null on EVERY `ChangeDetail` via
+ * `explicitNulls`) froze when P1b landed. ProposalGoldenTest grew 11 -> 20 (the 9 new apply/rebase shapes); the two
+ * existing `ChangeDetail` goldens were regenerated for present-null `status_reason` (NOT new cases). (The create-apply
+ * CONTENT contract is NOT frozen here — deferred to 5.5.)
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -142,8 +150,8 @@ class ForeverApiGoldenSuite : FunSpec({
         SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 11)
     }
 
-    test("PB-PROPOSE-1: propose/get/list/reject wire shapes are frozen (incl. the reject wire + status/operation vocabularies)") {
-        SelectedSuite.run(ProposalGoldenTest::class).shouldHavePassed("ProposalGoldenTest", atLeastTests = 11)
+    test("PB-PROPOSE-1: propose/get/list/reject + apply/rebase wire shapes are frozen (incl. status/operation vocabularies)") {
+        SelectedSuite.run(ProposalGoldenTest::class).shouldHavePassed("ProposalGoldenTest", atLeastTests = 20)
     }
 
     test("PB-DIFF-1: the unified-diff algorithm output + its frozen format rules are frozen") {

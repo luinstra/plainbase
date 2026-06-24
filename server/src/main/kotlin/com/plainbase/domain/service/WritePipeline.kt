@@ -4,6 +4,7 @@ import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
@@ -49,7 +50,7 @@ class WritePipeline(
     private val dirtyPages: DirtyPageRepository,
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
-    private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> null },
+    private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _ -> null },
 ) {
 
     @Synchronized
@@ -279,7 +280,9 @@ class WritePipeline(
     /** (3)+(4) Post-write steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun commitAndIndex(intent: WriteIntent, newHash: String): WriteOutcome =
         try {
-            val commit = historyHook.commit(intent.path, intent.bytes) // W5: the save's commit SHA (null off Git)
+            // W5: the save's commit SHA (null off Git). P1b threads the proposer->author + approver->committer
+            // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
+            val commit = historyHook.commit(intent.path, intent.bytes, intent.author, intent.committer)
             indexBuilder.reindex(intent.pageId) // targeted O(1); THROWS on a vanished save-path page (MUST-FIX 4)
             dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
@@ -329,9 +332,18 @@ class WritePipeline(
  * One content-mutating save. [path] is the on-disk location; [pageId] the immutable identity at that
  * path; [baseHash] the frozen `CitationFactory.contentHash` the client computed over the bytes it last
  * saw; [bytes] the EXACT full document buffer to write VERBATIM — never reserialized, never patched.
+ * [author]/[committer] are the optional git attribution P1b threads from the apply call site (the
+ * proposer->author, approver->committer); a plain PUT leaves them null → the server default identity.
  */
 // Array field on a one-shot param (never a map key) — no generated equals/hashCode (house style).
-data class WriteIntent(val pageId: PageId, val path: TreePath, val baseHash: String, val bytes: ByteArray)
+data class WriteIntent(
+    val pageId: PageId,
+    val path: TreePath,
+    val baseHash: String,
+    val bytes: ByteArray,
+    val author: CommitIdentity? = null,
+    val committer: CommitIdentity? = null,
+)
 
 /**
  * One new-page creation (PB-WRITE-1, chunk W2). [path] is the server-derived on-disk location,
@@ -349,7 +361,15 @@ data class CreateIntent(val pageId: PageId, val path: TreePath, val bytes: ByteA
  * Returns the recorded commit SHA (W5, F4): the save's new commit in Git mode, or null when history is
  * off / the no-op default. The SHA threads into [WriteOutcome.Written.commit] so the W3 response carries
  * the save's commit. A plain `String?` (not a domain `Commit`) keeps this seam framework-free.
+ *
+ * [author]/[committer] (P1b) carry the optional git attribution → the proposer (author) + approver (committer) on
+ * the apply path; null elsewhere → the server default identity. A `fun interface` SAM method cannot carry default
+ * values, so the no-attribution callers pass `null, null` explicitly (the no-arg [commit] extension below keeps the
+ * non-apply call sites terse).
  */
 fun interface WriteHistoryHook {
-    fun commit(path: TreePath, bytes: ByteArray): String?
+    fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): String?
 }
+
+/** A no-attribution commit (the PUT/create/reconcile paths) → the server default identity. */
+fun WriteHistoryHook.commit(path: TreePath, bytes: ByteArray): String? = commit(path, bytes, author = null, committer = null)

@@ -1,18 +1,25 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.ApplyOutcome
+import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalApprover
 import com.plainbase.domain.service.ProposalAuthorLabeler
 import com.plainbase.domain.service.ProposalCommandResource
+import com.plainbase.domain.service.ProposalContentWriter
 import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.ProposalSummaryView
 import com.plainbase.domain.service.ProposalView
 import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.ProposeOutcome
+import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
+import com.plainbase.domain.service.SaveRequest
+import com.plainbase.domain.service.SaveResult
 
 /**
  * The frameworks-side [ProposalFacade] impl (P1a, the A3 choke point — the [GuardedReadFacade] shape): it holds the
@@ -30,6 +37,7 @@ class GuardedProposalFacade(
     private val policy: PolicyService,
     private val proposals: ProposalService,
     private val labeler: ProposalAuthorLabeler,
+    private val mutate: MutatingFacade,
 ) : ProposalFacade {
 
     override fun propose(principal: Principal, command: ProposeCommand): ProposeOutcome =
@@ -62,8 +70,41 @@ class GuardedProposalFacade(
 
     override fun reject(principal: Principal, id: ProposalId, comment: String?): RejectOutcome {
         val grant = policy.checkApprove(principal, ProposalCommandResource.approve(id))
-        val approver = labeler.resolve(principal).let { ProposalApprover(it.issuer, it.externalId) }
+        val approver = labeler.resolve(principal).let { ProposalApprover(it.issuer, it.externalId, it.label) }
         return proposals.reject(grant, id, approver, comment)
+    }
+
+    override fun approve(principal: Principal, id: ProposalId): ApplyOutcome {
+        // checkApprove (ADMIN-only, audited as `proposal:{id}:apply`) FIRST; THEN drive the content write through the
+        // guarded MUTATING path so `checkEdit` mints the real EditGrant + audits the EDIT row. ApproveGrant never
+        // reaches WritePipeline — grant-composition option (a).
+        val grant = policy.checkApprove(principal, ProposalCommandResource.apply(id))
+        val approverAuthor = labeler.resolve(principal)
+        val writer = ProposalContentWriter { row, author, committer ->
+            // EDIT-only: a CREATE row is short-circuited in ProposalService.apply BEFORE this lambda runs, so
+            // row.pageId/baseHash are non-null here (the edit invariant).
+            mutate.save(
+                principal,
+                SaveRequest(
+                    pageId = requireNotNull(row.pageId) { "an EDIT proposal must carry a page_id" },
+                    baseHash = requireNotNull(row.baseHash) { "an EDIT proposal must carry a base_hash" },
+                    bytes = row.proposedContent,
+                    author = author,
+                    committer = committer,
+                ),
+            ).toWriteOutcome()
+        }
+        return proposals.apply(
+            grant,
+            id,
+            ProposalApprover(approverAuthor.issuer, approverAuthor.externalId, approverAuthor.label),
+            writer,
+        )
+    }
+
+    override fun rebase(principal: Principal, id: ProposalId): RebaseOutcome {
+        val grant = policy.checkApprove(principal, ProposalCommandResource.rebase(id))
+        return proposals.rebase(grant, id)
     }
 
     override fun list(principal: Principal): List<ProposalSummaryView> {
@@ -75,4 +116,16 @@ class GuardedProposalFacade(
         policy.checkRead(principal, ProposalCommandResource.detail(id))
         return proposals.get(id)
     }
+}
+
+/**
+ * The ONE owner of the [SaveResult] -> [WriteOutcome] bridge for the apply path (P1b). The two facade-resolved
+ * pre-pipeline outcomes map to apply-meaningful `WriteOutcome`s the FROZEN `dispositionOf` table understands:
+ *  - [SaveResult.PageNotFound] -> a `Conflict(reason="page_deleted")` (the target vanished — CONFLICTED, rebasable);
+ *  - [SaveResult.IdMismatch] -> `UnsupportedEdit(field="id")` (a rename — terminal FAILED).
+ */
+private fun SaveResult.toWriteOutcome(): WriteOutcome = when (this) {
+    is SaveResult.Written -> outcome
+    SaveResult.PageNotFound -> WriteOutcome.Conflict(reason = "page_deleted", currentContent = null, currentHash = null, currentPath = null)
+    SaveResult.IdMismatch -> WriteOutcome.UnsupportedEdit(field = "id")
 }

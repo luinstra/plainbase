@@ -16,5 +16,6 @@
   "approver_external_id": null,
   "decision_comment": null,
   "decided_at": null,
-  "applied_commit": null
+  "applied_commit": null,
+  "status_reason": null
 }

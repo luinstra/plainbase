@@ -109,7 +109,7 @@ class AppDbMigrationTest : FunSpec({
                     targetPath = TreePath.require("docs/start"), proposedContent = ByteArray(3) { 1 }, rationale = "r",
                     diffArtifact = "", status = "PENDING", authorIssuer = "agent", authorExternalId = "00ff",
                     authorLabel = "ci", approverIssuer = null, approverExternalId = null, decisionComment = null,
-                    createdAt = 0, decidedAt = null, appliedCommit = null,
+                    createdAt = 0, decidedAt = null, appliedCommit = null, statusReason = null,
                 )
                 db.proposalsQueries.selectById(proposalId).executeAsOne().status shouldBe "PENDING"
             }
@@ -133,7 +133,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 8L
+                    version shouldBe 9L
                 }
             }
         } finally {

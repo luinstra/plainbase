@@ -24,7 +24,7 @@ import io.ktor.server.application.ApplicationCall
 class RouteContext(
     val read: ReadFacade,
     val mutate: MutatingFacade,
-    /** PB-PROPOSE-1 (P1a) the guarded proposal surface for `/api/v1/changes` (propose/list/get/reject). */
+    /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
     val proposals: ProposalFacade,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */

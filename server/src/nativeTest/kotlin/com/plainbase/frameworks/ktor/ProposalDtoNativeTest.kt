@@ -1,19 +1,25 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.ApiTokenService
+import com.plainbase.domain.service.ApplyDisposition
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.dispositionOf
 import com.plainbase.domain.service.unifiedDiff
+import com.plainbase.frameworks.ktor.dto.ApplyResultResponse
 import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ChangeSummary
+import com.plainbase.frameworks.ktor.dto.ConflictedResponse
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
+import com.plainbase.frameworks.ktor.dto.RebasedResponse
 import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.security.ApiTokenMinter
@@ -134,6 +140,32 @@ class ProposalDtoNativeTest {
             ).value
             assertEquals("proposals", name)
         }
+    }
+
+    @Test
+    fun `the P1b apply-decision core + apply-rebase DTOs are native-proven (dispositionOf + reflection-free round-trip)`() {
+        // The pure decision core runs under the closed-world image.
+        val proposed = "sha256:${"a".repeat(64)}"
+        assertTrue(dispositionOf(WriteOutcome.Written(newHash = proposed, commit = "c"), proposed) is ApplyDisposition.Applied)
+        assertTrue(
+            dispositionOf(
+                WriteOutcome.Conflict("content_changed", "x", "sha256:${"b".repeat(64)}", null),
+                proposed,
+            ) is ApplyDisposition.Conflicted,
+        )
+
+        // The new apply/rebase response DTOs encode+decode reflection-free through the scoped RestJson.
+        assertRoundTrips(
+            ApplyResultResponse.serializer(),
+            ApplyResultResponse(
+                newHash = proposed,
+                commitSha = "abc",
+                appliedAt = "2023-11-14T22:13:20Z",
+                warnings = listOf("reindex_deferred"),
+            ),
+        )
+        assertRoundTrips(ConflictedResponse.serializer(), ConflictedResponse(currentHash = proposed, currentPath = "a.md"))
+        assertRoundTrips(RebasedResponse.serializer(), RebasedResponse(newBaseHash = proposed, unifiedDiff = "@@ -0,0 +1,1 @@\n+x\n"))
     }
 
     @Test

@@ -119,6 +119,8 @@ class ProposalAuthzRouteTest : FunSpec({
                         clock = Clock.System,
                     ),
                     labeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = countingTokens, users = harness.userRepository),
+                    // This test only drives propose (a denied EDIT) — the apply seam is never consulted.
+                    mutate = UnusedMutatingFacade,
                 )
                 val readOnly = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY).id)
                 val page = harness.builder.current.pages.single()
@@ -230,4 +232,19 @@ class ProposalAuthzRouteTest : FunSpec({
 private fun IndexHarness.fts(@Suppress("UNUSED_PARAMETER") root: java.nio.file.Path): com.plainbase.domain.search.SearchProvider {
     val searchDb = com.plainbase.frameworks.search.SearchDb(Files.createTempDirectory("proposal-authz-search").resolve("search.db"))
     return com.plainbase.frameworks.search.Fts5SearchProvider(searchDb)
+}
+
+/** A MutatingFacade for propose-only facade tests (the apply seam is never consulted); every method errors. */
+private object UnusedMutatingFacade : com.plainbase.domain.service.MutatingFacade {
+    override fun save(principal: Principal, request: com.plainbase.domain.service.SaveRequest) = error("unused")
+    override fun create(principal: Principal, intent: com.plainbase.domain.service.CreateIntent) = error("unused")
+    override fun writeAsset(
+        principal: Principal,
+        pageId: com.plainbase.domain.page.PageId,
+        filename: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ) = error("unused")
+    override fun rescan(principal: Principal) = error("unused")
+    override fun reindex(principal: Principal) = error("unused")
 }

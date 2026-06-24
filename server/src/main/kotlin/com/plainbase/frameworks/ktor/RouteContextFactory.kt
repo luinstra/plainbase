@@ -8,7 +8,8 @@ import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
-import com.plainbase.domain.service.ProposalFacade
+import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
@@ -36,7 +37,8 @@ fun buildRouteContext(
     writePipeline: WritePipeline,
     history: HistoryProvider,
     idProvider: IdProvider,
-    proposals: ProposalFacade,
+    proposalService: ProposalService,
+    proposalLabeler: ProposalAuthorLabeler,
     tokens: ApiTokenService,
     auth: AuthServices,
     trustedProxyCidrs: List<String>,
@@ -66,6 +68,15 @@ fun buildRouteContext(
         writePipeline = writePipeline,
         contentStore = contentStore,
         indexBuilder = indexBuilder,
+    )
+    // The apply-on-approve composition (P1b) lives BEHIND ProposalFacade — it needs the guarded MUTATING path to do
+    // the content write, so the facade is assembled HERE (where `mutate` exists), keeping the choke-point assembly
+    // in ONE place. A route never sees the composition.
+    val proposals = GuardedProposalFacade(
+        policy = policy,
+        proposals = proposalService,
+        labeler = proposalLabeler,
+        mutate = mutate,
     )
     return RouteContext(
         read = read,

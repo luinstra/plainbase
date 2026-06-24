@@ -44,6 +44,7 @@ class ProposalStatusCasTest : FunSpec({
                     createdAt = Instant.fromEpochMilliseconds(1_700_000_000_000),
                     decidedAt = null,
                     appliedCommit = null,
+                    statusReason = null,
                 ),
             )
 

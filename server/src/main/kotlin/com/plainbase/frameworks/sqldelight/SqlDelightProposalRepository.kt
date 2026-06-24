@@ -41,6 +41,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
             createdAt = row.createdAt.toEpochMilliseconds(),
             decidedAt = row.decidedAt?.toEpochMilliseconds(),
             appliedCommit = row.appliedCommit,
+            statusReason = row.statusReason,
         )
     }
 
@@ -65,6 +66,80 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
     override fun reconcileApplyingToPending(): Int =
         queries.reconcileApplyingToPending().value.toInt()
 
+    override fun markApplied(
+        id: ProposalId,
+        appliedCommit: String?,
+        statusReason: String?,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean =
+        queries.markApplied(
+            appliedCommit = appliedCommit,
+            statusReason = statusReason,
+            at = at.toEpochMilliseconds(),
+            approverIssuer = approverIssuer,
+            approverExternalId = approverExternalId,
+            id = id,
+        ).value == 1L
+
+    override fun markConflicted(
+        id: ProposalId,
+        statusReason: String?,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean =
+        queries.markConflicted(
+            statusReason = statusReason,
+            at = at.toEpochMilliseconds(),
+            approverIssuer = approverIssuer,
+            approverExternalId = approverExternalId,
+            id = id,
+        ).value == 1L
+
+    override fun markFailed(
+        id: ProposalId,
+        statusReason: String,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean =
+        queries.markFailed(
+            statusReason = statusReason,
+            at = at.toEpochMilliseconds(),
+            approverIssuer = approverIssuer,
+            approverExternalId = approverExternalId,
+            id = id,
+        ).value == 1L
+
+    override fun failPending(
+        id: ProposalId,
+        statusReason: String,
+        approverIssuer: String?,
+        approverExternalId: String?,
+        at: Instant,
+    ): Boolean =
+        queries.failPending(
+            statusReason = statusReason,
+            at = at.toEpochMilliseconds(),
+            approverIssuer = approverIssuer,
+            approverExternalId = approverExternalId,
+            id = id,
+        ).value == 1L
+
+    override fun failConflicted(id: ProposalId, statusReason: String, at: Instant): Boolean =
+        queries.failConflicted(statusReason = statusReason, at = at.toEpochMilliseconds(), id = id).value == 1L
+
+    override fun rebaseToPending(id: ProposalId, baseHash: String, diffArtifact: String, targetPath: TreePath): Boolean =
+        queries.rebaseToPending(baseHash = baseHash, diffArtifact = diffArtifact, targetPath = targetPath, id = id).value == 1L
+
+    override fun markPendingFromApplying(id: ProposalId): Boolean =
+        queries.markPendingFromApplying(id).value == 1L
+
+    override fun allApplying(): List<ProposalRow> =
+        queries.selectApplying(::toRow).executeAsList()
+
     @Suppress("LongParameterList")
     private fun toRow(
         id: ProposalId,
@@ -85,6 +160,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         createdAt: Long,
         decidedAt: Long?,
         appliedCommit: String?,
+        statusReason: String?,
     ) = ProposalRow(
         id = id,
         operation = ProposalOperation.valueOf(operation),
@@ -104,6 +180,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         createdAt = Instant.fromEpochMilliseconds(createdAt),
         decidedAt = decidedAt?.let(Instant::fromEpochMilliseconds),
         appliedCommit = appliedCommit,
+        statusReason = statusReason,
     )
 
     @Suppress("LongParameterList")

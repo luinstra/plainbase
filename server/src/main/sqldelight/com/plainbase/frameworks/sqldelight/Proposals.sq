@@ -10,7 +10,7 @@
 -- other column is a primitive SQLite type the repository maps at its boundary (enum-name TEXT, epoch-millis
 -- INTEGER), the api_tokens idiom. status/operation store the enum NAME (uppercase). The .sqm migration carries
 -- the SAME table body with the `AS` annotations + import banner STRIPPED (2.sqm strips page_checkpoint's the
--- same way); verifyMigrations cross-checks it against schema/8.db.
+-- same way); verifyMigrations cross-checks it against schema/9.db (P1b's 8.sqm added the status_reason column).
 
 import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
@@ -34,7 +34,8 @@ CREATE TABLE proposals (
   decision_comment TEXT,
   created_at INTEGER NOT NULL,
   decided_at INTEGER,
-  applied_commit TEXT
+  applied_commit TEXT,
+  status_reason TEXT
 );
 
 -- Covers selectAllSummary's `ORDER BY created_at DESC, id DESC` so the list_changes read is an index scan, not a
@@ -45,12 +46,12 @@ insert:
 INSERT INTO proposals(
   id, operation, page_id, base_hash, target_path, proposed_content, rationale, diff_artifact, status,
   author_issuer, author_external_id, author_label, approver_issuer, approver_external_id, decision_comment,
-  created_at, decided_at, applied_commit
+  created_at, decided_at, applied_commit, status_reason
 )
 VALUES (
   :id, :operation, :pageId, :baseHash, :targetPath, :proposedContent, :rationale, :diffArtifact, :status,
   :authorIssuer, :authorExternalId, :authorLabel, :approverIssuer, :approverExternalId, :decisionComment,
-  :createdAt, :decidedAt, :appliedCommit
+  :createdAt, :decidedAt, :appliedCommit, :statusReason
 );
 
 -- The full row — get_change needs proposed_content's derivations + the stored diff_artifact.
@@ -90,4 +91,68 @@ WHERE id = :id AND status = 'PENDING';
 reconcileApplyingToPending:
 UPDATE proposals
 SET status = 'PENDING'
+WHERE status = 'APPLYING';
+
+-- P1b apply terminal-CAS shapes (the reject/claimApplying conditional-UPDATE idiom). The approver pair is bound
+-- NULL on the crash-recovery path (the original approver is not recorded at claim time) and the real approver on
+-- the live apply path; both columns are already nullable, so binding NULL is well-typed.
+
+-- Terminal CAS: APPLYING -> APPLIED, stamping the commit + the optional reindex_deferred/recovered reason + approver.
+markApplied:
+UPDATE proposals
+SET status = 'APPLIED', applied_commit = :appliedCommit, status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- Terminal CAS: APPLYING -> CONFLICTED (rebasable), stamping the conflict reason + approver.
+markConflicted:
+UPDATE proposals
+SET status = 'CONFLICTED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- Terminal CAS: APPLYING -> FAILED, stamping the failure reason + approver.
+markFailed:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- DIRECT terminal CAS: PENDING -> FAILED (the create-unsupported path — NEVER claims APPLYING, so a CREATE
+-- proposal can never enter APPLYING; mirrors the `reject` PENDING->REJECTED conditional idiom).
+failPending:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'PENDING';
+
+-- Terminal CAS: CONFLICTED -> FAILED (the rebase `Gone` path — the target page was deleted; stamps a durable
+-- reason so the row is not a dangling CONFLICTED. No approver — the rebase actor lives in the audit row).
+failConflicted:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at
+WHERE id = :id AND status = 'CONFLICTED';
+
+-- One-step rebase CAS: CONFLICTED -> PENDING, re-pinning base_hash + diff_artifact + target_path (the page may have
+-- MOVED since propose; the rebase already resolved the CURRENT path by page_id, so re-pin it too — otherwise a
+-- rebased PENDING row would show a STALE target_path against a fresh base_hash/diff). ALSO clears the decision
+-- metadata markConflicted stamped (approver_*, decided_at) so a rebased-back-to-PENDING row is contract-identical to
+-- a freshly-inserted PENDING row (a PENDING row carries NULL approver/decided_at by invariant).
+rebaseToPending:
+UPDATE proposals
+SET status = 'PENDING', base_hash = :baseHash, diff_artifact = :diffArtifact, target_path = :targetPath,
+    status_reason = NULL, approver_issuer = NULL, approver_external_id = NULL, decided_at = NULL
+WHERE id = :id AND status = 'CONFLICTED';
+
+-- Per-row reconcile CAS: APPLYING -> PENDING (the inspect-then-decide recovery "write did not land" arm).
+markPendingFromApplying:
+UPDATE proposals
+SET status = 'PENDING'
+WHERE id = :id AND status = 'APPLYING';
+
+-- Every APPLYING row (the inspect-then-decide reconciler reads each one's disk hash to choose the terminal): the
+-- FULL row — it needs page_id + proposed_content to resolve the current path + compute the disk-hash comparison.
+selectApplying:
+SELECT *
+FROM proposals
 WHERE status = 'APPLYING';

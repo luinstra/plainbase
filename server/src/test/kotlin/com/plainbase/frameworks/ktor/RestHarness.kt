@@ -142,11 +142,6 @@ fun IndexHarness.testRouteContext(
         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
         clock = Clock.System,
     )
-    val proposalFacade = com.plainbase.frameworks.ktor.GuardedProposalFacade(
-        policy = policy,
-        proposals = proposalService,
-        labeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),
-    )
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
@@ -157,7 +152,8 @@ fun IndexHarness.testRouteContext(
         writePipeline = writePipeline,
         history = history,
         idProvider = idProvider,
-        proposals = proposalFacade,
+        proposalService = proposalService,
+        proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),
         tokens = apiTokens,
         auth = authServices(policy),
         trustedProxyCidrs = trustedProxyCidrs,

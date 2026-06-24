@@ -160,6 +160,20 @@ object ErrorCodes {
 
     /** 409: a `reject` (or future P1b decision) targeted a proposal no longer `PENDING` (already terminal/in-flight); no state change. */
     const val NOT_PENDING: String = "not_pending"
+
+    // ---- PB-PROPOSE-1 (P1b): the apply/rebase vocabulary (append-only) -------------------------------
+
+    /** 409: an apply hit disk-drift; the proposal is REBASABLE. Body is `ConflictedResponse` (carries `code="conflicted"`). DISTINCT from `not_pending`. */
+    const val CONFLICTED: String = "conflicted"
+
+    /** 422: a terminal edit-apply failure (`UnsupportedEdit`/`Unreadable`) OR a rebase whose target page was deleted (Gone). The message is a STABLE, non-leaking string. */
+    const val APPLY_FAILED: String = "apply_failed"
+
+    /** 422: approving a CREATE proposal in P1b (create-apply deferred to 5.5). The proposal is stamped FAILED + status_reason="create_apply_unsupported". */
+    const val CREATE_APPLY_UNSUPPORTED: String = "create_apply_unsupported"
+
+    /** 409: a rebase of a proposal that is not in CONFLICTED state (already PENDING/terminal). DISTINCT from `not_pending`. */
+    const val NOT_CONFLICTED: String = "not_conflicted"
 }
 
 /** The uniform error envelope (§A4, frozen): `{"error":{"code":…,"message":…}}`. */

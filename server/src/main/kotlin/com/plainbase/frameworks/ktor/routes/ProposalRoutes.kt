@@ -3,16 +3,21 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
+import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.ProposeOutcome
+import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
 import com.plainbase.frameworks.ktor.RouteContext
+import com.plainbase.frameworks.ktor.dto.ApplyResultResponse
 import com.plainbase.frameworks.ktor.dto.ChangeDetail
+import com.plainbase.frameworks.ktor.dto.ConflictedResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
 import com.plainbase.frameworks.ktor.dto.ProposalOperationWire
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
+import com.plainbase.frameworks.ktor.dto.RebasedResponse
 import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.toDto
@@ -27,11 +32,11 @@ import io.ktor.server.routing.route
 import kotlinx.serialization.SerializationException
 
 /**
- * PB-PROPOSE-1 (Phase 5, chunk P1a): the agent-facing proposal surface under `/api/v1/changes`. APPLY-NOTHING —
- * `propose_change` stores a PENDING row, `reject` flips it REJECTED; NEITHER writes the content tree. The
- * `HistoryRoutes`/`PageCreateRoutes` idiom: JSON request via the scoped [RestJson] (a malformed/bad-UTF-8 envelope
- * is a 400 `invalid_propose_request`, the `parseCreateRequest` pattern), `call.guarded { }` mapping `AccessDenied`
- * to 401/403, `respondRest`/`respondError`.
+ * PB-PROPOSE-1 (Phase 5, chunks P1a + P1b): the agent-facing proposal surface under `/api/v1/changes`. P1a is the
+ * propose/read/reject surface; P1b adds the EDIT-only apply (`approve`) + `rebase` decisions that DO mutate the
+ * content tree. The `HistoryRoutes`/`PageCreateRoutes` idiom: JSON request via the scoped [RestJson] (a
+ * malformed/bad-UTF-8 envelope is a 400 `invalid_propose_request`, the `parseCreateRequest` pattern),
+ * `call.guarded { }` mapping `AccessDenied` to 401/403, `respondRest`/`respondError`.
  *
  *  - `POST /api/v1/changes` — propose_change. 201 [ProposeChangeResponse]. The full F4 invalid-request matrix is
  *    enforced HERE / in `ProposalService` BEFORE any insert; nothing persisted on rejection.
@@ -39,6 +44,10 @@ import kotlinx.serialization.SerializationException
  *    admits an additive `limit`/`cursor` later without a contract break).
  *  - `GET /api/v1/changes/{id}` — get_change (checkRead). 404 on unknown id (existence not leaked — checkRead first).
  *  - `POST /api/v1/changes/{id}/reject` — reject (checkApprove). Rejected->200 ChangeDetail, NotPending->409, NotFound->404.
+ *  - `POST /api/v1/changes/{id}/approve` — apply an EDIT (checkApprove). Applied->200 [ApplyResultResponse],
+ *    Conflicted->409 [ConflictedResponse], Failed/CreateUnsupported->422, NotPending->409, NotFound->404.
+ *  - `POST /api/v1/changes/{id}/rebase` — rebase a CONFLICTED edit (checkApprove). Rebased->200 [RebasedResponse],
+ *    NotConflicted->409, Gone->422, NotFound->404.
  */
 fun Route.proposalRoutes(ctx: RouteContext) {
     route("/api/v1/changes") {
@@ -118,6 +127,75 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                     RejectOutcome.NotPending ->
                         call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
                     RejectOutcome.NotFound ->
+                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
+                }
+            }
+        }
+
+        post("/{id}/approve") {
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+            call.guarded {
+                val id = call.proposalId() ?: return@guarded
+                when (val outcome = ctx.proposals.approve(principal, id)) {
+                    is ApplyOutcome.Applied -> call.respondRest(
+                        ApplyResultResponse.serializer(),
+                        ApplyResultResponse(
+                            newHash = outcome.newHash,
+                            commitSha = outcome.commit,
+                            // The Applied terminal ALWAYS stamps decided_at; assert it rather than emit the literal "null".
+                            appliedAt = requireNotNull(outcome.view.row.decidedAt) {
+                                "Applied proposal ${id.value} has no decided_at"
+                            }.toString(),
+                            warnings = if (outcome.reindexDeferred) listOf("reindex_deferred") else null,
+                        ),
+                        HttpStatusCode.OK,
+                    )
+                    is ApplyOutcome.Conflicted -> call.respondRest(
+                        ConflictedResponse.serializer(),
+                        ConflictedResponse(currentHash = outcome.currentHash, currentPath = outcome.currentPath?.value),
+                        HttpStatusCode.Conflict,
+                    )
+                    is ApplyOutcome.Failed ->
+                        call.respondError(HttpStatusCode.UnprocessableEntity, ErrorCodes.APPLY_FAILED, outcome.reason)
+                    ApplyOutcome.CreateUnsupported -> call.respondError(
+                        HttpStatusCode.UnprocessableEntity,
+                        ErrorCodes.CREATE_APPLY_UNSUPPORTED,
+                        "create-apply is not supported in this release (deferred)",
+                    )
+                    ApplyOutcome.NotPending ->
+                        call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
+                    ApplyOutcome.NotFound ->
+                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
+                }
+            }
+        }
+
+        post("/{id}/rebase") {
+            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+            call.guarded {
+                val id = call.proposalId() ?: return@guarded
+                when (val outcome = ctx.proposals.rebase(principal, id)) {
+                    is RebaseOutcome.Rebased -> call.respondRest(
+                        RebasedResponse.serializer(),
+                        // rebaseToPending ALWAYS re-pins a non-null base_hash; assert it rather than emit "".
+                        RebasedResponse(
+                            newBaseHash = requireNotNull(outcome.view.row.baseHash) { "Rebased proposal ${id.value} has no base_hash" },
+                            unifiedDiff = outcome.view.row.diffArtifact,
+                        ),
+                        HttpStatusCode.OK,
+                    )
+                    RebaseOutcome.NotConflicted ->
+                        call.respondError(
+                            HttpStatusCode.Conflict,
+                            ErrorCodes.NOT_CONFLICTED,
+                            "Change ${id.value} is not in a conflicted state",
+                        )
+                    RebaseOutcome.Gone -> call.respondError(
+                        HttpStatusCode.UnprocessableEntity,
+                        ErrorCodes.APPLY_FAILED,
+                        "target page was deleted; rebase is impossible",
+                    )
+                    RebaseOutcome.NotFound ->
                         call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
                 }
             }

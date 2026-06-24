@@ -92,11 +92,47 @@ data class ChangeDetail(
     @SerialName("decision_comment") val decisionComment: String?,
     @SerialName("decided_at") val decidedAt: String?,
     @SerialName("applied_commit") val appliedCommit: String?,
+    // P1b: the human-facing reason a proposal landed in a terminal non-applied state (a FAILED reason / a
+    // CONFLICTED note / the reindex_deferred|recovered apply warning), null while PENDING. DETAIL-ONLY (not on the
+    // summary). Present-null on EVERY ChangeDetail serialization (the scoped RestJson has explicitNulls = true).
+    @SerialName("status_reason") val statusReason: String? = null,
 )
 
 /** `POST /api/v1/changes/{id}/reject` request — an optional reviewer comment. */
 @Serializable
 data class RejectChangeRequest(val comment: String? = null)
+
+/**
+ * `POST /api/v1/changes/{id}/approve` 200 applied body (P1b, append-only to PB-PROPOSE-1). [warnings] carries
+ * `["reindex_deferred"]` for a `WrittenButUnindexed` apply (the bytes are on disk; the dirty page heals at the next
+ * boot), else absent. [commitSha] is present-null until Git produces one.
+ */
+@Serializable
+data class ApplyResultResponse(
+    @SerialName("new_hash") val newHash: String,
+    @SerialName("commit_sha") val commitSha: String? = null,
+    @SerialName("applied_at") val appliedAt: String,
+    val warnings: List<String>? = null,
+)
+
+/**
+ * `POST /api/v1/changes/{id}/approve` 409 conflicted body (P1b): an apply hit disk-drift; the proposal is
+ * REBASABLE. [code] is ALWAYS present as `"conflicted"`.
+ */
+@Serializable
+data class ConflictedResponse(
+    val code: String = "conflicted",
+    @SerialName("current_hash") val currentHash: String? = null,
+    @SerialName("current_path") val currentPath: String? = null,
+)
+
+/** `POST /api/v1/changes/{id}/rebase` 200 body (P1b): the re-pinned base + recomputed diff; [status] is `"PENDING"`. */
+@Serializable
+data class RebasedResponse(
+    @SerialName("new_base_hash") val newBaseHash: String,
+    @SerialName("unified_diff") val unifiedDiff: String,
+    val status: String = "PENDING",
+)
 
 /**
  * The frozen PB-PROPOSE-1 status string set (append-only), spelled out EXPLICITLY (the [WriteConflictReason.ALL]
@@ -162,4 +198,5 @@ fun ProposalView.toDto(): ChangeDetail = ChangeDetail(
     decisionComment = row.decisionComment,
     decidedAt = row.decidedAt?.toString(),
     appliedCommit = row.appliedCommit,
+    statusReason = row.statusReason,
 )

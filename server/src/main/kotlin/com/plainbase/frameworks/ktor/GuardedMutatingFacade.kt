@@ -71,7 +71,10 @@ class GuardedMutatingFacade(
         if (!sameIdentity(submittedRaw, honoredRaw)) return SaveResult.IdMismatch
 
         return SaveResult.Written(
-            writePipeline.write(grant, WriteIntent(request.pageId, current.path, request.baseHash, request.bytes)),
+            writePipeline.write(
+                grant,
+                WriteIntent(request.pageId, current.path, request.baseHash, request.bytes, request.author, request.committer),
+            ),
         )
     }
 
