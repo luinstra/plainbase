@@ -7,6 +7,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
@@ -14,6 +15,8 @@ import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.LinkChecker
+import com.plainbase.domain.service.LinkReport
 import com.plainbase.domain.service.PageHtmlPayload
 import com.plainbase.domain.service.PagePayload
 import com.plainbase.domain.service.PageService
@@ -38,6 +41,7 @@ class GuardedReadFacade(
     private val indexBuilder: IndexBuilder,
     private val history: HistoryProvider,
     private val aliasRegistry: UrlAliasRegistry,
+    private val linkChecker: LinkChecker,
 ) : ReadFacade {
 
     private val treeJson = TreeJsonCache(indexBuilder)
@@ -55,6 +59,26 @@ class GuardedReadFacade(
     override fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload? {
         policy.checkRead(principal, id.value)
         return pageService.htmlById(id)
+    }
+
+    override fun validateLinks(principal: Principal, id: PageId): LinkReport? {
+        policy.checkRead(principal, id.value) // FIRST — existence never leaks (the A3 gate)
+        val snapshot = indexBuilder.current
+        val page = snapshot.byId[id] ?: return null // unknown page → 404 (the route maps null)
+        // The EXISTING whole-index check, FILTERED to this page (D-A): LinkChecker.check is the one resolution model;
+        // this aggregates it, it never re-resolves.
+        //
+        // DELIBERATE P2 deferral (addendum D-A): `check` sweeps the WHOLE tree then we filter to one page — O(tree) per
+        // call, not O(page). Accepted for P2: `validate_links` is a low-frequency agent op on internal-docs-scale
+        // corpora, and the cost is an impl detail BEHIND the frozen `ValidateLinksResponse`. A future per-page or
+        // memoized-per-snapshot optimization is transparent — no contract change, no LinkChecker change (the addendum
+        // forbids touching it here).
+        return LinkReport(linkChecker.check(snapshot).broken.filter { it.page == page.path })
+    }
+
+    override fun pageMetadata(principal: Principal, id: PageId): IndexedPage? {
+        policy.checkRead(principal, id.value) // FIRST
+        return indexBuilder.current.byId[id]
     }
 
     override fun search(principal: Principal, q: String?, limit: String?, offset: String?): SearchService.Outcome {

@@ -5,6 +5,7 @@ import com.plainbase.domain.service.FrontmatterPatcherGoldenTest
 import com.plainbase.domain.service.LinkResolutionGoldenTest
 import com.plainbase.domain.service.UnifiedDiffGoldenTest
 import com.plainbase.frameworks.ktor.ProposalGoldenTest
+import com.plainbase.frameworks.ktor.ReadGoldenTest
 import com.plainbase.frameworks.ktor.RestGoldenTest
 import com.plainbase.frameworks.ktor.SearchGoldenTest
 import com.plainbase.frameworks.ktor.WriteGoldenTest
@@ -116,6 +117,29 @@ import io.kotest.core.spec.style.FunSpec
  * `explicitNulls`) froze when P1b landed. ProposalGoldenTest grew 11 -> 20 (the 9 new apply/rebase shapes); the two
  * existing `ChangeDetail` goldens were regenerated for present-null `status_reason` (NOT new cases). (The create-apply
  * CONTENT contract is NOT frozen here — deferred to 5.5.)
+ *
+ * PB-READ-2 freeze ledger (froze when P2 landed, Phase 5 — the remaining agent READ ops): the two NET-NEW agent-read
+ * wire shapes `ValidateLinksResponse`/`BrokenLinkDto` (`GET /api/v1/pages/{id}/validate-links`) and
+ * `PageMetadataResponse` (`GET /api/v1/pages/{id}/metadata`) are frozen. The `PageMetadataResponse` frozen fields are
+ * `id`/`path`/`url` (nullable)/`permalink` (always non-null, the `/p/{id}` ID permalink)/`content_hash`/`commit`
+ * (nullable)/`title`/`headings`. They REUSE the frozen `HeadingDto` (metadata
+ * headings) and the PB-LINK-1 `BrokenLinkReason.wireValue` vocabulary — the append-only set `broken_missing`/
+ * `broken_case_mismatch`/`broken_malformed`/`outside_content_root`/`ambiguous`/`blocked_scheme` plus the checker's
+ * `broken_anchor` (mapped from the domain, never re-listed as literals). P3 MCP re-exposes BOTH shapes VERBATIM (its
+ * `validate_links`/`get_page_metadata` tools delegate to the SAME `ReadFacade` methods and serialize these SAME DTOs),
+ * so a field removal/retype or a reason-string change is a contract break across BOTH REST and MCP. Tier-1 holds three
+ * `golden/rest/` snapshots — `validate-links-broken.json` (the PINNED master §2.6 acceptance-3 gate: a fixture page
+ * with EXACTLY 2 `Unresolved` (`broken_missing` + `blocked_scheme`) + 1 `broken_anchor`), `validate-links-clean.json`
+ * (`{broken:[]}`), and `page-metadata.json` (ReadGoldenTest, 3 tests). The `BrokenLinkDto.page` field is a
+ * CONSTANT-per-response value under the per-page filter, frozen in DELIBERATELY (review MINOR #2) for P3/MCP symmetry
+ * and forward-compat with a future whole-tree `validate_links` variant (where `page` WOULD vary per row) — it is
+ * redundant within a single per-page response but MUST NOT be removed (removal is a contract break).
+ *
+ * `read_file` (the agent op for the WHOLE verbatim page file — frontmatter header + body — as raw markdown) adds NO
+ * PB-READ-2 shape: it is an op-NAME that maps to the EXISTING `read_page` op `GET /api/v1/pages/{id}` and its frozen
+ * PB-REST-1 `PageResponse.markdown` field (the literal on-disk bytes UTF-8-decoded, hashed by the same `content_hash`
+ * so it round-trips for an edit). It is covered by the shipped `read_page` golden + a `read_file` contract test
+ * (ReadAuthzRouteTest); a change to `read_file`'s payload IS a PB-REST-1 change, not a PB-READ-2 one.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -156,5 +180,9 @@ class ForeverApiGoldenSuite : FunSpec({
 
     test("PB-DIFF-1: the unified-diff algorithm output + its frozen format rules are frozen") {
         SelectedSuite.run(UnifiedDiffGoldenTest::class).shouldHavePassed("UnifiedDiffGoldenTest", atLeastTests = 7)
+    }
+
+    test("PB-READ-2: validate_links (broken + clean) + get_page_metadata wire shapes are frozen (3 cases)") {
+        SelectedSuite.run(ReadGoldenTest::class).shouldHavePassed("ReadGoldenTest", atLeastTests = 3)
     }
 })

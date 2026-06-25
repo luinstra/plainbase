@@ -6,6 +6,7 @@ import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.LinkChecker
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -62,6 +63,7 @@ fun buildRouteContext(
         indexBuilder = indexBuilder,
         history = history,
         aliasRegistry = aliasRegistry,
+        linkChecker = LinkChecker(),
     )
     val mutate = GuardedMutatingFacade(
         policy = policy,

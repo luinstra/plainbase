@@ -9,6 +9,29 @@ tags: [api]
 
 `GET /api/v1/pages/{id}`
 
+## Page metadata
+
+`GET /api/v1/pages/{id}/metadata`
+
+The server-derived metadata projection for a page. A 200 carries the id, the
+content path, the page url (nullable), the permalink, the content hash, the
+commit (nullable when the tree is not under Git), the title, and the
+document-order headings (each with its id, text, and level). A 401 or 403 means
+the read was not permitted. A 404 means no such page. A 400 invalid page id
+means the id was not a canonical-shape UUID.
+
+## Validate links
+
+`GET /api/v1/pages/{id}/validate-links`
+
+The page's link report. A 200 carries a broken list, each entry naming the page,
+the target, the link text, and a reason. The reason is broken missing when the
+target page does not exist, blocked scheme when the link uses a disallowed
+scheme, and broken anchor when the target heading anchor is absent. The same
+auth, not-found, and invalid-id rules as the metadata read apply: 401 or 403 if
+not permitted, 404 for an unknown page, and 400 for an id that is not a
+canonical-shape UUID.
+
 ## Search
 
 `GET /api/v1/search?q=`

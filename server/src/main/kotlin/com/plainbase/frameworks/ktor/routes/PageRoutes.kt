@@ -3,8 +3,11 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
+import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
 import com.plainbase.frameworks.ktor.dto.PageResponse
+import com.plainbase.frameworks.ktor.dto.ValidateLinksResponse
 import com.plainbase.frameworks.ktor.dto.toDto
+import com.plainbase.frameworks.ktor.dto.toMetadataDto
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -18,6 +21,8 @@ import io.ktor.server.routing.route
  *    `/docs/`-relative form, percent-decoded ONCE (PB-LINK-1), matched case-sensitively against
  *    canonical paths first, then the alias registry.
  *  - `GET /api/v1/pages/{id}/html` — sanitized HTML + the document-order `headings` array.
+ *  - `GET /api/v1/pages/{id}/validate-links` — the page's broken links + anchors (PB-READ-2, frozen).
+ *  - `GET /api/v1/pages/{id}/metadata` — the server-derived metadata projection (PB-READ-2, frozen).
  *
  * 400 vs 404 is decided by the spec regex through [PageId.of], never by `UUID.fromString` leniency:
  * shape-invalid → 400 `invalid_page_id`; shape-valid-but-unknown (ANY version — opaque identity,
@@ -67,6 +72,28 @@ fun Route.pageRoutes(ctx: RouteContext) {
                 val payload = ctx.read.pageHtml(principal, id)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 call.respondRest(PageHtmlResponse.serializer(), payload.toDto())
+            }
+        }
+        // Phase 5 `validate_links` (PB-READ-2). The constant `validate-links` suffix outranks the bare `{id}` by
+        // Ktor specificity, exactly like `html` above — no registration-order hazard.
+        get("/{id}/validate-links") {
+            val principal = ctx.principalOrRefuse(call) ?: return@get
+            call.guarded {
+                val id = call.pageId() ?: return@guarded
+                val report = ctx.read.validateLinks(principal, id)
+                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                call.respondRest(ValidateLinksResponse.serializer(), report.toDto())
+            }
+        }
+        // Phase 5 `get_page_metadata` (PB-READ-2). The server's TYPED projection (content_hash/commit/url/title/
+        // headings) — distinct from `read_file`'s raw body. Constant `metadata` suffix outranks bare `{id}`.
+        get("/{id}/metadata") {
+            val principal = ctx.principalOrRefuse(call) ?: return@get
+            call.guarded {
+                val id = call.pageId() ?: return@guarded
+                val page = ctx.read.pageMetadata(principal, id)
+                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
+                call.respondRest(PageMetadataResponse.serializer(), page.toMetadataDto())
             }
         }
     }

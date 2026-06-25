@@ -1,0 +1,7 @@
+{
+  "broken": [
+    { "page": "broken.md", "target": "./does-not-exist.md", "text": "gone", "reason": "broken_missing" },
+    { "page": "broken.md", "target": "javascript:alert", "text": "bad", "reason": "blocked_scheme" },
+    { "page": "broken.md", "target": "#no-such-heading", "text": "top", "reason": "broken_anchor" }
+  ]
+}
