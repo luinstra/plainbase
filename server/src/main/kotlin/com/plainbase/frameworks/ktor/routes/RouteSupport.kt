@@ -100,7 +100,7 @@ internal fun ApplicationCall.setContentHashETag(contentHash: String) {
  * `invalid_page_id`, never silently routed to the index lookup. The regex decides 400-vs-404, never
  * JDK leniency.
  */
-private val CANONICAL_PAGE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+internal val CANONICAL_PAGE_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 /**
  * Parses the `{id}` path parameter via the §A4 canonical-shape gate, or itself responds 400

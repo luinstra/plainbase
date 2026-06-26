@@ -88,12 +88,14 @@ class PolicyService(
      *  - [Principal.Human] → its `subject_role` row.
      *  - [Principal.Agent] → its token `mode` mapped onto the role axis (READ_ONLY → VIEWER; PROPOSE/COMMIT →
      *    EDITOR — A3 grants both the EDIT/CREATE capability; the propose-vs-direct-commit ENFORCEMENT is Phase 5).
-     *    A revoked/unknown token already resolved to [Principal.Anonymous] upstream (the A2 seam) → deny here too.
+     *    `modeOf` re-checks the active predicate (not revoked, not expired) at [clock]`.now()` on EVERY call: a REST
+     *    request re-auths its bearer per call (A2 seam), but a LIVE MCP SSE session authenticates once at connect and
+     *    reuses the captured Agent — so a token revoked/expired mid-session resolves to null mode → denied next call.
      *  - [Principal.Anonymous] → null → deny.
      */
     private fun roleFor(principal: Principal): Role? = when (principal) {
         is Principal.Human -> roles.roleOf(principal.issuer, principal.externalId)
-        is Principal.Agent -> apiTokens.modeOf(principal.tokenId)?.toRole()
+        is Principal.Agent -> apiTokens.modeOf(principal.tokenId, clock.now())?.toRole()
         Principal.Anonymous -> null
     }
 

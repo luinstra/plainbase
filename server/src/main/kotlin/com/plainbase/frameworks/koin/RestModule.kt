@@ -137,6 +137,9 @@ val restModule = module {
             trustedProxyCidrs = config.auth.trustedProxyCidrs,
             maxWriteBodyBytes = config.maxWriteBodyBytes,
             maxAssetBytes = config.maxAssetBytes,
+            // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
+            mcpAllowedHosts = config.mcpHostAllowlist(),
+            mcpAllowedOrigins = config.mcpOriginAllowlist(),
             builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
             proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
             proxySecret = config.auth.proxySecret,

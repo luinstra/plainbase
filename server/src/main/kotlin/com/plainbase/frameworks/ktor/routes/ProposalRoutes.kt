@@ -1,10 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.service.ApplyOutcome
-import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
@@ -14,7 +11,6 @@ import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ConflictedResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
-import com.plainbase.frameworks.ktor.dto.ProposalOperationWire
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
 import com.plainbase.frameworks.ktor.dto.RebasedResponse
@@ -68,7 +64,10 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                         "Request body must be JSON: {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
                     )
 
-                val command = call.toCommand(request) ?: return@guarded // the route already answered 400
+                val command = when (val parse = parseProposeCommand(request)) {
+                    is ProposeCommandParse.Ok -> parse.command
+                    is ProposeCommandParse.Invalid -> return@guarded call.invalidProposeRequest(parse.message)
+                }
                 when (val outcome = ctx.proposals.propose(principal, command)) {
                     is ProposeOutcome.Created -> call.respondRest(
                         ProposeChangeResponse.serializer(),
@@ -203,100 +202,6 @@ fun Route.proposalRoutes(ctx: RouteContext) {
     }
 }
 
-/**
- * Validates a parsed [ProposeChangeRequest] into a typed [ProposeCommand], OR responds the matching 400 itself and
- * returns null. The full F4 malformed-shape matrix lives here (every wire value parsed through its typed constructor
- * BEFORE the semantic checks); rows 3/5/6 (well-formed but stale / path-mismatch) are the `ProposalService` outcomes.
- */
-private suspend fun ApplicationCall.toCommand(request: ProposeChangeRequest): ProposeCommand? {
-    // Shared field validation.
-    if (request.proposedContent.isBlank()) {
-        invalidProposeRequest("proposed_content must not be empty")
-        return null
-    }
-    if (request.rationale.isBlank()) {
-        invalidProposeRequest("rationale must not be blank")
-        return null
-    }
-    return when (request.operation) {
-        ProposalOperationWire.EDIT -> toEditCommand(request)
-        ProposalOperationWire.CREATE -> toCreateCommand(request)
-        else -> {
-            invalidProposeRequest("operation must be one of edit, create")
-            null
-        }
-    }
-}
-
-private suspend fun ApplicationCall.toEditCommand(request: ProposeChangeRequest): ProposeCommand.Edit? {
-    val rawPageId = request.pageId
-    if (rawPageId.isNullOrBlank()) {
-        invalidProposeRequest("an edit requires page_id")
-        return null
-    }
-    val pageId = PageId.of(rawPageId)
-    if (pageId == null) {
-        invalidProposeRequest("page_id is not a valid UUID")
-        return null
-    }
-    val baseHash = request.baseHash
-    if (baseHash.isNullOrBlank()) {
-        invalidProposeRequest("an edit requires base_hash")
-        return null
-    }
-    if (!isContentHash(baseHash)) {
-        invalidProposeRequest("base_hash must be the sha256:<64-hex> form")
-        return null
-    }
-    // The optional client target_path is non-authoritative; if present it MUST be a valid TreePath (a traversal is a 400).
-    val clientTargetPath = request.targetPath?.let { raw ->
-        TreePath.of(raw) ?: run {
-            invalidProposeRequest("target_path is not a valid content-relative path: '$raw'")
-            return null
-        }
-    }
-    return ProposeCommand.Edit(
-        pageId = pageId,
-        baseHash = baseHash,
-        clientTargetPath = clientTargetPath,
-        proposedContent = request.proposedContent.encodeToByteArray(),
-        rationale = request.rationale,
-    )
-}
-
-private suspend fun ApplicationCall.toCreateCommand(request: ProposeChangeRequest): ProposeCommand.Create? {
-    if (request.pageId != null) {
-        invalidProposeRequest("a create has no existing page; page_id is contradictory")
-        return null
-    }
-    if (request.baseHash != null) {
-        invalidProposeRequest("a new page has no base; base_hash is contradictory")
-        return null
-    }
-    val rawTargetPath = request.targetPath
-    if (rawTargetPath.isNullOrBlank()) {
-        invalidProposeRequest("a create requires target_path")
-        return null
-    }
-    // SECURITY: the wire target_path goes through TreePath.of — a `..`/absolute/empty/NUL is structurally
-    // unrepresentable, so a traversal is a deterministic 400, never a 500 or a raw-string store.
-    val targetPath = TreePath.of(rawTargetPath)
-    if (targetPath == null) {
-        invalidProposeRequest("target_path is not a valid content-relative path: '$rawTargetPath'")
-        return null
-    }
-    return ProposeCommand.Create(
-        targetPath = targetPath,
-        proposedContent = request.proposedContent.encodeToByteArray(),
-        rationale = request.rationale,
-    )
-}
-
-/** The `sha256:` + 64-lowercase-hex content-hash shape (the CitationFactory form) — a malformed base_hash is a 400. */
-private val CONTENT_HASH = Regex("sha256:[0-9a-f]{64}")
-
-private fun isContentHash(value: String): Boolean = CONTENT_HASH.matches(value)
-
 /** Parses the `{id}` path param via the canonical UUID shape, or responds 400 / returns null. */
 private suspend fun ApplicationCall.proposalId(): ProposalId? {
     val raw = parameters["id"].orEmpty()
@@ -305,9 +210,10 @@ private suspend fun ApplicationCall.proposalId(): ProposalId? {
     return id
 }
 
-private val CANONICAL_PROPOSAL_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+/** The §A4 canonical proposal-id shape — `internal` so the `frameworks.mcp` `get_change` tool reuses it (same module). */
+internal val CANONICAL_PROPOSAL_ID = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
-private suspend fun ApplicationCall.invalidProposeRequest(message: String) =
+internal suspend fun ApplicationCall.invalidProposeRequest(message: String) =
     respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PROPOSE_REQUEST, message)
 
 /** Strict-decode the JSON envelope (the `parseCreateRequest` idiom): null on bad UTF-8 OR malformed JSON for the DTO. */

@@ -124,6 +124,24 @@ data class PlainbaseConfig(
      */
     fun secureCookie(): Boolean = isNonLoopbackBind() || auth.trustedProxyCidrs.isNotEmpty()
 
+    /**
+     * The P3 MCP DNS-rebinding HOST allowlist, fail-closed (the [secureCookie] accessor idiom): the operator value
+     * when set, ELSE a conservative default derived from the bind host (NOT empty, NOT a wildcard) plus loopback. The
+     * SDK matches the request `Host` header's HOSTNAME (port stripped) against this, so bare hostnames suffice; an
+     * operator behind a reverse proxy adds their external host. The bind host is the natural default — a request whose
+     * `Host` is the host we bind is the only one we serve by default.
+     */
+    fun mcpHostAllowlist(): List<String> = auth.mcpAllowedHosts.ifEmpty { (listOf(host) + MCP_LOOPBACK_HOSTS).distinct() }
+
+    /**
+     * The P3 MCP DNS-rebinding ORIGIN allowlist, fail-closed: the operator value when set, ELSE the bind-host origins
+     * (http+https) plus the loopback origins. The SDK extracts the request `Origin` header's host for the match, so
+     * these full origins normalize to their hostnames; an operator adds their external origin behind a reverse proxy.
+     */
+    fun mcpOriginAllowlist(): List<String> = auth.mcpAllowedOrigins.ifEmpty {
+        (listOf("http://$host:$port", "https://$host:$port") + MCP_LOOPBACK_HOSTS.map { "http://$it:$port" }).distinct()
+    }
+
     companion object {
         const val VERSION: String = "0.1.0"
 
@@ -149,6 +167,9 @@ data class PlainbaseConfig(
 
         /** A4b default proxy identity header (the IdP subject the trusted proxy stamps); operator-configurable. */
         const val DEFAULT_PROXY_IDENTITY_HEADER: String = "X-Forwarded-User"
+
+        /** The loopback hosts always added to the fail-closed MCP DNS-rebinding default (dev/test always reach these). */
+        private val MCP_LOOPBACK_HOSTS: List<String> = listOf("127.0.0.1", "localhost")
 
         /**
          * Env-only construction (the CLIs/spike fast path). No file is read; this is exactly the
@@ -211,6 +232,12 @@ data class PlainbaseConfig(
                 proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
                 proxyIdentityHeader = (env["PLAINBASE_PROXY_IDENTITY_HEADER"] ?: file.stringOrNull("auth.proxyIdentityHeader"))
                     ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
+                // P3 MCP DNS-rebinding allowlists. Empty here → the fail-closed bind-host default (see mcpHostAllowlist);
+                // reuse the SAME comma-or-list parser the trustedProxyCidrs path uses (never hand-roll a second one).
+                mcpAllowedHosts = env["PLAINBASE_MCP_ALLOWED_HOSTS"]?.toCommaList()
+                    ?: file.stringListOrNull("auth.mcpAllowedHosts") ?: emptyList(),
+                mcpAllowedOrigins = env["PLAINBASE_MCP_ALLOWED_ORIGINS"]?.toCommaList()
+                    ?: file.stringListOrNull("auth.mcpAllowedOrigins") ?: emptyList(),
             ),
         )
 
@@ -359,4 +386,12 @@ data class AuthConfig(
     val proxySecret: String? = null,
     /** A4b PROXY mode: the operator-configurable identity header name (default `X-Forwarded-User`). */
     val proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
+    /**
+     * P3 MCP DNS-rebinding allowlists. An EMPTY list here means "use the fail-closed bind-host default"
+     * ([PlainbaseConfig.mcpHostAllowlist]/[PlainbaseConfig.mcpOriginAllowlist]) — NEVER "allow none" and NEVER a
+     * wildcard. An operator behind a reverse proxy adds their external host/origin explicitly (the trustedProxyCidrs
+     * idiom). Parsed as a comma-or-list value exactly like trustedProxyCidrs.
+     */
+    val mcpAllowedHosts: List<String> = emptyList(),
+    val mcpAllowedOrigins: List<String> = emptyList(),
 )

@@ -36,6 +36,10 @@ class RouteContext(
     val maxWriteBodyBytes: Long,
     /** W3b asset upload cap (forwarded from config). */
     val maxAssetBytes: Long,
+    /** P3 MCP DNS-rebinding HOST allowlist (fail-closed to the bind host; the `mcp()` mount reads it). Loopback in tests. */
+    val mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
+    /** P3 MCP DNS-rebinding ORIGIN allowlist (fail-closed to the bind host). Loopback origins in tests. */
+    val mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     /**
      * A4a (WI-7): true ONLY in `auth.mode=builtin`. Gates the builtin auth surface — the `pb_session` cookie source
      * in [extract] is consulted only when true (in OFF/PROXY a stray cookie is ignored), and `plainbaseModule`

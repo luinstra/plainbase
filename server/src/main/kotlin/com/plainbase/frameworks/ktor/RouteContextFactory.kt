@@ -45,6 +45,10 @@ fun buildRouteContext(
     trustedProxyCidrs: List<String>,
     maxWriteBodyBytes: Long,
     maxAssetBytes: Long,
+    // P3 MCP DNS-rebinding allowlists (fail-closed to the bind host); the production wiring passes
+    // config.mcpHostAllowlist()/mcpOriginAllowlist(), the harnesses/spike a loopback default.
+    mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
+    mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     builtinAuthEnabled: Boolean = true,
     proxyAuthEnabled: Boolean = false,
     proxySecret: String? = null,
@@ -90,6 +94,8 @@ fun buildRouteContext(
         idProvider = idProvider,
         maxWriteBodyBytes = maxWriteBodyBytes,
         maxAssetBytes = maxAssetBytes,
+        mcpAllowedHosts = mcpAllowedHosts,
+        mcpAllowedOrigins = mcpAllowedOrigins,
         builtinAuthEnabled = builtinAuthEnabled,
         proxyAuthEnabled = proxyAuthEnabled,
         proxySecret = proxySecret,

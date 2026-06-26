@@ -2,10 +2,25 @@ package com.plainbase.frameworks.spike
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
+import com.plainbase.domain.service.ApiTokenService
+import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.koin.checkpointModule
+import com.plainbase.frameworks.koin.contentModule
+import com.plainbase.frameworks.koin.historyModule
+import com.plainbase.frameworks.koin.indexModule
+import com.plainbase.frameworks.koin.repositoryModule
+import com.plainbase.frameworks.koin.restModule
+import com.plainbase.frameworks.koin.searchModule
+import com.plainbase.frameworks.koin.securityModule
+import com.plainbase.frameworks.ktor.RouteContext
+import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.mcp.MCP_PATH
+import com.plainbase.frameworks.mcp.McpTools
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.Argon2PasswordHasher
@@ -29,6 +44,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
+import io.modelcontextprotocol.kotlin.sdk.client.mcpSseTransport
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
@@ -50,6 +66,7 @@ import java.nio.file.Files
 import java.sql.DriverManager
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
+import io.ktor.client.plugins.sse.SSE as ClientSSE
 import io.ktor.server.cio.CIO as ServerCIO
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 
@@ -69,6 +86,9 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerCon
  *  5. flexmark Markdown render (frontmatter + GFM + anchors)
  *  6. argon2 hash + verify (Bouncy Castle, pure Java)
  *  7. MCP Kotlin SDK stub handshake (initialize + listTools)
+ *  8. MCP SSE-on-CIO server handshake (P3): the in-binary `plainbaseMcp` mount over a real CIO server +
+ *     a real SSE MCP client under ENFORCED auth — initialize + listTools (== the seven) + callTool ×2 over
+ *     ONE open stream (proving keep-alive/flush work natively, not a single round-trip)
  *
  * The Git layer is NOT spiked here — it ships as the system `git` binary (ADR-0006), not a bundled
  * library, so its native proof is the real-round-trip GitNativeSmokeTest (@Tag("native")), not this set.
@@ -89,6 +109,7 @@ object NativeSpike {
         check("flexmark-render") { flexmarkRender() },
         check("argon2-hash-verify") { argon2() },
         check("mcp-stub-handshake") { mcpHandshake() },
+        check("mcp-sse-handshake") { mcpSseHandshake() },
     )
 
     fun runAsMain(): Int {
@@ -389,6 +410,84 @@ object NativeSpike {
             runCatching { client.close() }
             runCatching { session.close() }
             runCatching { server.close() }
+        }
+    }
+
+    // ---- 8. MCP SSE-on-CIO server handshake (P3) -----------------------------------------
+
+    /**
+     * The P3 native bet: the in-binary `plainbaseMcp` mount, served over a REAL CIO server under ENFORCED auth, driven
+     * by a REAL SSE MCP client. Wires the production Koin graph (config pointed at a temp tree, auth.mode=builtin so
+     * `enforced=true`, git off) so the spike exercises the SAME `buildRouteContext`/`plainbaseMcp` the server uses;
+     * mints a PROPOSE (-> EDITOR) agent token, opens an authed SSE stream, and asserts initialize + listTools(== the
+     * seven) + TWO callTool round-trips (list_changes + read_page) over ONE open stream — proving keep-alive / SSE
+     * flush work in the native image, not just a single round-trip. The SSE/MCP-server reflection this reaches is what
+     * the committed `traceMcpSseMetadata` delta covers.
+     */
+    private fun mcpSseHandshake(): String = runBlocking {
+        val contentDir = Files.createTempDirectory("plainbase-spike-mcp-content")
+        val dataDir = Files.createTempDirectory("plainbase-spike-mcp-data")
+        Files.writeString(contentDir.resolve("index.md"), "---\ntitle: Spike Home\n---\n\n# Spike Home\n\nMCP SSE spike body.\n")
+        val config = PlainbaseConfig.fromEnv(
+            mapOf(
+                "CONTENT_DIR" to contentDir.toString(),
+                "DATA_DIR" to dataDir.toString(),
+                "PLAINBASE_HOST" to "127.0.0.1",
+                "PLAINBASE_AUTH_MODE" to "builtin", // -> enforced=true, so the connect gate + facade gate are REAL
+                "PLAINBASE_GIT_ENABLED" to "false", // no git gate in the spike
+            ),
+        )
+        val app = koinApplication {
+            modules(
+                module { single { config } },
+                contentModule, repositoryModule, securityModule, indexModule, checkpointModule, searchModule, historyModule, restModule,
+            )
+        }
+        val koin = app.koin
+        try {
+            val builder = koin.get<IndexBuilder>()
+            builder.rebuild()
+            val seedPageId = builder.current.pages.first().id.value
+            val minted = koin.get<ApiTokenService>().mint(label = "spike", mode = AgentMode.PROPOSE)
+            val ctx = koin.get<RouteContext>()
+            val server = embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) {
+                plainbaseModule(ctx)
+            }.start(wait = false)
+            try {
+                val port = server.engine.resolvedConnectors().first().port
+                HttpClient(ClientCIO) { install(ClientSSE) }.use { httpClient ->
+                    val transport = httpClient.mcpSseTransport("http://127.0.0.1:$port$MCP_PATH") {
+                        headers.append("Authorization", "Bearer ${minted.plaintext}")
+                    }
+                    val client = Client(Implementation(name = "plainbase-sse-spike", version = "0.0.1"))
+                    try {
+                        withTimeout(15_000) { client.connect(transport) }
+                        require(client.serverVersion?.name == "plainbase") { "unexpected server info: ${client.serverVersion}" }
+                        val names = withTimeout(15_000) { client.listTools() }.tools.map { it.name }.toSet()
+                        require(names == McpTools.ALL) { "MCP tool surface drift: $names (expected ${McpTools.ALL})" }
+                        // TWO calls over the SAME open stream (keep-alive / SSE-flush proof, not one round-trip).
+                        val listText = (
+                            withTimeout(15_000) { client.callTool("list_changes", emptyMap<String, Any?>()) }
+                                ?.content?.firstOrNull() as? TextContent
+                            )?.text
+                        require(listText?.contains("\"proposals\"") == true) { "list_changes over SSE failed: $listText" }
+                        val readText = (
+                            withTimeout(15_000) { client.callTool("read_page", mapOf("id" to seedPageId)) }
+                                ?.content?.firstOrNull() as? TextContent
+                            )?.text
+                        require(readText?.contains(seedPageId) == true) { "read_page over SSE failed: $readText" }
+                        "SSE-on-CIO MCP: initialize + listTools(==${names.size}) + list_changes + read_page over one stream (port $port)"
+                    } finally {
+                        runCatching { client.close() }
+                    }
+                }
+            } finally {
+                server.stop(gracePeriodMillis = 100, timeoutMillis = 1000)
+            }
+        } finally {
+            app.close()
+            Files.walk(contentDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+            Files.walk(dataDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 }

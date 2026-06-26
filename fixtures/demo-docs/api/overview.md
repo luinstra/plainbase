@@ -7,8 +7,8 @@ updated: 2026-05-30
 
 # API Overview
 
-Agent operations over REST and MCP: search, read_page, read_section,
-get_page_metadata, propose_change, validate_links, list_changes, get_change.
+Agent operations over REST and MCP: search, read_page, get_page_metadata,
+propose_change, validate_links, list_changes, get_change.
 
 Approved changes apply directly to the content tree: an admin reviewer
 approves an edit (it commits to disk + Git), rejects it, or rebases a
