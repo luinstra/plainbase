@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useRouter } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
+import { sessionQuery } from "../api/queries";
 import { interceptableHref } from "../lib/links";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
@@ -30,6 +32,11 @@ function SearchTrigger() {
  */
 export function Shell() {
   const router = useRouter();
+  // F8: the only available auth signal is `authenticated` (SessionResponse carries no role) — agents/anonymous
+  // never approve, so the "Review" nav is gated on it. The queue itself renders for any authenticated reader;
+  // an approve/reject/rebase 403 becomes the no-access state in the detail (NOT a hard client capability gate —
+  // that would need a server DTO change, out of scope for this frontend-only chunk).
+  const session = useQuery(sessionQuery);
 
   const onClick = (event: MouseEvent) => {
     const href = interceptableHref(event.nativeEvent);
@@ -51,6 +58,16 @@ export function Shell() {
         </a>
         <div className="flex items-center gap-3">
           <SearchTrigger />
+          {session.data?.authenticated && (
+            <Link
+              to="/review"
+              className="pb-review-nav flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
+              data-pb-review-nav
+              aria-label="Review queue"
+            >
+              <span className="max-sm:hidden">Review</span>
+            </Link>
+          )}
           <Link
             to="/new"
             className="pb-new-page flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"

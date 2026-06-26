@@ -12,6 +12,8 @@ import { EditorPage, NewPage } from "./components/EditorPage";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
 import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
+import { ReviewDetail } from "./components/ReviewDetail";
+import { ReviewQueue } from "./components/ReviewQueue";
 import { Shell } from "./components/Shell";
 
 /**
@@ -115,6 +117,23 @@ const adminRoute = createRoute({
   component: Admin,
 });
 
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/review",
+  component: ReviewQueue,
+});
+
+const reviewDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/review/$id",
+  component: ReviewDetailSplat,
+});
+
+function ReviewDetailSplat() {
+  const { id } = reviewDetailRoute.useParams();
+  return <ReviewDetail id={id} />;
+}
+
 const permalinkRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/p/$",
@@ -129,7 +148,16 @@ function PermalinkSplat() {
   return <PermalinkPage splat={_splat ?? ""} />;
 }
 
-const routeTree = rootRoute.addChildren([indexRoute, docsIndexRoute, docsRoute, newRoute, adminRoute, permalinkRoute]);
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  docsIndexRoute,
+  docsRoute,
+  newRoute,
+  adminRoute,
+  reviewRoute,
+  reviewDetailRoute,
+  permalinkRoute,
+]);
 
 /** [history] is injectable for tests (memory history); the app default is browser history. */
 export function createAppRouter(queryClient: QueryClient, history?: RouterHistory) {

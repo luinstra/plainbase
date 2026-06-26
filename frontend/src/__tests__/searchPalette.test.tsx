@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { searchQuery, treeQuery } from "../api/queries";
+import { searchQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { SearchResponse, TreeResponse } from "../api/types";
 import { QUICK_SWITCH_MAX } from "../components/SearchPalette";
 import { createAppRouter } from "../router";
@@ -61,6 +61,9 @@ function searchResponse(query: string): SearchResponse {
 function setup(initialPath = "/docs") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, tree);
+  // The Shell gates its "Review" nav on a session read — prime it (unauthenticated) so it serves from cache
+  // and the no-fetch assertions stay honest.
+  queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
   const view = render(

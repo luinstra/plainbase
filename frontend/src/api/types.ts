@@ -298,3 +298,85 @@ export interface UserMeta {
 export interface UserListResponse {
   users: UserMeta[];
 }
+
+// ---- PB-PROPOSE-1 (P1a/P1b) change shapes (frozen — server: ProposalDtos.kt) -------------------
+//
+// The agent-facing proposal wire, transcribed 1:1 from the server `@SerialName` strings. Casing is
+// ASYMMETRIC and load-bearing: `status` is UPPERCASE (ProposalStatusWire), `operation` is lowercase
+// (ProposalOperationWire). `unified_diff` is server-computed text the client renders VERBATIM — never
+// re-derived (§0.13(i)). `base_drifted` is a LIVE-derived read flag (present on a still-PENDING row),
+// DISTINCT from the `CONFLICTED` status reached only after an apply hit disk-drift.
+
+/** The frozen status set — UPPERCASE on the wire (append-only). */
+export type ProposalStatus = "PENDING" | "APPLYING" | "APPLIED" | "REJECTED" | "CONFLICTED" | "FAILED";
+
+/** The frozen operation set — lowercase on the wire (append-only). */
+export type ProposalOperation = "edit" | "create";
+
+/** A `list_changes` element. `page_id` is null for a create; `base_drifted` is the live triage datum. */
+export interface ChangeSummary {
+  id: string;
+  operation: ProposalOperation;
+  status: ProposalStatus;
+  target_path: string;
+  page_id: string | null;
+  base_drifted: boolean;
+  author_label: string;
+  created_at: string;
+  rationale: string;
+}
+
+/** `GET /api/v1/changes` — a WRAPPER object (never a bare array), so additive pagination can land later. */
+export interface ListChangesResponse {
+  proposals: ChangeSummary[];
+}
+
+/** `get_change` (and the reject success body) — the summary fields PLUS the stored diff + decision fields. */
+export interface ChangeDetail {
+  id: string;
+  operation: ProposalOperation;
+  status: ProposalStatus;
+  target_path: string;
+  page_id: string | null;
+  base_hash: string | null;
+  base_drifted: boolean;
+  author_label: string;
+  author_issuer: string;
+  author_external_id: string;
+  created_at: string;
+  rationale: string;
+  unified_diff: string;
+  approver_issuer: string | null;
+  approver_external_id: string | null;
+  decision_comment: string | null;
+  decided_at: string | null;
+  applied_commit: string | null;
+  status_reason: string | null;
+}
+
+/** `POST …/{id}/approve` 200 — the applied result (the page moved; the diff was committed). */
+export interface ApplyResultResponse {
+  new_hash: string;
+  commit_sha: string | null;
+  applied_at: string;
+  warnings: string[] | null;
+}
+
+/** `POST …/{id}/approve` 409 — an apply hit disk-drift; the proposal is now rebasable. `code` is "conflicted". */
+export interface ConflictedResponse {
+  code: "conflicted";
+  current_hash: string | null;
+  current_path: string | null;
+}
+
+/** `POST …/{id}/rebase` 200 — the re-pinned base + recomputed diff; `status` is back to "PENDING". */
+export interface RebasedResponse {
+  new_base_hash: string;
+  unified_diff: string;
+  status: "PENDING";
+}
+
+/** `POST …/{id}/reject` request — an optional reviewer comment (the comment is REJECT-only; approve has no body). */
+export interface RejectChangeRequest {
+  comment?: string | null;
+}

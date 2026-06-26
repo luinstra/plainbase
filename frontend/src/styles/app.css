@@ -1036,3 +1036,173 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ---- review queue + detail (P4: .pb-review* / data-pb-review-* are stable selectors; token-only) ----- */
+
+.pb-review-title {
+  margin-bottom: 16px;
+}
+.pb-review-back {
+  display: inline-block;
+  font-size: 14px;
+  color: var(--pb-link);
+}
+.pb-review-back:hover {
+  color: var(--pb-link-hover);
+}
+
+/* Queue list */
+.pb-review-list {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pb-review-row {
+  border: 1px solid var(--pb-border);
+  border-radius: 6px;
+  background: var(--pb-surface-raised);
+}
+.pb-review-row[data-pb-review-row-drifted] {
+  border-color: var(--pb-warning);
+}
+.pb-review-row-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+}
+.pb-review-row-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.pb-review-row-op,
+.pb-review-op {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pb-accent);
+}
+.pb-review-row-path {
+  color: var(--pb-text);
+  font-weight: 500;
+}
+.pb-review-row-meta,
+.pb-review-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--pb-text-muted);
+}
+.pb-review-chip-drift {
+  color: var(--pb-warning);
+  font-weight: 500;
+}
+
+/* Detail */
+.pb-review-header {
+  margin-top: 16px;
+}
+.pb-review-meta {
+  margin-top: 8px;
+}
+.pb-review-status {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--pb-text-muted);
+}
+.pb-review-decision {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  font-size: 13px;
+}
+.pb-review-decision dt {
+  color: var(--pb-text-faint);
+}
+.pb-review-decision dd {
+  color: var(--pb-text-muted);
+}
+.pb-review-rationale {
+  margin-top: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--pb-text);
+}
+
+/* Drift banner — warning-tinted, carries the one-click Rebase for a CONFLICTED proposal. */
+.pb-review-drift {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--pb-warning);
+  background: var(--pb-warning-soft);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.pb-review-drift-text {
+  color: var(--pb-text);
+  font-size: 14px;
+}
+
+/* Diff spacing in the detail (the .pb-diff block itself is styled by the W7 history rules above). */
+.pb-review-detail [data-pb-diff] {
+  margin-top: 16px;
+}
+
+/* Actions */
+.pb-review-actions {
+  margin-top: 24px;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.pb-review-action {
+  border: 1px solid var(--pb-border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 14px;
+  color: var(--pb-text);
+  background: var(--pb-surface-raised);
+}
+.pb-review-action:hover:enabled {
+  background: var(--pb-surface-hover);
+}
+.pb-review-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pb-review-reject {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pb-review-comment {
+  min-width: 18rem;
+  min-height: 3.5rem;
+  border: 1px solid var(--pb-border);
+  border-radius: 6px;
+  background: var(--pb-surface);
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--pb-text);
+}
+.pb-review-no-access {
+  margin-top: 16px;
+  border: 1px solid var(--pb-border);
+  background: var(--pb-surface-raised);
+  border-radius: 6px;
+  padding: 12px 14px;
+  color: var(--pb-text-muted);
+}
+.pb-review-action-error {
+  margin-top: 16px;
+  color: var(--pb-danger);
+  font-size: 14px;
+}

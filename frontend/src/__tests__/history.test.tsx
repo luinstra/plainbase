@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { CommitDto, PageResponse, TreeResponse } from "../api/types";
 import { MAX_DIFF_RENDER_CHARS } from "../lib/unifiedDiff";
 import { createAppRouter } from "../router";
@@ -84,6 +84,8 @@ function urlOf(input: RequestInfo | URL): string {
 function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+  // Prime the Shell's session read (unauthenticated) so it serves from cache — no extra /session fetch.
+  queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   prime(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);

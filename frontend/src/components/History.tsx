@@ -1,11 +1,11 @@
-import hljs from "highlight.js/lib/common";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { diffQuery, historyQuery, pageByPathQuery } from "../api/queries";
 import type { CommitDto, DiffResponse } from "../api/types";
-import { languageForPath, MAX_DIFF_RENDER_CHARS, parseUnifiedDiff, type DiffLine } from "../lib/unifiedDiff";
+import { formatTime } from "../lib/datetime";
+import { DiffView } from "./DiffView";
 import { NotFoundView } from "./NotFound";
 
 /**
@@ -182,15 +182,6 @@ function shortSha(sha: string): string {
   return sha.slice(0, 7);
 }
 
-/**
- * Formats an ISO-8601 timestamp for display, defensively (D-8): a malformed value falls back to the raw
- * string (never "Invalid Date", never throws). The raw ISO rides a `title`/`dateTime` attr so tests stay
- * timezone-independent.
- */
-function formatTime(iso: string): string {
-  return Number.isNaN(Date.parse(iso)) ? iso : new Date(iso).toLocaleString();
-}
-
 function CommitRow({ commit, selected, onToggle }: { commit: CommitDto; selected: boolean; onToggle: () => void }) {
   return (
     <li className="pb-commit" data-pb-commit data-pb-commit-sha={shortSha(commit.sha)} data-pb-commit-selected={selected ? "" : undefined}>
@@ -245,70 +236,11 @@ function DiffPane({ diff, pending, error, selectedCount }: { diff: DiffResponse 
       </div>
     );
   }
+  // The W7 history diff drives DiffView with the from→to shas as the too-large label (it has them); the review
+  // detail (ReviewDetail) reuses the same component with no label (the generic message).
   return (
     <div className="pb-diff-pane" data-pb-diff-pane>
-      <Diff diff={diff} />
-    </div>
-  );
-}
-
-function Diff({ diff }: { diff: DiffResponse }) {
-  // The size-cap lives INSIDE the memo so the hook is called UNCONDITIONALLY (Rules of Hooks): a `Diff`
-  // instance that switches between an oversized and a normal diff on the same mount must keep a stable hook
-  // count. Parse + per-line highlight is the only expensive work here, and it's skipped for the cap state, so a
-  // giant diff still never parses. Memoized on (unified_diff, path) so a transient parent re-render — a window
-  // refocus, a sibling state change — can't re-run the pass.
-  const rows = useMemo(() => {
-    if (diff.unified_diff.length > MAX_DIFF_RENDER_CHARS) return "too-large" as const;
-    // ONE language detected once from the diff path's extension (MF-2) — never per-line auto-detection.
-    // Guard on hljs.getLanguage exactly like Prose.tsx:37; a missing/unregistered language → escaped plaintext.
-    const detected = languageForPath(diff.path);
-    const language = detected && hljs.getLanguage(detected) ? detected : null;
-    return parseUnifiedDiff(diff.unified_diff).map((line) => ({
-      line,
-      // hljs output is generated from the line's TEXT (no markup passes through), preserving the
-      // no-injection property Prose relies on (Prose.tsx:41-45). Meta rows are never highlighted.
-      html: line.kind !== "meta" && language !== null ? hljs.highlight(line.text, { language, ignoreIllegals: true }).value : null,
-    }));
-  }, [diff.unified_diff, diff.path]);
-
-  // A giant diff can never freeze the browser: render the cap state instead of megabytes of rows.
-  if (rows === "too-large") {
-    return (
-      <div className="pb-diff pb-diff-too-large" data-pb-diff data-pb-diff-too-large>
-        <p className="text-sm text-muted">
-          This diff is too large to render here ({diff.from.slice(0, 7)} → {diff.to.slice(0, 7)}). View it locally with{" "}
-          <code className="font-mono">git diff</code>.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="pb-diff" data-pb-diff>
-      {rows.map(({ line, html }, index) => (
-        <DiffRow key={index} line={line} html={html} />
-      ))}
-    </div>
-  );
-}
-
-/** The visually-hidden, AT-only label for each row kind, paired with the (aria-hidden) +/- visual gutter. */
-const KIND_LABEL: Record<DiffLine["kind"], string | null> = { add: "Added: ", del: "Removed: ", context: null, meta: null };
-
-function DiffRow({ line, html }: { line: DiffLine; html: string | null }) {
-  const srLabel = KIND_LABEL[line.kind];
-  return (
-    <div className="pb-diff-line" data-pb-diff-line={line.kind}>
-      {srLabel && <span className="sr-only">{srLabel}</span>}
-      <span className="pb-diff-gutter" aria-hidden="true">
-        {line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}
-      </span>
-      {html !== null ? (
-        <code className="pb-diff-code hljs" dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <code className="pb-diff-code">{line.text}</code>
-      )}
+      <DiffView unifiedDiff={diff.unified_diff} path={diff.path} tooLargeLabel={`${diff.from.slice(0, 7)} → ${diff.to.slice(0, 7)}`} />
     </div>
   );
 }
