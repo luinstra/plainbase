@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
@@ -27,6 +28,21 @@ interface ReadFacade {
     fun pageByUrlPath(principal: Principal, path: TreePath): PagePayload?
 
     fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload?
+
+    /**
+     * The broken links + anchors ON the page [id] (Phase 5 `validate_links`, master §2.6): a checkRead-FIRST gated,
+     * per-page view of the EXISTING whole-index [LinkChecker] report (filtered to this page). Null when [id] is
+     * unknown (the checkRead gate fired first, so a denied caller cannot tell unknown-from-known). NOT a re-checker —
+     * it aggregates the one render-time resolution model, exactly like the whole-tree gate.
+     */
+    fun validateLinks(principal: Principal, id: PageId): LinkReport?
+
+    /**
+     * The page [id]'s metadata projection (Phase 5 `get_page_metadata`, master §2.6): id/path/url/content_hash/
+     * commit/title/headings, all from the published snapshot (no disk read). checkRead-FIRST; null when [id] unknown
+     * (the gate fired first). Headings are document order. Returns the domain [IndexedPage] (the route projects it).
+     */
+    fun pageMetadata(principal: Principal, id: PageId): IndexedPage?
 
     fun search(principal: Principal, q: String?, limit: String?, offset: String?): SearchService.Outcome
 

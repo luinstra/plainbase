@@ -130,7 +130,14 @@ test("reduced-motion: deep-link still scrolls but does not pulse", async ({ page
 
 test("a deep link to a missing fragment lands at top with no error", async ({ page }) => {
   const errors: string[] = [];
-  page.on("console", (msg) => msg.type() === "error" && errors.push(msg.text()));
+  page.on("console", (msg) => {
+    if (msg.type() !== "error") return;
+    // The chrome's "Review" nav gate probes GET /api/v1/session on every load; in auth.mode=off that route
+    // is intentionally absent (KtorServer registers it only in builtin/proxy), so it 404s. That probe is
+    // by-design infra noise, orthogonal to this deep-link test — ignore it.
+    if (msg.location().url.includes("/api/v1/session")) return;
+    errors.push(msg.text());
+  });
   await page.setViewportSize({ width: 1280, height: 380 });
   await page.goto("/docs/guides/deploy-guide#does-not-exist");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");

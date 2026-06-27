@@ -249,6 +249,37 @@ describe("W6 editor", () => {
     await waitFor(() => expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(false));
   });
 
+  it("a 202 degrade-to-proposal does NOT advance the saved baseline (Save stays enabled) and shows a non-\"Saved\" notice", async () => {
+    // P5: a PUT that degrades to a proposal (202) is NOT an applied write — the editor must stay dirty (these
+    // bytes aren't on disk) and surface a proposal notice, never "Saved". (Latent for the cookie-auth SPA, but the
+    // `degraded` result kind has to be handled.) The PUT returns the 202 degraded body; everything else is benign.
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return jsonResponse({ degraded: true, proposal_id: "0198abc", status: "PENDING", unified_diff: "--- a\n+++ b\n@@ -1 +1 @@\n" }, 202);
+      }
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    });
+
+    await appendToEditor(view, "more.\n");
+    const save = await waitFor(() => {
+      const btn = view.container.querySelector<HTMLButtonElement>("[data-pb-save]")!;
+      expect(btn.disabled).toBe(false);
+      return btn;
+    });
+    fireEvent.click(save);
+
+    // The proposal notice surfaces…
+    await waitFor(() => expect(view.container.querySelector("[data-pb-editor-notice]")?.textContent).toContain("proposal"));
+    const notice = view.container.querySelector("[data-pb-editor-notice]")!;
+    expect(notice.textContent).not.toContain("Saved");
+    // …and the baseline never advanced: the buffer is still dirty, so Save stays enabled.
+    expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(false);
+  });
+
   it("a non-UTF-8 page (markdown is a lossy U+FFFD decode) disables Save and shows the byte-fidelity banner", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     // A page whose on-disk bytes weren't valid UTF-8: the read path decoded them lossily (the U+FFFD

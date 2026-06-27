@@ -1,0 +1,28 @@
+-- v7 -> v8: Phase 5, chunk P1a — the proposals store (PB-PROPOSE-1).
+--
+-- Plain migration SQL: the typed Kotlin `AS ProposalId`/`AS PageId`/`AS TreePath` annotations and the import
+-- banner live ONLY in Proposals.sq (the form SQLDelight generates adapters from); a .sqm is plain SQL, same as
+-- 2.sqm strips page_checkpoint's `AS` annotations. verifyMigrations cross-checks this body against schema/8.db.
+CREATE TABLE proposals (
+  id BLOB NOT NULL PRIMARY KEY,
+  operation TEXT NOT NULL,
+  page_id BLOB,
+  base_hash TEXT,
+  target_path TEXT NOT NULL,
+  proposed_content BLOB NOT NULL,
+  rationale TEXT NOT NULL,
+  diff_artifact TEXT NOT NULL,
+  status TEXT NOT NULL,
+  author_issuer TEXT NOT NULL,
+  author_external_id TEXT NOT NULL,
+  author_label TEXT NOT NULL,
+  approver_issuer TEXT,
+  approver_external_id TEXT,
+  decision_comment TEXT,
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER,
+  applied_commit TEXT
+);
+
+-- Covers selectAllSummary's `ORDER BY created_at DESC, id DESC` (the sessions_user_id idiom; plain SQL here).
+CREATE INDEX proposals_created_at ON proposals(created_at DESC, id DESC);

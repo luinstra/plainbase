@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "apply_failed",
+    "message": "target page was deleted; rebase is impossible"
+  }
+}

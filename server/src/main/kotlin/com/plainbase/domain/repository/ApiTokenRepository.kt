@@ -20,11 +20,21 @@ interface ApiTokenRepository {
     fun findById(id: String): ApiTokenRow?
 
     /**
-     * The agent token's [AgentMode], or null if unknown — A3 role resolution reads ONLY the mode (→ Role) for an
-     * already-authenticated [com.plainbase.domain.principal.Principal.Agent], never the secret hash. A narrow
-     * projection so the authZ path never loads the at-rest secret (defense-in-depth).
+     * The agent token's [AgentMode], or null if unknown / REVOKED / EXPIRED at [now] — A3 role resolution reads ONLY
+     * the mode (→ Role) for an already-authenticated [com.plainbase.domain.principal.Principal.Agent], never the secret
+     * hash. A narrow projection so the authZ path never loads the at-rest secret (defense-in-depth). The active
+     * predicate (the [touchIfActive] one) is load-bearing for a LIVE MCP SSE session: it authenticates ONCE at connect
+     * and reuses the captured Agent for every tool call, so role resolution itself must deny a token revoked/expired
+     * mid-session (REST re-auths the bearer per request, but MCP does not).
      */
-    fun modeOf(id: String): AgentMode?
+    fun modeOf(id: String, now: Instant): AgentMode?
+
+    /**
+     * The agent token's `agent_label`, or null if unknown — C4 author labeling reads ONLY the label (→ the snapshot
+     * attribution) for an already-authenticated [com.plainbase.domain.principal.Principal.Agent], never the secret
+     * hash. A narrow projection (the [modeOf] discipline) so the non-auth propose path never loads the at-rest secret.
+     */
+    fun agentLabelById(id: String): String?
 
     /**
      * The atomic authenticate stamp (TOCTOU-safe): sets [id]'s `last_used_at` to [at] in ONE conditional write
@@ -78,7 +88,9 @@ data class ApiTokenMeta(
 )
 
 /**
- * What an agent token is permitted to do. The FIELD lands now (A2); ENFORCEMENT of
- * direct-commit-vs-propose is Phase 5 (§0.7). Stored as the enum name in TEXT (the [Stage] idiom).
+ * What an agent token is permitted to do. The FIELD landed in A2; ENFORCEMENT is LIVE (Phase 5): a COMMIT token's
+ * write direct-commits only inside `agentDirectCommit.globs` and otherwise degrades to a proposal, a PROPOSE token
+ * always proposes, READ_ONLY can only read (`PolicyService` + `GuardedMutatingFacade`). Stored as the enum name in
+ * TEXT (the [Stage] idiom).
  */
 enum class AgentMode { READ_ONLY, PROPOSE, COMMIT }

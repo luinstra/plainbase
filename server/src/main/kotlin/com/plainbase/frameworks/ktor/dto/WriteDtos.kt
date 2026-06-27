@@ -47,6 +47,21 @@ data class WrittenButUnindexedResponse(
 data class WriteWarning(val code: String, val message: String)
 
 /**
+ * 202 Accepted (P5): an agent COMMIT write fell OUTSIDE `agentDirectCommit.globs` and was degraded to a proposal. A
+ * NEW shape — NEVER a field on the frozen two-key [WrittenResponse] (`encodeDefaults=true` would emit any added field
+ * on EVERY PUT-200, breaking the golden corpus + the frontend type). [degraded] is always true — the discriminator a
+ * client checks before treating a PUT response as an applied write. [status] is always [ProposalStatusWire.PENDING];
+ * [unifiedDiff] is NON-NULL (`ProposeOutcome.Created.unifiedDiff` is always populated).
+ */
+@Serializable
+data class DegradedToProposalResponse(
+    val degraded: Boolean = true,
+    @SerialName("proposal_id") val proposalId: String,
+    val status: String,
+    @SerialName("unified_diff") val unifiedDiff: String,
+)
+
+/**
  * 201 (`POST /api/v1/pages`, `WriteOutcome.Written`): the clean-create response. It conforms to
  * PB-WRITE-1's `WrittenResponse` shape (`content_hash` + present-`null` `commit`) and ADDS the two
  * fields a create owes the client (W6, owner+debate-approved additive revision): the minted [id] and

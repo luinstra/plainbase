@@ -3,7 +3,8 @@ package com.plainbase.domain.principal
 /**
  * Unforgeable typed authorization grants (A3, the compile-time floor). A mutating domain operation
  * ([com.plainbase.domain.service.WritePipeline.write]/`create`, `ContentStore.writeAssetExclusive`, the gated
- * `IndexBuilder.rebuild(grant)`) REQUIRES one of these as a leading parameter — so a bypassed
+ * `IndexBuilder.rebuild(grant)`, the P1a proposal status transition `ProposalService.proposeEdit`/`proposeCreate`/
+ * `reject`) REQUIRES one of these as a leading parameter — so a bypassed
  * `PolicyService.check()` is a COMPILE error even if someone injects the raw mutator. The grants carry NO payload:
  * they exist purely to make "I called check()" a value the mutator can demand (a plain `class`, never a `data`
  * class — `copy()` would re-open forgery).
@@ -24,6 +25,9 @@ class CreateGrant internal constructor()
 
 class ManageGrant internal constructor()
 
+/** Gates the P1a proposal STATUS TRANSITION (approve/reject) — NOT a content-tree write (that is the EditGrant). */
+class ApproveGrant internal constructor()
+
 /**
  * TEST-ONLY grant mint, PUBLIC in `src/main` so `src/test` and `src/nativeTest` can both mint via `main`'s output
  * (the only seam `src/nativeTest` has). NEVER referenced from production — the source-scan tests enforce that.
@@ -33,3 +37,5 @@ fun grantForTests(): EditGrant = EditGrant()
 fun createGrantForTests(): CreateGrant = CreateGrant()
 
 fun manageGrantForTests(): ManageGrant = ManageGrant()
+
+fun approveGrantForTests(): ApproveGrant = ApproveGrant()

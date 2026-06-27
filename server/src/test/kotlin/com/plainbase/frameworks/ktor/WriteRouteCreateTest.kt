@@ -220,7 +220,7 @@ class WriteRouteCreateTest : FunSpec({
 
         // On-Git stand-in: a RECORDING hook is invoked with the created path + the composed bytes.
         val recorded = AtomicReference<Pair<String, ByteArray>>()
-        val recording = WriteHistoryHook { path, bytes ->
+        val recording = WriteHistoryHook { path, bytes, _, _ ->
             recorded.set(path.value to bytes)
             null
         }
@@ -237,7 +237,7 @@ class WriteRouteCreateTest : FunSpec({
 
     // 8. WrittenButUnindexed on create (R2 parity): a throwing post-write hook → 201 + warning, NOT 200.
     test("a post-write hook failure on create is 201 with warning reindex_deferred; the bytes are on disk") {
-        val throwingHook = WriteHistoryHook { _, _ -> throw RuntimeException("history boom") }
+        val throwingHook = WriteHistoryHook { _, _, _, _ -> throw RuntimeException("history boom") }
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider(), historyHook = throwingHook) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(json())

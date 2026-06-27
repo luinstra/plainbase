@@ -5,21 +5,34 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
+import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.Action
+import com.plainbase.domain.service.AgentWriteDecision
 import com.plainbase.domain.service.AssetWriteOutcome
+import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalFacade
+import com.plainbase.domain.service.ProposeCommand
+import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.ReindexResult
 import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
 import com.plainbase.domain.service.WriteIntent
+import com.plainbase.domain.service.WriteOrigin
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.service.agentWriteDecision
+import com.plainbase.domain.service.syntheticEmail
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -39,6 +52,18 @@ class GuardedMutatingFacade(
     private val writePipeline: WritePipeline,
     private val contentStore: ContentStore,
     private val indexBuilder: IndexBuilder,
+    // P5: the degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
+    // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) — invoked only at
+    // request time, never during assembly. Defaulted so the many non-P5 test constructors compile unchanged.
+    private val proposals: () -> ProposalFacade = { error("ProposalFacade not wired for this GuardedMutatingFacade") },
+    // P5: the validated `agentDirectCommit.globs` (config-parsed). Empty (the default) ⇒ every agent write degrades.
+    private val agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
+    // P5 (b1): the C4 author labeler — resolves an agent's snapshot (issuer, externalId, label) so a DIRECT agent
+    // commit is git-attributed to the AGENT (author == committer), matching its agent-attributed audit row instead of
+    // the server "Plainbase" identity. Defaulted null so the many non-P5 test constructors compile unchanged; the agent
+    // DirectCommit path requires it (it is only ever reached with globs configured, where the production wiring + the
+    // testRouteContext harness both thread it in via buildRouteContext).
+    private val proposalLabeler: ProposalAuthorLabeler? = null,
 ) : MutatingFacade {
 
     /**
@@ -49,15 +74,87 @@ class GuardedMutatingFacade(
     private val reindexInFlight = AtomicBoolean(false)
 
     override fun save(principal: Principal, request: SaveRequest): SaveResult {
+        // P5 gate (WI-4): the agent direct-commit-vs-degrade decision is consulted ONLY for a genuine agent PUT
+        // (Principal.Agent AND origin == DIRECT_PUT). Human/Anonymous ALWAYS, and the proposal-APPLY path REGARDLESS
+        // of its principal (an off-mode agent CAN drive approve — finding #11), take the strict audit-first direct
+        // path UNCHANGED. The bypass is the WriteOrigin discriminator the apply caller sets, never an assumption about
+        // the approver's principal type.
+        if (principal !is Principal.Agent || request.origin == WriteOrigin.PROPOSAL_APPLY) {
+            return directSave(principal, request)
+        }
+
+        // Agent DIRECT_PUT — DECIDE-FIRST (a deliberate, AGENT-ONLY relaxation of the strict audit-first ordering the
+        // non-agent path keeps): the non-auditing agentModeFor lookup + the in-memory snapshot resolution run BEFORE
+        // the audited checkEdit fires on the chosen branch. It leaks nothing client-visible — a deny still throws from
+        // checkEdit with NO content returned, and EVERY agent path still audits EXACTLY once (EDIT@pageId on a direct
+        // commit, EDIT@"proposal" on a degrade).
+        val mode = policy.agentModeFor(principal)
+
+        // Missing-page COMMIT → 404 DIRECT (never a StaleBase degrade): there is no content to smuggle and no
+        // applyable proposal to mint. Audit EDIT@pageId then return PageNotFound (a READ_ONLY agent denies here → 403).
+        val current = indexBuilder.current.byId[request.pageId] ?: run {
+            policy.checkEdit(principal, request.pageId.value)
+            return SaveResult.PageNotFound
+        }
+
+        // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME server-
+        // resolved current.path the pipeline writes (WI-3 — smuggling closed by construction).
+        val decision = if (mode == null) {
+            AgentWriteDecision.DegradeToProposal(current.path)
+        } else {
+            agentWriteDecision(mode, agentDirectCommitGlobs, current.path)
+        }
+        return when (decision) {
+            // DirectCommit: audit EDIT@pageId, then the EXISTING direct write over the SAME `current` object the
+            // decision matched — so decision.targetPath === the WriteIntent's path by construction (WI-3). b1: the
+            // agent's resolved identity threads in as BOTH git author AND committer (its commit is agent-attributed,
+            // matching the audit row — never the server "Plainbase" default).
+            is AgentWriteDecision.DirectCommit -> {
+                val identity = agentCommitIdentity(principal)
+                directWriteResolved(policy.checkEdit(principal, request.pageId.value), request, current, identity, identity)
+            }
+            is AgentWriteDecision.DegradeToProposal -> degradeToProposal(principal, request)
+        }
+    }
+
+    /** The strict audit-first direct path (Human/Anonymous + the proposal-apply caller): checkEdit → resolve → write. */
+    private fun directSave(principal: Principal, request: SaveRequest): SaveResult {
         // The AUDITED edit-check is the FIRST authorization on the write path — a denied save writes the denied-EDIT
         // audit row (PolicyService.checkEdit) BEFORE any read, so an unauthorized PUT can never escape the audit log
         // via an unaudited read-check. Only after the grant is minted do we resolve the snapshot + id-tamper-check.
         val grant = policy.checkEdit(principal, request.pageId.value)
 
         // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 — the route never
-        // invents a path. The snapshot resolution lives HERE (post-grant), not in a route read-check.
+        // invents a path. The snapshot resolution lives HERE (post-grant), not in a route read-check. The git
+        // attribution is whatever the request carried (the apply path's proposer/approver; null on a plain PUT).
         val current = indexBuilder.current.byId[request.pageId] ?: return SaveResult.PageNotFound
+        return directWriteResolved(grant, request, current, request.author, request.committer)
+    }
 
+    /**
+     * The agent's git commit identity for a DIRECT commit (b1): the C4 labeler's snapshot label + the PINNED synthetic
+     * email `<externalId>@<issuer>.plainbase.local` — the SAME attribution the apply path stamps for a proposer. Only
+     * reached on the agent DirectCommit branch (globs configured), where [proposalLabeler] is always wired.
+     */
+    private fun agentCommitIdentity(principal: Principal.Agent): CommitIdentity {
+        val author = requireNotNull(proposalLabeler) {
+            "an agent direct commit needs the ProposalAuthorLabeler for git attribution (wire it in buildRouteContext)"
+        }.resolve(principal)
+        return CommitIdentity(author.label, syntheticEmail(author.issuer, author.externalId))
+    }
+
+    /**
+     * The shared id-tamper-check + pipeline write over an ALREADY-resolved [current]. The agent DirectCommit branch
+     * reuses the SAME `current` the decision matched, so `decision.targetPath === WriteIntent.path` holds by
+     * construction; the non-agent path resolves its own `current` first.
+     */
+    private fun directWriteResolved(
+        grant: EditGrant,
+        request: SaveRequest,
+        current: IndexedPage,
+        author: CommitIdentity?,
+        committer: CommitIdentity?,
+    ): SaveResult {
         // (6) id-tamper check (R1, PB-WRITE-1): the submitted buffer's `id:` line must denote the SAME identity as
         // the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL `PATCHER.readIdValue` — over
         // the submitted bytes and over `current.markdown` (the verbatim lenient decode the index captured; the `id:`
@@ -71,11 +168,64 @@ class GuardedMutatingFacade(
         if (!sameIdentity(submittedRaw, honoredRaw)) return SaveResult.IdMismatch
 
         return SaveResult.Written(
-            writePipeline.write(grant, WriteIntent(request.pageId, current.path, request.baseHash, request.bytes)),
+            writePipeline.write(
+                grant,
+                WriteIntent(request.pageId, current.path, request.baseHash, request.bytes, author, committer),
+            ),
         )
     }
 
+    /**
+     * The out-of-glob / non-COMMIT degrade: file a proposal through the SAME guarded [ProposalFacade.propose] routes
+     * use, so the audit is identical to every shipped propose (EDIT@"proposal") and the author resolves via the
+     * labeler — no re-implementing the grant/labeler dance, no `Action.PROPOSE`, NEVER the pageId EditGrant.
+     *
+     * The id-tamper check is INTENTIONALLY bypassed here (it lives on the DirectCommit/non-agent path only): a COMMIT
+     * agent submitting a mismatched `id:` on an OUT-of-glob page files a PROPOSAL, not a 422 — the rename surfaces to
+     * a human reviewer who rejects the rename-proposal, rather than being rejected inline. Out-of-glob writes are
+     * ALWAYS human-gated, so this is the desired behavior, not a silent divergence from the direct path.
+     */
+    private fun degradeToProposal(principal: Principal, request: SaveRequest): SaveResult {
+        val outcome = proposals().propose(
+            principal,
+            ProposeCommand.Edit(
+                pageId = request.pageId,
+                baseHash = request.baseHash,
+                clientTargetPath = null, // server-resolved; never a client-divergence path
+                proposedContent = request.bytes,
+                rationale = DEGRADE_RATIONALE,
+            ),
+        )
+        return when (outcome) {
+            is ProposeOutcome.Created -> SaveResult.DegradedToProposal(outcome.id, outcome.unifiedDiff)
+            ProposeOutcome.StaleBase -> SaveResult.DegradeStaleBase
+            ProposeOutcome.InvalidRequest -> error("degrade passes no client target_path; InvalidRequest is impossible")
+        }
+    }
+
     override fun create(principal: Principal, intent: CreateIntent): WriteOutcome {
+        // P5 agent-create stop-gap (security): an AGENT's direct create is glob-gated EXACTLY like save() — ONLY an
+        // in-glob COMMIT agent direct-creates; every other agent (PROPOSE/READ_ONLY, COMMIT out-of-glob, COMMIT under
+        // the default empty globs, or a revoked/expired token → null mode) is DENIED 403, NOT degraded: create-apply is
+        // deferred to 5.5, so a degraded create-proposal could never be applied (a dead-letter). The deny audits ONE
+        // denied-CREATE row through the PolicyService choke point WITHOUT first minting an allowed grant we'd refuse.
+        // The match target is the SERVER-COMPOSED intent.path (the route derived it; no client-smuggling, like save's
+        // current.path gate). Human/Anonymous are UNCHANGED — they fall straight through to the existing checkCreate.
+        if (principal is Principal.Agent) {
+            val mode = policy.agentModeFor(principal)
+            val decision = if (mode == null) {
+                AgentWriteDecision.DegradeToProposal(intent.path)
+            } else {
+                agentWriteDecision(mode, agentDirectCommitGlobs, intent.path)
+            }
+            if (decision !is AgentWriteDecision.DirectCommit) {
+                logger.info {
+                    "agent direct create refused (non-COMMIT mode or out-of-glob '${intent.path.value}'); " +
+                        "direct page creation is not permitted yet — propose instead"
+                }
+                policy.deny(principal, Action.CREATE, intent.path.value)
+            }
+        }
         val grant = policy.checkCreate(principal, intent.path.value)
         return writePipeline.create(grant, intent)
     }
@@ -159,6 +309,10 @@ class GuardedMutatingFacade(
 
     private companion object {
         val logger = KotlinLogging.logger {}
+
+        /** P5: the deterministic rationale stamped on an auto-degraded proposal (a single-line literal — no `\n`). */
+        const val DEGRADE_RATIONALE =
+            "Auto-degraded: an agent direct commit fell outside agentDirectCommit.globs and was filed as a proposal for review."
 
         /** The single frontmatter id-detection grammar (lenient decode — the id-inspection trap is closed in W3a). */
         val PATCHER = FrontmatterPatcher()

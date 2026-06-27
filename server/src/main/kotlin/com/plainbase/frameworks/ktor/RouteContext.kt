@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
+import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ReadFacade
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.security.ProxyCsrf
@@ -23,6 +24,8 @@ import io.ktor.server.application.ApplicationCall
 class RouteContext(
     val read: ReadFacade,
     val mutate: MutatingFacade,
+    /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
+    val proposals: ProposalFacade,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,
@@ -33,6 +36,10 @@ class RouteContext(
     val maxWriteBodyBytes: Long,
     /** W3b asset upload cap (forwarded from config). */
     val maxAssetBytes: Long,
+    /** P3 MCP DNS-rebinding HOST allowlist (fail-closed to the bind host; the `mcp()` mount reads it). Loopback in tests. */
+    val mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
+    /** P3 MCP DNS-rebinding ORIGIN allowlist (fail-closed to the bind host). Loopback origins in tests. */
+    val mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     /**
      * A4a (WI-7): true ONLY in `auth.mode=builtin`. Gates the builtin auth surface — the `pb_session` cookie source
      * in [extract] is consulted only when true (in OFF/PROXY a stray cookie is ignored), and `plainbaseModule`

@@ -13,6 +13,8 @@ frontend/dist/
 frontend/.node/
 frontend/.smoke-data/
 frontend/.smoke-content/
+frontend/.smoke-data-*/
+frontend/.smoke-content-*/
 frontend/test-results/
 frontend/playwright-report/
 

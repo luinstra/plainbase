@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
@@ -69,9 +69,13 @@ const rootReadmeTree: TreeResponse = {
   },
 };
 
+/** An unauthenticated session — the Shell renders no "Review" link, and serves it from cache (no /session fetch). */
+const ANON_SESSION = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
+
 function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+  queryClient.setQueryData(sessionQuery.queryKey, ANON_SESSION);
   prime(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
@@ -218,5 +222,20 @@ describe("routing flows", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("review nav gating (F8 — session.authenticated, the only available signal)", () => {
+  it("shows the Review nav link when the session reports authenticated:true", async () => {
+    const { view } = renderAt("/docs", (qc) => {
+      qc.setQueryData(sessionQuery.queryKey, { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" });
+    });
+    await waitFor(() => expect(view.container.querySelector("[data-pb-review-nav]")).not.toBeNull());
+  });
+
+  it("hides the Review nav link when unauthenticated (the default ANON_SESSION)", async () => {
+    const { view } = renderAt("/docs", () => {});
+    await waitFor(() => expect(view.container.querySelector("[data-pb-shell]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-review-nav]")).toBeNull();
   });
 });

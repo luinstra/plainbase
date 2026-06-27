@@ -3,6 +3,9 @@ package com.plainbase.acceptance
 import com.plainbase.domain.render.HeadingIdsGoldenTest
 import com.plainbase.domain.service.FrontmatterPatcherGoldenTest
 import com.plainbase.domain.service.LinkResolutionGoldenTest
+import com.plainbase.domain.service.UnifiedDiffGoldenTest
+import com.plainbase.frameworks.ktor.ProposalGoldenTest
+import com.plainbase.frameworks.ktor.ReadGoldenTest
 import com.plainbase.frameworks.ktor.RestGoldenTest
 import com.plainbase.frameworks.ktor.SearchGoldenTest
 import com.plainbase.frameworks.ktor.WriteGoldenTest
@@ -93,6 +96,57 @@ import io.kotest.core.spec.style.FunSpec
  * (the url-divergence guard), so WriteGoldenTest is now 11 tests (incl. the path-space-loser
  * permalink fallback: a null-canonical-url create addresses the `/p/{id}` permalink, never a
  * fabricated `/docs/<raw path>`).
+ *
+ * PB-PROPOSE-1 + PB-DIFF-1 freeze ledger (froze when P1a landed, Phase 5): the agent proposal wire
+ * (`POST/GET /api/v1/changes` + `…/{id}` + `…/{id}/reject`) is frozen — the propose/get/list/reject
+ * shapes, the wrapper-object `{proposals:[…]}` (never a bare array, so pagination is additive), the
+ * `base_drifted` LIVE triage field, and the reject success body (200 `ChangeDetail`, status REJECTED).
+ * Three append-only codes joined `ErrorCodes`: `stale_base` (400), `invalid_propose_request` (400),
+ * `not_pending` (409); `not_found` (404) is REUSED. The status vocabulary is append-only six
+ * {PENDING, APPLYING, APPLIED, REJECTED, CONFLICTED, FAILED}; the operation vocabulary is the two
+ * lowercase wire values {edit, create}. PB-DIFF-1 freezes the server-computed unified-diff ALGORITHM
+ * OUTPUT and its format rules (3-line context, explicit `,<n>` counts, elided file headers, git's
+ * `\ No newline` marker, empty-string no-op) via the six canonical byte-pair goldens; the benign-rare
+ * adversarial tail (CRLF/BOM/no-final-newline/non-UTF8) is frozen by INVARIANTS, not exact goldens
+ * (freeze-surface policy). A diff-algo or format change is a CONTRACT break, not a fix.
+ *
+ * PB-PROPOSE-1 grew in P1b (apply-on-approve, Phase 5): the apply (200 applied / 409 conflicted / 409 not_pending /
+ * 422 apply_failed / 404 not_found / 422 create_apply_unsupported) + rebase (200 pending / 409 not_conflicted / 422
+ * apply_failed-gone) wire shapes + the append-only codes `conflicted`/`apply_failed`/`not_conflicted`/
+ * `create_apply_unsupported` + the `status_reason` field (now present-null on EVERY `ChangeDetail` via
+ * `explicitNulls`) froze when P1b landed. ProposalGoldenTest grew 11 -> 20 (the 9 new apply/rebase shapes); the two
+ * existing `ChangeDetail` goldens were regenerated for present-null `status_reason` (NOT new cases). (The create-apply
+ * CONTENT contract is NOT frozen here — deferred to 5.5.)
+ *
+ * PB-READ-2 freeze ledger (froze when P2 landed, Phase 5 — the remaining agent READ ops): the two NET-NEW agent-read
+ * wire shapes `ValidateLinksResponse`/`BrokenLinkDto` (`GET /api/v1/pages/{id}/validate-links`) and
+ * `PageMetadataResponse` (`GET /api/v1/pages/{id}/metadata`) are frozen. The `PageMetadataResponse` frozen fields are
+ * `id`/`path`/`url` (nullable)/`permalink` (always non-null, the `/p/{id}` ID permalink)/`content_hash`/`commit`
+ * (nullable)/`title`/`headings`. They REUSE the frozen `HeadingDto` (metadata
+ * headings) and the PB-LINK-1 `BrokenLinkReason.wireValue` vocabulary — the append-only set `broken_missing`/
+ * `broken_case_mismatch`/`broken_malformed`/`outside_content_root`/`ambiguous`/`blocked_scheme` plus the checker's
+ * `broken_anchor` (mapped from the domain, never re-listed as literals). P3 MCP re-exposes BOTH shapes VERBATIM (its
+ * `validate_links`/`get_page_metadata` tools delegate to the SAME `ReadFacade` methods and serialize these SAME DTOs),
+ * so a field removal/retype or a reason-string change is a contract break across BOTH REST and MCP. Tier-1 holds three
+ * `golden/rest/` snapshots — `validate-links-broken.json` (the PINNED master §2.6 acceptance-3 gate: a fixture page
+ * with EXACTLY 2 `Unresolved` (`broken_missing` + `blocked_scheme`) + 1 `broken_anchor`), `validate-links-clean.json`
+ * (`{broken:[]}`), and `page-metadata.json` (ReadGoldenTest, 3 tests). The `BrokenLinkDto.page` field is a
+ * CONSTANT-per-response value under the per-page filter, frozen in DELIBERATELY (review MINOR #2) for P3/MCP symmetry
+ * and forward-compat with a future whole-tree `validate_links` variant (where `page` WOULD vary per row) — it is
+ * redundant within a single per-page response but MUST NOT be removed (removal is a contract break).
+ *
+ * PB-WRITE-1 grew in P5 (low-risk agent direct commit, Phase 5): an agent COMMIT write that falls OUTSIDE
+ * `agentDirectCommit.globs` is DEGRADED to a proposal, answered `202 Accepted` with the NET-NEW `DegradedToProposalResponse`
+ * shape `{degraded:true, proposal_id, status:"PENDING", unified_diff}` — a NEW DTO, NEVER a field on the frozen two-key
+ * `WrittenResponse`. The PUT route also gains the existing `stale_base` (400) outcome when the degrade's `proposeEdit`
+ * hits a drifted base (the code already existed; the NEW fact is the PUT route can now emit it). No existing write
+ * shape/code changed. WriteGoldenTest grew 11 -> 12 (the degrade-DTO encode golden, `golden/rest/degraded-to-proposal.json`).
+ *
+ * `read_file` (the agent op for the WHOLE verbatim page file — frontmatter header + body — as raw markdown) adds NO
+ * PB-READ-2 shape: it is an op-NAME that maps to the EXISTING `read_page` op `GET /api/v1/pages/{id}` and its frozen
+ * PB-REST-1 `PageResponse.markdown` field (the literal on-disk bytes UTF-8-decoded, hashed by the same `content_hash`
+ * so it round-trips for an edit). It is covered by the shipped `read_page` golden + a `read_file` contract test
+ * (ReadAuthzRouteTest); a change to `read_file`'s payload IS a PB-REST-1 change, not a PB-READ-2 one.
  * =================================================================================
  */
 class ForeverApiGoldenSuite : FunSpec({
@@ -122,8 +176,20 @@ class ForeverApiGoldenSuite : FunSpec({
     }
 
     test(
-        "PB-WRITE-1: the write snapshot corpus (11 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback)",
+        "PB-WRITE-1: the write snapshot corpus (12 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback, P5 degrade 202 DTO)",
     ) {
-        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 11)
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 12)
+    }
+
+    test("PB-PROPOSE-1: propose/get/list/reject + apply/rebase wire shapes are frozen (incl. status/operation vocabularies)") {
+        SelectedSuite.run(ProposalGoldenTest::class).shouldHavePassed("ProposalGoldenTest", atLeastTests = 20)
+    }
+
+    test("PB-DIFF-1: the unified-diff algorithm output + its frozen format rules are frozen") {
+        SelectedSuite.run(UnifiedDiffGoldenTest::class).shouldHavePassed("UnifiedDiffGoldenTest", atLeastTests = 7)
+    }
+
+    test("PB-READ-2: validate_links (broken + clean) + get_page_metadata wire shapes are frozen (3 cases)") {
+        SelectedSuite.run(ReadGoldenTest::class).shouldHavePassed("ReadGoldenTest", atLeastTests = 3)
     }
 })

@@ -124,6 +124,9 @@ fun IndexHarness.testRouteContext(
     proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
     secureCookie: Boolean = false,
     proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf = com.plainbase.frameworks.security.ProxyCsrf(ByteArray(32) { 7 }),
+    // P5: a defaulted glob list the enforced-mode tests set non-empty (the production wiring threads
+    // config.agentDirectCommitGlobs()); forwarded into buildRouteContext so the harness can exercise the gate.
+    agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val policy = PolicyService(
@@ -133,6 +136,14 @@ fun IndexHarness.testRouteContext(
         idProvider = UuidV7IdProvider(),
         clock = Clock.System,
         enforced = enforced,
+    )
+    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, contentStore = contentStore)
+    val proposalService = com.plainbase.domain.service.ProposalService(
+        repository = proposalRepository,
+        citations = CitationFactory(),
+        baseReader = proposalReader,
+        proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+        clock = Clock.System,
     )
     return buildRouteContext(
         policy = policy,
@@ -144,6 +155,8 @@ fun IndexHarness.testRouteContext(
         writePipeline = writePipeline,
         history = history,
         idProvider = idProvider,
+        proposalService = proposalService,
+        proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),
         tokens = apiTokens,
         auth = authServices(policy),
         trustedProxyCidrs = trustedProxyCidrs,
@@ -155,6 +168,7 @@ fun IndexHarness.testRouteContext(
         proxyIdentityHeader = proxyIdentityHeader,
         secureCookie = secureCookie,
         proxyCsrf = proxyCsrf,
+        agentDirectCommitGlobs = agentDirectCommitGlobs,
         extract = extract,
     )
 }

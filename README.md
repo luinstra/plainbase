@@ -70,9 +70,10 @@ asdf install        # one-time: installs the pinned GraalVM
 ### The native dependency spike
 
 `plainbase spike` exercises every load-bearing dependency with real
-assertions — Ktor CIO round-trip, Koin DSL wiring, SQLDelight query, FTS5
-MATCH, JGit init/commit/log/diff, flexmark render, argon2 hash/verify, and an
-MCP SDK stub handshake. It prints PASS/FAIL per check and exits non-zero on
+assertions (8 checks) — Ktor CIO round-trip, Koin DSL wiring, SQLDelight
+query, FTS5 MATCH, flexmark render, argon2 hash/verify, an MCP SDK stub
+handshake, and the in-binary MCP SSE-on-CIO handshake (`mcp-sse-handshake`,
+P3). It prints PASS/FAIL per check and exits non-zero on
 failure. CI runs it on the JVM **and** against the native binary (the native
 gate). If a dependency ever fails irreparably under native-image, the
 documented escape hatch is: v0.1 ships JVM-only and native moves to v0.2 —

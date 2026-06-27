@@ -208,6 +208,9 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
             history = NoOpHistoryProvider,
             idProvider = UuidV7IdProvider(),
+            // 301 alias-redirects never touch the proposal surface; relaxed mocks satisfy the wiring.
+            proposalService = mockk(relaxed = true),
+            proposalLabeler = mockk(relaxed = true),
             tokens = ApiTokenService(
                 minter = ApiTokenMinter(),
                 hasher = TokenHasher(),

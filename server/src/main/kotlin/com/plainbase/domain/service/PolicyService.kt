@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.principal.ApproveGrant
 import com.plainbase.domain.principal.CreateGrant
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.ManageGrant
@@ -62,6 +63,35 @@ class PolicyService(
     fun checkManage(principal: Principal): ManageGrant =
         gate(principal, Action.MANAGE, MANAGE_RESOURCE) { ManageGrant() }
 
+    /**
+     * APPROVE gate (the proposal status transition, P1a): mints + returns an [ApproveGrant]; records the decision
+     * row + throws on deny. ADMIN-only via the [permits] matrix (`Role.ADMIN -> true` already covers it; VIEWER/
+     * EDITOR exclude it, so an agent — PROPOSE/COMMIT -> EDITOR — can never approve its own proposal, D1).
+     */
+    fun checkApprove(principal: Principal, resource: String): ApproveGrant =
+        gate(principal, Action.APPROVE, resource) { ApproveGrant() }
+
+    /**
+     * Read-only, NON-auditing: the live [AgentMode] for a [Principal.Agent] (null for non-agents OR a revoked/expired
+     * token at [clock]`.now()`), so [com.plainbase.frameworks.ktor.GuardedMutatingFacade] can decide direct-vs-degrade
+     * (P5) WITHOUT an audit side effect — the audit fires later via `checkEdit` on the chosen branch. Reuses the SAME
+     * live revoked/expired re-check [roleFor] rides; does NOT touch [audit].
+     */
+    fun agentModeFor(principal: Principal): AgentMode? =
+        (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
+
+    /**
+     * Record a DENIED [action] decision row for [principal]/[resource], then throw [AccessDenied] — the mint-free deny
+     * for a FACADE-level gate that refuses a request WITHOUT consulting the role×action matrix (P5: the agent-create
+     * glob gate, where an out-of-glob / non-COMMIT agent's DIRECT create is refused rather than degraded — create-apply
+     * is deferred to 5.5, so a degraded create-proposal would dead-letter). Audit stays in this ONE choke point: the
+     * denial records exactly one denied row, like a matrix deny, and never mints a grant the caller would then refuse.
+     */
+    fun deny(principal: Principal, action: Action, resource: String): Nothing {
+        audit.record(decisionRow(principal, action, resource, allowed = false))
+        throw AccessDenied(action, resource, principal)
+    }
+
     /** The shared mutating gate: record the pre-effect decision row, then mint the grant or throw [AccessDenied]. */
     private inline fun <G> gate(principal: Principal, action: Action, resource: String, mint: () -> G): G {
         val allowed = allows(principal, action)
@@ -78,13 +108,16 @@ class PolicyService(
      * The role of [principal] from the DB/token row ONLY (the non-escalation guarantee), or null (→ default deny):
      *  - [Principal.Human] → its `subject_role` row.
      *  - [Principal.Agent] → its token `mode` mapped onto the role axis (READ_ONLY → VIEWER; PROPOSE/COMMIT →
-     *    EDITOR — A3 grants both the EDIT/CREATE capability; the propose-vs-direct-commit ENFORCEMENT is Phase 5).
-     *    A revoked/unknown token already resolved to [Principal.Anonymous] upstream (the A2 seam) → deny here too.
+     *    EDITOR — A3 grants both the EDIT/CREATE capability; the propose-vs-direct-commit ENFORCEMENT is LIVE in
+     *    [com.plainbase.frameworks.ktor.GuardedMutatingFacade] via the `agentDirectCommit.globs` gate, Phase 5).
+     *    `modeOf` re-checks the active predicate (not revoked, not expired) at [clock]`.now()` on EVERY call: a REST
+     *    request re-auths its bearer per call (A2 seam), but a LIVE MCP SSE session authenticates once at connect and
+     *    reuses the captured Agent — so a token revoked/expired mid-session resolves to null mode → denied next call.
      *  - [Principal.Anonymous] → null → deny.
      */
     private fun roleFor(principal: Principal): Role? = when (principal) {
         is Principal.Human -> roles.roleOf(principal.issuer, principal.externalId)
-        is Principal.Agent -> apiTokens.modeOf(principal.tokenId)?.toRole()
+        is Principal.Agent -> apiTokens.modeOf(principal.tokenId, clock.now())?.toRole()
         Principal.Anonymous -> null
     }
 
@@ -110,7 +143,10 @@ class PolicyService(
         const val MANAGE_RESOURCE = "admin"
         const val AGENT_ISSUER = "agent"
 
-        /** VIEWER: READ. EDITOR: READ + EDIT + CREATE. ADMIN: all. Anonymous / no-row: deny everything. */
+        /**
+         * VIEWER: READ. EDITOR: READ + EDIT + CREATE. ADMIN: all (incl. MANAGE + APPROVE — the proposal
+         * status transition rides `Role.ADMIN -> true`, D1, no new arm). Anonymous / no-row: deny everything.
+         */
         fun permits(role: Role?, action: Action): Boolean = when (role) {
             null -> false
             Role.VIEWER -> action == Action.READ
@@ -125,8 +161,8 @@ class PolicyService(
     }
 }
 
-/** The authZ verbs. READ is gated by the ReadFacade; EDIT/CREATE/MANAGE require a typed grant. */
-enum class Action { READ, EDIT, CREATE, MANAGE }
+/** The authZ verbs. READ is gated by the ReadFacade; EDIT/CREATE/MANAGE/APPROVE require a typed grant. */
+enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE }
 
 /**
  * A denied authorization decision (A3) — thrown by [PolicyService] AFTER the denied audit row is written. The

@@ -2,6 +2,8 @@ package com.plainbase.frameworks.config
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
@@ -187,6 +189,21 @@ class PlainbaseConfigTest : FunSpec({
         PlainbaseConfig.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
     }
 
+    // P5: agentDirectCommit.globs are validated at LOAD (the requireParseableCidrs idiom) — a malformed pattern fails
+    // fast naming it, and a valid set survives unchanged + parses to a CommitGlob via the accessor.
+    test("a malformed PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS entry fails fast at load naming the bad pattern") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, secrets/../etc"))
+        }.message shouldContain "secrets/../etc"
+    }
+
+    test("valid agentDirectCommit.globs survive load and parse to CommitGlobs via the accessor") {
+        val config = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, guides/*.md"))
+        config.auth.agentDirectCommitGlobs shouldBe listOf("docs/**", "guides/*.md")
+        config.agentDirectCommitGlobs().size shouldBe 2
+        config.agentDirectCommitGlobs().first().matches(com.plainbase.domain.content.TreePath.require("docs/a/b.md")) shouldBe true
+    }
+
     // --- B3: HOCON substitutions resolve (ADR-0009). ConfigResolveOptions.defaults() resolves within-file refs and
     //     falls back to the JVM system ENVIRONMENT (not system properties); the optional `${?…}` form drops silently
     //     when its var is unset (a bare `${…}` would throw by design — the supported form is the optional one) ------
@@ -257,5 +274,40 @@ class PlainbaseConfigTest : FunSpec({
         withDataDir("""git { enabled = "false" }""") { env ->
             PlainbaseConfig.fromEnvAndFile(env).git.enabled shouldBe false
         }
+    }
+
+    // --- P3 MCP DNS-rebinding allowlist (WI-5): fail-closed to the bind host, never empty, never a wildcard ---
+
+    test("no MCP keys → mcpHostAllowlist defaults to the bind host (not empty, not a wildcard)") {
+        val allowlist = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")).mcpHostAllowlist()
+        allowlist.shouldNotBeEmpty()
+        allowlist shouldContain "127.0.0.1"
+        allowlist.none { it == "*" || it == "0.0.0.0" } shouldBe true // fail-closed: never a wildcard
+    }
+
+    test("a non-loopback bind defaults the MCP host allowlist to that bind host (+ loopback), still no wildcard") {
+        val allowlist = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "docs.example.com")).mcpHostAllowlist()
+        allowlist shouldContain "docs.example.com"
+        allowlist.none { it == "*" || it == "0.0.0.0" } shouldBe true
+    }
+
+    test("an explicit PLAINBASE_MCP_ALLOWED_HOSTS overrides the default") {
+        val config = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_MCP_ALLOWED_HOSTS" to "docs.example.com, proxy.example.com"))
+        config.auth.mcpAllowedHosts shouldBe listOf("docs.example.com", "proxy.example.com")
+        config.mcpHostAllowlist() shouldContain "docs.example.com"
+    }
+
+    test("no MCP keys → mcpOriginAllowlist defaults to the bind-host origins (not empty, not a wildcard)") {
+        val allowlist = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_HOST" to "127.0.0.1")).mcpOriginAllowlist()
+        allowlist.shouldNotBeEmpty()
+        allowlist.none { it == "*" } shouldBe true // fail-closed: never a wildcard
+    }
+
+    test("an explicit PLAINBASE_MCP_ALLOWED_ORIGINS overrides the default") {
+        val config = PlainbaseConfig.fromEnv(
+            mapOf("PLAINBASE_MCP_ALLOWED_ORIGINS" to "https://docs.example.com, https://proxy.example.com"),
+        )
+        config.auth.mcpAllowedOrigins shouldBe listOf("https://docs.example.com", "https://proxy.example.com")
+        config.mcpOriginAllowlist() shouldContain "https://docs.example.com"
     }
 })

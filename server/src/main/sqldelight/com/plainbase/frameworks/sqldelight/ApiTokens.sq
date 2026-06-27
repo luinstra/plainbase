@@ -34,8 +34,19 @@ WHERE id = :id;
 
 -- A3 role resolution reads ONLY the agent's `mode` (→ Role) — never the secret_hash. A narrow projection so the
 -- authZ path never loads the at-rest secret (defense-in-depth; the principal is already authenticated upstream).
+-- Honors the SAME active predicate as `touchIfActive` (revoked_at IS NULL AND not expired): a REST request re-auths
+-- the bearer per call (catching revocation at the A2 seam), but a LIVE MCP SSE session authenticates ONCE at connect
+-- and reuses the captured Agent for every tool call — so role resolution itself MUST re-check revocation/expiry, or a
+-- revoked/expired agent token would keep an open MCP session authorized. Denying here closes that window (P3).
 modeOf:
 SELECT mode
+FROM api_tokens
+WHERE id = :id AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > :now);
+
+-- C4 author labeling reads ONLY the agent's `agent_label` — never the secret_hash. A narrow projection so the
+-- (non-auth) propose-attribution path never loads the at-rest secret, like `modeOf` (defense-in-depth).
+agentLabelById:
+SELECT agent_label
 FROM api_tokens
 WHERE id = :id;
 

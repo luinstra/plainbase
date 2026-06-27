@@ -6,6 +6,7 @@ import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
@@ -148,6 +149,10 @@ private fun serve() {
             // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
             // and before serving — drift-skips a page whose on-disk bytes changed since the crash.
             koin.get<WritePipeline>().reconcileDirtyPages()
+            // P1b: inspect-then-decide crash-recovery of a prior interrupted APPLY, after the index is whole + after
+            // reconcileDirtyPages may have re-committed a crashed dirty page — it resolves each APPLYING row's
+            // CURRENT pageId path and stamps APPLIED (write landed) or PENDING (it didn't). Cannot race a live apply.
+            koin.get<ProposalService>().reconcileApplying()
             KtorServer(config, koin.get()).start(wait = true)
         } finally {
             watch.close()

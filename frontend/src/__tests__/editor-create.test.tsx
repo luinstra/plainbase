@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
@@ -64,12 +64,15 @@ function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = 
     if (url.includes("/pages/by-path/")) return jsonResponse(pageResponse());
     if (url.endsWith("/html")) return jsonResponse(htmlResponse());
     if (url.includes(`/pages/${NEW_ID}`)) return jsonResponse(pageResponse());
+    // A create success invalidates the tree (Sidebar) — serve a valid empty tree so the refetch can't crash it.
+    if (url.endsWith("/api/v1/tree")) return jsonResponse(emptyTree);
     return jsonResponse({ html: "", headings: [] });
   });
   vi.stubGlobal("fetch", fetchSpy);
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+  queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   prime(queryClient);
   const history = createMemoryHistory({ initialEntries: ["/new"] });
   const router = createAppRouter(queryClient, history);
@@ -134,6 +137,7 @@ describe("W6 new-page creation", () => {
     vi.stubGlobal("fetch", fetchSpy);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(treeQuery.queryKey, emptyTree);
+    queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
     const history = createMemoryHistory({ initialEntries: ["/new"] });
     const router = createAppRouter(queryClient, history);
     const view = render(

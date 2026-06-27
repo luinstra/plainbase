@@ -1,6 +1,17 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { getJson, previewRaw } from "./client";
-import type { DiffResponse, HistoryResponse, PageHtmlResponse, PageResponse, PreviewResponse, SearchResponse, TreeResponse } from "./types";
+import type {
+  ChangeDetail,
+  DiffResponse,
+  HistoryResponse,
+  ListChangesResponse,
+  PageHtmlResponse,
+  PageResponse,
+  PreviewResponse,
+  SearchResponse,
+  SessionResponse,
+  TreeResponse,
+} from "./types";
 
 /**
  * Re-encodes a decoded `/docs/`-relative path for the by-path endpoint. The router hands
@@ -145,6 +156,46 @@ export function invalidateAfterWrite(queryClient: QueryClient, { id, url }: { id
   if (byPathKey !== null) void queryClient.invalidateQueries({ queryKey: pageByPathQuery(byPathKey).queryKey });
   // Leave neither the old nor the new by-path location stale (a rename changes the URL key; the 200 doesn't carry it).
   void queryClient.invalidateQueries({ queryKey: ["page", "by-path"] });
+}
+
+/**
+ * The auth/session read (A4b) — `authenticated` / `username` / `csrf_token` / `auth_mode`, nothing more (no
+ * role, no capabilities — F8). The Shell gates the "Review" nav link on `authenticated`; the review route uses
+ * it too. csrf.ts keeps its OWN independent `/session` fetch (the mutation-token cache) — leave it.
+ */
+export const sessionQuery = queryOptions({
+  queryKey: ["session"],
+  queryFn: () => getJson<SessionResponse>("/api/v1/session"),
+  staleTime: 60_000,
+});
+
+/**
+ * PB-PROPOSE-1 review queue — `GET /api/v1/changes` returns ALL statuses (the client decides presentation —
+ * F1). `checkRead` suffices, so any authenticated reader can list.
+ */
+export const changesQuery = queryOptions({
+  queryKey: ["changes"],
+  queryFn: () => getJson<ListChangesResponse>("/api/v1/changes"),
+  staleTime: 30_000,
+});
+
+/** A single proposed change (`get_change`) — the stored diff + decision fields + the live `base_drifted` flag. */
+export const changeQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["change", id],
+    queryFn: () => getJson<ChangeDetail>(`/api/v1/changes/${encodeURIComponent(id)}`),
+    staleTime: 30_000,
+  });
+
+/**
+ * The post-DECISION cache-invalidation sibling to {@link invalidateAfterWrite}: a reject/approve/rebase changes
+ * the proposal row, so the list (`["changes"]`) and the detail (`changeQuery(id)`) both go stale. A successful
+ * APPROVE ALSO moved the content tree (an apply writes a page) — the caller adds `invalidateAfterWrite` for the
+ * affected `page_id` (re-using the one write-invalidation funnel; skipped when `page_id` is null, F4/WI-2).
+ */
+export function invalidateAfterDecision(queryClient: QueryClient, id: string): void {
+  void queryClient.invalidateQueries({ queryKey: changesQuery.queryKey });
+  void queryClient.invalidateQueries({ queryKey: changeQuery(id).queryKey });
 }
 
 export type { PreviewResponse };

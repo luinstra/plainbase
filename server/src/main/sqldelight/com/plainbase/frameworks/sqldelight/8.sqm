@@ -1,0 +1,5 @@
+-- v8 -> v9: Phase 5, chunk P1b — apply-on-approve. One append-only nullable column carrying the human-facing
+-- reason a proposal landed in a TERMINAL non-applied state (FAILED reason, or a CONFLICTED note). Plain
+-- migration SQL (no `AS`/import banner — Proposals.sq carries the typed form). verifyMigrations cross-checks
+-- this against schema/9.db.
+ALTER TABLE proposals ADD COLUMN status_reason TEXT;

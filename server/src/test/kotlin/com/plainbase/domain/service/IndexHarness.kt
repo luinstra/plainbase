@@ -20,6 +20,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -64,6 +65,7 @@ class IndexHarness(
     val roleRepository = SqlDelightRoleRepository(database)
     val auditRepository = SqlDelightAuditRepository(database)
     val apiTokenRepository = SqlDelightApiTokenRepository(database)
+    val proposalRepository = SqlDelightProposalRepository(database)
     val apiTokens = ApiTokenService(minter = ApiTokenMinter(), hasher = TokenHasher(), tokens = apiTokenRepository, clock = Clock.System)
 
     // A4a human-auth substrate over the SAME in-memory DB (the v7 schema includes users/sessions/setup_tokens).
@@ -102,7 +104,7 @@ class IndexHarness(
      * a failing/wrapping stand-in while the index/search wiring keeps using the real copy.
      */
     fun writePipeline(
-        historyHook: WriteHistoryHook = WriteHistoryHook { _, _ -> null },
+        historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _ -> null },
         store: ContentStore = contentStore,
     ): WritePipeline =
         WritePipeline(

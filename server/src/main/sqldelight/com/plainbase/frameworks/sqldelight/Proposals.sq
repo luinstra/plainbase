@@ -1,0 +1,158 @@
+-- The agent-proposal store (Phase 5, chunk P1a — PB-PROPOSE-1). App state (the review queue is security
+-- truth), so the APP database (`plainbase.db`), NEVER disposable search.db (ADR-0004). Landed by 7.sqm (v7 -> v8).
+--
+-- Attribution is DENORMALIZED + SNAPSHOTTED into author_*/approver_* columns (never a FK to api_tokens/users):
+-- tokens are revocable and a terminal proposal's authorship must survive revocation. proposed_content is the
+-- FULL proposed bytes VERBATIM (a BLOB, never TEXT — W1 byte-fidelity). diff_artifact is the PRECOMPUTED stable
+-- base->proposed unified diff (the review record survives the live page converging on the proposed content).
+--
+-- Three columns carry a Kotlin `AS <Type>` annotation (id/page_id/target_path → the Proposals.Adapter); every
+-- other column is a primitive SQLite type the repository maps at its boundary (enum-name TEXT, epoch-millis
+-- INTEGER), the api_tokens idiom. status/operation store the enum NAME (uppercase). The .sqm migration carries
+-- the SAME table body with the `AS` annotations + import banner STRIPPED (2.sqm strips page_checkpoint's the
+-- same way); verifyMigrations cross-checks it against schema/9.db (P1b's 8.sqm added the status_reason column).
+
+import com.plainbase.domain.content.TreePath;
+import com.plainbase.domain.page.PageId;
+import com.plainbase.domain.page.ProposalId;
+
+CREATE TABLE proposals (
+  id BLOB AS ProposalId NOT NULL PRIMARY KEY,
+  operation TEXT NOT NULL,
+  page_id BLOB AS PageId,
+  base_hash TEXT,
+  target_path TEXT AS TreePath NOT NULL,
+  proposed_content BLOB NOT NULL,
+  rationale TEXT NOT NULL,
+  diff_artifact TEXT NOT NULL,
+  status TEXT NOT NULL,
+  author_issuer TEXT NOT NULL,
+  author_external_id TEXT NOT NULL,
+  author_label TEXT NOT NULL,
+  approver_issuer TEXT,
+  approver_external_id TEXT,
+  decision_comment TEXT,
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER,
+  applied_commit TEXT,
+  status_reason TEXT
+);
+
+-- Covers selectAllSummary's `ORDER BY created_at DESC, id DESC` so the list_changes read is an index scan, not a
+-- file-sort (the sessions_user_id idiom — index the column a hot query orders/filters on).
+CREATE INDEX proposals_created_at ON proposals(created_at DESC, id DESC);
+
+insert:
+INSERT INTO proposals(
+  id, operation, page_id, base_hash, target_path, proposed_content, rationale, diff_artifact, status,
+  author_issuer, author_external_id, author_label, approver_issuer, approver_external_id, decision_comment,
+  created_at, decided_at, applied_commit, status_reason
+)
+VALUES (
+  :id, :operation, :pageId, :baseHash, :targetPath, :proposedContent, :rationale, :diffArtifact, :status,
+  :authorIssuer, :authorExternalId, :authorLabel, :approverIssuer, :approverExternalId, :decisionComment,
+  :createdAt, :decidedAt, :appliedCommit, :statusReason
+);
+
+-- The full row — get_change needs proposed_content's derivations + the stored diff_artifact.
+selectById:
+SELECT *
+FROM proposals
+WHERE id = :id;
+
+-- The list_changes source: a SUMMARY PROJECTION excluding the heavyweight columns proposed_content (BLOB) and
+-- diff_artifact (the full unified diff), so a list never overfetches every proposal's content + diff. INCLUDES
+-- target_path (the DTO + the live base_drifted drift check need it). created_at DESC newest-first; the secondary
+-- id DESC is a STABLE tie-break for same-millis inserts (created_at DESC alone is non-deterministic).
+selectAllSummary:
+SELECT
+  id, operation, page_id, target_path, base_hash, status, rationale,
+  author_issuer, author_external_id, author_label, approver_issuer, approver_external_id, decision_comment,
+  created_at, decided_at
+FROM proposals
+ORDER BY created_at DESC, id DESC;
+
+-- The reject decision: conditional on PENDING (only a PENDING proposal can be rejected); affected-rows==1 confirms.
+reject:
+UPDATE proposals
+SET status = 'REJECTED', approver_issuer = :issuer, approver_external_id = :externalId,
+    decision_comment = :comment, decided_at = :at
+WHERE id = :id AND status = 'PENDING';
+
+-- The FROZEN status-CAS shape P1b consumes (the touchIfActive pattern): claim a PENDING proposal for apply.
+-- P1a SHIPS + tests its CAS semantics; P1a drives it in NO endpoint (apply-nothing).
+claimApplying:
+UPDATE proposals
+SET status = 'APPLYING'
+WHERE id = :id AND status = 'PENDING';
+
+-- The startup-reconcile SEAM (the recoverable-invariant freeze): APPLYING is transient/non-terminal. P1a ships +
+-- unit-tests the QUERY only; the crash-recovery SEMANTICS (inspect-then-decide) are DEFERRED to P1b.
+reconcileApplyingToPending:
+UPDATE proposals
+SET status = 'PENDING'
+WHERE status = 'APPLYING';
+
+-- P1b apply terminal-CAS shapes (the reject/claimApplying conditional-UPDATE idiom). The approver pair is bound
+-- NULL on the crash-recovery path (the original approver is not recorded at claim time) and the real approver on
+-- the live apply path; both columns are already nullable, so binding NULL is well-typed.
+
+-- Terminal CAS: APPLYING -> APPLIED, stamping the commit + the optional reindex_deferred/recovered reason + approver.
+markApplied:
+UPDATE proposals
+SET status = 'APPLIED', applied_commit = :appliedCommit, status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- Terminal CAS: APPLYING -> CONFLICTED (rebasable), stamping the conflict reason + approver.
+markConflicted:
+UPDATE proposals
+SET status = 'CONFLICTED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- Terminal CAS: APPLYING -> FAILED, stamping the failure reason + approver.
+markFailed:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'APPLYING';
+
+-- DIRECT terminal CAS: PENDING -> FAILED (the create-unsupported path — NEVER claims APPLYING, so a CREATE
+-- proposal can never enter APPLYING; mirrors the `reject` PENDING->REJECTED conditional idiom).
+failPending:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
+    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
+WHERE id = :id AND status = 'PENDING';
+
+-- Terminal CAS: CONFLICTED -> FAILED (the rebase `Gone` path — the target page was deleted; stamps a durable
+-- reason so the row is not a dangling CONFLICTED. No approver — the rebase actor lives in the audit row).
+failConflicted:
+UPDATE proposals
+SET status = 'FAILED', status_reason = :statusReason, decided_at = :at
+WHERE id = :id AND status = 'CONFLICTED';
+
+-- One-step rebase CAS: CONFLICTED -> PENDING, re-pinning base_hash + diff_artifact + target_path (the page may have
+-- MOVED since propose; the rebase already resolved the CURRENT path by page_id, so re-pin it too — otherwise a
+-- rebased PENDING row would show a STALE target_path against a fresh base_hash/diff). ALSO clears the decision
+-- metadata markConflicted stamped (approver_*, decided_at) so a rebased-back-to-PENDING row is contract-identical to
+-- a freshly-inserted PENDING row (a PENDING row carries NULL approver/decided_at by invariant).
+rebaseToPending:
+UPDATE proposals
+SET status = 'PENDING', base_hash = :baseHash, diff_artifact = :diffArtifact, target_path = :targetPath,
+    status_reason = NULL, approver_issuer = NULL, approver_external_id = NULL, decided_at = NULL
+WHERE id = :id AND status = 'CONFLICTED';
+
+-- Per-row reconcile CAS: APPLYING -> PENDING (the inspect-then-decide recovery "write did not land" arm).
+markPendingFromApplying:
+UPDATE proposals
+SET status = 'PENDING'
+WHERE id = :id AND status = 'APPLYING';
+
+-- Every APPLYING row (the inspect-then-decide reconciler reads each one's disk hash to choose the terminal): the
+-- FULL row — it needs page_id + proposed_content to resolve the current path + compute the disk-hash comparison.
+selectApplying:
+SELECT *
+FROM proposals
+WHERE status = 'APPLYING';

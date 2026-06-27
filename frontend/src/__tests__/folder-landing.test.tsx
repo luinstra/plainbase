@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
+import { pageByPathQuery, pageHtmlQuery, pageQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeFolder, TreePage, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
@@ -84,6 +84,8 @@ function stubNotFound() {
 function renderAt(initialPath: string, treeData: TreeResponse, prime: (qc: QueryClient) => void = () => {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, treeData);
+  // Prime the Shell's session read (unauthenticated) so it serves from cache and the no-fetch assertions hold.
+  queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   prime(queryClient);
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);

@@ -37,6 +37,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -59,6 +60,7 @@ fun withRestServices(
     seedAdmin: Pair<String, String>? = null, // (username, password) — seeds a builtin ADMIN before the block runs
     proxyMode: Boolean = false, // A4b: PROXY auth (builtin off, a test secret, a loopback-trusted transport)
     seedProxyAdmin: String? = null, // A4b: grant ADMIN to a proxy/<subject> identity (the grant-role first-admin seam)
+    agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(), // P5: the direct-commit globs
     block: (RouteContext) -> Unit,
 ) {
     // A4b: in proxy mode the loopback test client (127.0.0.1) counts as loopback-secure, so a request can present the
@@ -183,6 +185,14 @@ fun withRestServices(
                         database,
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
+                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, contentStore = store)
+                val proposalService = com.plainbase.domain.service.ProposalService(
+                    repository = SqlDelightProposalRepository(database),
+                    citations = CitationFactory(),
+                    baseReader = proposalBaseReader,
+                    proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
+                    clock = Clock.System,
+                )
                 val services = buildRouteContext(
                     policy = policy,
                     indexBuilder = builder,
@@ -201,6 +211,11 @@ fun withRestServices(
                     ),
                     history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
+                    proposalService = proposalService,
+                    proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(
+                        tokens = SqlDelightApiTokenRepository(database),
+                        users = SqlDelightUserRepository(database),
+                    ),
                     tokens = apiTokens,
                     auth = authServices,
                     trustedProxyCidrs = emptyList(),
@@ -212,6 +227,8 @@ fun withRestServices(
                     // Exercise the real app_meta key load + persistence path in the native image (the §0.12 proof
                     // that SecureRandom + app_meta.upsert work closed-world).
                     proxyCsrf = ProxyCsrf(loadOrCreateProxyCsrfKey(database)),
+                    // P5: the direct-commit globs (empty by default; the direct-commit smoke passes a non-empty list).
+                    agentDirectCommitGlobs = agentDirectCommitGlobs,
                 )
                 block(services)
             }

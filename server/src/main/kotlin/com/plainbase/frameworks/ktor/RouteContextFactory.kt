@@ -4,10 +4,15 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.ApiTokenService
+import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.LinkChecker
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalFacade
+import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
@@ -35,11 +40,17 @@ fun buildRouteContext(
     writePipeline: WritePipeline,
     history: HistoryProvider,
     idProvider: IdProvider,
+    proposalService: ProposalService,
+    proposalLabeler: ProposalAuthorLabeler,
     tokens: ApiTokenService,
     auth: AuthServices,
     trustedProxyCidrs: List<String>,
     maxWriteBodyBytes: Long,
     maxAssetBytes: Long,
+    // P3 MCP DNS-rebinding allowlists (fail-closed to the bind host); the production wiring passes
+    // config.mcpHostAllowlist()/mcpOriginAllowlist(), the harnesses/spike a loopback default.
+    mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
+    mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     builtinAuthEnabled: Boolean = true,
     proxyAuthEnabled: Boolean = false,
     proxySecret: String? = null,
@@ -48,6 +59,9 @@ fun buildRouteContext(
     // TEST-ONLY default: production wiring (Application.kt) ALWAYS passes the real key-derived ProxyCsrf, so this
     // zero-key fallback is never reached in prod — it only spares non-proxy route tests from constructing one.
     proxyCsrf: ProxyCsrf = ProxyCsrf(ByteArray(32)),
+    // P5: the validated `agentDirectCommit.globs`. Defaulted empty so existing callers compile unchanged (every agent
+    // write degrades); the production wiring passes `config.agentDirectCommitGlobs()`, a P5 test a non-empty list.
+    agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
     extract: (ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val read = GuardedReadFacade(
@@ -58,22 +72,43 @@ fun buildRouteContext(
         indexBuilder = indexBuilder,
         history = history,
         aliasRegistry = aliasRegistry,
+        linkChecker = LinkChecker(),
     )
+    // P5: the mutate↔proposals construction cycle (the degrade path needs ProposalFacade; the apply path needs
+    // MutatingFacade) is broken by a provider-lambda over a 2-phase `lateinit`. `mutate` only invokes the lambda at
+    // REQUEST time — well after the assignment below — so the lateinit is safe.
+    lateinit var proposalsFacade: ProposalFacade
     val mutate = GuardedMutatingFacade(
         policy = policy,
         writePipeline = writePipeline,
         contentStore = contentStore,
         indexBuilder = indexBuilder,
+        proposals = { proposalsFacade },
+        agentDirectCommitGlobs = agentDirectCommitGlobs,
+        proposalLabeler = proposalLabeler,
     )
+    // The apply-on-approve composition (P1b) lives BEHIND ProposalFacade — it needs the guarded MUTATING path to do
+    // the content write, so the facade is assembled HERE (where `mutate` exists), keeping the choke-point assembly
+    // in ONE place. A route never sees the composition.
+    val proposals = GuardedProposalFacade(
+        policy = policy,
+        proposals = proposalService,
+        labeler = proposalLabeler,
+        mutate = mutate,
+    )
+    proposalsFacade = proposals
     return RouteContext(
         read = read,
         mutate = mutate,
+        proposals = proposals,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,
         idProvider = idProvider,
         maxWriteBodyBytes = maxWriteBodyBytes,
         maxAssetBytes = maxAssetBytes,
+        mcpAllowedHosts = mcpAllowedHosts,
+        mcpAllowedOrigins = mcpAllowedOrigins,
         builtinAuthEnabled = builtinAuthEnabled,
         proxyAuthEnabled = proxyAuthEnabled,
         proxySecret = proxySecret,

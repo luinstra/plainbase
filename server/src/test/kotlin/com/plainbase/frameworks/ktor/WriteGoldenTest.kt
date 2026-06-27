@@ -7,6 +7,8 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
+import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
+import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 import com.plainbase.frameworks.ktor.dto.WriteWarning
@@ -262,6 +264,20 @@ class WriteGoldenTest : FunSpec({
         } finally {
             tree.toFile().deleteRecursively()
         }
+    }
+
+    test("degraded-to-proposal.json — a 202 DegradedToProposalResponse is {degraded:true, proposal_id, status:PENDING, unified_diff}") {
+        // P5 (forever): the agent direct-commit DEGRADE shape — a NEW DTO, NEVER a field on the frozen WrittenResponse.
+        // `status` is the SHARED ProposalStatusWire.PENDING constant; `unified_diff` is non-null. Pure encode golden
+        // (the ProposalGoldenTest idiom): the route integration is exercised in AgentDirectCommitAuthzRouteTest.
+        val diff = "@@ -1,1 +1,1 @@\n-old\n+new\n"
+        val response = DegradedToProposalResponse(
+            proposalId = "01900000-0000-7000-9000-000000000001",
+            status = ProposalStatusWire.PENDING,
+            unifiedDiff = diff,
+        )
+        val encoded = Json.parseToJsonElement(RestJson.encodeToString(DegradedToProposalResponse.serializer(), response))
+        encoded shouldBe RestGolden.load("degraded-to-proposal.json", mapOf("unified_diff" to diff))
     }
 
     test("the drift reason enum is EXACTLY {content_changed, page_moved, page_deleted}; id_changed is NOT a member") {

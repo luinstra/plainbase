@@ -18,11 +18,13 @@ import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
+import com.plainbase.frameworks.ktor.routes.proposalRoutes
 import com.plainbase.frameworks.ktor.routes.respondError
 import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.sessionRoutes
 import com.plainbase.frameworks.ktor.routes.setupRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
+import com.plainbase.frameworks.mcp.plainbaseMcp
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLDecodeException
@@ -38,6 +40,7 @@ import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.routing.routing
 import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
+import io.ktor.server.sse.SSE
 import kotlinx.serialization.json.Json
 
 /**
@@ -115,6 +118,9 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
             call.respondError(HttpStatusCode.InternalServerError, ErrorCodes.INTERNAL_ERROR, "Internal server error")
         }
     }
+    // SSE — the in-binary MCP transport (P3). Installed ONCE at module scope (the `mcp(Route)` overload asserts it);
+    // it touches NO content negotiation, so the app-wide `json()` above is left untouched.
+    install(SSE)
     routing {
         // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → /docs SPA shell →
         // static. Ktor resolves by specificity, and every surface below owns a distinct constant
@@ -146,6 +152,11 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         pageWriteRoutes(ctx)
         // POST create on the collection path `/api/v1/pages` — distinct from the item-path GET/PUT.
         pageCreateRoutes(ctx)
+        // PB-PROPOSE-1 (P1a): the agent proposal surface under `/api/v1/changes` (distinct constant prefix).
+        proposalRoutes(ctx)
+        // P3: the in-binary MCP server (SSE-on-CIO) at `/api/v1/mcp` — agent-only connect auth on the SSE GET. Mounted
+        // here (a distinct constant prefix), BEFORE apiFallbackRoute(), so the §A4 "API → fallback → static" order holds.
+        plainbaseMcp(ctx)
         // W5 per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
         historyRoutes(ctx)
         // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.

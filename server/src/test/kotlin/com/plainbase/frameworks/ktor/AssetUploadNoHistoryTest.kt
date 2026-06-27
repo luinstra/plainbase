@@ -28,7 +28,7 @@ class AssetUploadNoHistoryTest : FunSpec({
 
     test("an asset upload fires no history commit (assets are unversioned in Phase 3)") {
         val commits = AtomicInteger(0)
-        val countingHook = WriteHistoryHook { _, _ ->
+        val countingHook = WriteHistoryHook { _, _, _, _ ->
             commits.incrementAndGet()
             null
         }

@@ -4,6 +4,9 @@ import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
+import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalBaseReader
+import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.SearchService
 import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
@@ -12,6 +15,7 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.AuthServices
 import com.plainbase.frameworks.ktor.GuardedAdminFacade
+import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildRouteContext
@@ -93,6 +97,23 @@ val restModule = module {
     }
     single { LoginRateLimiter() }
     single { AuthServices(session = get(), login = get(), setup = get(), admin = get(), rateLimiter = get()) }
+    // PB-PROPOSE-1 (P1a): the proposal store seam + the guarded facade. The live read seam over the SAME
+    // IndexBuilder + ContentStore the read facade uses; the C4 label resolver over the token/user repos. Clock is
+    // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
+    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), contentStore = get()) }
+    single { ProposalAuthorLabeler(tokens = get(), users = get()) }
+    single {
+        ProposalService(
+            repository = get(),
+            citations = get(),
+            baseReader = get(),
+            proposalIdProvider = get(),
+            clock = Clock.System,
+        )
+    }
+    // P1b: the GuardedProposalFacade is no longer a standalone single — it needs the guarded MutatingFacade (built
+    // inside buildRouteContext) for the apply-on-approve content write, so it is assembled there with `mutate` in
+    // scope (RouteContextFactory option (b)). RestModule passes the raw ProposalService + the labeler in.
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
     // KtorServer), so two processes never race a double-generate (WI-9 fold-in). The key bytes never log.
@@ -109,17 +130,24 @@ val restModule = module {
             writePipeline = get(),
             history = get(),
             idProvider = get(),
+            proposalService = get(),
+            proposalLabeler = get(),
             tokens = get(),
             auth = get(),
             trustedProxyCidrs = config.auth.trustedProxyCidrs,
             maxWriteBodyBytes = config.maxWriteBodyBytes,
             maxAssetBytes = config.maxAssetBytes,
+            // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
+            mcpAllowedHosts = config.mcpHostAllowlist(),
+            mcpAllowedOrigins = config.mcpOriginAllowlist(),
             builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
             proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
             proxySecret = config.auth.proxySecret,
             proxyIdentityHeader = config.auth.proxyIdentityHeader,
             secureCookie = config.secureCookie(),
             proxyCsrf = get(),
+            // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
+            agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
         )
     }
 }

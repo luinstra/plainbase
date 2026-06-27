@@ -93,6 +93,22 @@ class SqlDelightApiTokenRepositoryTest : FunSpec({
         }
     }
 
+    test("modeOf returns null once the row is expired at the query instant (the live active-predicate)") {
+        withRepo { repo ->
+            repo.insert(
+                row("abc").let {
+                    ApiTokenRow(
+                        it.id, it.secretHash, it.agentLabel, it.issuer, it.externalId, it.mode,
+                        createdAt = created, lastUsedAt = null, expiresAt = created, revokedAt = null,
+                    )
+                },
+            )
+            // expires_at == created, queried at `later` (> created): the exclusive `expires_at > :now` guard fails,
+            // so the live `modeOf` re-check (PolicyService runs it per call) sees an inactive token → null.
+            repo.modeOf("abc", later).shouldBeNull()
+        }
+    }
+
     test("all() returns the inserted rows' metadata, ordered by created_at") {
         withRepo { repo ->
             repo.insert(row("a"))

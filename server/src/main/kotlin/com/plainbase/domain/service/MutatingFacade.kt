@@ -1,9 +1,11 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
 
 /**
@@ -65,8 +67,31 @@ interface MutatingFacade {
  * the `If-Match` [baseHash], and the EXACT submitted document [bytes]. The facade resolves the page's current
  * path from the snapshot INTERNALLY — the route never reads it ahead of the audited edit-check (so a denied save
  * is audited as a denied EDIT, not swallowed by an unaudited read).
+ *
+ * [author]/[committer] (P1b) carry the optional git attribution the apply coordinator supplies (the proposer +
+ * approver); they DEFAULT to null so the existing PUT route constructs a [SaveRequest] unchanged (server identity).
  */
-class SaveRequest(val pageId: PageId, val baseHash: String, val bytes: ByteArray)
+class SaveRequest(
+    val pageId: PageId,
+    val baseHash: String,
+    val bytes: ByteArray,
+    val author: CommitIdentity? = null,
+    val committer: CommitIdentity? = null,
+    val origin: WriteOrigin = WriteOrigin.DIRECT_PUT,
+)
+
+/**
+ * P5: which write entrypoint a [SaveRequest] came from. The agent direct-commit decision (WI-4) is consulted ONLY for
+ * [DIRECT_PUT]; a [PROPOSAL_APPLY] write carries already-approved, already-reviewed content and ALWAYS direct-writes
+ * through the pipeline, bypassing the glob decision REGARDLESS of the caller's principal type/mode (the apply path can
+ * pass a [Principal.Agent] in `auth.mode=off`, where everyone is permitted — finding #11).
+ *
+ * SECURITY INVARIANT: `origin` is SERVER-SET ONLY — [SaveRequest] is never deserialized from a request body (it is not
+ * `@Serializable`; the PUT route constructs it server-side), so an agent cannot smuggle [PROPOSAL_APPLY] over the wire
+ * to bypass the glob gate. A future refactor that made [SaveRequest] `@Serializable` would silently open exactly that
+ * bypass — do NOT.
+ */
+enum class WriteOrigin { DIRECT_PUT, PROPOSAL_APPLY }
 
 /**
  * The outcome of [MutatingFacade.save]. A DENIED edit never reaches here — the facade's `checkEdit` throws
@@ -83,6 +108,12 @@ sealed interface SaveResult {
 
     /** The edit reached the pipeline; [outcome] is mapped through the frozen `toWire`. */
     data class Written(val outcome: WriteOutcome) : SaveResult
+
+    /** P5: an agent COMMIT write OUTSIDE `agentDirectCommit.globs` was degraded to a proposal (202 Accepted). */
+    data class DegradedToProposal(val proposalId: ProposalId, val unifiedDiff: String) : SaveResult
+
+    /** P5: the degrade's `proposeEdit` hit a stale base_hash / missing target → 400 stale_base (no proposal stored). */
+    data object DegradeStaleBase : SaveResult
 }
 
 /** The outcome of [MutatingFacade.reindex] — `Done` with the rebuilt page count, or `InFlight` (the §A5 409). */

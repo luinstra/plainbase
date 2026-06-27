@@ -6,6 +6,7 @@ import com.plainbase.domain.repository.AuditRepository
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
+import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.RoleRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
@@ -19,6 +20,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -35,6 +37,7 @@ val repositoryModule = module {
     single<PageCheckpointRepository> { SqlDelightPageCheckpointRepository(get()) }
     single<DirtyPageRepository> { SqlDelightDirtyPageRepository(get()) }
     single<ApiTokenRepository> { SqlDelightApiTokenRepository(get()) }
+    single<ProposalRepository> { SqlDelightProposalRepository(get()) }
     single<RoleRepository> { SqlDelightRoleRepository(get()) }
     single<AuditRepository> { SqlDelightAuditRepository(get()) }
     single<UserRepository> { SqlDelightUserRepository(get()) }

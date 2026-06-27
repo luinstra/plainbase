@@ -1,0 +1,12 @@
+{
+  "id": "0197c000-0000-7000-8000-00000000b00c",
+  "path": "broken.md",
+  "url": "/docs/broken",
+  "permalink": "/p/0197c000-0000-7000-8000-00000000b00c",
+  "content_hash": "{{content_hash}}",
+  "commit": null,
+  "title": "Broken Fixture",
+  "headings": [
+    { "id": "intro", "level": 1, "text": "Intro" }
+  ]
+}

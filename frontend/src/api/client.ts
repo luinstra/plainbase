@@ -3,6 +3,7 @@ import type {
   BodyTooLargeEnvelope,
   CreatePageRequest,
   CreatedResponse,
+  DegradedToProposalResponse,
   ErrorEnvelope,
   PageExistsEnvelope,
   PreviewResponse,
@@ -70,6 +71,7 @@ async function apiError(response: Response): Promise<ApiError> {
  */
 export type SaveResult =
   | { kind: "saved"; written: WrittenResponse | WrittenButUnindexedResponse }
+  | { kind: "degraded"; proposalId: string; status: string; unifiedDiff: string }
   | { kind: "conflict"; conflict: WriteConflictEnvelope["error"] }
   | { kind: "unsupported"; unsupported: UnsupportedEditEnvelope["error"] }
   | { kind: "too-large"; maxBytes: number }
@@ -99,8 +101,21 @@ export async function putPageRaw(id: string, body: string, baseHash: string): Pr
   // A non-JSON body on ANY typed status (e.g. a reverse proxy's HTML 413/200) degrades to the generic
   // error family the editor retries — never an uncaught SyntaxError that freezes "Saving…".
   if (response.ok) {
-    const written = await parseJson<WrittenResponse | WrittenButUnindexedResponse>(response);
-    return written ? { kind: "saved", written } : { kind: "error", error: await apiError(response) };
+    // P5: a 202 `DegradedToProposalResponse` is `ok` too — an agent COMMIT write that fell outside
+    // `agentDirectCommit.globs` was filed as a proposal, NOT applied. It MUST be a distinct `degraded`
+    // result, never `saved` (which would advance the saved baseline + show "Saved" for an un-applied write).
+    // The browser SPA is Human/cookie-auth so this is unreachable today, but the type's contract demands the
+    // handler. Detect it by status 202 OR the body's `degraded` discriminator (the type's own MUST-check).
+    const body = await parseJson<DegradedToProposalResponse | WrittenResponse | WrittenButUnindexedResponse>(response);
+    // A valid 2xx write body is always a JSON OBJECT. A truthy-but-non-object body (a proxy's primitive string/number)
+    // is malformed → the generic error family, NEVER a thrown `"degraded" in body` TypeError or a mis-`saved`. The
+    // object guard MUST precede the `in` check (a primitive on the right of `in` throws).
+    if (typeof body !== "object" || body === null) return { kind: "error", error: await apiError(response) };
+    if (response.status === 202 || "degraded" in body) {
+      const degraded = body as DegradedToProposalResponse;
+      return { kind: "degraded", proposalId: degraded.proposal_id, status: degraded.status, unifiedDiff: degraded.unified_diff };
+    }
+    return { kind: "saved", written: body as WrittenResponse | WrittenButUnindexedResponse };
   }
   if (response.status === 409) {
     const envelope = await parseJson<WriteConflictEnvelope>(response);
