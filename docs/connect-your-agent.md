@@ -94,5 +94,7 @@ detail + diff + decision state).
 Every MCP tool is a thin transport adapter over the same guarded service the REST routes use — there is no
 second authorization path and no divergent behavior. The six read/list/get tools return byte-identical JSON to
 their REST endpoints (`GET /api/v1/search`, `/pages/{id}`, `/pages/{id}/metadata`, `/pages/{id}/validate-links`,
-`/changes`, `/changes/{id}`); `propose_change` is `POST /api/v1/changes`. Anything you can do over MCP you can
-do over REST with the same `pb_` bearer, and vice versa.
+`/changes`, `/changes/{id}`); `propose_change` is `POST /api/v1/changes`. Every MCP tool has a REST equivalent you
+can drive with the same `pb_` bearer. The reverse is not total: a few write paths are REST-only (the
+`PUT /api/v1/pages/{id}` direct commit for an in-glob COMMIT token, and direct page creation), with no MCP tool —
+over MCP you propose instead.

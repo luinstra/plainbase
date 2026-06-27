@@ -123,6 +123,25 @@ describe("write client 202 degrade-to-proposal handling", () => {
       expect(result.unifiedDiff).toContain("@@");
     }
   });
+
+  /**
+   * Final-review fix (b2): a 2xx whose JSON body is a truthy PRIMITIVE (a proxy emitting a bare JSON string/number)
+   * must NOT throw a `"degraded" in body` TypeError and must NOT be misclassified as `degraded` — the object guard
+   * routes it to the generic `error` family instead.
+   */
+  function primitiveBodyResponse(status: number): Response {
+    return new Response(JSON.stringify("just a string"), { status, headers: { "content-type": "application/json" } });
+  }
+
+  it("putPageRaw does NOT throw and does NOT mis-degrade a 2xx primitive (non-object) body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => primitiveBodyResponse(200)),
+    );
+    const result = await putPageRaw("id", "buffer", HASH);
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") expect(result.error.status).toBe(200);
+  });
 });
 
 /**

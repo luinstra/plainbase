@@ -88,7 +88,9 @@ data class ApiTokenMeta(
 )
 
 /**
- * What an agent token is permitted to do. The FIELD lands now (A2); ENFORCEMENT of
- * direct-commit-vs-propose is Phase 5 (§0.7). Stored as the enum name in TEXT (the [Stage] idiom).
+ * What an agent token is permitted to do. The FIELD landed in A2; ENFORCEMENT is LIVE (Phase 5): a COMMIT token's
+ * write direct-commits only inside `agentDirectCommit.globs` and otherwise degrades to a proposal, a PROPOSE token
+ * always proposes, READ_ONLY can only read (`PolicyService` + `GuardedMutatingFacade`). Stored as the enum name in
+ * TEXT (the [Stage] idiom).
  */
 enum class AgentMode { READ_ONLY, PROPOSE, COMMIT }

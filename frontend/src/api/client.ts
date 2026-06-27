@@ -107,11 +107,15 @@ export async function putPageRaw(id: string, body: string, baseHash: string): Pr
     // The browser SPA is Human/cookie-auth so this is unreachable today, but the type's contract demands the
     // handler. Detect it by status 202 OR the body's `degraded` discriminator (the type's own MUST-check).
     const body = await parseJson<DegradedToProposalResponse | WrittenResponse | WrittenButUnindexedResponse>(response);
-    if (body && (response.status === 202 || "degraded" in body)) {
+    // A valid 2xx write body is always a JSON OBJECT. A truthy-but-non-object body (a proxy's primitive string/number)
+    // is malformed → the generic error family, NEVER a thrown `"degraded" in body` TypeError or a mis-`saved`. The
+    // object guard MUST precede the `in` check (a primitive on the right of `in` throws).
+    if (typeof body !== "object" || body === null) return { kind: "error", error: await apiError(response) };
+    if (response.status === 202 || "degraded" in body) {
       const degraded = body as DegradedToProposalResponse;
       return { kind: "degraded", proposalId: degraded.proposal_id, status: degraded.status, unifiedDiff: degraded.unified_diff };
     }
-    return body ? { kind: "saved", written: body as WrittenResponse | WrittenButUnindexedResponse } : { kind: "error", error: await apiError(response) };
+    return { kind: "saved", written: body as WrittenResponse | WrittenButUnindexedResponse };
   }
   if (response.status === 409) {
     const envelope = await parseJson<WriteConflictEnvelope>(response);

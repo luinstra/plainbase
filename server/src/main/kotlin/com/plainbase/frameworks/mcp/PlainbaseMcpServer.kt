@@ -14,6 +14,7 @@ import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
 import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
 import com.plainbase.frameworks.ktor.dto.PageResponse
+import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
 import com.plainbase.frameworks.ktor.dto.RestJson
@@ -68,21 +69,21 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
 
     server.addTool(McpTools.READ_PAGE, READ_PAGE_DESCRIPTION, readPageSchema) { request ->
         catchingErrors {
-            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId()
+            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
             toolResult(PageResponse.serializer()) { ctx.read.pageById(principal, id)?.toDto() }
         }
     }
 
     server.addTool(McpTools.GET_PAGE_METADATA, GET_PAGE_METADATA_DESCRIPTION, getPageMetadataSchema) { request ->
         catchingErrors {
-            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId()
+            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
             toolResult(PageMetadataResponse.serializer()) { ctx.read.pageMetadata(principal, id)?.toMetadataDto() }
         }
     }
 
     server.addTool(McpTools.VALIDATE_LINKS, VALIDATE_LINKS_DESCRIPTION, validateLinksSchema) { request ->
         catchingErrors {
-            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId()
+            val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
             toolResult(ValidateLinksResponse.serializer()) { ctx.read.validateLinks(principal, id)?.toDto() }
         }
     }
@@ -102,7 +103,11 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
                 is ProposeCommandParse.Ok -> when (val outcome = ctx.proposals.propose(principal, parse.command)) {
                     is ProposeOutcome.Created -> jsonResult(
                         ProposeChangeResponse.serializer(),
-                        ProposeChangeResponse(id = outcome.id.value, status = "PENDING", unifiedDiff = outcome.unifiedDiff),
+                        ProposeChangeResponse(
+                            id = outcome.id.value,
+                            status = ProposalStatusWire.PENDING,
+                            unifiedDiff = outcome.unifiedDiff,
+                        ),
                     )
                     ProposeOutcome.StaleBase -> errorResult(
                         "stale_base",
@@ -125,7 +130,9 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
         catchingErrors {
             val raw = request.arguments?.stringArg("id")
             if (raw == null || !CANONICAL_PROPOSAL_ID.matches(raw)) {
-                return@catchingErrors errorResult("invalid_proposal_id", "Not a canonical-shape UUID")
+                // REST↔MCP parity: a malformed proposal id is the SAME code the REST `proposalId()` parser emits
+                // (`invalid_propose_request`), quoting the raw id like REST does — NOT a divergent `invalid_proposal_id`.
+                return@catchingErrors errorResult("invalid_propose_request", "Not a canonical-shape UUID: '${raw.orEmpty()}'")
             }
             toolResult(ChangeDetail.serializer()) { ctx.proposals.get(principal, ProposalId.require(raw))?.toDto() }
         }
@@ -140,7 +147,8 @@ private fun io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest.canonicalPa
     return if (CANONICAL_PAGE_ID.matches(raw)) PageId.require(raw) else null
 }
 
-private fun invalidPageId(): CallToolResult = errorResult("invalid_page_id", "Not a canonical-shape UUID")
+/** REST parity: the SAME `invalid_page_id` code + quoted-raw-id message the REST `pageId()` parser emits. */
+private fun invalidPageId(raw: String?): CallToolResult = errorResult("invalid_page_id", "Not a canonical-shape UUID: '${raw.orEmpty()}'")
 
 /** Reads a named string argument off the tool's `arguments` object (null when absent / not a string). */
 private fun JsonObject.stringArg(name: String): String? = this[name]?.jsonPrimitive?.contentOrNull

@@ -650,6 +650,32 @@ class ProposalServiceTest : FunSpec({
         }
     }
 
+    test("rebase Gone RACE: a lost failConflicted CAS (a concurrent transition won the row) returns NotConflicted, not Gone") {
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
+        val backing = MemRepo()
+        // A repo whose failConflicted ALWAYS loses the CONFLICTED->FAILED CAS — modeling a concurrent rebase/terminal
+        // transition that won this row between the rebase's initial CONFLICTED read and the Gone arm's failConflicted.
+        val repo = object : ProposalRepository by backing {
+            override fun failConflicted(id: com.plainbase.domain.page.ProposalId, statusReason: String, at: Instant) = false
+        }
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = (
+            svc.proposeEdit(grantForTests(), pageId, citations.contentHash(current), null, proposed, "r", author) as ProposeOutcome.Created
+            ).id
+        svc.apply(
+            approveGrantForTests(),
+            id,
+            approver,
+            FakeWriter(WriteOutcome.Conflict("content_changed", "x", "sha256:" + "b".repeat(64), path)),
+        )
+        backing.findById(id)!!.status shouldBe ProposalStatus.CONFLICTED
+        // The page vanishes (pathOf null) → the Gone arm — but the loser's failConflicted CAS returns false, so the
+        // row already left CONFLICTED under a winner: report NotConflicted, NEVER an unrecorded Gone.
+        reader.pathById = emptyMap()
+        svc.rebase(approveGrantForTests(), id) shouldBe RebaseOutcome.NotConflicted
+    }
+
     // ---- P1b reconcileApplying (WI-6) ----------------------------------------------------------------
 
     /** Inserts a fresh PENDING edit row, then claims it APPLYING (simulating a crash-mid-apply, no terminal stamp). */

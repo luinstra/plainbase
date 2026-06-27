@@ -12,6 +12,10 @@ import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.ProposeCommand
+import com.plainbase.frameworks.git.GitExecutor
+import com.plainbase.frameworks.git.headCommits
+import com.plainbase.frameworks.git.openOracle
+import com.plainbase.frameworks.git.providerOver
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -67,6 +71,8 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
         seedAgentMode: AgentMode? = null,
         globs: List<CommitGlob> = listOf(CommitGlob.parse("docs/**")),
         enforced: Boolean = true,
+        // b1: a test wires a real Git provider to assert the agent direct commit's git author/committer attribution.
+        historyFactory: (Path) -> com.plainbase.domain.history.HistoryProvider = { com.plainbase.frameworks.git.NoOpHistoryProvider },
         block: suspend (
             ApplicationTestBuilder,
             IndexHarness,
@@ -82,7 +88,9 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             Files.writeString(root.resolve("docs/in.md"), inDoc)
             Files.writeString(root.resolve("notes/out.md"), outDoc)
             val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
-            IndexHarness(root, contentStore = store).use { harness ->
+            val history = historyFactory(root)
+            IndexHarness(root, contentStore = store, history = history).use { harness ->
+                history.prepare()
                 harness.idMap.bind(TreePath.require("docs/in.md"), PageId.require(inId), materialized = false)
                 harness.idMap.bind(TreePath.require("notes/out.md"), PageId.require(outId), materialized = false)
                 harness.builder.rebuild()
@@ -94,10 +102,12 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
                     }
                     else -> principal
                 }
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val ctx = harness.testRouteContext(
                     contentStore = store,
-                    writePipeline = harness.writePipeline(store = store),
+                    writePipeline = harness.writePipeline(pipelineHook, store),
                     searchProvider = harness.fts(),
+                    history = history,
                     enforced = enforced,
                     agentDirectCommitGlobs = globs,
                     extract = fixedPrincipal(resolved),
@@ -122,7 +132,14 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             setBody(body)
         }
 
+    suspend fun ApplicationTestBuilder.postCreate(folder: String, title: String = "newpage"): HttpResponse =
+        client.post("/api/v1/pages") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"folder":"$folder","title":"$title"}""")
+        }
+
     fun List<AuditEntry>.edits() = filter { it.action == "EDIT" }
+    fun List<AuditEntry>.creates() = filter { it.action == "CREATE" }
 
     // ---- MASTER: the same call splits two ways by the glob gate ---------------------------------------
 
@@ -203,6 +220,68 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe inDoc // disk byte-unchanged
             harness.proposalRepository.all().shouldBeEmpty() // the degrade's propose was denied before any row
             harness.auditRepository.recent(50).edits().single { it.resource == "proposal" }.decision shouldBe "denied"
+        }
+    }
+
+    // ---- (a) agent-create stop-gap: the glob gate extends to DIRECT page creation --------------------
+
+    test("agent-create: a PROPOSE agent POST /pages is 403 — NO page created, NO proposal, a DENIED CREATE audit row") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.PROPOSE) { app, harness, store, _, _ ->
+            app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
+            store.read(TreePath.require("docs/newpage.md")) shouldBe null
+            harness.proposalRepository.all().shouldBeEmpty() // a deny, NOT a degrade-to-proposal (5.5 dead-letter)
+            harness.auditRepository.recent(50).creates().single().decision shouldBe "denied"
+        }
+    }
+
+    test("agent-create: a COMMIT agent OUT-of-glob POST /pages is 403 — NO page created") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
+            app.postCreate("notes").status shouldBe HttpStatusCode.Forbidden
+            store.read(TreePath.require("notes/newpage.md")) shouldBe null
+            harness.auditRepository.recent(50).creates().single().decision shouldBe "denied"
+        }
+    }
+
+    test("agent-create: a COMMIT agent IN-glob (docs/**) POST /pages is a 201 direct create") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
+            app.postCreate("docs").status shouldBe HttpStatusCode.Created
+            store.read(TreePath.require("docs/newpage.md")).shouldBeInstanceOf<ByteArray>()
+            harness.auditRepository.recent(50).creates().single().decision shouldBe "allowed"
+        }
+    }
+
+    test("agent-create: a COMMIT agent under the DEFAULT empty globs is 403 (every agent create degrades... to a deny)") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT, globs = emptyList()) { app, harness, store, _, _ ->
+            app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
+            store.read(TreePath.require("docs/newpage.md")) shouldBe null
+        }
+    }
+
+    test("agent-create: a Human EDITOR POST /pages is STILL a 201 (a Human is NEVER glob-checked)") {
+        withApp(Principal.Human("builtin", "editor"), role = Role.EDITOR) { app, _, store, _, _ ->
+            app.postCreate("docs").status shouldBe HttpStatusCode.Created
+            store.read(TreePath.require("docs/newpage.md")).shouldBeInstanceOf<ByteArray>()
+        }
+    }
+
+    // ---- (b1) git attribution: an in-glob direct commit is agent-attributed in git -------------------
+
+    test("git-attribution: an in-glob COMMIT agent's direct commit is git-attributed to the AGENT (author == committer), not 'Plainbase'") {
+        val gitFactory: (Path) -> com.plainbase.domain.history.HistoryProvider = { root ->
+            val home = Files.createTempDirectory("plainbase-direct-commit-git-home")
+            providerOver(GitExecutor(workTree = root, home = home), root, home)
+        }
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT, historyFactory = gitFactory) { app, harness, _, _, root ->
+            val agentId = harness.apiTokens.list().single().id
+            app.putEdit(inId, app.hashOf(inId)).status shouldBe HttpStatusCode.OK
+            openOracle(root).use { repo ->
+                val head = repo.headCommits().first()
+                // The labeler snapshots the token label ("ci") + the PINNED synthetic email — NOT the server identity.
+                head.authorIdent.name shouldBe "ci"
+                head.authorIdent.emailAddress shouldBe "$agentId@agent.plainbase.local"
+                head.committerIdent.name shouldBe "ci"
+                head.committerIdent.emailAddress shouldBe "$agentId@agent.plainbase.local"
+            }
         }
     }
 

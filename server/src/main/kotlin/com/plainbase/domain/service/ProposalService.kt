@@ -240,8 +240,15 @@ class ProposalService(
         val path = baseReader.pathOf(pageId)
         val currentBytes = path?.let(baseReader::currentBytes)
         if (path == null || currentBytes == null) {
-            repository.failConflicted(id, "rebase_target_gone", clock.now())
-            return RebaseOutcome.Gone
+            // The target page is gone → stamp terminal FAILED via the CONFLICTED->FAILED CAS. HONOR the CAS result the
+            // SAME way the success path honors a lost `rebaseToPending` CAS: a false means a concurrent rebase/terminal
+            // transition won this row after our initial CONFLICTED read, so the row already left CONFLICTED — report
+            // NotConflicted (the idempotent already-transitioned miss), NEVER an unconditional Gone we did not record.
+            return if (repository.failConflicted(id, "rebase_target_gone", clock.now())) {
+                RebaseOutcome.Gone
+            } else {
+                RebaseOutcome.NotConflicted
+            }
         }
         val newBaseHash = citations.contentHash(currentBytes)
         val newDiff = unifiedDiff(currentBytes, row.proposedContent)
@@ -304,13 +311,13 @@ class ProposalService(
 
     /** Every proposal as a summary view, newest-first, each carrying its LIVE-derived `base_drifted` flag. */
     fun list(): List<ProposalSummaryView> = repository.all().map {
-        ProposalSummaryView(it, baseDrifted(it.operation, it.pageId, it.targetPath, it.baseHash))
+        ProposalSummaryView(it, baseDrifted(it.status, it.operation, it.pageId, it.targetPath, it.baseHash))
     }
 
     /** The full proposal view for [id] (incl. the stable `unified_diff`) with its LIVE `base_drifted`, or null. */
     fun get(id: ProposalId): ProposalView? {
         val row = repository.findById(id) ?: return null
-        return ProposalView(row, baseDrifted(row.operation, row.pageId, row.targetPath, row.baseHash))
+        return ProposalView(row, baseDrifted(row.status, row.operation, row.pageId, row.targetPath, row.baseHash))
     }
 
     private fun newPending(
@@ -345,19 +352,31 @@ class ProposalService(
     )
 
     /**
-     * The LIVE drift flag (§0.13(ii)), derived per-row at read time, NEVER stored (NON-AUTHORITATIVE triage — §B4):
+     * The LIVE drift flag (§0.13(ii)), derived per-row at read time, NEVER stored (NON-AUTHORITATIVE triage — §B4).
+     * Only an ACTIONABLE row carries it: a PENDING or CONFLICTED proposal can still be applied/rebased against the live
+     * base, so drift is meaningful. A TERMINAL row (APPLIED/REJECTED/FAILED — and the transient APPLYING) is decided;
+     * deriving drift against a live base would be misleading (an APPLIED row's base ALWAYS "differs" post-apply), so it
+     * is fixed to `false`. For an actionable row:
      *  - EDIT: the live current hash differs from the stored `base_hash` — OR the target was deleted since propose
      *    (currentBytes null IS drift; do NOT diff against empty here);
      *  - CREATE: a content file now occupies `target_path` (the file-path collision, `byPath` ∪ `assets`).
      */
-    private fun baseDrifted(operation: ProposalOperation, pageId: PageId?, targetPath: TreePath, baseHash: String?): Boolean =
-        when (operation) {
+    private fun baseDrifted(
+        status: ProposalStatus,
+        operation: ProposalOperation,
+        pageId: PageId?,
+        targetPath: TreePath,
+        baseHash: String?,
+    ): Boolean {
+        if (status != ProposalStatus.PENDING && status != ProposalStatus.CONFLICTED) return false
+        return when (operation) {
             ProposalOperation.EDIT -> {
                 val current = pageId?.let(baseReader::pathOf)?.let(baseReader::currentBytes)
                 current == null || citations.contentHash(current) != baseHash
             }
             ProposalOperation.CREATE -> baseReader.occupied(targetPath)
         }
+    }
 
     private companion object {
         private val logger = KotlinLogging.logger {}

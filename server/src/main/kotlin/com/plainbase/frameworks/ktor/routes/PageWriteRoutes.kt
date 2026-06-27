@@ -77,13 +77,17 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 val bytes = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
                     ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
 
-                // (5+6+7) The guarded facade owns the WHOLE write decision in the correct AUDIT order: its EDIT check
-                // (audited, mint-or-throw) fires FIRST — BEFORE any read — so a denied PUT writes a denied-EDIT audit
-                // row instead of being swallowed by an unaudited read-check. Only after the grant is minted does the
-                // facade resolve the page from the snapshot (R1: id absent → 404 PageNotFound — the route never invents
-                // a path) and run the PB-WRITE-1 id-tamper check (a submitted `id:` denoting a different identity is a
-                // rename → 422 IdMismatch, before the pipeline runs). A Written outcome renders through the frozen wire
-                // mapping, applying the retry-idempotency shim (stale base_hash but on-disk == submitted → 200 no-op).
+                // (5+6+7) The guarded facade owns the WHOLE write decision and EXACTLY-ONCE audit. For a Human/Anonymous
+                // (and the proposal-apply caller) the EDIT check (audited, mint-or-throw) fires FIRST — BEFORE any read —
+                // so a denied PUT writes a denied-EDIT audit row instead of being swallowed by an unaudited read-check.
+                // The P5 agent DIRECT_PUT path deliberately RELAXES that strict ordering (an AGENT-ONLY, non-auditing
+                // agentModeFor + in-memory snapshot lookup runs before the audited check on the chosen direct/degrade
+                // branch); it still audits EXACTLY once and a deny still throws with no content returned (see
+                // GuardedMutatingFacade.save). After the grant, the facade resolves the page from the snapshot (R1: id
+                // absent → 404 PageNotFound — the route never invents a path) and runs the PB-WRITE-1 id-tamper check (a
+                // submitted `id:` denoting a different identity is a rename → 422 IdMismatch, before the pipeline runs). A
+                // Written outcome renders through the frozen wire mapping, applying the retry-idempotency shim (stale
+                // base_hash but on-disk == submitted → 200 no-op).
                 val submittedHash = CITATIONS.contentHash(bytes)
                 when (val result = ctx.mutate.save(principal, SaveRequest(id, baseHash, bytes))) {
                     SaveResult.PageNotFound ->

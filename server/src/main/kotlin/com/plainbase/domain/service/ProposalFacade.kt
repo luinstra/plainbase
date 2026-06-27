@@ -10,8 +10,9 @@ import com.plainbase.domain.principal.Principal
  * [Principal] and calls the matching `PolicyService.check*` FIRST, mints the typed grant, and passes it into the
  * grant-demanded [ProposalService] method (the demanded-value floor). The impl
  * ([com.plainbase.frameworks.ktor.GuardedProposalFacade]) lives frameworks-side ([AccessDenied] -> HTTP is its
- * concern). NO content-tree write — `propose`/`reject` store proposal rows; the live disk READS for base-hash/drift
- * go through [ProposalBaseReader].
+ * concern). `propose`/`reject`/`list`/`get` do NO content-tree write (they store/read proposal rows; the live disk
+ * READS for base-hash/drift go through [ProposalBaseReader]); P1b's `approve` (apply-on-approve) + `rebase` DO mutate
+ * the content tree, routing the EDIT write through the guarded MUTATING path.
  *
  *  - [propose] is gated by `checkEdit` (for an edit) / `checkCreate` (for a create) — an agent in PROPOSE/COMMIT
  *    (-> EDITOR) is permitted, READ_ONLY denied; a HUMAN EDITOR/ADMIN permitted; in `auth.mode=off`, Anonymous too.

@@ -11,6 +11,7 @@ import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ConflictedResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
+import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
 import com.plainbase.frameworks.ktor.dto.RebasedResponse
@@ -71,7 +72,11 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                 when (val outcome = ctx.proposals.propose(principal, command)) {
                     is ProposeOutcome.Created -> call.respondRest(
                         ProposeChangeResponse.serializer(),
-                        ProposeChangeResponse(id = outcome.id.value, status = "PENDING", unifiedDiff = outcome.unifiedDiff),
+                        ProposeChangeResponse(
+                            id = outcome.id.value,
+                            status = ProposalStatusWire.PENDING,
+                            unifiedDiff = outcome.unifiedDiff,
+                        ),
                         HttpStatusCode.Created,
                     )
                     ProposeOutcome.StaleBase -> call.respondError(

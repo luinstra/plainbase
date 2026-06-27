@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.dto
 
 import com.plainbase.domain.repository.ProposalOperation
+import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.service.ProposalSummaryView
 import com.plainbase.domain.service.ProposalView
 import kotlinx.serialization.SerialName
@@ -167,10 +168,24 @@ fun ProposalOperation.toWire(): String = when (this) {
     ProposalOperation.CREATE -> ProposalOperationWire.CREATE
 }
 
+/**
+ * The wire form of a domain status enum, mapped EXPLICITLY to the [ProposalStatusWire] constants (never `.name`) — so a
+ * domain enum rename can't silently shift the frozen wire (symmetric with [ProposalOperation.toWire]; names == wire
+ * today, golden-pinned).
+ */
+fun ProposalStatus.toWire(): String = when (this) {
+    ProposalStatus.PENDING -> ProposalStatusWire.PENDING
+    ProposalStatus.APPLYING -> ProposalStatusWire.APPLYING
+    ProposalStatus.APPLIED -> ProposalStatusWire.APPLIED
+    ProposalStatus.REJECTED -> ProposalStatusWire.REJECTED
+    ProposalStatus.CONFLICTED -> ProposalStatusWire.CONFLICTED
+    ProposalStatus.FAILED -> ProposalStatusWire.FAILED
+}
+
 fun ProposalSummaryView.toDto(): ChangeSummary = ChangeSummary(
     id = row.id.value,
     operation = row.operation.toWire(),
-    status = row.status.name,
+    status = row.status.toWire(),
     targetPath = row.targetPath.value,
     pageId = row.pageId?.value,
     baseDrifted = baseDrifted,
@@ -182,7 +197,7 @@ fun ProposalSummaryView.toDto(): ChangeSummary = ChangeSummary(
 fun ProposalView.toDto(): ChangeDetail = ChangeDetail(
     id = row.id.value,
     operation = row.operation.toWire(),
-    status = row.status.name,
+    status = row.status.toWire(),
     targetPath = row.targetPath.value,
     pageId = row.pageId?.value,
     baseHash = row.baseHash,

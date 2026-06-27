@@ -85,6 +85,7 @@ fun buildRouteContext(
         indexBuilder = indexBuilder,
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = agentDirectCommitGlobs,
+        proposalLabeler = proposalLabeler,
     )
     // The apply-on-approve composition (P1b) lives BEHIND ProposalFacade — it needs the guarded MUTATING path to do
     // the content write, so the facade is assembled HERE (where `mutate` exists), keeping the choke-point assembly

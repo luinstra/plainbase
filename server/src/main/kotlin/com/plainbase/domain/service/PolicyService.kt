@@ -80,6 +80,18 @@ class PolicyService(
     fun agentModeFor(principal: Principal): AgentMode? =
         (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
 
+    /**
+     * Record a DENIED [action] decision row for [principal]/[resource], then throw [AccessDenied] — the mint-free deny
+     * for a FACADE-level gate that refuses a request WITHOUT consulting the role×action matrix (P5: the agent-create
+     * glob gate, where an out-of-glob / non-COMMIT agent's DIRECT create is refused rather than degraded — create-apply
+     * is deferred to 5.5, so a degraded create-proposal would dead-letter). Audit stays in this ONE choke point: the
+     * denial records exactly one denied row, like a matrix deny, and never mints a grant the caller would then refuse.
+     */
+    fun deny(principal: Principal, action: Action, resource: String): Nothing {
+        audit.record(decisionRow(principal, action, resource, allowed = false))
+        throw AccessDenied(action, resource, principal)
+    }
+
     /** The shared mutating gate: record the pre-effect decision row, then mint the grant or throw [AccessDenied]. */
     private inline fun <G> gate(principal: Principal, action: Action, resource: String, mint: () -> G): G {
         val allowed = allows(principal, action)
@@ -96,7 +108,8 @@ class PolicyService(
      * The role of [principal] from the DB/token row ONLY (the non-escalation guarantee), or null (→ default deny):
      *  - [Principal.Human] → its `subject_role` row.
      *  - [Principal.Agent] → its token `mode` mapped onto the role axis (READ_ONLY → VIEWER; PROPOSE/COMMIT →
-     *    EDITOR — A3 grants both the EDIT/CREATE capability; the propose-vs-direct-commit ENFORCEMENT is Phase 5).
+     *    EDITOR — A3 grants both the EDIT/CREATE capability; the propose-vs-direct-commit ENFORCEMENT is LIVE in
+     *    [com.plainbase.frameworks.ktor.GuardedMutatingFacade] via the `agentDirectCommit.globs` gate, Phase 5).
      *    `modeOf` re-checks the active predicate (not revoked, not expired) at [clock]`.now()` on EVERY call: a REST
      *    request re-auths its bearer per call (A2 seam), but a LIVE MCP SSE session authenticates once at connect and
      *    reuses the captured Agent — so a token revoked/expired mid-session resolves to null mode → denied next call.
