@@ -124,6 +124,9 @@ fun IndexHarness.testRouteContext(
     proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
     secureCookie: Boolean = false,
     proxyCsrf: com.plainbase.frameworks.security.ProxyCsrf = com.plainbase.frameworks.security.ProxyCsrf(ByteArray(32) { 7 }),
+    // P5: a defaulted glob list the enforced-mode tests set non-empty (the production wiring threads
+    // config.agentDirectCommitGlobs()); forwarded into buildRouteContext so the harness can exercise the gate.
+    agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
     val policy = PolicyService(
@@ -165,6 +168,7 @@ fun IndexHarness.testRouteContext(
         proxyIdentityHeader = proxyIdentityHeader,
         secureCookie = secureCookie,
         proxyCsrf = proxyCsrf,
+        agentDirectCommitGlobs = agentDirectCommitGlobs,
         extract = extract,
     )
 }

@@ -189,6 +189,21 @@ class PlainbaseConfigTest : FunSpec({
         PlainbaseConfig.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
     }
 
+    // P5: agentDirectCommit.globs are validated at LOAD (the requireParseableCidrs idiom) — a malformed pattern fails
+    // fast naming it, and a valid set survives unchanged + parses to a CommitGlob via the accessor.
+    test("a malformed PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS entry fails fast at load naming the bad pattern") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, secrets/../etc"))
+        }.message shouldContain "secrets/../etc"
+    }
+
+    test("valid agentDirectCommit.globs survive load and parse to CommitGlobs via the accessor") {
+        val config = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "docs/**, guides/*.md"))
+        config.auth.agentDirectCommitGlobs shouldBe listOf("docs/**", "guides/*.md")
+        config.agentDirectCommitGlobs().size shouldBe 2
+        config.agentDirectCommitGlobs().first().matches(com.plainbase.domain.content.TreePath.require("docs/a/b.md")) shouldBe true
+    }
+
     // --- B3: HOCON substitutions resolve (ADR-0009). ConfigResolveOptions.defaults() resolves within-file refs and
     //     falls back to the JVM system ENVIRONMENT (not system properties); the optional `${?…}` form drops silently
     //     when its var is unset (a bare `${…}` would throw by design — the supported form is the optional one) ------

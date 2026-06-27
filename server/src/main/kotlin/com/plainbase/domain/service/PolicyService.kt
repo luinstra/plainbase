@@ -71,6 +71,15 @@ class PolicyService(
     fun checkApprove(principal: Principal, resource: String): ApproveGrant =
         gate(principal, Action.APPROVE, resource) { ApproveGrant() }
 
+    /**
+     * Read-only, NON-auditing: the live [AgentMode] for a [Principal.Agent] (null for non-agents OR a revoked/expired
+     * token at [clock]`.now()`), so [com.plainbase.frameworks.ktor.GuardedMutatingFacade] can decide direct-vs-degrade
+     * (P5) WITHOUT an audit side effect — the audit fires later via `checkEdit` on the chosen branch. Reuses the SAME
+     * live revoked/expired re-check [roleFor] rides; does NOT touch [audit].
+     */
+    fun agentModeFor(principal: Principal): AgentMode? =
+        (principal as? Principal.Agent)?.let { apiTokens.modeOf(it.tokenId, clock.now()) }
+
     /** The shared mutating gate: record the pre-effect decision row, then mint the grant or throw [AccessDenied]. */
     private inline fun <G> gate(principal: Principal, action: Action, resource: String, mint: () -> G): G {
         val allowed = allows(principal, action)

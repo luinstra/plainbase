@@ -16,6 +16,7 @@ import com.plainbase.frameworks.ktor.dto.ApplyResultResponse
 import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ChangeSummary
 import com.plainbase.frameworks.ktor.dto.ConflictedResponse
+import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import com.plainbase.frameworks.ktor.dto.ProposeChangeResponse
@@ -166,6 +167,15 @@ class ProposalDtoNativeTest {
         )
         assertRoundTrips(ConflictedResponse.serializer(), ConflictedResponse(currentHash = proposed, currentPath = "a.md"))
         assertRoundTrips(RebasedResponse.serializer(), RebasedResponse(newBaseHash = proposed, unifiedDiff = "@@ -0,0 +1,1 @@\n+x\n"))
+        // P5: the agent direct-commit DEGRADE response (202) encodes+decodes reflection-free through the scoped RestJson.
+        assertRoundTrips(
+            DegradedToProposalResponse.serializer(),
+            DegradedToProposalResponse(
+                proposalId = "01900000-0000-7000-9000-000000000001",
+                status = "PENDING",
+                unifiedDiff = "@@ -0,0 +1,1 @@\n+x\n",
+            ),
+        )
     }
 
     @Test

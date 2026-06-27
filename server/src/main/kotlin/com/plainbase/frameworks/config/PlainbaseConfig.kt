@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.service.CommitGlob
 import com.plainbase.frameworks.ktor.RemoteAddress
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
@@ -142,6 +143,13 @@ data class PlainbaseConfig(
         (listOf("http://$host:$port", "https://$host:$port") + MCP_LOOPBACK_HOSTS.map { "http://$it:$port" }).distinct()
     }
 
+    /**
+     * P5: the validated `agentDirectCommit.globs` as parsed [CommitGlob]s (the [mcpHostAllowlist] accessor idiom).
+     * Re-parsing is safe because config load already validated every pattern (`requireParseableGlobs`), so this never
+     * throws at request time.
+     */
+    fun agentDirectCommitGlobs(): List<CommitGlob> = auth.agentDirectCommitGlobs.map(CommitGlob::parse)
+
     companion object {
         const val VERSION: String = "0.1.0"
 
@@ -225,8 +233,10 @@ data class PlainbaseConfig(
                     env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
                 ),
                 insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP") ?: file.boolStrict("auth.insecureHttp") ?: false,
-                agentDirectCommitGlobs = env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
-                    ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
+                agentDirectCommitGlobs = requireParseableGlobs(
+                    env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
+                        ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
+                ),
                 // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
                 // completeness; the deploy docs steer operators to env.
                 proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
@@ -255,6 +265,18 @@ data class PlainbaseConfig(
                 )
             }
             return cidrs
+        }
+
+        /**
+         * P5: fail-fast on a malformed `agentDirectCommit.globs` entry at LOAD (the [requireParseableCidrs] idiom) —
+         * a blank/empty pattern, a `.`/`..` segment, or an empty segment. [CommitGlob.parse] throws naming the bad
+         * pattern; after this, "an entry survived load" provably means "a parseable glob". The validated strings are
+         * returned unchanged (the frozen `AuthConfig.agentDirectCommitGlobs: List<String>` keeps its shape); the parsed
+         * form is exposed via [agentDirectCommitGlobs].
+         */
+        private fun requireParseableGlobs(globs: List<String>): List<String> {
+            globs.forEach { CommitGlob.parse(it) }
+            return globs
         }
 
         /**
@@ -370,8 +392,10 @@ enum class AuthMode {
  * - [trustedProxyCidrs] — proxy source CIDRs whose `X-Forwarded-Proto: https` is trusted (secure-context,
  *   WI 5; A4b spoof check). Empty = no trusted proxy.
  * - [insecureHttp] — the explicit, knowing override that lets the bind guard serve credentials over plaintext.
- * - [agentDirectCommitGlobs] — PROVISIONAL: lands now (config-only); ENFORCEMENT is Phase 5 (§0.7), unused in
- *   Phase 4. Default `[]`.
+ * - [agentDirectCommitGlobs] — LIVE as of P5 (§0.7): RestModule threads this into the route context and
+ *   [com.plainbase.frameworks.ktor.GuardedMutatingFacade] consults it on every agent PUT. A COMMIT-mode agent
+ *   writing INSIDE a glob direct-commits (200); OUTSIDE it degrades to a proposal (202). The default `[]` degrades
+ *   EVERY agent write. Humans and the proposal-apply path are never glob-checked. Default `[]`.
  */
 data class AuthConfig(
     val mode: AuthMode = AuthMode.OFF,

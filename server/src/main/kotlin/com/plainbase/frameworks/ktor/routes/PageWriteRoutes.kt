@@ -9,9 +9,11 @@ import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AssetUploadResponse
+import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageExistsBody
 import com.plainbase.frameworks.ktor.dto.PageExistsEnvelope
+import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.UnsupportedEditBody
 import com.plainbase.frameworks.ktor.dto.UnsupportedEditEnvelope
@@ -88,6 +90,26 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                         call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                     SaveResult.IdMismatch -> call.respondUnsupportedEdit("id")
                     is SaveResult.Written -> call.respondWriteWire(result.outcome.toWire(submittedHash))
+                    // P5: an agent COMMIT write outside agentDirectCommit.globs degraded to a proposal — 202 with a
+                    // NEW shape, never a field on the frozen WrittenResponse.
+                    is SaveResult.DegradedToProposal ->
+                        call.respondRest(
+                            DegradedToProposalResponse.serializer(),
+                            DegradedToProposalResponse(
+                                proposalId = result.proposalId.value,
+                                status = ProposalStatusWire.PENDING,
+                                unifiedDiff = result.unifiedDiff,
+                            ),
+                            HttpStatusCode.Accepted,
+                        )
+                    // P5: the degrade's proposeEdit hit a stale base_hash / missing target — the existing propose
+                    // vocabulary, now also a PUT-path outcome.
+                    SaveResult.DegradeStaleBase ->
+                        call.respondError(
+                            HttpStatusCode.BadRequest,
+                            ErrorCodes.STALE_BASE,
+                            "The base you proposed against is no longer current; re-read the page and re-propose.",
+                        )
                 }
             }
         }

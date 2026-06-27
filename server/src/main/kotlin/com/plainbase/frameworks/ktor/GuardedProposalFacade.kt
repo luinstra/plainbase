@@ -20,6 +20,7 @@ import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
 import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
+import com.plainbase.domain.service.WriteOrigin
 
 /**
  * The frameworks-side [ProposalFacade] impl (P1a, the A3 choke point — the [GuardedReadFacade] shape): it holds the
@@ -91,6 +92,10 @@ class GuardedProposalFacade(
                     bytes = row.proposedContent,
                     author = author,
                     committer = committer,
+                    // P5: the apply path carries already-approved, already-reviewed content — WriteOrigin.PROPOSAL_APPLY
+                    // makes GuardedMutatingFacade.save bypass the agent direct-commit/degrade decision ENTIRELY, even
+                    // when `principal` is a Principal.Agent (an off-mode agent can drive approve — finding #11).
+                    origin = WriteOrigin.PROPOSAL_APPLY,
                 ),
             ).toWriteOutcome()
         }
@@ -128,4 +133,12 @@ private fun SaveResult.toWriteOutcome(): WriteOutcome = when (this) {
     is SaveResult.Written -> outcome
     SaveResult.PageNotFound -> WriteOutcome.Conflict(reason = "page_deleted", currentContent = null, currentHash = null, currentPath = null)
     SaveResult.IdMismatch -> WriteOutcome.UnsupportedEdit(field = "id")
+    // P5: a degrade is DIRECT_PUT-only. The apply path passes WriteOrigin.PROPOSAL_APPLY, so GuardedMutatingFacade.save
+    // NEVER enters the agent direct-commit/degrade decision here — these arms are unreachable BY THE ORIGIN
+    // DISCRIMINATOR (NOT by the approver's principal type: an off-mode agent CAN drive approve — finding #11). Like the
+    // create-only `toWire` arms, but earned by an explicit discriminator rather than by construction over principals.
+    is SaveResult.DegradedToProposal ->
+        error("a degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY and never enters the agent decision")
+    SaveResult.DegradeStaleBase ->
+        error("a degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY and never enters the agent decision")
 }

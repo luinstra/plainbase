@@ -12,7 +12,11 @@ against a separate `DATA_DIR`). Choose a mode:
 
 - `read-only` — search + read only (no proposals).
 - `propose` — read **and** open change proposals for human review (the usual agent mode).
-- `commit` — same capability surface as `propose` today (direct-commit globs are a later phase).
+- `commit` — direct-commits a REST `PUT /api/v1/pages/{id}` whose page falls INSIDE `auth.agentDirectCommit.globs`,
+  and otherwise DEGRADES to a proposal (HTTP `202`, `{degraded, proposal_id, status, unified_diff}`) — so a commit
+  agent is a propose agent everywhere outside its allowed globs. MCP has no write tool, so MCP is propose-only
+  regardless of mode. The globs are set with `auth.agentDirectCommit.globs` (or
+  `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS`); the default `[]` means EVERY agent write is a proposal.
 
 ```console
 $ plainbase admin mint-token my-agent propose

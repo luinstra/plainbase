@@ -135,6 +135,13 @@ import io.kotest.core.spec.style.FunSpec
  * and forward-compat with a future whole-tree `validate_links` variant (where `page` WOULD vary per row) — it is
  * redundant within a single per-page response but MUST NOT be removed (removal is a contract break).
  *
+ * PB-WRITE-1 grew in P5 (low-risk agent direct commit, Phase 5): an agent COMMIT write that falls OUTSIDE
+ * `agentDirectCommit.globs` is DEGRADED to a proposal, answered `202 Accepted` with the NET-NEW `DegradedToProposalResponse`
+ * shape `{degraded:true, proposal_id, status:"PENDING", unified_diff}` — a NEW DTO, NEVER a field on the frozen two-key
+ * `WrittenResponse`. The PUT route also gains the existing `stale_base` (400) outcome when the degrade's `proposeEdit`
+ * hits a drifted base (the code already existed; the NEW fact is the PUT route can now emit it). No existing write
+ * shape/code changed. WriteGoldenTest grew 11 -> 12 (the degrade-DTO encode golden, `golden/rest/degraded-to-proposal.json`).
+ *
  * `read_file` (the agent op for the WHOLE verbatim page file — frontmatter header + body — as raw markdown) adds NO
  * PB-READ-2 shape: it is an op-NAME that maps to the EXISTING `read_page` op `GET /api/v1/pages/{id}` and its frozen
  * PB-REST-1 `PageResponse.markdown` field (the literal on-disk bytes UTF-8-decoded, hashed by the same `content_hash`
@@ -169,9 +176,9 @@ class ForeverApiGoldenSuite : FunSpec({
     }
 
     test(
-        "PB-WRITE-1: the write snapshot corpus (11 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback)",
+        "PB-WRITE-1: the write snapshot corpus (12 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback, P5 degrade 202 DTO)",
     ) {
-        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 11)
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 12)
     }
 
     test("PB-PROPOSE-1: propose/get/list/reject + apply/rebase wire shapes are frozen (incl. status/operation vocabularies)") {

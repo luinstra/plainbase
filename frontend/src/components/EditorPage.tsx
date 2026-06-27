@@ -216,6 +216,13 @@ function Editor({
         });
         return;
       }
+      case "degraded":
+        // P5: an agent COMMIT write outside `agentDirectCommit.globs` was filed as a proposal, NOT applied.
+        // Do NOT advance the saved baseline (the editor stays dirty — these bytes are not on disk) and surface a
+        // clear non-"Saved" notice. Unreachable from the Human/cookie-auth SPA, but the result kind is exhaustive.
+        clearOutcomeBanners();
+        setNotice("Submitted as a proposal for review.");
+        return;
       case "unsupported":
         clearOutcomeBanners();
         setRefusal({ field: result.unsupported.field, message: result.unsupported.message });

@@ -135,6 +135,17 @@ export interface WrittenButUnindexedResponse {
   warning: { code: string; message: string };
 }
 
+/**
+ * 202 (P5): an agent COMMIT write outside agentDirectCommit.globs, degraded to a proposal. Clients MUST check
+ * `degraded`/status before treating a PUT response as an applied write. NEVER a field on the frozen WrittenResponse.
+ */
+export interface DegradedToProposalResponse {
+  degraded: true;
+  proposal_id: string;
+  status: "PENDING";
+  unified_diff: string;
+}
+
 /** The frozen drift `reason` set (additive-only); `page_moved` is producer-reserved. */
 export type WriteConflictReason = "content_changed" | "page_moved" | "page_deleted";
 

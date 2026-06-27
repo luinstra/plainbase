@@ -29,7 +29,7 @@ class BearerExemptCsrfTest : FunSpec({
     // rejects ADDING an id as a rename → 422). The CSRF behavior is what this test asserts, not id materialization.
     fun pageBody() = "---\ntitle: Doc\n---\n\nedited body.\n"
 
-    test("an agent bearer PUT succeeds with NO X-CSRF-Token (bearer is CSRF-exempt)") {
+    test("an agent bearer PUT is ACCEPTED with NO X-CSRF-Token (bearer is CSRF-exempt)") {
         authRouteTest(enforced = true) { harness ->
             val (id, hash) = harness.seedPage("doc.md", "---\ntitle: Doc\n---\n\nbody.\n")
             val bearer = harness.mintAgentToken(AgentMode.COMMIT) // an agent that may edit
@@ -39,7 +39,10 @@ class BearerExemptCsrfTest : FunSpec({
                 contentType(ContentType.parse("text/markdown"))
                 setBody(pageBody())
             }
-            response.status shouldBe HttpStatusCode.OK // no X-CSRF-Token, yet accepted (bearer exempt)
+            // The harness configures no agentDirectCommit.globs (the default), so a P5 COMMIT agent's write DEGRADES to
+            // a proposal (202). The point this test makes is CSRF EXEMPTION: the bearer was ACCEPTED (202, NOT a 403
+            // csrf_failed) with no X-CSRF-Token — the cookie-CSRF case below proves the contrast.
+            response.status shouldBe HttpStatusCode.Accepted
         }
     }
 

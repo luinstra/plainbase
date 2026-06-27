@@ -60,6 +60,7 @@ fun withRestServices(
     seedAdmin: Pair<String, String>? = null, // (username, password) — seeds a builtin ADMIN before the block runs
     proxyMode: Boolean = false, // A4b: PROXY auth (builtin off, a test secret, a loopback-trusted transport)
     seedProxyAdmin: String? = null, // A4b: grant ADMIN to a proxy/<subject> identity (the grant-role first-admin seam)
+    agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(), // P5: the direct-commit globs
     block: (RouteContext) -> Unit,
 ) {
     // A4b: in proxy mode the loopback test client (127.0.0.1) counts as loopback-secure, so a request can present the
@@ -226,6 +227,8 @@ fun withRestServices(
                     // Exercise the real app_meta key load + persistence path in the native image (the §0.12 proof
                     // that SecureRandom + app_meta.upsert work closed-world).
                     proxyCsrf = ProxyCsrf(loadOrCreateProxyCsrfKey(database)),
+                    // P5: the direct-commit globs (empty by default; the direct-commit smoke passes a non-empty list).
+                    agentDirectCommitGlobs = agentDirectCommitGlobs,
                 )
                 block(services)
             }

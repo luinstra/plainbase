@@ -98,6 +98,34 @@ describe("write client non-JSON body handling", () => {
 });
 
 /**
+ * P5 (diverse-lens review): a 202 `DegradedToProposalResponse` is `response.ok`, so without a dedicated branch
+ * `putPageRaw` would misclassify an UN-applied agent write as `{kind:"saved"}` (advancing the baseline + showing
+ * "Saved"). It MUST surface a distinct `degraded` kind. Latent for the cookie-auth SPA, but the type demands it.
+ */
+function degradedResponse(): Response {
+  return new Response(
+    JSON.stringify({ degraded: true, proposal_id: "0198abc", status: "PENDING", unified_diff: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new\n" }),
+    { status: 202, headers: { "content-type": "application/json" } },
+  );
+}
+
+describe("write client 202 degrade-to-proposal handling", () => {
+  it("putPageRaw maps a 202 degraded response to the `degraded` kind, NEVER `saved`", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => degradedResponse()),
+    );
+    const result = await putPageRaw("id", "buffer", HASH);
+    expect(result.kind).toBe("degraded");
+    if (result.kind === "degraded") {
+      expect(result.proposalId).toBe("0198abc");
+      expect(result.status).toBe("PENDING");
+      expect(result.unifiedDiff).toContain("@@");
+    }
+  });
+});
+
+/**
  * FIX F-a (multi-model review): `parseJson` now parses a `clone()`, leaving the ORIGINAL body stream
  * unconsumed. On a status with no typed branch (here 503), the generic `apiError(response)` fallback can
  * therefore re-read the real body and surface the proxy's actual JSON error envelope — its code/message,

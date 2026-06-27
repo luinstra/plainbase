@@ -146,6 +146,8 @@ val restModule = module {
             proxyIdentityHeader = config.auth.proxyIdentityHeader,
             secureCookie = config.secureCookie(),
             proxyCsrf = get(),
+            // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
+            agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
         )
     }
 }
