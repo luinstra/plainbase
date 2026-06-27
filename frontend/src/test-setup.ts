@@ -1,6 +1,14 @@
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { clearCsrfToken } from "./api/csrf";
+
+// Raise the Testing-Library async-util ceiling above the 1000ms default. Our `waitFor`s poll for
+// async UI (router transitions, debounced search, query settles); on a slow/contended CI runner (30
+// jsdom test files in one process) a correct assertion can need >1s to settle, and the default ceiling
+// surfaced as flaky "expected … not to be null" timeouts that never reproduce locally. This only widens
+// how long a `waitFor` POLLS before giving up — a fast-passing test is unaffected, and a genuinely
+// broken one (the node never appears) still fails — so it buys CI headroom without masking a real bug.
+configure({ asyncUtilTimeout: 5000 });
 
 // Unmount every rendered tree after each test. We do NOT set vitest `globals: true`, so RTL's
 // auto-cleanup is not registered — without this, a test file that leaves a component mounted leaks its
