@@ -280,6 +280,20 @@ class WriteGoldenTest : FunSpec({
         encoded shouldBe RestGolden.load("degraded-to-proposal.json", mapOf("unified_diff" to diff))
     }
 
+    test("create-degraded-to-proposal.json — a 202 DegradedToProposalResponse from POST /pages (the create twin; same DTO)") {
+        // C1 (forever): an out-of-glob/non-COMMIT/null-mode agent POST /api/v1/pages degrades to a create-proposal,
+        // answered 202 with the SAME DegradedToProposalResponse the PUT degrade uses. Pure encode golden; the route
+        // integration is exercised in ProposalApplyAuthzRouteTest / AgentDirectCommitAuthzRouteTest.
+        val diff = "@@ -0,0 +1,3 @@\n+---\n+id: …\n+---\n"
+        val response = DegradedToProposalResponse(
+            proposalId = "01900000-0000-7000-9000-000000000001",
+            status = ProposalStatusWire.PENDING,
+            unifiedDiff = diff,
+        )
+        val encoded = Json.parseToJsonElement(RestJson.encodeToString(DegradedToProposalResponse.serializer(), response))
+        encoded shouldBe RestGolden.load("create-degraded-to-proposal.json", mapOf("unified_diff" to diff))
+    }
+
     test("the drift reason enum is EXACTLY {content_changed, page_moved, page_deleted}; id_changed is NOT a member") {
         WriteConflictReason.ALL shouldBe setOf("content_changed", "page_moved", "page_deleted")
         ("id_changed" in WriteConflictReason.ALL) shouldBe false

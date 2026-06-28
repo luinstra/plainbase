@@ -111,12 +111,17 @@ import io.kotest.core.spec.style.FunSpec
  * (freeze-surface policy). A diff-algo or format change is a CONTRACT break, not a fix.
  *
  * PB-PROPOSE-1 grew in P1b (apply-on-approve, Phase 5): the apply (200 applied / 409 conflicted / 409 not_pending /
- * 422 apply_failed / 404 not_found / 422 create_apply_unsupported) + rebase (200 pending / 409 not_conflicted / 422
- * apply_failed-gone) wire shapes + the append-only codes `conflicted`/`apply_failed`/`not_conflicted`/
- * `create_apply_unsupported` + the `status_reason` field (now present-null on EVERY `ChangeDetail` via
- * `explicitNulls`) froze when P1b landed. ProposalGoldenTest grew 11 -> 20 (the 9 new apply/rebase shapes); the two
- * existing `ChangeDetail` goldens were regenerated for present-null `status_reason` (NOT new cases). (The create-apply
- * CONTENT contract is NOT frozen here — deferred to 5.5.)
+ * 422 apply_failed / 404 not_found) + rebase (200 pending / 409 not_conflicted / 422 apply_failed-gone) wire shapes +
+ * the append-only codes `conflicted`/`apply_failed`/`not_conflicted` + the `status_reason` field (now present-null on
+ * EVERY `ChangeDetail` via `explicitNulls`) froze when P1b landed. ProposalGoldenTest grew 11 -> 20.
+ *
+ * PB-PROPOSE-1 grew again in C1 (create-apply, Phase 5.5): approving a CREATE proposal now MATERIALIZES the page (the
+ * P1b stop-gap `create_apply_unsupported` is RETIRED — a create FAILED reuses 422 `apply_failed` with a STABLE
+ * create_* `status_reason` ∈ {create_path_taken, create_slug_conflict, create_invalid_location, unreadable}; a create
+ * applied reuses 200 `ApplyResultResponse`). A create proposal's `page_id` is now NON-NULL (minted at propose/degrade
+ * time). The NET-NEW code `invalid_create_content` (400) joined `ErrorCodes` (a create blob the FrontmatterPatcher
+ * refused / an agent-supplied id). ProposalGoldenTest stays 20 (apply-create-unsupported retired, invalid-create-content
+ * added). The create-apply CONTENT contract is now LIVE.
  *
  * PB-READ-2 freeze ledger (froze when P2 landed, Phase 5 — the remaining agent READ ops): the two NET-NEW agent-read
  * wire shapes `ValidateLinksResponse`/`BrokenLinkDto` (`GET /api/v1/pages/{id}/validate-links`) and
@@ -141,6 +146,11 @@ import io.kotest.core.spec.style.FunSpec
  * `WrittenResponse`. The PUT route also gains the existing `stale_base` (400) outcome when the degrade's `proposeEdit`
  * hits a drifted base (the code already existed; the NEW fact is the PUT route can now emit it). No existing write
  * shape/code changed. WriteGoldenTest grew 11 -> 12 (the degrade-DTO encode golden, `golden/rest/degraded-to-proposal.json`).
+ *
+ * PB-WRITE-1 grew in C1 (create-apply degrade, Phase 5.5): an out-of-glob/non-COMMIT/null-mode agent `POST /api/v1/pages`
+ * now DEGRADES to a create-proposal, answered `202 Accepted` with the SAME `DegradedToProposalResponse` shape (the
+ * create twin of the PUT degrade — same DTO, new route case) + the NET-NEW 400 `invalid_create_content`. No existing
+ * write shape/code changed. WriteGoldenTest grew 12 -> 13 (`golden/rest/create-degraded-to-proposal.json`).
  *
  * `read_file` (the agent op for the WHOLE verbatim page file — frontmatter header + body — as raw markdown) adds NO
  * PB-READ-2 shape: it is an op-NAME that maps to the EXISTING `read_page` op `GET /api/v1/pages/{id}` and its frozen
@@ -176,9 +186,9 @@ class ForeverApiGoldenSuite : FunSpec({
     }
 
     test(
-        "PB-WRITE-1: the write snapshot corpus (12 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback, P5 degrade 202 DTO)",
+        "PB-WRITE-1: the write snapshot corpus (13 tests; raw round-trip, 409/422 split, present-null commit, 201 create id+url + url-divergence, unindexed-create url:null, loser permalink fallback, P5 PUT degrade 202 DTO + C1 create degrade 202 DTO)",
     ) {
-        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 12)
+        SelectedSuite.run(WriteGoldenTest::class).shouldHavePassed("WriteGoldenTest", atLeastTests = 13)
     }
 
     test("PB-PROPOSE-1: propose/get/list/reject + apply/rebase wire shapes are frozen (incl. status/operation vocabularies)") {

@@ -154,6 +154,11 @@ class ProposalDtoNativeTest {
                 proposed,
             ) is ApplyDisposition.Conflicted,
         )
+        // C1: the create-only decision core is native-proven — AlreadyExists maps to the STABLE create_path_taken reason.
+        assertEquals(
+            ApplyDisposition.Failed("create_path_taken"),
+            dispositionOf(WriteOutcome.AlreadyExists(com.plainbase.domain.content.TreePath.require("guides/x.md")), proposed),
+        )
 
         // The new apply/rebase response DTOs encode+decode reflection-free through the scoped RestJson.
         assertRoundTrips(

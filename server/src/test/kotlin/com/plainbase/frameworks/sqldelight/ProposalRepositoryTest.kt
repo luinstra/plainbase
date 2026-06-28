@@ -193,25 +193,6 @@ class ProposalRepositoryTest : FunSpec({
         }
     }
 
-    test("failPending flips PENDING -> FAILED once; false on the now-FAILED row AND on an APPLYING row (create never enters APPLYING)") {
-        withRepo { repo ->
-            val create = pending(1, Instant.fromEpochMilliseconds(1_700_000_000_000), op = ProposalOperation.CREATE)
-            repo.insert(create)
-            repo.failPending(create.id, "create_apply_unsupported", "builtin", "alice", at).shouldBeTrue()
-            repo.findById(create.id).shouldNotBeNull().let {
-                it.status shouldBe ProposalStatus.FAILED
-                it.statusReason shouldBe
-                    "create_apply_unsupported"
-            }
-            repo.failPending(create.id, "x", "builtin", "alice", at).shouldBeFalse()
-            // An APPLYING row never matches failPending's WHERE status='PENDING'.
-            val edit = pending(2, Instant.fromEpochMilliseconds(1_700_000_000_000))
-            repo.insert(edit)
-            repo.claimApplying(edit.id).shouldBeTrue()
-            repo.failPending(edit.id, "x", "builtin", "alice", at).shouldBeFalse()
-        }
-    }
-
     test("failConflicted flips CONFLICTED -> FAILED once; false on a non-CONFLICTED row") {
         withRepo { repo ->
             val row = pending(1, Instant.fromEpochMilliseconds(1_700_000_000_000))

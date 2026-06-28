@@ -121,6 +121,7 @@ class ProposalAuthzRouteTest : FunSpec({
                     labeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = countingTokens, users = harness.userRepository),
                     // This test only drives propose (a denied EDIT) — the apply seam is never consulted.
                     mutate = UnusedMutatingFacade,
+                    idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
                 )
                 val readOnly = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY).id)
                 val page = harness.builder.current.pages.single()
@@ -237,7 +238,11 @@ private fun IndexHarness.fts(@Suppress("UNUSED_PARAMETER") root: java.nio.file.P
 /** A MutatingFacade for propose-only facade tests (the apply seam is never consulted); every method errors. */
 private object UnusedMutatingFacade : com.plainbase.domain.service.MutatingFacade {
     override fun save(principal: Principal, request: com.plainbase.domain.service.SaveRequest) = error("unused")
-    override fun create(principal: Principal, intent: com.plainbase.domain.service.CreateIntent) = error("unused")
+    override fun create(
+        principal: Principal,
+        intent: com.plainbase.domain.service.CreateIntent,
+        origin: com.plainbase.domain.service.WriteOrigin,
+    ) = error("unused")
     override fun writeAsset(
         principal: Principal,
         pageId: com.plainbase.domain.page.PageId,

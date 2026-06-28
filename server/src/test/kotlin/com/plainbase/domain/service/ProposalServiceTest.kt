@@ -40,6 +40,7 @@ class ProposalServiceTest : FunSpec({
     val author = ProposalAuthor("agent", "pb_a", "ci-bot")
     val approver = ProposalApprover("builtin", "alice", "Alice Admin")
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+    val createPageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
     val path = TreePath.require("guides/deploy.md")
 
     class FakeReader(
@@ -172,23 +173,6 @@ class ProposalServiceTest : FunSpec({
             )
         }
 
-        override fun failPending(
-            id: com.plainbase.domain.page.ProposalId,
-            statusReason: String,
-            approverIssuer: String?,
-            approverExternalId: String?,
-            at: Instant,
-        ): Boolean = cas(id, ProposalStatus.PENDING) {
-            replace(
-                it,
-                ProposalStatus.FAILED,
-                approverIssuer = approverIssuer,
-                approverExternalId = approverExternalId,
-                decidedAt = at,
-                statusReason = statusReason,
-            )
-        }
-
         override fun failConflicted(id: com.plainbase.domain.page.ProposalId, statusReason: String, at: Instant): Boolean =
             cas(id, ProposalStatus.CONFLICTED) { replace(it, ProposalStatus.FAILED, decidedAt = at, statusReason = statusReason) }
 
@@ -279,16 +263,18 @@ class ProposalServiceTest : FunSpec({
         (repo as MemRepo).rows.shouldBeEmpty()
     }
 
-    test("proposeCreate builds a PENDING row over an empty base") {
+    test("proposeCreate stores the passed page_id + the given blob on the row over an empty base (a pure store — no mint/patch)") {
         val (svc, repo) = service(FakeReader())
         val target = TreePath.require("guides/new.md")
-        val outcome = svc.proposeCreate(createGrantForTests(), target, "# Brand New\n".toByteArray(), "r", author)
+        val blob = "# Brand New\n".toByteArray()
+        val outcome = svc.proposeCreate(createGrantForTests(), createPageId, target, blob, "r", author)
         outcome.shouldBeInstanceOf<ProposeOutcome.Created>()
         val row = (repo as MemRepo).rows.single()
         row.operation shouldBe ProposalOperation.CREATE
-        row.pageId shouldBe null
+        row.pageId shouldBe createPageId // the pre-minted id is stored verbatim
         row.baseHash shouldBe null
         row.targetPath shouldBe target
+        row.proposedContent.contentEquals(blob).shouldBeTrue() // the bytes are stored exactly as given (no patch here)
     }
 
     test("the stored diff survives the live page converging on the proposed content (§0.13(i) freeze)") {
@@ -317,7 +303,14 @@ class ProposalServiceTest : FunSpec({
         val target = TreePath.require("guides/new.md")
         val reader = FakeReader()
         val (svc, _) = service(reader)
-        val created = svc.proposeCreate(createGrantForTests(), target, "# X\n".toByteArray(), "r", author) as ProposeOutcome.Created
+        val created = svc.proposeCreate(
+            createGrantForTests(),
+            createPageId,
+            target,
+            "# X\n".toByteArray(),
+            "r",
+            author,
+        ) as ProposeOutcome.Created
         svc.get(created.id)!!.baseDrifted.shouldBeFalse()
         reader.occupiedPaths = setOf(target)
         svc.get(created.id)!!.baseDrifted.shouldBeTrue()
@@ -470,25 +463,55 @@ class ProposalServiceTest : FunSpec({
         repo.findById(id)!!.status shouldBe ProposalStatus.FAILED
     }
 
-    test("apply of a CREATE -> CreateUnsupported via failPending; the writer is NEVER invoked, claimApplying NEVER called") {
-        val (svc, repo) = service(FakeReader())
-        repo as MemRepo
-        val createId = (
-            svc.proposeCreate(
-                createGrantForTests(),
-                TreePath.require("guides/new.md"),
-                "# X\n".toByteArray(),
-                "r",
-                author,
-            ) as ProposeOutcome.Created
-            ).id
-        val writer = FakeWriter(WriteOutcome.Written("h", "c"))
-        svc.apply(approveGrantForTests(), createId, approver, writer) shouldBe ApplyOutcome.CreateUnsupported
-        writer.calls shouldBeExactly 0
-        repo.claimApplyingCalls shouldBeExactly 0
-        repo.findById(createId)!!.let {
-            it.status shouldBe ProposalStatus.FAILED
-            it.statusReason shouldBe "create_apply_unsupported"
+    test("apply of a CREATE claims APPLYING + drives the writer; each create-reachable WriteOutcome maps to its terminal") {
+        // The create twin of the edit-apply outcome table (C1): a create hits Written / WrittenButUnindexed /
+        // AlreadyExists / SlugConflict / InvalidLocation / Unreadable, NEVER Conflict (no base_hash).
+        fun applyCreate(outcome: WriteOutcome): Pair<ApplyOutcome, ProposalRow> {
+            val (svc, repo) = service(FakeReader())
+            repo as MemRepo
+            val createId = (
+                svc.proposeCreate(
+                    createGrantForTests(),
+                    createPageId,
+                    TreePath.require("guides/new.md"),
+                    "# X\n".toByteArray(),
+                    "r",
+                    author,
+                ) as ProposeOutcome.Created
+                ).id
+            val writer = FakeWriter(outcome)
+            val result = svc.apply(approveGrantForTests(), createId, approver, writer)
+            writer.calls shouldBeExactly 1 // the writer IS driven now (no short-circuit)
+            return result to repo.findById(createId)!!
+        }
+
+        applyCreate(WriteOutcome.Written("sha256:" + "a".repeat(64), "c1")).let { (outcome, row) ->
+            outcome.shouldBeInstanceOf<ApplyOutcome.Applied>()
+            row.status shouldBe ProposalStatus.APPLIED
+            row.statusReason shouldBe null
+        }
+        applyCreate(WriteOutcome.WrittenButUnindexed("sha256:" + "b".repeat(64), cause = "x")).let { (outcome, row) ->
+            outcome.shouldBeInstanceOf<ApplyOutcome.Applied>()
+            outcome.reindexDeferred.shouldBeTrue()
+            row.status shouldBe ProposalStatus.APPLIED
+            row.statusReason shouldBe "reindex_deferred"
+        }
+        applyCreate(WriteOutcome.AlreadyExists(TreePath.require("guides/new.md"))).let { (outcome, row) ->
+            (outcome as ApplyOutcome.Failed).reason shouldBe "create_path_taken"
+            row.status shouldBe ProposalStatus.FAILED
+            row.statusReason shouldBe "create_path_taken"
+        }
+        applyCreate(WriteOutcome.SlugConflict("docs/x")).let { (outcome, row) ->
+            (outcome as ApplyOutcome.Failed).reason shouldBe "create_slug_conflict"
+            row.statusReason shouldBe "create_slug_conflict"
+        }
+        applyCreate(WriteOutcome.InvalidLocation("ignored segment")).let { (outcome, row) ->
+            (outcome as ApplyOutcome.Failed).reason shouldBe "create_invalid_location"
+            row.statusReason shouldBe "create_invalid_location"
+        }
+        applyCreate(WriteOutcome.Unreadable(cause = "/secret: denied")).let { (outcome, row) ->
+            (outcome as ApplyOutcome.Failed).reason shouldBe "unreadable"
+            row.statusReason shouldBe "unreadable"
         }
     }
 
@@ -694,6 +717,22 @@ class ProposalServiceTest : FunSpec({
         return id
     }
 
+    fun insertApplyingCreate(repo: MemRepo, targetPath: TreePath, content: ByteArray): com.plainbase.domain.page.ProposalId {
+        val id = TestProposalIdProvider().next()
+        repo.insert(
+            ProposalRow(
+                // A CREATE APPLYING row carries a non-null page_id (minted at propose time) but NO base_hash.
+                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, baseHash = null,
+                targetPath = targetPath, proposedContent = content, rationale = "r", diffArtifact = "",
+                status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
+                approverIssuer = null, approverExternalId = null, decisionComment = null,
+                createdAt = clock.now(), decidedAt = null, appliedCommit = null, statusReason = null,
+            ),
+        )
+        repo.claimApplying(id).shouldBeTrue()
+        return id
+    }
+
     test("reconcileApplying: disk == proposed at the current pageId path -> APPLIED with NULL approver + recovered + null commit") {
         // The disk bytes at the page's CURRENT path already equal the proposed bytes (the apply's write landed).
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to proposed))
@@ -719,6 +758,7 @@ class ProposalServiceTest : FunSpec({
         val pendingId = (
             svc.proposeCreate(
                 createGrantForTests(),
+                createPageId,
                 TreePath.require("guides/new.md"),
                 "# X\n".toByteArray(),
                 "r",
@@ -728,6 +768,33 @@ class ProposalServiceTest : FunSpec({
         svc.reconcileApplying()
         repo.findById(applyingId)!!.status shouldBe ProposalStatus.PENDING
         repo.findById(pendingId)!!.status shouldBe ProposalStatus.PENDING
+    }
+
+    test("reconcileApplying CREATE: disk at target_path == proposed -> APPLIED + recovered + NULL approver + null commit") {
+        // A fresh create's page is NOT resolvable by pathOf(pageId) after a crash; recovery keys on the immutable
+        // target_path. The disk bytes there already equal the proposed bytes (the apply's create write landed).
+        val createPath = TreePath.require("guides/new.md")
+        val reader = FakeReader(bytesByPath = mapOf(createPath to proposed)) // pathById is EMPTY (no index entry yet)
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = insertApplyingCreate(repo, createPath, proposed)
+        svc.reconcileApplying()
+        repo.findById(id)!!.let {
+            it.status shouldBe ProposalStatus.APPLIED
+            it.approverIssuer shouldBe null
+            it.statusReason shouldBe "recovered"
+            it.appliedCommit shouldBe null
+        }
+    }
+
+    test("reconcileApplying CREATE: no/mismatched disk file at target_path -> PENDING (re-drivable, never wedged)") {
+        val createPath = TreePath.require("guides/new.md")
+        val reader = FakeReader() // nothing on disk at target_path
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = insertApplyingCreate(repo, createPath, proposed)
+        svc.reconcileApplying()
+        repo.findById(id)!!.status shouldBe ProposalStatus.PENDING
     }
 
     test("reconcileApplying moved-page: disk landed at the NEW pageId path -> APPLIED (not mis-reconciled to PENDING)") {

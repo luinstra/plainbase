@@ -82,10 +82,11 @@ class PolicyService(
 
     /**
      * Record a DENIED [action] decision row for [principal]/[resource], then throw [AccessDenied] — the mint-free deny
-     * for a FACADE-level gate that refuses a request WITHOUT consulting the role×action matrix (P5: the agent-create
-     * glob gate, where an out-of-glob / non-COMMIT agent's DIRECT create is refused rather than degraded — create-apply
-     * is deferred to 5.5, so a degraded create-proposal would dead-letter). Audit stays in this ONE choke point: the
-     * denial records exactly one denied row, like a matrix deny, and never mints a grant the caller would then refuse.
+     * for a FACADE-level gate that refuses a request WITHOUT consulting the role×action matrix. (P5 used it for the
+     * agent-create glob gate, refusing an out-of-glob create because create-apply did not yet exist; C1 added
+     * create-apply, so that path now DEGRADES to a create-proposal that applies on approval — leaving this the general
+     * facade-level deny primitive.) Audit stays in this ONE choke point: the denial records exactly one denied row,
+     * like a matrix deny, and never mints a grant the caller would then refuse.
      */
     fun deny(principal: Principal, action: Action, resource: String): Nothing {
         audit.record(decisionRow(principal, action, resource, allowed = false))

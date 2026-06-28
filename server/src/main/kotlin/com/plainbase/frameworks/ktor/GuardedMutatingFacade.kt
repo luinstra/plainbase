@@ -6,17 +6,16 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
-import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.Principal
-import com.plainbase.domain.service.Action
 import com.plainbase.domain.service.AgentWriteDecision
 import com.plainbase.domain.service.AssetWriteOutcome
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.CreateIntent
+import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.MutatingFacade
@@ -200,34 +199,63 @@ class GuardedMutatingFacade(
             is ProposeOutcome.Created -> SaveResult.DegradedToProposal(outcome.id, outcome.unifiedDiff)
             ProposeOutcome.StaleBase -> SaveResult.DegradeStaleBase
             ProposeOutcome.InvalidRequest -> error("degrade passes no client target_path; InvalidRequest is impossible")
+            is ProposeOutcome.InvalidCreateContent -> error("an edit degrade files ProposeCommand.Edit; InvalidCreateContent is impossible")
         }
     }
 
-    override fun create(principal: Principal, intent: CreateIntent): WriteOutcome {
-        // P5 agent-create stop-gap (security): an AGENT's direct create is glob-gated EXACTLY like save() — ONLY an
-        // in-glob COMMIT agent direct-creates; every other agent (PROPOSE/READ_ONLY, COMMIT out-of-glob, COMMIT under
-        // the default empty globs, or a revoked/expired token → null mode) is DENIED 403, NOT degraded: create-apply is
-        // deferred to 5.5, so a degraded create-proposal could never be applied (a dead-letter). The deny audits ONE
-        // denied-CREATE row through the PolicyService choke point WITHOUT first minting an allowed grant we'd refuse.
-        // The match target is the SERVER-COMPOSED intent.path (the route derived it; no client-smuggling, like save's
-        // current.path gate). Human/Anonymous are UNCHANGED — they fall straight through to the existing checkCreate.
-        if (principal is Principal.Agent) {
-            val mode = policy.agentModeFor(principal)
-            val decision = if (mode == null) {
-                AgentWriteDecision.DegradeToProposal(intent.path)
-            } else {
-                agentWriteDecision(mode, agentDirectCommitGlobs, intent.path)
-            }
-            if (decision !is AgentWriteDecision.DirectCommit) {
-                logger.info {
-                    "agent direct create refused (non-COMMIT mode or out-of-glob '${intent.path.value}'); " +
-                        "direct page creation is not permitted yet — propose instead"
-                }
-                policy.deny(principal, Action.CREATE, intent.path.value)
-            }
+    override fun create(principal: Principal, intent: CreateIntent, origin: WriteOrigin): CreateOutcome {
+        // C1: the create twin of save()'s agent direct-commit-vs-degrade gate. Human/Anonymous ALWAYS, and the
+        // PROPOSAL_APPLY caller REGARDLESS of principal (an off-mode agent can drive approve — finding #11), take the
+        // strict direct path: the bypass is the WriteOrigin discriminator the apply caller sets, never an assumption
+        // about the approver's principal type (the save() invariant). An approved out-of-glob create MUST land here.
+        if (principal !is Principal.Agent || origin == WriteOrigin.PROPOSAL_APPLY) {
+            val grant = policy.checkCreate(principal, intent.path.value)
+            return CreateOutcome.DirectCreated(writePipeline.create(grant, intent))
         }
-        val grant = policy.checkCreate(principal, intent.path.value)
-        return writePipeline.create(grant, intent)
+
+        // Agent DIRECT_PUT — decide-first (the save() AGENT-ONLY relaxation): a null mode (revoked/expired token at
+        // clock.now()) is fail-safe DEGRADE; otherwise the glob decision over the SERVER-COMPOSED intent.path.
+        val mode = policy.agentModeFor(principal)
+        val decision = if (mode == null) {
+            AgentWriteDecision.DegradeToProposal(intent.path)
+        } else {
+            agentWriteDecision(mode, agentDirectCommitGlobs, intent.path)
+        }
+        return when (decision) {
+            // In-glob COMMIT agent: the agent's resolved identity as BOTH git author AND committer (the save() b1 idiom).
+            is AgentWriteDecision.DirectCommit -> {
+                val identity = agentCommitIdentity(principal)
+                val grant = policy.checkCreate(principal, intent.path.value)
+                CreateOutcome.DirectCreated(
+                    writePipeline.create(grant, intent.copy(author = identity, committer = identity)),
+                )
+            }
+            is AgentWriteDecision.DegradeToProposal -> degradeCreateToProposal(principal, intent)
+        }
+    }
+
+    /**
+     * The out-of-glob / non-COMMIT create degrade (the create twin of [degradeToProposal]): file a create-proposal
+     * through the SAME guarded [ProposalFacade.propose] so the audit is identical to a shipped propose and `checkCreate`
+     * runs (a READ_ONLY/revoked principal is denied there → AccessDenied → 403, decision 5). The id is the one the
+     * create route already minted + baked into the bytes (WI-1) — PIN it so the stored row + blob agree, no re-mint.
+     */
+    private fun degradeCreateToProposal(principal: Principal, intent: CreateIntent): CreateOutcome {
+        val outcome = proposals().propose(
+            principal,
+            ProposeCommand.Create(
+                targetPath = intent.path,
+                proposedContent = intent.bytes, // already composed + id-baked by the create route (WI-1 degrade arm)
+                rationale = DEGRADE_RATIONALE,
+                pageId = intent.pageId, // PIN the already-minted id — no re-mint
+            ),
+        )
+        return when (outcome) {
+            is ProposeOutcome.Created -> CreateOutcome.DegradedToProposal(outcome.id, outcome.unifiedDiff)
+            is ProposeOutcome.InvalidCreateContent -> CreateOutcome.InvalidContent(outcome.message)
+            ProposeOutcome.StaleBase -> error("a create degrade has no base; StaleBase is impossible")
+            ProposeOutcome.InvalidRequest -> error("a create degrade passes a server-derived path; InvalidRequest is impossible")
+        }
     }
 
     override fun writeAsset(

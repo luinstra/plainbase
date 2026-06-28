@@ -49,8 +49,9 @@ data class ProposeChangeResponse(
 
 /**
  * A `list_changes` element. [baseDrifted] is the LIVE-derived triage datum (MUST be present — omitting it forces
- * N+1 reads, a contract break); [pageId] is nullable (present for an edit, null for a create) so a client links to
- * the target without an N+1 `get_change`.
+ * N+1 reads, a contract break); [pageId] carries the page id for BOTH operations — an edit's authoritative target id
+ * and a create's reserved minted id (C1, baked into the proposed bytes at propose-time) — so a client links to the
+ * target without an N+1 `get_change`. (Typed nullable for robustness; in practice present on every row.)
  */
 @Serializable
 data class ChangeSummary(

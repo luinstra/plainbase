@@ -233,6 +233,34 @@ class WritePipelineTest : FunSpec({
             }
         }
     }
+
+    // C1 (WI-3): a create threads the proposer->author + approver->committer attribution through CreateIntent into the
+    // 4-arg historyHook.commit (a plain POST /pages leaves them null → the server identity).
+    test("create threads author/committer through to the history hook") {
+        withTempTree({}) { root ->
+            var capturedAuthor: com.plainbase.domain.history.CommitIdentity? = null
+            var capturedCommitter: com.plainbase.domain.history.CommitIdentity? = null
+            val capturingHook = WriteHistoryHook { _, _, author, committer ->
+                capturedAuthor = author
+                capturedCommitter = committer
+                "sha-1"
+            }
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val pipeline = harness.writePipeline(capturingHook)
+                val pageId = PageId.require("01900000-0000-7000-8000-0000000000c1")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Attr\n---\n\n# Attr\n\nbody.\n".toByteArray()
+                val author = com.plainbase.domain.history.CommitIdentity("ci-bot", "pb_a@agent.plainbase.local")
+                val committer = com.plainbase.domain.history.CommitIdentity("Alice Admin", "alice@builtin.plainbase.local")
+                pipeline.create(
+                    createGrantForTests(),
+                    CreateIntent(pageId, TreePath.require("attr.md"), bytes, author = author, committer = committer),
+                ).shouldBeInstanceOf<WriteOutcome.Written>()
+                capturedAuthor shouldBe author
+                capturedCommitter shouldBe committer
+            }
+        }
+    }
 })
 
 /**

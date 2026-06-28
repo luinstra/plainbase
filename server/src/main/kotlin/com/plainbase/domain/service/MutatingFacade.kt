@@ -32,8 +32,13 @@ interface MutatingFacade {
      */
     fun save(principal: Principal, request: SaveRequest): SaveResult
 
-    /** CREATE: `PolicyService.checkCreate` then `WritePipeline.create(grant, intent)`. */
-    fun create(principal: Principal, intent: CreateIntent): WriteOutcome
+    /**
+     * CREATE: agent direct-commit-vs-degrade (DIRECT_PUT) OR a straight pipeline create (PROPOSAL_APPLY / Human /
+     * Anonymous). Returns a [CreateOutcome] the route maps to status — a direct create's pipeline outcome, a degrade to
+     * a create-proposal (202), or a degrade refusal (400). [origin] defaults to [WriteOrigin.DIRECT_PUT]; the apply
+     * path passes [WriteOrigin.PROPOSAL_APPLY] to bypass the agent glob decision entirely.
+     */
+    fun create(principal: Principal, intent: CreateIntent, origin: WriteOrigin = WriteOrigin.DIRECT_PUT): CreateOutcome
 
     /**
      * EDIT: the WHOLE asset write under one check — resolve the page's folder from the snapshot, the stale-page
@@ -81,15 +86,18 @@ class SaveRequest(
 )
 
 /**
- * P5: which write entrypoint a [SaveRequest] came from. The agent direct-commit decision (WI-4) is consulted ONLY for
- * [DIRECT_PUT]; a [PROPOSAL_APPLY] write carries already-approved, already-reviewed content and ALWAYS direct-writes
- * through the pipeline, bypassing the glob decision REGARDLESS of the caller's principal type/mode (the apply path can
- * pass a [Principal.Agent] in `auth.mode=off`, where everyone is permitted — finding #11).
+ * P5/C1: which write entrypoint a write came from — carried by both [SaveRequest.origin] (an edit) and the
+ * [MutatingFacade.create] `origin` argument (a create). The agent direct-commit decision (WI-4) is consulted ONLY for
+ * [DIRECT_PUT]; a [PROPOSAL_APPLY] write (an EDIT save OR a CREATE) carries already-approved, already-reviewed content
+ * and ALWAYS direct-writes through the pipeline, bypassing the glob decision REGARDLESS of the caller's principal
+ * type/mode (the apply path can pass a [Principal.Agent] in `auth.mode=off`, where everyone is permitted — finding
+ * #11). For a create-apply this is load-bearing: an approved OUT-OF-GLOB create MUST land, not re-degrade into a second
+ * proposal (a dead-letter).
  *
- * SECURITY INVARIANT: `origin` is SERVER-SET ONLY — [SaveRequest] is never deserialized from a request body (it is not
- * `@Serializable`; the PUT route constructs it server-side), so an agent cannot smuggle [PROPOSAL_APPLY] over the wire
- * to bypass the glob gate. A future refactor that made [SaveRequest] `@Serializable` would silently open exactly that
- * bypass — do NOT.
+ * SECURITY INVARIANT: `origin` is SERVER-SET ONLY — neither [SaveRequest] nor the create `origin` is deserialized from
+ * a request body (the routes construct them server-side), so an agent cannot smuggle [PROPOSAL_APPLY] over the wire to
+ * bypass the glob gate. A future refactor that made either `@Serializable` would silently open exactly that bypass — do
+ * NOT.
  */
 enum class WriteOrigin { DIRECT_PUT, PROPOSAL_APPLY }
 
@@ -114,6 +122,25 @@ sealed interface SaveResult {
 
     /** P5: the degrade's `proposeEdit` hit a stale base_hash / missing target → 400 stale_base (no proposal stored). */
     data object DegradeStaleBase : SaveResult
+}
+
+/**
+ * The outcome of [MutatingFacade.create] (C1): a direct create (the pipeline [WriteOutcome]) or a degrade to a
+ * create-proposal (202) — split from [WriteOutcome] so the create wire shapes don't pollute the pipeline outcome.
+ */
+sealed interface CreateOutcome {
+
+    /** The create reached the pipeline (Human/Anonymous, an in-glob COMMIT agent, or the apply path); [outcome] maps to status. */
+    data class DirectCreated(val outcome: WriteOutcome) : CreateOutcome
+
+    /** C1: an agent direct create OUTSIDE `agentDirectCommit.globs` (or non-COMMIT/null-mode) was degraded to a proposal (202 Accepted). */
+    data class DegradedToProposal(val proposalId: ProposalId, val unifiedDiff: String) : CreateOutcome
+
+    /**
+     * The degrade's `proposeCreate` refused the blob (FrontmatterPatcher) — 400 invalid_create_content. (See WI-1/SD-1:
+     * the create route composes valid bytes, so the degrade path does not hit this in practice; present for total mapping.)
+     */
+    data class InvalidContent(val message: String) : CreateOutcome
 }
 
 /** The outcome of [MutatingFacade.reindex] — `Done` with the rebuilt page count, or `InFlight` (the §A5 409). */

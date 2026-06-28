@@ -20,10 +20,11 @@ import kotlin.time.Clock
  * The proposal lifecycle orchestration (pure-domain, over the [ProposalRepository] port + the injected
  * [CitationFactory] + [unifiedDiff] + the LIVE [ProposalBaseReader] read seam + a [Clock] for deterministic
  * golden timestamps). P1a writes PENDING (propose) + REJECTED (reject) rows; P1b ADDS the mutating apply surface —
- * the EDIT-apply ([apply]) drives the content-tree/Git write through the injected [ProposalContentWriter] under the
+ * the apply ([apply]) drives the content-tree/Git write through the injected [ProposalContentWriter] under the
  * claim->write->stamp order, plus the one-step [rebase] of a CONFLICTED row and the boot [reconcileApplying] crash
- * recovery. CREATE-apply is still deferred (5.5). Live disk READS via [ProposalBaseReader] (base-hash validation +
- * drift + recovery) are expected throughout.
+ * recovery. C1 extends [apply] to CREATE proposals too — the guarded create write under `WriteOrigin.PROPOSAL_APPLY`,
+ * which bypasses the agent glob gate so an approved out-of-glob create still lands. Live disk READS via
+ * [ProposalBaseReader] (base-hash validation + drift + recovery) are expected throughout.
  *
  * The decision methods DEMAND their op-matching grant as a required leading parameter (the `WritePipeline.write(
  * grant)` floor, G1a): a proposal cannot be created without an [EditGrant]/[CreateGrant] and cannot be rejected
@@ -76,12 +77,17 @@ class ProposalService(
     }
 
     /**
-     * Propose a CREATE of a new page at [targetPath] (authoritative — no page exists yet, so `page_id`/`base_hash`
-     * are null). The diff is computed over an empty base. Nothing here rejects on collision — that is a LIVE
-     * `base_drifted` triage flag the read path derives, and the real gate is P1b's apply.
+     * Propose a CREATE of a new page at [targetPath] (authoritative — no page exists yet, so `base_hash` is null). A
+     * pure store: [pageId] is the SERVER-minted id (C1), already materialized into the [proposedContent] frontmatter
+     * by the facade (explicit propose) or the create route (degrade) — this method NEVER mints or patches. Storing it
+     * on the row preserves the invariant that an APPLYING create row carries a non-null `page_id` (a RESERVATION — no
+     * live page exists yet; `baseDrifted` for a CREATE keys on `occupied(targetPath)`, never on `page_id`). The diff is
+     * computed over an empty base. Nothing here rejects on collision — that is a LIVE `base_drifted` triage flag the
+     * read path derives, and the real gate is the apply.
      */
     fun proposeCreate(
         @Suppress("UNUSED_PARAMETER") grant: CreateGrant,
+        pageId: PageId,
         targetPath: TreePath,
         proposedContent: ByteArray,
         rationale: String,
@@ -89,7 +95,7 @@ class ProposalService(
     ): ProposeOutcome {
         val row = newPending(
             operation = ProposalOperation.CREATE,
-            pageId = null,
+            pageId = pageId,
             baseHash = null,
             targetPath = targetPath,
             proposedContent = proposedContent,
@@ -120,19 +126,19 @@ class ProposalService(
     }
 
     /**
-     * Apply a PENDING proposal (P1b, EDIT-APPLY ONLY). The load-bearing order is **claim(DB) -> write(disk+git) ->
-     * stamp-terminal(DB)**, the terminal stamp a conditional `WHERE status='APPLYING'` CAS so a crash-recovery
-     * reconcile racing a live apply cannot double-stamp.
+     * Apply a PENDING proposal (P1b edit-apply + C1 create-apply). The load-bearing order is **claim(DB) ->
+     * write(disk+git) -> stamp-terminal(DB)**, the terminal stamp a conditional `WHERE status='APPLYING'` CAS so a
+     * crash-recovery reconcile racing a live apply cannot double-stamp.
      *
-     * CREATE-apply is DEFERRED to 5.5: a CREATE proposal short-circuits to terminal FAILED via a DIRECT
-     * PENDING->FAILED CAS ([ProposalRepository.failPending]) that NEVER calls [ProposalRepository.claimApplying], so
-     * a CREATE row can never enter APPLYING — which is what makes the recovery invariant "every APPLYING row has a
-     * non-null page_id" hold BY CONSTRUCTION. The [writer] (the guarded EDIT content write the facade binds) is
-     * NEVER invoked for a CREATE.
+     * BOTH operations flow through the SAME claim->write->stamp path (C1 removed the P1b CREATE short-circuit). The
+     * [writer] branches on `row.operation` (the facade binding): an EDIT routes through `GuardedMutatingFacade.save`
+     * (resolving the page's CURRENT pageId path); a CREATE routes through `GuardedMutatingFacade.create` under
+     * `WriteOrigin.PROPOSAL_APPLY` (bypassing the agent glob gate). An APPLYING row carries a non-null `page_id`
+     * regardless (minted at propose/degrade time for a create; the edit invariant for an edit) — but a fresh create's
+     * page is NOT yet resolvable by `pathOf(pageId)`, so create recovery keys on the immutable `target_path`.
      *
      * The [grant] is the demanded witness that `checkApprove` ran; [approver] carries the deciding ADMIN's
-     * (issuer, externalId, label); [writer] routes the content write through `GuardedMutatingFacade.save` (so
-     * `checkEdit` mints the real EditGrant + audits the EDIT row + resolves the page's CURRENT pageId path).
+     * (issuer, externalId, label).
      */
     fun apply(
         @Suppress("UNUSED_PARAMETER") grant: ApproveGrant,
@@ -140,24 +146,12 @@ class ProposalService(
         approver: ProposalApprover,
         writer: ProposalContentWriter,
     ): ApplyOutcome {
-        // (0) CREATE short-circuit — DIRECT PENDING->FAILED, NEVER APPLYING (create-apply deferred to 5.5).
-        val initial = repository.findById(id) ?: return ApplyOutcome.NotFound
-        if (initial.operation == ProposalOperation.CREATE) {
-            return if (repository.failPending(id, "create_apply_unsupported", approver.issuer, approver.externalId, clock.now())) {
-                ApplyOutcome.CreateUnsupported
-            } else if (repository.findById(id) == null) {
-                ApplyOutcome.NotFound
-            } else {
-                ApplyOutcome.NotPending
-            }
-        }
-
-        // (1) claim: PENDING -> APPLYING CAS (the EDIT path).
+        // (1) claim: PENDING -> APPLYING CAS (both EDIT and CREATE).
         if (!repository.claimApplying(id)) {
             return if (repository.findById(id) == null) ApplyOutcome.NotFound else ApplyOutcome.NotPending
         }
 
-        // (2) now APPLYING; an EDIT row, so pageId is non-null by the edit invariant (proposeEdit requires pathOf).
+        // (2) now APPLYING; pageId is non-null (an edit resolves its path; a create carries the propose-time id).
         val row = requireNotNull(repository.findById(id)) { "claimed proposal $id vanished" }
         val proposer = CommitIdentity(row.authorLabel, syntheticEmail(row.authorIssuer, row.authorExternalId))
         val committer = CommitIdentity(approver.label, syntheticEmail(approver.issuer, approver.externalId))
@@ -174,6 +168,10 @@ class ProposalService(
             if (outcome is WriteOutcome.Unreadable) {
                 // The raw cause is diagnostic and MUST NOT reach the wire/status_reason — log it server-side only.
                 logger.error { "apply $id: the content write was Unreadable (cause logged, never surfaced): ${outcome.cause}" }
+            }
+            if (outcome is WriteOutcome.InvalidLocation) {
+                // The raw reason can carry FS detail; dispositionOf emits only a stable string (the same no-leak rule).
+                logger.error { "apply $id: create InvalidLocation (reason logged, never surfaced): ${outcome.reason}" }
             }
 
             // (4) map the outcome via the FROZEN pure table.
@@ -263,14 +261,15 @@ class ProposalService(
     }
 
     /**
-     * The inspect-then-decide crash-recovery reconciler (P1b), run at startup AFTER the disk + index are ready
+     * The inspect-then-decide crash-recovery reconciler (P1b/C1), run at startup AFTER the disk + index are ready
      * (replaces P1a's BLIND [ProposalRepository.reconcileApplyingToPending] use for the APPLYING-row case). Every
-     * APPLYING row is an EDIT with a non-null `page_id` (creates never enter APPLYING — the [failPending] invariant),
-     * so the current path resolves through `pageId` (NOT the stale `target_path`): if the disk bytes at that current
-     * path equal `hash(proposed_content)`, the apply's disk write SUCCEEDED before the terminal stamp ran -> stamp
-     * APPLIED (with a NULL approver + `status_reason="recovered"`, since the approver is unknown post-crash);
-     * otherwise the write did NOT land -> return to PENDING for a fresh approve. Cannot race a live apply (the engine
-     * is not serving yet), the [reconcileDirtyPages] guarantee.
+     * APPLYING row carries a non-null `page_id` (an edit by the edit invariant; a create from the propose/degrade-time
+     * mint). An EDIT resolves the page's CURRENT path through `pageId`; a CREATE resolves by the IMMUTABLE
+     * `target_path` (its fresh page is not in the index/idMap after a crash). If the disk bytes at the resolved path
+     * equal `hash(proposed_content)`, the apply's disk write SUCCEEDED before the terminal stamp ran -> stamp APPLIED
+     * (with a NULL approver + `status_reason="recovered"`, since the approver is unknown post-crash); otherwise the
+     * write did NOT land -> return to PENDING for a fresh approve. Cannot race a live apply (the engine is not serving
+     * yet), the [reconcileDirtyPages] guarantee.
      */
     fun reconcileApplying() {
         val applying = repository.allApplying()
@@ -281,19 +280,23 @@ class ProposalService(
 
     /**
      * The single-row inspect-then-decide recovery shared by the boot [reconcileApplying] AND the live post-claim catch
-     * in [apply] (ONE codepath, two callers). Every APPLYING row is an EDIT with a non-null `page_id` (creates never
-     * enter APPLYING — the [failPending] invariant), so the current path resolves through `pageId` (NOT the stale
-     * `target_path`): if the disk bytes at that current path equal `hash(proposed_content)`, the apply's disk write
-     * SUCCEEDED before the terminal stamp ran -> stamp APPLIED (NULL approver + `status_reason="recovered"`, since the
-     * approver is unknown post-crash and uniform with the boot path); otherwise the write did NOT land -> return to
-     * PENDING for a fresh approve. The terminal CAS conditions on `status='APPLYING'`, so a row that already left
-     * APPLYING (a racing winner) is a no-op.
+     * in [apply] (ONE codepath, two callers). Every APPLYING row carries a non-null `page_id` (an edit by the edit
+     * invariant; a create from the propose/degrade-time mint). An EDIT resolves the page's CURRENT path through
+     * `pageId` (it may have moved); a CREATE resolves by the IMMUTABLE `target_path` — a fresh page is not in the
+     * index/idMap after a crash, so `pathOf(pageId)` would wrongly miss a landed create. If the disk bytes at the
+     * resolved path equal `hash(proposed_content)`, the apply's disk write SUCCEEDED before the terminal stamp ran ->
+     * stamp APPLIED (NULL approver + `status_reason="recovered"`, since the approver is unknown post-crash and uniform
+     * with the boot path); otherwise the write did NOT land -> return to PENDING for a fresh approve. The terminal CAS
+     * conditions on `status='APPLYING'`, so a row that already left APPLYING (a racing winner) is a no-op.
      */
     private fun recoverApplyingRow(row: ProposalRow) {
-        // Every APPLYING row is an EDIT with a non-null page_id (creates never enter APPLYING — the failPending
-        // invariant); assert it rather than silently absorb an impossible null into a PENDING reset.
-        val pageId = requireNotNull(row.pageId) { "APPLYING proposal ${row.id} must be an edit with a non-null page_id" }
-        val path = baseReader.pathOf(pageId)
+        // EDIT resolves the page's CURRENT path via pageId (it may have moved); CREATE resolves by the IMMUTABLE
+        // target_path — a fresh page is not in the index/idMap after a crash, so pathOf(pageId) would wrongly miss a
+        // landed create. Both operations carry a non-null page_id (the edit invariant / the propose-time mint).
+        val path = when (row.operation) {
+            ProposalOperation.EDIT -> baseReader.pathOf(requireNotNull(row.pageId) { "APPLYING edit ${row.id} must carry a page_id" })
+            ProposalOperation.CREATE -> row.targetPath
+        }
         val diskBytes = path?.let(baseReader::currentBytes)
         if (diskBytes != null && citations.contentHash(diskBytes) == citations.contentHash(row.proposedContent)) {
             repository.markApplied(
@@ -391,10 +394,11 @@ class ProposalService(
 internal fun syntheticEmail(issuer: String, externalId: String): String = "$externalId@$issuer.plainbase.local"
 
 /**
- * The EDIT content-write seam the apply drives (P1b): the FACADE binds it to `GuardedMutatingFacade.save` (which
- * mints the real EditGrant + audits + resolves the page's CURRENT path by pageId + drives `WritePipeline`).
- * Domain-side so [ProposalService] stays framework-free. P1b is EDIT-ONLY; CREATE-apply (a create() binding) is
- * deferred to 5.5 — a CREATE row is short-circuited in [ProposalService.apply] BEFORE this is ever consulted.
+ * The content-write seam the apply drives (P1b/C1): the FACADE binds it, branching on `row.operation` — an EDIT to
+ * `GuardedMutatingFacade.save` (which mints the real EditGrant + audits + resolves the page's CURRENT path by pageId +
+ * drives `WritePipeline.write`); a CREATE to `GuardedMutatingFacade.create` under `WriteOrigin.PROPOSAL_APPLY` (which
+ * mints the CreateGrant + drives `WritePipeline.create`, bypassing the agent glob gate). Domain-side so
+ * [ProposalService] stays framework-free.
  */
 fun interface ProposalContentWriter {
     fun write(row: ProposalRow, author: CommitIdentity, committer: CommitIdentity): WriteOutcome
@@ -415,6 +419,9 @@ sealed interface ProposeOutcome {
 
     /** A semantic malformed request the service detected (C3 — a client `target_path` disagreeing with the resolved path) (400 invalid_propose_request). */
     data object InvalidRequest : ProposeOutcome
+
+    /** A create blob the server could not materialize an id into (FrontmatterPatcher refusal / an agent-supplied id) (400 invalid_create_content). */
+    data class InvalidCreateContent(val message: String) : ProposeOutcome
 }
 
 /** The outcome of an apply (P1b — the §WI-5 wire contract maps these). */
@@ -424,9 +431,6 @@ sealed interface ApplyOutcome {
     data class Conflicted(val view: ProposalView, val currentHash: String?, val currentPath: TreePath?) : ApplyOutcome
 
     data class Failed(val view: ProposalView, val reason: String) : ApplyOutcome
-
-    /** A CREATE proposal: DIRECT PENDING->FAILED + status_reason="create_apply_unsupported" (never APPLYING; deferred to 5.5). */
-    data object CreateUnsupported : ApplyOutcome
 
     /** The row was not PENDING (already terminal/in-flight) — the double-approve loser. */
     data object NotPending : ApplyOutcome

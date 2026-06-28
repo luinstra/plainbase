@@ -95,6 +95,7 @@ fun buildRouteContext(
         proposals = proposalService,
         labeler = proposalLabeler,
         mutate = mutate,
+        idProvider = idProvider,
     )
     proposalsFacade = proposals
     return RouteContext(
