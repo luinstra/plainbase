@@ -132,6 +132,30 @@ describe("W6 new-page creation", () => {
     expect(history.location.pathname).toBe("/new");
   });
 
+  it("a 202 degrade-to-proposal is treated as degraded — surfaces a notice, does NOT navigate", async () => {
+    // POST /api/v1/pages can 202-degrade (an agent CREATE outside agentDirectCommit.globs is filed as a
+    // proposal, not applied). It MUST be treated as `degraded`, never `created` — there is no page to land on.
+    const { view, history } = renderNew(
+      jsonResponse(
+        { degraded: true, proposal_id: "01900000-0000-7000-8000-0000000000aa", status: "PENDING", unified_diff: "--- /dev/null\n+++ b\n" },
+        202,
+      ),
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    // A proposal notice is surfaced…
+    const notice = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-create-notice]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(notice.textContent).toContain("proposal");
+    // …and the flow stays on /new (no navigation to a page that was never applied).
+    expect(history.location.pathname).toBe("/new");
+  });
+
   it("a fetch rejection (offline) shows a save-failed notice instead of a silent error (FIX 4)", async () => {
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "POST") throw new TypeError("Failed to fetch");
@@ -235,6 +259,33 @@ describe("W6 new-page creation", () => {
       return call!;
     });
     expect(JSON.parse(post[1]!.body as string).slug).toBe("My Page");
+  });
+
+  it("a trailing-slash folder is normalized once — preview shows a single slash AND the POST strips it (regression)", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "guides/" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+
+    // (a) The advisory preview reflects the normalized folder — a single slash, never `guides//`.
+    const preview = view.container.querySelector("[data-pb-new-preview]")!;
+    expect(preview.textContent).toContain("guides/my-new-page.md");
+    expect(preview.textContent).not.toContain("guides//");
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    // (b) The POST submits the trailing slash STRIPPED — preview and submit agree, so the server
+    // accepts the path the preview promised (`TreePath.of("guides/")` would otherwise reject).
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).folder).toBe("guides");
   });
 
   it("section mode hides BOTH the slug input and the advisory preview", async () => {

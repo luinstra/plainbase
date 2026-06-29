@@ -37,4 +37,8 @@ describe("previewPath (advisory path shape)", () => {
   it("drops the folder segment at the root", () => {
     expect(previewPath("", "My Page")).toBe("my-page.md");
   });
+
+  it("trims a trailing slash so the folder join never doubles up", () => {
+    expect(previewPath("guides/", "My Page")).toBe("guides/my-page.md");
+  });
 });

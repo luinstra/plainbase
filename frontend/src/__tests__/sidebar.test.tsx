@@ -192,6 +192,42 @@ describe("SidebarNav", () => {
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(0);
   });
 
+  it("gives an index-only folder no expand affordance (the disclosure button is disabled, no empty list)", () => {
+    // A `url`-folder whose ONLY child is its landing surfaces that child through the label link, so
+    // `nonLandingChildren` leaves nothing to disclose — the chevron must be disabled, not a click that
+    // expands to an empty list.
+    const indexOnly: TreeFolder = {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: "/docs",
+      page_count: 0,
+      children: [
+        {
+          type: "folder",
+          name: "runbooks",
+          title: null,
+          description: null,
+          path: "runbooks",
+          url: "/docs/runbooks",
+          page_count: 1,
+          children: [
+            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<SidebarNav root={indexOnly} currentPathname="/docs" />);
+    const toggle = container.querySelector<HTMLButtonElement>('[data-pb-nav-item="folder"] [data-pb-folder-toggle]')!;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBeNull(); // nothing to expand → no expanded state
+    // Clicking the inert chevron reveals no child list (the landing is reached via the folder label only).
+    fireEvent.click(toggle);
+    expect(container.querySelector('[data-pb-nav-item="page"]')).toBeNull();
+  });
+
   it("keeps a loser folder's index child as a row (no url to surface it through the label)", () => {
     // A collision-loser folder (url null) has an inert label, so its index/README can't be reached
     // via the folder link — it must remain a child row or it's unreachable from the tree.

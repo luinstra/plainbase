@@ -456,6 +456,12 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
       await router.navigate({ to: result.created.url });
       return;
     }
+    if (result.kind === "degraded") {
+      // P5: the create degraded to a proposal (agent write outside the direct-commit globs) — nothing landed
+      // on disk to navigate to. Unreachable from the Human/cookie-auth SPA, but the kind is exhaustive.
+      setError("Submitted as a proposal for review.");
+      return;
+    }
     setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
   }
 
@@ -492,14 +498,18 @@ export function NewPage() {
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Normalize the folder ONCE — trim, then strip trailing slash(es) (the SAME normalization
+  // `previewPath` applies) — so the advisory preview and the POST agree: `guides/` previews
+  // `guides/<slug>.md` AND submits `folder: "guides"` (the server rejects the empty trailing segment).
+  const folderPath = folder.trim().replace(/\/+$/, "");
   // In section mode the Folder field IS the new section's path; a section needs a non-blank path
   // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
-  const sectionReady = !section || folder.trim() !== "";
+  const sectionReady = !section || folderPath !== "";
 
   const create = useMutation({
     mutationFn: () =>
       createPage({
-        folder: folder.trim() || undefined,
+        folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
         // slug authority and slugifies it). Blank → undefined → the server slugifies the title.
@@ -517,6 +527,12 @@ export function NewPage() {
           return;
         }
         void router.navigate({ to: result.created.url });
+        return;
+      }
+      if (result.kind === "degraded") {
+        // P5: an agent CREATE outside `agentDirectCommit.globs` was filed as a proposal, not applied — there
+        // is no page to navigate to. Unreachable from the Human/cookie-auth SPA, but the kind is exhaustive.
+        setNotice("Submitted as a proposal for review.");
         return;
       }
       setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
@@ -556,7 +572,7 @@ export function NewPage() {
             onChange={(event) => setFolder(event.target.value)}
             placeholder="guides"
           />
-          {section && <span className="text-xs text-faint">Creates {folder.trim() ? `${folder.trim()}/index.md` : "<folder>/index.md"}</span>}
+          {section && <span className="text-xs text-faint">Creates {folderPath ? `${folderPath}/index.md` : "<folder>/index.md"}</span>}
         </label>
         {/* Slug + advisory path preview: NON-section only (section forces slug "index", so a typed slug would
             be silently overridden). The preview is ADVISORY — it lowercases via approxSlug, but the POST
@@ -573,7 +589,7 @@ export function NewPage() {
             />
             {(title.trim() || slug.trim()) && (
               <span className="text-xs text-faint" data-pb-new-preview>
-                approx. ≈ {previewPath(folder.trim(), slug.trim() || title.trim())}
+                approx. ≈ {previewPath(folderPath, slug.trim() || title.trim())}
               </span>
             )}
           </label>

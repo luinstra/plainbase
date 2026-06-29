@@ -66,6 +66,14 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
   const [open, setOpen] = useState(true);
   const label = folderTitle(folder);
   const active = folder.url !== null && folder.url === currentPathname;
+  // The rows actually rendered under this folder, computed ONCE: a `url`-folder surfaces its landing
+  // (index/README) THROUGH the label link above, so it's dropped from the child rows (one canonical path
+  // — matches the root). A loser folder has no url and an inert label, so its landing can only be reached
+  // as a child row: keep the full children there or the index page becomes unreachable from the tree.
+  const visibleChildren = folder.url ? nonLandingChildren(folder) : folder.children;
+  // An index-only folder (its sole child IS the landing, surfaced via the label) has nothing left to
+  // disclose — gate BOTH the chevron and the child list on the VISIBLE count so it shows no expand affordance.
+  const expandable = visibleChildren.length > 0;
   // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
   // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
   const childrenId = `pb-folder-children-${encodeURIComponent(folder.path)}`;
@@ -74,11 +82,12 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
       <div className="flex items-center">
         <button
           type="button"
-          aria-expanded={open}
+          disabled={!expandable}
+          aria-expanded={expandable ? open : undefined}
           aria-controls={childrenId}
           aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
           onClick={() => setOpen((value) => !value)}
-          className="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+          className="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
           data-pb-folder-toggle
         >
           <span aria-hidden="true" className="pb-folder-caret" />
@@ -99,13 +108,9 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
           <span className="block flex-1 px-2 py-1 font-semibold text-ink">{label}</span>
         )}
       </div>
-      {open && (
+      {open && expandable && (
         <div id={childrenId} className="ml-3 border-l border-edge pl-2">
-          {/* A folder with a `url` surfaces its landing (index/README) THROUGH the label link above,
-              so it's dropped from the child rows (one canonical path — matches the root). A loser
-              folder has no url and an inert label, so its landing can only be reached as a child row:
-              keep the full children there or the index page becomes unreachable from the tree. */}
-          <NodeList nodes={folder.url ? nonLandingChildren(folder) : folder.children} currentPathname={currentPathname} />
+          <NodeList nodes={visibleChildren} currentPathname={currentPathname} />
         </div>
       )}
     </li>

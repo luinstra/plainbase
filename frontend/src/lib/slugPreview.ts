@@ -36,5 +36,7 @@ export function approxSlug(text: string, fallback = "page"): string {
  */
 export function previewPath(folder: string, slugOrTitle: string): string {
   const stem = approxSlug(slugOrTitle);
-  return folder ? `${folder}/${stem}.md` : `${stem}.md`;
+  // Trim a trailing slash so a folder typed as `guides/` previews `guides/my-page.md`, not `guides//my-page.md`.
+  const dir = folder.replace(/\/+$/, "");
+  return dir ? `${dir}/${stem}.md` : `${stem}.md`;
 }

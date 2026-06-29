@@ -135,6 +135,7 @@ export async function putPageRaw(id: string, body: string, baseHash: string): Pr
 /** The new-page create outcome — a 201 with the server `id`+`url`, or the create-collision families. */
 export type CreateResult =
   | { kind: "created"; created: CreatedResponse }
+  | { kind: "degraded"; proposalId: string; status: string; unifiedDiff: string }
   | { kind: "exists"; exists: PageExistsEnvelope["error"] }
   | { kind: "error"; error: ApiError };
 
@@ -159,8 +160,20 @@ export async function createPage(request: CreatePageRequest): Promise<CreateResu
     return { kind: "error", error: networkError() };
   }
   if (response.ok) {
-    const created = await parseJson<CreatedResponse>(response);
-    return created ? { kind: "created", created } : { kind: "error", error: await apiError(response) };
+    // P5: a 202 `DegradedToProposalResponse` is `ok` too — an agent CREATE that fell outside
+    // `agentDirectCommit.globs` was filed as a proposal, NOT applied. It MUST be a distinct `degraded`
+    // result, never `created` (which would navigate to a page that doesn't exist on disk yet). The browser
+    // SPA is Human/cookie-auth so this is unreachable today, but the contract demands the handler (same
+    // rationale `putPageRaw` documents). Detect it by status 202 OR the body's `degraded` discriminator.
+    const body = await parseJson<DegradedToProposalResponse | CreatedResponse>(response);
+    // A valid 2xx create body is always a JSON OBJECT; a truthy-but-non-object body (a proxy primitive) is
+    // malformed → the generic error family, never a thrown `"degraded" in body` TypeError. Object guard FIRST.
+    if (typeof body !== "object" || body === null) return { kind: "error", error: await apiError(response) };
+    if (response.status === 202 || "degraded" in body) {
+      const degraded = body as DegradedToProposalResponse;
+      return { kind: "degraded", proposalId: degraded.proposal_id, status: degraded.status, unifiedDiff: degraded.unified_diff };
+    }
+    return { kind: "created", created: body as CreatedResponse };
   }
   if (response.status === 409) {
     const envelope = await parseJson<PageExistsEnvelope>(response);
