@@ -12,6 +12,8 @@ import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } f
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
+import { PAGE_TEMPLATES } from "../lib/pageTemplates";
+import { previewPath } from "../lib/slugPreview";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
 import { MetaForm } from "./MetaForm";
@@ -484,7 +486,10 @@ export function NewPage() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [folder, setFolder] = useState("");
+  const [slug, setSlug] = useState("");
   const [section, setSection] = useState(false);
+  const [templateId, setTemplateId] = useState("blank");
+  const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // In section mode the Folder field IS the new section's path; a section needs a non-blank path
@@ -492,7 +497,15 @@ export function NewPage() {
   const sectionReady = !section || folder.trim() !== "";
 
   const create = useMutation({
-    mutationFn: () => createPage({ folder: folder.trim() || undefined, title: title.trim(), slug: section ? "index" : undefined }),
+    mutationFn: () =>
+      createPage({
+        folder: folder.trim() || undefined,
+        title: title.trim(),
+        // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
+        // slug authority and slugifies it). Blank → undefined → the server slugifies the title.
+        slug: section ? "index" : slug.trim() || undefined,
+        body: body || undefined,
+      }),
     onSuccess: (result) => {
       if (result.kind === "created") {
         invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
@@ -544,6 +557,60 @@ export function NewPage() {
             placeholder="guides"
           />
           {section && <span className="text-xs text-faint">Creates {folder.trim() ? `${folder.trim()}/index.md` : "<folder>/index.md"}</span>}
+        </label>
+        {/* Slug + advisory path preview: NON-section only (section forces slug "index", so a typed slug would
+            be silently overridden). The preview is ADVISORY — it lowercases via approxSlug, but the POST
+            forwards the slug verbatim and navigation stays on the server-returned url. */}
+        {!section && (
+          <label className="flex flex-col gap-1 text-sm text-muted">
+            Slug (optional)
+            <input
+              className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
+              data-pb-new-slug
+              value={slug}
+              onChange={(event) => setSlug(event.target.value)}
+              placeholder="my-page"
+            />
+            {(title.trim() || slug.trim()) && (
+              <span className="text-xs text-faint" data-pb-new-preview>
+                approx. ≈ {previewPath(folder.trim(), slug.trim() || title.trim())}
+              </span>
+            )}
+          </label>
+        )}
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Template
+          <select
+            className="rounded-md border border-edge bg-surface px-3 py-2 text-ink"
+            data-pb-new-template
+            value={templateId}
+            onChange={(event) => {
+              const next = event.target.value;
+              // Guard the no-op re-select so a manual body edit survives re-picking the same template.
+              if (next === templateId) return;
+              const template = PAGE_TEMPLATES.find((t) => t.id === next);
+              setTemplateId(next);
+              // Selecting a template is an explicit action: replace the body with its scaffold (Blank → "").
+              setBody(template?.body ?? "");
+            }}
+          >
+            {PAGE_TEMPLATES.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Body
+          <textarea
+            className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
+            data-pb-new-body
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Page body (Markdown)"
+            rows={8}
+          />
         </label>
         <label className="flex items-start gap-2 text-sm text-muted">
           <input
