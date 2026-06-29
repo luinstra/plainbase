@@ -117,6 +117,7 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
                         "invalid_propose_request",
                         "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
                     )
+                    is ProposeOutcome.InvalidCreateContent -> errorResult("invalid_create_content", outcome.message)
                 }
             }
         }

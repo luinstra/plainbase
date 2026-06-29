@@ -18,11 +18,13 @@ sealed interface ApplyDisposition {
 }
 
 /**
- * The FROZEN `WriteOutcome` -> disposition table (one test per variant; PB-PROPOSE-1 P1b). [proposedHash] is the
- * apply's content hash. On the P1b edit-apply path only `Written`/`WrittenButUnindexed`/`Conflict`/`Unreadable`/
- * `UnsupportedEdit` arise; the three create-only variants (`AlreadyExists`/`SlugConflict`/`InvalidLocation`) are
- * UNREACHABLE in P1b (creates never reach the pipeline) — mapped to `Failed` DEFENSIVELY so the `when` stays
- * exhaustive (a future ninth variant is then a deliberate compile signal, the house pattern).
+ * The FROZEN `WriteOutcome` -> disposition table (one test per variant; PB-PROPOSE-1 P1b/C1). [proposedHash] is the
+ * apply's content hash. An EDIT apply hits `Written`/`WrittenButUnindexed`/`Conflict`/`Unreadable`/`UnsupportedEdit`;
+ * a CREATE apply (C1) hits `Written`/`WrittenButUnindexed`/`AlreadyExists`/`SlugConflict`/`InvalidLocation`/
+ * `Unreadable` and NEVER `Conflict` (no base_hash) — so the three create-only variants are now REACHABLE, mapped to a
+ * terminal `Failed` with a STABLE, no-interpolation `status_reason` (deterministic golden + no FS leak). `Conflict`/
+ * `UnsupportedEdit` stay edit-only but the `when` stays exhaustive (a future ninth variant is a deliberate compile
+ * signal, the house pattern).
  */
 fun dispositionOf(outcome: WriteOutcome, proposedHash: String): ApplyDisposition = when (outcome) {
     is WriteOutcome.Written -> ApplyDisposition.Applied(outcome.newHash, outcome.commit, reindexDeferred = false)
@@ -40,8 +42,9 @@ fun dispositionOf(outcome: WriteOutcome, proposedHash: String): ApplyDisposition
     // only the fixed string so the wire + goldens stay deterministic.
     is WriteOutcome.Unreadable -> ApplyDisposition.Failed("unreadable")
     is WriteOutcome.UnsupportedEdit -> ApplyDisposition.Failed("unsupported_edit: ${outcome.field}")
-    // create-only, UNREACHABLE on the P1b edit-apply path — defensive terminal mapping for exhaustiveness:
-    is WriteOutcome.AlreadyExists -> ApplyDisposition.Failed("already_exists: ${outcome.path.value}")
-    is WriteOutcome.SlugConflict -> ApplyDisposition.Failed("slug_conflict: ${outcome.urlPath}")
-    is WriteOutcome.InvalidLocation -> ApplyDisposition.Failed("invalid_location: ${outcome.reason}")
+    // create-only (C1, REACHABLE) — STABLE no-interpolation reasons: the raw path/url/reason is logged server-side
+    // (ProposalService.apply), never woven into the wire status_reason, so the golden stays deterministic + leak-free.
+    is WriteOutcome.AlreadyExists -> ApplyDisposition.Failed("create_path_taken")
+    is WriteOutcome.SlugConflict -> ApplyDisposition.Failed("create_slug_conflict")
+    is WriteOutcome.InvalidLocation -> ApplyDisposition.Failed("create_invalid_location")
 }

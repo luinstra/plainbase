@@ -22,7 +22,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             aria-controls="pb-folder-children-guides"
             aria-expanded="true"
             aria-label="Collapse Guides"
-            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
             data-pb-folder-toggle="true"
             type="button"
           >
@@ -70,7 +70,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             aria-controls="pb-folder-children-shadowed-folder"
             aria-expanded="true"
             aria-label="Collapse shadowed-folder"
-            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink"
+            class="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
             data-pb-folder-toggle="true"
             type="button"
           >

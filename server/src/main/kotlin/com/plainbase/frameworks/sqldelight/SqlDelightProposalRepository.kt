@@ -113,21 +113,6 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
             id = id,
         ).value == 1L
 
-    override fun failPending(
-        id: ProposalId,
-        statusReason: String,
-        approverIssuer: String?,
-        approverExternalId: String?,
-        at: Instant,
-    ): Boolean =
-        queries.failPending(
-            statusReason = statusReason,
-            at = at.toEpochMilliseconds(),
-            approverIssuer = approverIssuer,
-            approverExternalId = approverExternalId,
-            id = id,
-        ).value == 1L
-
     override fun failConflicted(id: ProposalId, statusReason: String, at: Instant): Boolean =
         queries.failConflicted(statusReason = statusReason, at = at.toEpochMilliseconds(), id = id).value == 1L
 

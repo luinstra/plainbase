@@ -28,9 +28,10 @@ interface ProposalFacade {
     fun reject(principal: Principal, id: ProposalId, comment: String?): RejectOutcome
 
     /**
-     * Authorize (checkApprove, ADMIN-only) + APPLY the PENDING proposal [id] (P1b): claim PENDING->APPLYING, drive
-     * the guarded EDIT content write, and stamp the terminal status. A CREATE proposal is short-circuited to terminal
-     * FAILED ([ApplyOutcome.CreateUnsupported]) — create-apply is deferred to 5.5.
+     * Authorize (checkApprove, ADMIN-only) + APPLY the PENDING proposal [id] (P1b/C1): claim PENDING->APPLYING, drive
+     * the guarded content write, and stamp the terminal status. Applies BOTH an EDIT (the guarded `save` write) AND a
+     * CREATE (C1 — the guarded `create` write under `WriteOrigin.PROPOSAL_APPLY`, which bypasses the agent glob gate so
+     * an approved out-of-glob create still lands).
      */
     fun approve(principal: Principal, id: ProposalId): ApplyOutcome
 
@@ -80,10 +81,20 @@ sealed interface ProposeCommand {
         val rationale: String,
     ) : ProposeCommand
 
-    /** A create proposal: [targetPath] is authoritative (no page exists yet). */
+    /**
+     * A create proposal: [targetPath] is authoritative (no page exists yet). [pageId] is the SERVER-minted id (C1):
+     * null on the explicit-propose path (the facade mints + patches it into the blob), pre-set on the degrade path
+     * (the create route already minted it + baked it into the bytes — the facade stores both verbatim, no re-mint).
+     *
+     * Contract: when non-null, [pageId] MUST already be materialized into [proposedContent]'s `id:` frontmatter line —
+     * the row stores the bytes verbatim and apply writes them verbatim, so the stored id and the on-disk id can only
+     * agree if the caller baked it in first. Both current callers do (the explicit path patches it in via the facade;
+     * the degrade path passes the create route's already-id-baked bytes), so no runtime re-scan validates this here.
+     */
     data class Create(
         val targetPath: TreePath,
         val proposedContent: ByteArray,
         val rationale: String,
+        val pageId: PageId? = null,
     ) : ProposeCommand
 }

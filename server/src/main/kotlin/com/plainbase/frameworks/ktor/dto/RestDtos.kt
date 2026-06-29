@@ -169,8 +169,8 @@ object ErrorCodes {
     /** 422: a terminal edit-apply failure (`UnsupportedEdit`/`Unreadable`) OR a rebase whose target page was deleted (Gone). The message is a STABLE, non-leaking string. */
     const val APPLY_FAILED: String = "apply_failed"
 
-    /** 422: approving a CREATE proposal in P1b (create-apply deferred to 5.5). The proposal is stamped FAILED + status_reason="create_apply_unsupported". */
-    const val CREATE_APPLY_UNSUPPORTED: String = "create_apply_unsupported"
+    /** 400: a create proposal blob the server could not materialize an id into (FrontmatterPatcher refusal / an agent-supplied id). */
+    const val INVALID_CREATE_CONTENT: String = "invalid_create_content"
 
     /** 409: a rebase of a proposal that is not in CONFLICTED state (already PENDING/terminal). DISTINCT from `not_pending`. */
     const val NOT_CONFLICTED: String = "not_conflicted"

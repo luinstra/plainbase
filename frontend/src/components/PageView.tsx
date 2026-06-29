@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeFolder, TreePage } from "../api/types";
-import { folderByUrl, folderForLanding, landingPage, pageHref } from "../lib/tree";
+import { folderByUrl, folderForLanding, folderTitle, landingPage, pageHref } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -59,7 +59,7 @@ export function DocsPage({ path }: { path: string }) {
     if (page.error instanceof ApiError && page.error.isNotFound) return <FolderLanding />;
     return <PageError error={page.error} />;
   }
-  // A landing page renders AS its folder (prose + child listing); the effect canonicalizes the URL.
+  // A landing page renders AS its folder (the index content replaces the generated listing); the effect canonicalizes the URL.
   if (landingFolder?.url) return <FolderLanding url={landingFolder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
@@ -87,16 +87,12 @@ export function FolderLanding({ url }: { url?: string }) {
   if (!folder) return <NotFoundView />;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
-  // page URL redirects here; see DocsPage). With an index/README the authored content renders as a
-  // real page (prose + rail) and the generated listing follows BELOW it (the index itself excluded).
-  // With no index, it's a purely-generated listing — no rail, but the rail column stays reserved so
-  // the content width matches a page (see FolderListing).
+  // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
+  // WHOLE landing (prose + rail), REPLACING the generated child listing — the children stay reachable
+  // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
+  // column stays reserved so the content width matches a page (see FolderListing).
   const landing = landingPage(folder);
-  return landing ? (
-    <PageContent id={landing.id} below={<FolderListingGroups folder={folder} excludeId={landing.id} />} />
-  ) : (
-    <FolderListing folder={folder} />
-  );
+  return landing ? <PageContent id={landing.id} /> : <FolderListing folder={folder} />;
 }
 
 /**
@@ -109,7 +105,7 @@ export function FolderLanding({ url }: { url?: string }) {
  */
 function FolderListing({ folder }: { folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
-  const title = folder.title ?? (folder.name || "docs");
+  const title = folderTitle(folder) || "docs";
   useEffect(() => {
     document.title = `${title} · Plainbase`;
   }, [title]);
@@ -133,12 +129,11 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
  * The generated child groups — subfolders into a card grid, pages into a compact list — each
  * group preserving the tree response's order (never re-sorted; a stable partition, not a sort).
  * Pages link via their node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a
- * loser subfolder has none and stays an inert card). `excludeId` drops one child (the index/README
- * already rendered as prose above). `data-pb-folder*` hooks are stable selectors.
+ * loser subfolder has none and stays an inert card). `data-pb-folder*` hooks are stable selectors.
  */
-function FolderListingGroups({ folder, excludeId }: { folder: TreeFolder; excludeId?: string }) {
+function FolderListingGroups({ folder }: { folder: TreeFolder }) {
   const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
-  const pages = folder.children.filter((c): c is TreePage => c.type === "page" && c.id !== excludeId);
+  const pages = folder.children.filter((c): c is TreePage => c.type === "page");
 
   return (
     <div className="pb-listing" data-pb-folder-children>
@@ -179,7 +174,7 @@ function FolderListingGroups({ folder, excludeId }: { folder: TreeFolder; exclud
 /** A subfolder landing card: icon + name + optional description + `path/ · N pages` meta. A
  * collision-loser subfolder has `url === null` and renders inert (no link). */
 function FolderCard({ folder }: { folder: TreeFolder }) {
-  const name = folder.title ?? folder.name;
+  const name = folderTitle(folder);
   const pageLabel = folder.page_count === 1 ? "1 page" : `${folder.page_count} pages`;
   const body = (
     <>
@@ -252,12 +247,8 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
  * slow or failed fetch degrades the Rail to its always-present File row, never blanking the doc.
- *
- * [below] is optional content rendered under the prose in the reading column — the generated
- * child listing when this page IS a folder's index/README landing (the rail still belongs here
- * because there's authored content; a purely-generated folder view has no rail — see FolderLanding).
  */
-function PageContent({ id, page: seeded, below }: { id: string; page?: PageResponse; below?: ReactNode }) {
+function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) {
   const html = useQuery(pageHtmlQuery(id));
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
@@ -280,7 +271,6 @@ function PageContent({ id, page: seeded, below }: { id: string; page?: PageRespo
         <div className="mx-auto max-w-[72ch]">
           <Breadcrumbs path={html.data.path} title={html.data.title} />
           <Prose html={html.data.html} />
-          {below}
           <DocFooter frontmatter={frontmatter} url={page?.url ?? null} hasHistory={(page?.commit ?? null) !== null} />
         </div>
       </div>

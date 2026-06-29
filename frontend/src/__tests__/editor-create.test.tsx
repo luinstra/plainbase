@@ -4,7 +4,10 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pageByPathQuery, pageHtmlQuery, sessionQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
+import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { createAppRouter } from "../router";
+
+const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
 const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
 
@@ -129,6 +132,30 @@ describe("W6 new-page creation", () => {
     expect(history.location.pathname).toBe("/new");
   });
 
+  it("a 202 degrade-to-proposal is treated as degraded — surfaces a notice, does NOT navigate", async () => {
+    // POST /api/v1/pages can 202-degrade (an agent CREATE outside agentDirectCommit.globs is filed as a
+    // proposal, not applied). It MUST be treated as `degraded`, never `created` — there is no page to land on.
+    const { view, history } = renderNew(
+      jsonResponse(
+        { degraded: true, proposal_id: "01900000-0000-7000-8000-0000000000aa", status: "PENDING", unified_diff: "--- /dev/null\n+++ b\n" },
+        202,
+      ),
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    // A proposal notice is surfaced…
+    const notice = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-create-notice]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(notice.textContent).toContain("proposal");
+    // …and the flow stays on /new (no navigation to a page that was never applied).
+    expect(history.location.pathname).toBe("/new");
+  });
+
   it("a fetch rejection (offline) shows a save-failed notice instead of a silent error (FIX 4)", async () => {
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "POST") throw new TypeError("Failed to fetch");
@@ -153,6 +180,199 @@ describe("W6 new-page creation", () => {
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")?.textContent).toContain("Couldn't reach the server"));
     // The form is still usable (the create button re-enables).
     expect(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")?.disabled).toBe(false);
+  });
+
+  it("the new-section checkbox POSTs slug:index with the folder field as the section path", async () => {
+    const SECTION_URL = "/docs/runbooks/index";
+    const { view, fetchSpy } = renderNew(
+      jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201),
+      (qc) => {
+        // Prime the destination (the index page's own url canonicalizes to /docs/runbooks) so the
+        // post-create navigation renders without a live fetch.
+        qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
+        qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      },
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "runbooks" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    // The load-bearing fact: the create POSTs a section request — slug "index", folder = the section path.
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string)).toEqual({ folder: "runbooks", title: "Runbooks", slug: "index" });
+  });
+
+  it("the new-section checkbox with a blank folder leaves Create disabled and does NOT POST", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+
+    // A section needs a path: Create is disabled and a click never POSTs.
+    const create = view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!;
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    expect(fetchSpy.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it("renders the advisory slug/path preview in non-section mode (labelled approximate)", async () => {
+    const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    // No title/slug yet → no preview element (no lonely page.md on an empty form).
+    expect(view.container.querySelector("[data-pb-new-preview]")).toBeNull();
+
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+
+    const preview = view.container.querySelector("[data-pb-new-preview]");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toContain("≈");
+    expect(preview!.textContent).toContain("approx.");
+    expect(preview!.textContent).toContain("my-new-page.md");
+  });
+
+  it("forwards the typed slug VERBATIM (case-preserving) — the server is the slug authority", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-slug]")!, { target: { value: "My Page" } });
+    // The preview lowercases (advisory)…
+    expect(view.container.querySelector("[data-pb-new-preview]")!.textContent).toContain("my-page.md");
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    // …but the POST carries the raw user slug, case preserved — the client never derives a slug.
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).slug).toBe("My Page");
+  });
+
+  it("a trailing-slash folder is normalized once — preview shows a single slash AND the POST strips it (regression)", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "guides/" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+
+    // (a) The advisory preview reflects the normalized folder — a single slash, never `guides//`.
+    const preview = view.container.querySelector("[data-pb-new-preview]")!;
+    expect(preview.textContent).toContain("guides/my-new-page.md");
+    expect(preview.textContent).not.toContain("guides//");
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    // (b) The POST submits the trailing slash STRIPPED — preview and submit agree, so the server
+    // accepts the path the preview promised (`TreePath.of("guides/")` would otherwise reject).
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).folder).toBe("guides");
+  });
+
+  it("section mode hides BOTH the slug input and the advisory preview", async () => {
+    const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+    expect(view.container.querySelector("[data-pb-new-slug]")).not.toBeNull();
+
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+    expect(view.container.querySelector("[data-pb-new-slug]")).toBeNull();
+    expect(view.container.querySelector("[data-pb-new-preview]")).toBeNull();
+  });
+
+  it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect("body" in JSON.parse(post[1]!.body as string)).toBe(false);
+  });
+
+  it("selecting a template fills the body textarea and POSTs that scaffold", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "My New Page" } });
+    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("[data-pb-new-body]")!;
+    expect(textarea.value).toBe(MEETING_BODY);
+
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).body).toBe(MEETING_BODY);
+  });
+
+  it("a template body flows to the POST even in section mode (no special-casing)", async () => {
+    const SECTION_URL = "/docs/runbooks/index";
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "runbooks" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
+    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    const parsed = JSON.parse(post[1]!.body as string);
+    expect(parsed.slug).toBe("index");
+    expect(parsed.body).toBe(MEETING_BODY);
+  });
+
+  it("a no-op template re-select does NOT clobber a manual body edit", async () => {
+    const { view } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+    const textarea = view.container.querySelector<HTMLTextAreaElement>("[data-pb-new-body]")!;
+    fireEvent.change(textarea, { target: { value: `${MEETING_BODY}## Extra\n` } });
+    // Re-firing the SAME value is a no-op — the edit survives.
+    fireEvent.change(view.container.querySelector<HTMLSelectElement>("[data-pb-new-template]")!, { target: { value: "meeting" } });
+    expect(textarea.value).toBe(`${MEETING_BODY}## Extra\n`);
   });
 
   it("a create collision surfaces page_exists with the server path", async () => {

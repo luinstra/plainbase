@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder } from "../api/types";
-import { foldersByPath } from "../lib/tree";
+import { folderTitle, foldersByPath, landingPage } from "../lib/tree";
 
 /**
  * Breadcrumb trail derived from the page's content-relative `path` (the API's value,
@@ -19,14 +19,18 @@ export function Breadcrumbs({ path, title }: { path: string; title: string }) {
   const segments = path.split("/").slice(0, -1);
   // The root label is deliberately the literal "docs" (URL-truthful); a site-title override is a future plainbase.yaml concern.
   const root = { key: "/docs", label: "docs", url: "/docs" };
-  const crumbs = path === "" ? [] : [
-    root,
-    ...segments.map((name, i) => {
-      const folderPath = segments.slice(0, i + 1).join("/");
-      const folder = folders.get(folderPath);
-      return { key: folderPath, label: folder?.title ?? name, url: folder?.url ?? null };
-    }),
-  ];
+  const ancestors = segments.map((name, i) => {
+    const folderPath = segments.slice(0, i + 1).join("/");
+    const folder = folders.get(folderPath);
+    return { key: folderPath, label: folder ? folderTitle(folder) : name, url: folder?.url ?? null };
+  });
+  // When the page IS its parent folder's landing (index/README), the parent ancestor crumb and the
+  // leaf crumb are the same place: `folderTitle` resolves to the index title and the parent's url is
+  // this very page's URL. Drop the redundant ancestor so the trail reads `docs / <Title>`, not
+  // `docs / <Title> / <Title>` with the ancestor self-linking to the page being viewed (Phase 5.5).
+  const parent = folders.get(segments.join("/"));
+  const pageIsLanding = parent ? landingPage(parent)?.path === path : false;
+  const crumbs = path === "" ? [] : [root, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];
 
   return (
     <nav className="pb-breadcrumbs mb-4 text-sm text-muted" data-pb-breadcrumbs aria-label="Breadcrumb">

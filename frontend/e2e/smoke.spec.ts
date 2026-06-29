@@ -105,6 +105,33 @@ test("sidebar folder labels navigate to the landing view; the chevron still coll
   await expectNoReload(page);
 });
 
+test("the new-section affordance creates <dir>/index.md and the folder landing renders it (no child listing)", async ({ page }) => {
+  // C2 end-to-end: ticking "new section" on /new POSTs slug:index with the Folder field as the new
+  // section path, materializing a brand-new nested dir server-side. The unique suffix keeps a retry
+  // (CI runs retries=1) from colliding on an already-created section.
+  const stamp = Date.now();
+  const dir = `runbooks-${stamp}`;
+  const sectionTitle = `Runbooks ${stamp}`;
+
+  await page.goto("/new");
+  await expect(page.locator("[data-pb-new-page-form]")).toBeVisible();
+  await page.locator("[data-pb-new-section]").check();
+  await page.locator("[data-pb-new-folder]").fill(dir);
+  await page.locator("[data-pb-new-title]").fill(sectionTitle);
+  await page.locator("[data-pb-new-create]").click();
+
+  // The index page's own url (/docs/<dir>/index) canonicalizes to the folder landing (/docs/<dir>).
+  await expect(page).toHaveURL(`/docs/${dir}`);
+  // REPLACE semantics: the folder landing IS the index page view (rail present), NOT the generated
+  // listing — neither the listing container nor the generated-folder heading appear.
+  await expect(page.locator("[data-pb-rail]")).toBeVisible();
+  await expect(page.locator("[data-pb-folder-children]")).toHaveCount(0);
+  await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
+  await expect(page.locator(".pb-breadcrumbs")).toContainText(sectionTitle);
+  // The sidebar gains the new section as a folder row labelled by the index page's title (folderTitle).
+  await expect(page.locator(`.pb-sidebar a[href="/docs/${dir}"]`)).toHaveText(sectionTitle);
+});
+
 test("an unknown path serves the shell and the SPA renders the 404 view", async ({ page }) => {
   const response = await page.goto("/docs/nope/never-existed");
   expect(response?.status()).toBe(200); // shell, per the routing matrix

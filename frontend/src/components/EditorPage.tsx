@@ -12,6 +12,8 @@ import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } f
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
+import { PAGE_TEMPLATES } from "../lib/pageTemplates";
+import { previewPath } from "../lib/slugPreview";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
 import { MetaForm } from "./MetaForm";
@@ -454,6 +456,12 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
       await router.navigate({ to: result.created.url });
       return;
     }
+    if (result.kind === "degraded") {
+      // P5: the create degraded to a proposal (agent write outside the direct-commit globs) — nothing landed
+      // on disk to navigate to. Unreachable from the Human/cookie-auth SPA, but the kind is exhaustive.
+      setError("Submitted as a proposal for review.");
+      return;
+    }
     setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
   }
 
@@ -484,11 +492,30 @@ export function NewPage() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [folder, setFolder] = useState("");
+  const [slug, setSlug] = useState("");
+  const [section, setSection] = useState(false);
+  const [templateId, setTemplateId] = useState("blank");
+  const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Normalize the folder ONCE — trim, then strip trailing slash(es) (the SAME normalization
+  // `previewPath` applies) — so the advisory preview and the POST agree: `guides/` previews
+  // `guides/<slug>.md` AND submits `folder: "guides"` (the server rejects the empty trailing segment).
+  const folderPath = folder.trim().replace(/\/+$/, "");
+  // In section mode the Folder field IS the new section's path; a section needs a non-blank path
+  // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
+  const sectionReady = !section || folderPath !== "";
 
   const create = useMutation({
-    mutationFn: () => createPage({ folder: folder.trim() || undefined, title: title.trim() }),
+    mutationFn: () =>
+      createPage({
+        folder: folderPath || undefined,
+        title: title.trim(),
+        // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
+        // slug authority and slugifies it). Blank → undefined → the server slugifies the title.
+        slug: section ? "index" : slug.trim() || undefined,
+        body: body || undefined,
+      }),
     onSuccess: (result) => {
       if (result.kind === "created") {
         invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
@@ -500,6 +527,12 @@ export function NewPage() {
           return;
         }
         void router.navigate({ to: result.created.url });
+        return;
+      }
+      if (result.kind === "degraded") {
+        // P5: an agent CREATE outside `agentDirectCommit.globs` was filed as a proposal, not applied — there
+        // is no page to navigate to. Unreachable from the Human/cookie-auth SPA, but the kind is exhaustive.
+        setNotice("Submitted as a proposal for review.");
         return;
       }
       setError(result.kind === "exists" ? `A page already exists at ${result.exists.path}.` : result.error.message);
@@ -515,7 +548,8 @@ export function NewPage() {
           event.preventDefault();
           setError(null);
           setNotice(null);
-          if (title.trim()) create.mutate();
+          // Guard the blank-section case explicitly so a section create never POSTs without a path.
+          if (title.trim() && sectionReady) create.mutate();
         }}
       >
         <label className="flex flex-col gap-1 text-sm text-muted">
@@ -530,7 +564,7 @@ export function NewPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-muted">
-          Folder (optional)
+          {section ? "Section folder path" : "Folder (optional)"}
           <input
             className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
             data-pb-new-folder
@@ -538,12 +572,77 @@ export function NewPage() {
             onChange={(event) => setFolder(event.target.value)}
             placeholder="guides"
           />
+          {section && <span className="text-xs text-faint">Creates {folderPath ? `${folderPath}/index.md` : "<folder>/index.md"}</span>}
+        </label>
+        {/* Slug + advisory path preview: NON-section only (section forces slug "index", so a typed slug would
+            be silently overridden). The preview is ADVISORY — it lowercases via approxSlug, but the POST
+            forwards the slug verbatim and navigation stays on the server-returned url. */}
+        {!section && (
+          <label className="flex flex-col gap-1 text-sm text-muted">
+            Slug (optional)
+            <input
+              className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
+              data-pb-new-slug
+              value={slug}
+              onChange={(event) => setSlug(event.target.value)}
+              placeholder="my-page"
+            />
+            {(title.trim() || slug.trim()) && (
+              <span className="text-xs text-faint" data-pb-new-preview>
+                approx. ≈ {previewPath(folderPath, slug.trim() || title.trim())}
+              </span>
+            )}
+          </label>
+        )}
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Template
+          <select
+            className="rounded-md border border-edge bg-surface px-3 py-2 text-ink"
+            data-pb-new-template
+            value={templateId}
+            onChange={(event) => {
+              const next = event.target.value;
+              // Guard the no-op re-select so a manual body edit survives re-picking the same template.
+              if (next === templateId) return;
+              const template = PAGE_TEMPLATES.find((t) => t.id === next);
+              setTemplateId(next);
+              // Selecting a template is an explicit action: replace the body with its scaffold (Blank → "").
+              setBody(template?.body ?? "");
+            }}
+          >
+            {PAGE_TEMPLATES.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-muted">
+          Body
+          <textarea
+            className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
+            data-pb-new-body
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Page body (Markdown)"
+            rows={8}
+          />
+        </label>
+        <label className="flex items-start gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            className="mt-0.5 rounded border border-edge bg-surface text-accent"
+            data-pb-new-section
+            checked={section}
+            onChange={(event) => setSection(event.target.checked)}
+          />
+          <span>Create a new section (this page becomes its landing page)</span>
         </label>
         <button
           type="submit"
           className="self-start rounded-md border border-edge bg-accent px-4 py-2 text-sm font-medium text-accent-contrast disabled:opacity-50"
           data-pb-new-create
-          disabled={create.isPending || !title.trim()}
+          disabled={create.isPending || !title.trim() || !sectionReady}
         >
           {create.isPending ? "Creating…" : "Create page"}
         </button>

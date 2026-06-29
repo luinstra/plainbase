@@ -6,27 +6,40 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.CommitGlob
+import com.plainbase.domain.service.CreateIntent
+import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
+import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposalService
+import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.UuidV7ProposalIdProvider
+import com.plainbase.domain.service.WriteOrigin
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.headCommits
 import com.plainbase.frameworks.git.openOracle
 import com.plainbase.frameworks.git.providerOver
+import com.plainbase.frameworks.ktor.routes.composeDocument
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -121,6 +134,64 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         }
         withClue(created.bodyAsText()) { created.status shouldBe HttpStatusCode.Created }
         return Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content
+    }
+
+    /**
+     * Builds the create-apply facade graph DIRECTLY (no Ktor) over a temp tree — the two-principal create-apply tests
+     * need an AGENT proposer/degrader AND an ADMIN/agent approver, which the single-fixed-principal [withApp] cannot
+     * drive. Wires the `mutate <-> proposals` construction cycle the SAME 2-phase-lateinit way [buildRouteContext]
+     * does. [block] receives the harness, the content store, the proposal facade, the mutating facade, and the root.
+     */
+    fun withCreateApplyHarness(
+        enforced: Boolean,
+        globs: List<CommitGlob> = emptyList(),
+        historyFactory: (Path) -> HistoryProvider = { com.plainbase.frameworks.git.NoOpHistoryProvider },
+        block: (IndexHarness, LocalContentStore, GuardedProposalFacade, GuardedMutatingFacade, Path) -> Unit,
+    ) {
+        val root = Files.createTempDirectory("plainbase-create-apply")
+        try {
+            Files.writeString(root.resolve("doc.md"), docBody)
+            val store = LocalContentStore(root)
+            val history = historyFactory(root)
+            IndexHarness(root, contentStore = store, history = history).use { harness ->
+                history.prepare()
+                harness.builder.rebuild()
+                val policy = PolicyService(
+                    harness.roleRepository,
+                    harness.apiTokenRepository,
+                    harness.auditRepository,
+                    com.plainbase.domain.service.UuidV7IdProvider(),
+                    Clock.System,
+                    enforced = enforced,
+                )
+                val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
+                val pipeline = harness.writePipeline(pipelineHook, store)
+                val proposalService = ProposalService(
+                    harness.proposalRepository,
+                    citations,
+                    IndexProposalBaseReader(harness.builder, store),
+                    UuidV7ProposalIdProvider(),
+                    Clock.System,
+                )
+                lateinit var proposalsFacade: ProposalFacade
+                val mutate = GuardedMutatingFacade(
+                    policy = policy,
+                    writePipeline = pipeline,
+                    contentStore = store,
+                    indexBuilder = harness.builder,
+                    proposals = { proposalsFacade },
+                    agentDirectCommitGlobs = globs,
+                    proposalLabeler = labeler,
+                )
+                val facade =
+                    GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
+                proposalsFacade = facade
+                block(harness, store, facade, mutate, root)
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
     }
 
     // ---- Authz (enforced) ----------------------------------------------------------------------------
@@ -325,7 +396,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
-            val facade = GuardedProposalFacade(policy, proposalService, labeler, mutate)
+            val facade = GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
             val admin = Principal.Human("builtin", "admin")
             val proposalId = app.proposeEdit(id, hash)
             val pid = com.plainbase.domain.page.ProposalId.require(proposalId)
@@ -367,7 +438,11 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val fakeMutate = object : com.plainbase.domain.service.MutatingFacade {
                 override fun save(principal: Principal, request: SaveRequest): SaveResult =
                     SaveResult.Written(WriteOutcome.Unreadable(cause = "/var/lib/plainbase/secret/doc.md: permission denied"))
-                override fun create(principal: Principal, intent: com.plainbase.domain.service.CreateIntent) = error("unused")
+                override fun create(
+                    principal: Principal,
+                    intent: com.plainbase.domain.service.CreateIntent,
+                    origin: com.plainbase.domain.service.WriteOrigin,
+                ) = error("unused")
                 override fun writeAsset(
                     principal: Principal,
                     pageId: PageId,
@@ -384,6 +459,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     proposalService,
                     ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository),
                     fakeMutate,
+                    com.plainbase.domain.service.UuidV7IdProvider(),
                 )
             val outcome = facade.approve(Principal.Human("builtin", "admin"), pid)
             (outcome as ApplyOutcome.Failed).reason shouldBe "unreadable" // the STABLE string, never the raw cause
@@ -395,25 +471,225 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         }
     }
 
-    test("CREATE-apply unsupported -> 422 create_apply_unsupported; FAILED + status_reason; NO content write; never APPLYING") {
+    // ---- create-apply (C1) ---------------------------------------------------------------------------
+
+    test("create-apply: ADMIN approve of a create-proposal MATERIALIZES the page; APPLIED; live bytes == proposed (id baked)") {
         withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
             val created = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody("""{"operation":"create","target_path":"guides/brand-new.md","proposed_content":"# New\n","rationale":"r"}""")
             }
-            created.status shouldBe HttpStatusCode.Created
-            val proposalId = Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content
+            withClue(created.bodyAsText()) { created.status shouldBe HttpStatusCode.Created }
+            val detail0 = Json.parseToJsonElement(created.bodyAsText()).jsonObject
+            val proposalId = detail0.getValue("id").jsonPrimitive.content
+            // The create proposal carries a non-null page_id (minted at propose time) baked into the stored blob.
+            val pid = com.plainbase.domain.page.ProposalId.require(proposalId)
+            val pageId = harness.proposalRepository.findById(pid)!!.pageId!!.value
             val resp = app.client.post("/api/v1/changes/$proposalId/approve")
+            withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
+            val onDisk = store.read(TreePath.require("guides/brand-new.md"))!!.decodeToString()
+            onDisk shouldContain "id: $pageId" // the propose-time minted id is what landed (verbatim apply)
+            harness.proposalRepository.findById(pid)!!.status shouldBe ProposalStatus.APPLIED
+        }
+    }
+
+    test(
+        "create-apply two-ADMIN race: exactly one wins claimApplying (200 applied); the loser is 409 not_pending; the page is written ONCE",
+    ) {
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, ctx, _ ->
+            val created = app.client.post("/api/v1/changes") {
+                contentType(json)
+                setBody("""{"operation":"create","target_path":"guides/race.md","proposed_content":"# Race\n","rationale":"r"}""")
+            }
+            val pid = com.plainbase.domain.page.ProposalId.require(
+                Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content,
+            )
+            val admin = Principal.Human("builtin", "admin")
+            val outcomes = mutableListOf<ApplyOutcome>()
+            val a = thread {
+                val o = ctx.proposals.approve(admin, pid)
+                synchronized(outcomes) { outcomes.add(o) }
+            }
+            val b = thread {
+                val o = ctx.proposals.approve(admin, pid)
+                synchronized(outcomes) { outcomes.add(o) }
+            }
+            a.join()
+            b.join()
+            outcomes.count { it is ApplyOutcome.Applied } shouldBe 1
+            outcomes.count { it is ApplyOutcome.NotPending } shouldBe 1
+            harness.proposalRepository.findById(pid)!!.status shouldBe ProposalStatus.APPLIED
+            store.read(TreePath.require("guides/race.md"))!!.decodeToString() shouldContain "# Race"
+        }
+    }
+
+    test("create-degrade: an out-of-glob COMMIT agent POST /pages is a 202 + proposal_id (NOT 403); a PENDING create-proposal exists") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
+            val resp = app.client.post("/api/v1/pages") {
+                contentType(json)
+                setBody("""{"folder":"guides","title":"Degraded"}""")
+            }
+            withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
+            val body = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
+            body.getValue("proposal_id").jsonPrimitive.content.shouldNotContain(" ")
+            val row = harness.proposalRepository.all().single()
+            row.operation shouldBe ProposalOperation.CREATE
+            row.status shouldBe ProposalStatus.PENDING
+            row.pageId shouldNotBe null // minted at the route, baked into the stored blob
+        }
+    }
+
+    test("create-degrade: a READ_ONLY agent POST /pages is 403 (the degrade's inner checkCreate denies); NO proposal stored") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.READ_ONLY) { app, harness, _, _, _ ->
+            val resp = app.client.post("/api/v1/pages") {
+                contentType(json)
+                setBody("""{"folder":"guides","title":"Nope"}""")
+            }
+            resp.status shouldBe HttpStatusCode.Forbidden
+            harness.proposalRepository.all() shouldHaveSize 0
+        }
+    }
+
+    test(
+        "approved OUT-of-glob create LANDS (the PROPOSAL_APPLY bypass); + an off-mode AGENT approver still lands (keys on WriteOrigin, not principal)",
+    ) {
+        // ENFORCED: a COMMIT agent's out-of-glob create degrades; an ADMIN approve must LAND it (never re-degrade).
+        withCreateApplyHarness(enforced = true) { harness, store, facade, mutate, _ ->
+            val agent = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
+            harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
+            val admin = Principal.Human("builtin", "admin")
+            val pageId = UuidV7IdProvider().next()
+            val bytes = composeDocument(pageId.value, "Landed", null, "# body\n")
+            val degraded = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/landed.md"), bytes), WriteOrigin.DIRECT_PUT)
+            val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
+            facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
+            store.read(TreePath.require("guides/landed.md"))!!.contentEquals(bytes) shouldBe true
+            harness.proposalRepository.findById(pid)!!.status shouldBe ProposalStatus.APPLIED
+        }
+        // OFF-MODE: the SAME approve driven by a Principal.Agent approver still lands — the bypass keys on the
+        // WriteOrigin discriminator, not the approver's principal type (finding #11).
+        withCreateApplyHarness(enforced = false) { harness, store, facade, mutate, _ ->
+            val agent = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.PROPOSE).id)
+            val pageId = UuidV7IdProvider().next()
+            val bytes = composeDocument(pageId.value, "OffMode", null, "# body\n")
+            val degraded = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/offmode.md"), bytes), WriteOrigin.DIRECT_PUT)
+            val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
+            // The approver is the AGENT itself (auth.mode=off permits everyone).
+            facade.approve(agent, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
+            store.read(TreePath.require("guides/offmode.md"))!!.contentEquals(bytes) shouldBe true
+            harness.proposalRepository.findById(pid)!!.status shouldBe ProposalStatus.APPLIED
+        }
+    }
+
+    test("in-glob COMMIT agent create is git-attributed to the agent (author == committer == the agent identity)") {
+        val gitFactory: (Path) -> HistoryProvider = { root ->
+            val home = Files.createTempDirectory("plainbase-create-attr-home")
+            providerOver(GitExecutor(workTree = root, home = home), root, home)
+        }
+        withCreateApplyHarness(enforced = true, globs = listOf(CommitGlob.parse("guides/**")), historyFactory = gitFactory) {
+                harness,
+                _,
+                _,
+                mutate,
+                root,
+            ->
+            val agentId = harness.apiTokens.mint(label = "ci-bot", mode = AgentMode.COMMIT).id
+            val agent = Principal.Agent(agentId)
+            val pageId = UuidV7IdProvider().next()
+            val bytes = composeDocument(pageId.value, "Direct", null, "# body\n")
+            val outcome = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/direct.md"), bytes), WriteOrigin.DIRECT_PUT)
+            outcome.shouldBeInstanceOf<CreateOutcome.DirectCreated>()
+            openOracle(root).use { repo ->
+                val head = repo.headCommits().first()
+                head.authorIdent.name shouldBe "ci-bot"
+                head.authorIdent.emailAddress shouldBe "$agentId@agent.plainbase.local"
+                head.committerIdent.emailAddress shouldBe "$agentId@agent.plainbase.local"
+            }
+        }
+    }
+
+    test("create-apply git attribution: the commit author == the snapshotted proposer, committer == the approving ADMIN") {
+        val gitFactory: (Path) -> HistoryProvider = { root ->
+            val home = Files.createTempDirectory("plainbase-create-apply-attr-home")
+            providerOver(GitExecutor(workTree = root, home = home), root, home)
+        }
+        withCreateApplyHarness(enforced = true, historyFactory = gitFactory) { harness, _, facade, _, root ->
+            val agentId = harness.apiTokens.mint(label = "ci-bot", mode = AgentMode.PROPOSE).id
+            val agent = Principal.Agent(agentId)
+            harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
+            val admin = Principal.Human("builtin", "admin")
+            // Agent proposes a create (the facade mints + patches the id); ADMIN approves.
+            facade.propose(agent, ProposeCommand.Create(TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"))
+            val pid = harness.proposalRepository.all().single().id
+            facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
+            openOracle(root).use { repo ->
+                val head = repo.headCommits().first()
+                head.authorIdent.name shouldBe "ci-bot"
+                head.authorIdent.emailAddress shouldBe "$agentId@agent.plainbase.local"
+                head.committerIdent.emailAddress shouldBe "admin@builtin.plainbase.local"
+            }
+        }
+    }
+
+    test("terminal create FAILED surfaces create_path_taken on get_change (a second create over an occupied path)") {
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, _ ->
+            suspend fun proposeCreate() = Json.parseToJsonElement(
+                app.client.post("/api/v1/changes") {
+                    contentType(json)
+                    setBody("""{"operation":"create","target_path":"guides/dup.md","proposed_content":"# Dup\n","rationale":"r"}""")
+                }.bodyAsText(),
+            ).jsonObject.getValue("id").jsonPrimitive.content
+            val first = proposeCreate()
+            app.client.post("/api/v1/changes/$first/approve").status shouldBe HttpStatusCode.OK
+            // A SECOND create proposal at the SAME path; approving it hits AlreadyExists -> FAILED create_path_taken.
+            val second = proposeCreate()
+            val resp = app.client.post("/api/v1/changes/$second/approve")
             resp.status shouldBe HttpStatusCode.UnprocessableEntity
-            Json.parseToJsonElement(
-                resp.bodyAsText(),
-            ).jsonObject.getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
-                "create_apply_unsupported"
-            val row = harness.proposalRepository.findById(com.plainbase.domain.page.ProposalId.require(proposalId))!!
-            row.status shouldBe ProposalStatus.FAILED
-            row.statusReason shouldBe "create_apply_unsupported"
-            // No new file was written at the target path.
-            store.read(TreePath.require("guides/brand-new.md")) shouldBe null
+            Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("error").jsonObject
+                .getValue("code").jsonPrimitive.content shouldBe "apply_failed"
+            val detail = Json.parseToJsonElement(app.client.get("/api/v1/changes/$second").bodyAsText()).jsonObject
+            detail.getValue("status").jsonPrimitive.content shouldBe "FAILED"
+            detail.getValue("status_reason").jsonPrimitive.content shouldBe "create_path_taken"
+        }
+    }
+
+    test(
+        "explicit malformed create propose -> 400 invalid_create_content; a no-frontmatter blob is ACCEPTED; an agent-supplied id -> 400",
+    ) {
+        withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, _, _, _ ->
+            // Malformed (non-mapping) frontmatter — the patcher refuses.
+            val malformed = app.client.post("/api/v1/changes") {
+                contentType(json)
+                setBody(
+                    """{"operation":"create","target_path":"guides/bad.md","proposed_content":${
+                        Json.encodeToString("---\n\"quoted key\": v\n---\n\nbody\n")
+                    },"rationale":"r"}""",
+                )
+            }
+            malformed.status shouldBe HttpStatusCode.BadRequest
+            Json.parseToJsonElement(malformed.bodyAsText()).jsonObject.getValue("error").jsonObject
+                .getValue("code").jsonPrimitive.content shouldBe "invalid_create_content"
+            // An agent-supplied frontmatter id — the server is the sole identity authority -> refuse.
+            val suppliedId = app.client.post("/api/v1/changes") {
+                contentType(json)
+                setBody(
+                    """{"operation":"create","target_path":"guides/own-id.md","proposed_content":${
+                        Json.encodeToString("---\nid: 0190ffff-ffff-7fff-8fff-ffffffffffff\n---\n\nbody\n")
+                    },"rationale":"r"}""",
+                )
+            }
+            suppliedId.status shouldBe HttpStatusCode.BadRequest
+            // A no-frontmatter blob is VALID — the patcher prepends a fresh id block.
+            val plain = app.client.post("/api/v1/changes") {
+                contentType(json)
+                setBody(
+                    """{"operation":"create","target_path":"guides/plain.md","proposed_content":"# Just a heading\n","rationale":"r"}""",
+                )
+            }
+            plain.status shouldBe HttpStatusCode.Created
+            // Only the accepted (no-frontmatter) create persisted a row.
+            harness.proposalRepository.all() shouldHaveSize 1
+            harness.proposalRepository.all().single().pageId shouldNotBe null
         }
     }
 
@@ -522,7 +798,8 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         UuidV7ProposalIdProvider(),
                         Clock.System,
                     )
-                val facade = GuardedProposalFacade(policy, proposalService, labeler, mutate)
+                val facade =
+                    GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
                 // Propose (agent) then approve (admin).
                 val page = harness.builder.current.pages.single()
                 facade.propose(

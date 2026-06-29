@@ -118,14 +118,6 @@ SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
     approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
 WHERE id = :id AND status = 'APPLYING';
 
--- DIRECT terminal CAS: PENDING -> FAILED (the create-unsupported path — NEVER claims APPLYING, so a CREATE
--- proposal can never enter APPLYING; mirrors the `reject` PENDING->REJECTED conditional idiom).
-failPending:
-UPDATE proposals
-SET status = 'FAILED', status_reason = :statusReason, decided_at = :at,
-    approver_issuer = :approverIssuer, approver_external_id = :approverExternalId
-WHERE id = :id AND status = 'PENDING';
-
 -- Terminal CAS: CONFLICTED -> FAILED (the rebase `Gone` path — the target page was deleted; stamps a durable
 -- reason so the row is not a dangling CONFLICTED. No approver — the rebase actor lives in the audit row).
 failConflicted:

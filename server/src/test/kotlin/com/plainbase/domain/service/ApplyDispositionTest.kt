@@ -64,9 +64,12 @@ class ApplyDispositionTest : FunSpec({
         dispositionOf(WriteOutcome.UnsupportedEdit(field = "id"), proposed) shouldBe ApplyDisposition.Failed("unsupported_edit: id")
     }
 
-    test("the three create-only variants map defensively to Failed (unreachable on the P1b edit path)") {
-        dispositionOf(WriteOutcome.AlreadyExists(path), proposed) shouldBe ApplyDisposition.Failed("already_exists: ${path.value}")
-        dispositionOf(WriteOutcome.SlugConflict("guides/x"), proposed) shouldBe ApplyDisposition.Failed("slug_conflict: guides/x")
-        dispositionOf(WriteOutcome.InvalidLocation("bad"), proposed) shouldBe ApplyDisposition.Failed("invalid_location: bad")
+    test("the three create-only variants map to a STABLE, no-interpolation create_* Failed reason (C1, REACHABLE)") {
+        // No interpolation: a varying path/url/reason does NOT change the wire status_reason (deterministic + no leak).
+        dispositionOf(WriteOutcome.AlreadyExists(path), proposed) shouldBe ApplyDisposition.Failed("create_path_taken")
+        dispositionOf(WriteOutcome.AlreadyExists(TreePath.require("other/x.md")), proposed) shouldBe
+            ApplyDisposition.Failed("create_path_taken")
+        dispositionOf(WriteOutcome.SlugConflict("guides/x"), proposed) shouldBe ApplyDisposition.Failed("create_slug_conflict")
+        dispositionOf(WriteOutcome.InvalidLocation("bad"), proposed) shouldBe ApplyDisposition.Failed("create_invalid_location")
     }
 })

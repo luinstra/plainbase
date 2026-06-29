@@ -166,18 +166,22 @@ class FrontmatterReader : FrontmatterParser {
         }
     }
 
-    /** Decodes the YAML double-quoted escapes this tree emits: `\"` → `"`, `\\` → `\`; other `\x` kept verbatim. */
+    /**
+     * Decodes the YAML double-quoted escapes this tree emits — `\"`, `\\`, and the C-style control escapes
+     * `\n`/`\r`/`\t` (the inverse of the create composer's `yamlDoubleQuoted`, so a composed title/slug bearing a
+     * newline round-trips byte-faithfully); any other `\x` is kept verbatim.
+     */
     private fun unescapeDoubleQuoted(inner: String): String {
         if ('\\' !in inner) return inner
         return buildString(inner.length) {
             var i = 0
             while (i < inner.length) {
-                val c = inner[i]
-                if (c == '\\' && i + 1 < inner.length && (inner[i + 1] == '"' || inner[i + 1] == '\\')) {
-                    append(inner[i + 1])
+                val decoded = if (inner[i] == '\\' && i + 1 < inner.length) DOUBLE_QUOTED_ESCAPES[inner[i + 1]] else null
+                if (decoded != null) {
+                    append(decoded)
                     i += 2
                 } else {
-                    append(c)
+                    append(inner[i])
                     i++
                 }
             }
@@ -189,5 +193,8 @@ class FrontmatterReader : FrontmatterParser {
 
         /** Value-position YAML indicators that put a key outside the §C2 subset: block scalars, anchors/aliases, tags. */
         private val OUT_OF_SUBSET_VALUE_INDICATORS = setOf('|', '>', '&', '*', '!')
+
+        /** The YAML double-quoted escapes this tree emits, mapped to their decoded char (the create composer's inverse). */
+        private val DOUBLE_QUOTED_ESCAPES = mapOf('"' to '"', '\\' to '\\', 'n' to '\n', 'r' to '\r', 't' to '\t')
     }
 }

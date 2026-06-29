@@ -6,13 +6,16 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.service.CreateIntent
+import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.CreatePageRequest
 import com.plainbase.frameworks.ktor.dto.CreatedButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.CreatedResponse
+import com.plainbase.frameworks.ktor.dto.DegradedToProposalResponse
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageExistsBody
 import com.plainbase.frameworks.ktor.dto.PageExistsEnvelope
+import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WriteWarningCode
@@ -136,10 +139,26 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                     return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
                 }
 
-                // The guarded facade owns the CREATE check + the write. The clean-create 201 url is looked up
-                // from the now-published snapshot via the read facade (a creator is an EDITOR who may read).
-                val outcome = ctx.mutate.create(principal, CreateIntent(pageId = id, path = path, bytes = bytes))
-                call.respondCreateOutcome(outcome, id) { ctx.read.currentSnapshot(principal, id.value) }
+                // The guarded facade owns the CREATE check + the write. A Human/Anonymous/in-glob-agent create is a
+                // DirectCreated (201 / the existing create wire); an out-of-glob/non-COMMIT/null-mode agent degrades to
+                // a create-proposal (202, the create twin of the PUT degrade); a refused blob is a 400. The clean-create
+                // 201 url is looked up from the now-published snapshot via the read facade (a creator is an EDITOR who
+                // may read).
+                when (val result = ctx.mutate.create(principal, CreateIntent(pageId = id, path = path, bytes = bytes))) {
+                    is CreateOutcome.DirectCreated ->
+                        call.respondCreateOutcome(result.outcome, id) { ctx.read.currentSnapshot(principal, id.value) }
+                    is CreateOutcome.DegradedToProposal -> call.respondRest(
+                        DegradedToProposalResponse.serializer(),
+                        DegradedToProposalResponse(
+                            proposalId = result.proposalId.value,
+                            status = ProposalStatusWire.PENDING,
+                            unifiedDiff = result.unifiedDiff,
+                        ),
+                        HttpStatusCode.Accepted,
+                    )
+                    is CreateOutcome.InvalidContent ->
+                        call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_CREATE_CONTENT, result.message)
+                }
             }
         }
     }
@@ -205,37 +224,6 @@ private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
         HttpStatusCode.Conflict,
     )
 }
-
-/**
- * Composes the minimal frontmatter block (the minted [id], [title], optional [slug]) + [body], written
- * VERBATIM. The `id:` line is plain ASCII (the patcher's shape); `title`/`slug` are emitted as
- * YAML double-quoted scalars (quote-always) with `\` and `"` escaped, so a value bearing `:`/`[`/`>`/
- * `@`/`|`/`&`/`*`/`!`/quotes/backslashes/unicode composes to VALID YAML the reader reads back EXACTLY
- * (the inverse of ADR-0001: the writer must never PRODUCE ambiguous YAML).
- */
-private fun composeDocument(id: String, title: String, slug: String?, body: String?): ByteArray =
-    buildString {
-        append("---\n")
-        append("id: ").append(id).append('\n')
-        append("title: ").append(yamlDoubleQuoted(title)).append('\n')
-        if (slug != null) append("slug: ").append(yamlDoubleQuoted(slug)).append('\n')
-        append("---\n\n")
-        append(body.orEmpty())
-    }.toByteArray(Charsets.UTF_8)
-
-/** A YAML double-quoted scalar: `"` + the value with `\` and `"` backslash-escaped + `"`. */
-private fun yamlDoubleQuoted(value: String): String =
-    buildString(value.length + 2) {
-        append('"')
-        for (c in value) {
-            when (c) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                else -> append(c)
-            }
-        }
-        append('"')
-    }
 
 /**
  * The route's OWN exhaustive [WriteOutcome] → wire mapping (it does NOT reuse `toWire`). Only four

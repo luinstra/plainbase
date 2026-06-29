@@ -58,17 +58,17 @@ An admin declines a pending change, optionally with a comment. A 200 marks it
 rejected. A 409 not-pending means the change was already decided. A 404 means no
 such change.
 
-### Approve (apply an edit)
+### Approve (apply a change)
 
 `POST /api/v1/changes/{id}/approve`
 
-A 200 applies the edit to disk and Git, returning the new content hash, an
-optional commit, the applied timestamp, and optional warnings (a deferred-reindex
-note when the bytes landed but the search index heals on the next boot). A 409
-conflicted means the page drifted under the proposal; it is rebasable. A 409
-not-pending means the change was already decided. A 404 means no such change. A
-422 apply-failed means the edit could not be applied, and a 422
-create-apply-unsupported means approving a create (deferred to a later release).
+A 200 applies the change to disk and Git — an edit overwrites the page, a create
+writes the new file (a section create lands its `<dir>/index.md`) — returning the
+new content hash, an optional commit, the applied timestamp, and optional warnings
+(a deferred-reindex note when the bytes landed but the search index heals on the
+next boot). A 409 conflicted means the page drifted under the proposal; it is
+rebasable. A 409 not-pending means the change was already decided. A 404 means no
+such change. A 422 apply-failed means the change could not be applied.
 
 ### Rebase (a conflicted edit)
 

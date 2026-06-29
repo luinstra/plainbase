@@ -136,8 +136,9 @@ export interface WrittenButUnindexedResponse {
 }
 
 /**
- * 202 (P5): an agent COMMIT write outside agentDirectCommit.globs, degraded to a proposal. Clients MUST check
- * `degraded`/status before treating a PUT response as an applied write. NEVER a field on the frozen WrittenResponse.
+ * 202 (P5): an agent COMMIT write outside agentDirectCommit.globs, degraded to a proposal. Both `PUT
+ * /api/v1/pages/{id}` (edit) AND `POST /api/v1/pages` (create) can answer with this. Clients MUST check
+ * `degraded`/status before treating a 2xx as an applied write/create. NEVER a field on the frozen WrittenResponse.
  */
 export interface DegradedToProposalResponse {
   degraded: true;
@@ -324,7 +325,8 @@ export type ProposalStatus = "PENDING" | "APPLYING" | "APPLIED" | "REJECTED" | "
 /** The frozen operation set — lowercase on the wire (append-only). */
 export type ProposalOperation = "edit" | "create";
 
-/** A `list_changes` element. `page_id` is null for a create; `base_drifted` is the live triage datum. */
+/** A `list_changes` element. `page_id` carries the target page's id — server-reserved at propose/degrade time
+ *  for a create — or null when none is bound; `base_drifted` is the live triage datum. */
 export interface ChangeSummary {
   id: string;
   operation: ProposalOperation;

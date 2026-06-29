@@ -155,7 +155,9 @@ class WritePipeline(
     private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
         try {
             idMap.bind(intent.path, intent.pageId, materialized = true) // the create composed the id INTO frontmatter
-            val commit = historyHook.commit(intent.path, intent.bytes) // W5: the create's commit SHA (null off Git)
+            // W5/C1: the create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
+            // identity); create-apply threads the proposer->author + approver->committer (an in-glob agent: both = agent).
+            val commit = historyHook.commit(intent.path, intent.bytes, intent.author, intent.committer)
             indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
             // P2: rebuild()'s publication-listener search sync is best-effort (its listener exceptions are
             // swallowed+logged), so a failed FTS sync would otherwise yield a clean 201 with the page
@@ -349,9 +351,18 @@ data class WriteIntent(
  * One new-page creation (PB-WRITE-1, chunk W2). [path] is the server-derived on-disk location,
  * [pageId] the freshly minted identity (materialized into [bytes]' frontmatter from birth), [bytes]
  * the EXACT composed document buffer to write VERBATIM (frontmatter + body) — never reserialized.
+ * [author]/[committer] are the optional git attribution C1 threads from the create-apply call site (the
+ * proposer->author, approver->committer); a plain POST /pages leaves them null → the server default identity (and an
+ * in-glob COMMIT agent direct create stamps the agent identity as BOTH, the `save()` b1 idiom).
  */
 // Array field on a one-shot param (never a map key) — no generated equals/hashCode (house style).
-data class CreateIntent(val pageId: PageId, val path: TreePath, val bytes: ByteArray)
+data class CreateIntent(
+    val pageId: PageId,
+    val path: TreePath,
+    val bytes: ByteArray,
+    val author: CommitIdentity? = null,
+    val committer: CommitIdentity? = null,
+)
 
 /**
  * The Git seam (PB-WRITE-1): a no-op default in W1, keeping the `WrittenButUnindexed`/commit-recovery

@@ -3,6 +3,7 @@ package com.plainbase.frameworks.markdown
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterValue
 import com.plainbase.frameworks.filesystem.Fixtures
+import com.plainbase.frameworks.ktor.routes.composeDocument
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -132,5 +133,16 @@ class FrontmatterExtractionTest : FunSpec({
     test("duplicate keys: last value wins") {
         val fm = parseInline("---\ntitle: first\ntitle: second\n---\n# B\n")
         fm.scalar("title") shouldBe "second"
+    }
+
+    // ---- composer↔reader seam: a scalar bearing control chars composes to VALID one-line YAML the reader
+    // decodes back EXACTLY (the C-style `\n`/`\r`/`\t` escapes round-trip; an unescaped newline would flow-fold). ----
+
+    test("composeDocument escapes newline/CR/tab in a scalar so the reader round-trips it EXACTLY") {
+        val title = "Line one\nLine two"
+        val slug = "tab\tand\rcr"
+        val fm = reader.parse(composeDocument("01900000-0000-7000-8000-000000000000", title, slug, "# body\n"))
+        fm.scalar("title") shouldBe title
+        fm.scalar("slug") shouldBe slug
     }
 })

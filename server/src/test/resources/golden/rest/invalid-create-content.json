@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "invalid_create_content",
+    "message": "a create proposal must not supply its own frontmatter id; the server mints it"
+  }
+}

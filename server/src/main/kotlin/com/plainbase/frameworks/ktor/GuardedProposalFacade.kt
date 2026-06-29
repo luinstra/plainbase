@@ -3,7 +3,12 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.service.ApplyOutcome
+import com.plainbase.domain.service.CreateIntent
+import com.plainbase.domain.service.CreateOutcome
+import com.plainbase.domain.service.FrontmatterPatcher
+import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalApprover
@@ -39,6 +44,9 @@ class GuardedProposalFacade(
     private val proposals: ProposalService,
     private val labeler: ProposalAuthorLabeler,
     private val mutate: MutatingFacade,
+    // C1 (SD-1): the explicit-propose create path mints the page id server-side, then PATCHES it into the agent's
+    // whole-doc blob via the surgical FrontmatterPatcher (the server owns identity; the agent owns the body/title/slug).
+    private val idProvider: IdProvider,
 ) : ProposalFacade {
 
     override fun propose(principal: Principal, command: ProposeCommand): ProposeOutcome =
@@ -57,17 +65,43 @@ class GuardedProposalFacade(
                     author = labeler.resolve(principal),
                 )
             }
-            is ProposeCommand.Create -> {
-                val grant = policy.checkCreate(principal, ProposalCommandResource.PROPOSE)
-                proposals.proposeCreate(
-                    grant = grant,
-                    targetPath = command.targetPath,
-                    proposedContent = command.proposedContent,
-                    rationale = command.rationale,
-                    author = labeler.resolve(principal),
-                )
-            }
+            is ProposeCommand.Create -> proposeCreate(principal, command)
         }
+
+    /**
+     * SD-1 — patch-the-blob: the server owns identity. `checkCreate` FIRST (READ_ONLY/revoked deny HERE, before any
+     * mint/patch). The EXPLICIT-propose path supplies NO id, so the server mints one and splices ONLY the `id:` line
+     * into the agent's whole-doc blob via the surgical [FrontmatterPatcher] (the agent's title/slug stay untouched —
+     * the patcher inserts only the id; a no-frontmatter blob gets a fresh block prepended). The DEGRADE path already
+     * minted + baked the id at the create route (`command.pageId` set) — store both verbatim, no re-mint, no re-patch.
+     */
+    private fun proposeCreate(principal: Principal, command: ProposeCommand.Create): ProposeOutcome {
+        val grant = policy.checkCreate(principal, ProposalCommandResource.PROPOSE)
+        val (pageId, bakedBytes) = when (val pre = command.pageId) {
+            null -> {
+                val minted = idProvider.next()
+                when (val patched = PATCHER.patch(command.proposedContent, minted)) {
+                    is FrontmatterPatcher.PatchResult.Patched -> minted to patched.bytes
+                    // The agent supplied its OWN column-0 `id:` — reject; the server is the sole identity authority.
+                    FrontmatterPatcher.PatchResult.AlreadyPresent ->
+                        return ProposeOutcome.InvalidCreateContent(
+                            "a create proposal must not supply its own frontmatter id; the server mints it",
+                        )
+                    // Malformed / non-mapping / oversized / invalid-encoding frontmatter — the patcher's stable rule string.
+                    is FrontmatterPatcher.PatchResult.Refused -> return ProposeOutcome.InvalidCreateContent(patched.message)
+                }
+            }
+            else -> pre to command.proposedContent
+        }
+        return proposals.proposeCreate(
+            grant = grant,
+            pageId = pageId,
+            targetPath = command.targetPath,
+            proposedContent = bakedBytes,
+            rationale = command.rationale,
+            author = labeler.resolve(principal),
+        )
+    }
 
     override fun reject(principal: Principal, id: ProposalId, comment: String?): RejectOutcome {
         val grant = policy.checkApprove(principal, ProposalCommandResource.approve(id))
@@ -82,22 +116,34 @@ class GuardedProposalFacade(
         val grant = policy.checkApprove(principal, ProposalCommandResource.apply(id))
         val approverAuthor = labeler.resolve(principal)
         val writer = ProposalContentWriter { row, author, committer ->
-            // EDIT-only: a CREATE row is short-circuited in ProposalService.apply BEFORE this lambda runs, so
-            // row.pageId/baseHash are non-null here (the edit invariant).
-            mutate.save(
-                principal,
-                SaveRequest(
-                    pageId = requireNotNull(row.pageId) { "an EDIT proposal must carry a page_id" },
-                    baseHash = requireNotNull(row.baseHash) { "an EDIT proposal must carry a base_hash" },
-                    bytes = row.proposedContent,
-                    author = author,
-                    committer = committer,
-                    // P5: the apply path carries already-approved, already-reviewed content — WriteOrigin.PROPOSAL_APPLY
-                    // makes GuardedMutatingFacade.save bypass the agent direct-commit/degrade decision ENTIRELY, even
-                    // when `principal` is a Principal.Agent (an off-mode agent can drive approve — finding #11).
+            // C1: the writer branches on the row's operation. BOTH paths carry already-approved, already-reviewed
+            // content and pass WriteOrigin.PROPOSAL_APPLY so the guarded mutating facade bypasses the agent direct-
+            // commit/degrade decision ENTIRELY, even when `principal` is a Principal.Agent (an off-mode agent can drive
+            // approve — finding #11). For a CREATE the bypass is load-bearing: an approved OUT-OF-GLOB create MUST land.
+            when (row.operation) {
+                ProposalOperation.EDIT -> mutate.save(
+                    principal,
+                    SaveRequest(
+                        pageId = requireNotNull(row.pageId) { "an EDIT proposal must carry a page_id" },
+                        baseHash = requireNotNull(row.baseHash) { "an EDIT proposal must carry a base_hash" },
+                        bytes = row.proposedContent,
+                        author = author,
+                        committer = committer,
+                        origin = WriteOrigin.PROPOSAL_APPLY,
+                    ),
+                ).toWriteOutcome()
+                ProposalOperation.CREATE -> mutate.create(
+                    principal,
+                    CreateIntent(
+                        pageId = requireNotNull(row.pageId) { "a CREATE proposal must carry a page_id (minted at propose time)" },
+                        path = row.targetPath,
+                        bytes = row.proposedContent,
+                        author = author,
+                        committer = committer,
+                    ),
                     origin = WriteOrigin.PROPOSAL_APPLY,
-                ),
-            ).toWriteOutcome()
+                ).toWriteOutcome()
+            }
         }
         return proposals.apply(
             grant,
@@ -121,6 +167,11 @@ class GuardedProposalFacade(
         policy.checkRead(principal, ProposalCommandResource.detail(id))
         return proposals.get(id)
     }
+
+    private companion object {
+        /** The single surgical frontmatter patcher (the `GuardedMutatingFacade` idiom) — splices ONLY the `id:` line. */
+        val PATCHER = FrontmatterPatcher()
+    }
 }
 
 /**
@@ -141,4 +192,18 @@ private fun SaveResult.toWriteOutcome(): WriteOutcome = when (this) {
         error("a degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY and never enters the agent decision")
     SaveResult.DegradeStaleBase ->
         error("a degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY and never enters the agent decision")
+}
+
+/**
+ * The [CreateOutcome] -> [WriteOutcome] bridge for the create-apply path (C1, the [SaveResult.toWriteOutcome] sibling).
+ * The apply path passes [WriteOrigin.PROPOSAL_APPLY], so `create()` NEVER enters the agent direct-commit/degrade
+ * decision — the degrade arms are unreachable BY THE ORIGIN DISCRIMINATOR (not by the approver's principal type: an
+ * off-mode agent CAN drive approve — finding #11).
+ */
+private fun CreateOutcome.toWriteOutcome(): WriteOutcome = when (this) {
+    is CreateOutcome.DirectCreated -> outcome
+    is CreateOutcome.DegradedToProposal ->
+        error("a create degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY")
+    is CreateOutcome.InvalidContent ->
+        error("a create degrade is DIRECT_PUT-only; the apply path passes WriteOrigin.PROPOSAL_APPLY")
 }

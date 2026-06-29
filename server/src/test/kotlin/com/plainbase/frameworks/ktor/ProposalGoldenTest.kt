@@ -30,9 +30,11 @@ import kotlinx.serialization.json.Json
  *
  * NEVER-CHANGE: these shapes + the append-only codes `stale_base`/`invalid_propose_request`/`not_pending` froze
  * when P1a landed. PB-PROPOSE-1 GREW in P1b: the apply shapes (200 [ApplyResultResponse] / 409 [ConflictedResponse]
- * / 409 not_pending / 404 not_found / 422 apply_failed / 422 create_apply_unsupported) + the rebase shapes (200
- * [RebasedResponse] / 409 not_conflicted / 422 apply_failed) froze when P1b landed. A field is never removed or
- * retyped; the status/operation vocabularies only grow. See `ForeverApiGoldenSuite.kt`.
+ * / 409 not_pending / 404 not_found / 422 apply_failed) + the rebase shapes (200 [RebasedResponse] / 409
+ * not_conflicted / 422 apply_failed) froze when P1b landed. C1 RETIRED the P1b stop-gap `create_apply_unsupported`
+ * (create-apply now lands — a create FAILED reuses 422 apply_failed with a stable create_* status_reason) and ADDED
+ * the 400 `invalid_create_content` code. A field is never removed or retyped; the vocabularies only grow. See
+ * `ForeverApiGoldenSuite.kt`.
  */
 class ProposalGoldenTest : FunSpec({
 
@@ -207,11 +209,13 @@ class ProposalGoldenTest : FunSpec({
         )
     }
 
-    test("apply-create-unsupported.json — the 422 create_apply_unsupported envelope (deferred to 5.5)") {
+    test("invalid-create-content.json — the 400 invalid_create_content envelope (a create blob the patcher refused)") {
         goldenMatches(
-            "apply-create-unsupported.json",
+            "invalid-create-content.json",
             ErrorEnvelope.serializer(),
-            ErrorEnvelope(ErrorBody("create_apply_unsupported", "create-apply is not supported in this release (deferred)")),
+            ErrorEnvelope(
+                ErrorBody("invalid_create_content", "a create proposal must not supply its own frontmatter id; the server mints it"),
+            ),
             emptyMap(),
         )
     }

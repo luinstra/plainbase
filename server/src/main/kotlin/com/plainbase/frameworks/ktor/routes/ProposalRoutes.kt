@@ -36,13 +36,15 @@ import kotlinx.serialization.SerializationException
  * `call.guarded { }` mapping `AccessDenied` to 401/403, `respondRest`/`respondError`.
  *
  *  - `POST /api/v1/changes` — propose_change. 201 [ProposeChangeResponse]. The full F4 invalid-request matrix is
- *    enforced HERE / in `ProposalService` BEFORE any insert; nothing persisted on rejection.
+ *    enforced HERE / in `ProposalService` BEFORE any insert; nothing persisted on rejection. A create whose blob the
+ *    server can't materialize an id into (FrontmatterPatcher refusal / an agent-supplied id) → 400 `invalid_create_content`.
  *  - `GET /api/v1/changes` — list_changes (checkRead). Returns ALL rows (pagination deferred — the wrapper object
  *    admits an additive `limit`/`cursor` later without a contract break).
  *  - `GET /api/v1/changes/{id}` — get_change (checkRead). 404 on unknown id (existence not leaked — checkRead first).
  *  - `POST /api/v1/changes/{id}/reject` — reject (checkApprove). Rejected->200 ChangeDetail, NotPending->409, NotFound->404.
- *  - `POST /api/v1/changes/{id}/approve` — apply an EDIT (checkApprove). Applied->200 [ApplyResultResponse],
- *    Conflicted->409 [ConflictedResponse], Failed/CreateUnsupported->422, NotPending->409, NotFound->404.
+ *  - `POST /api/v1/changes/{id}/approve` — apply an EDIT or a CREATE (checkApprove). Applied->200 [ApplyResultResponse],
+ *    Conflicted->409 [ConflictedResponse], Failed->422 (a create FAILED carries a stable create_* status_reason),
+ *    NotPending->409, NotFound->404.
  *  - `POST /api/v1/changes/{id}/rebase` — rebase a CONFLICTED edit (checkApprove). Rebased->200 [RebasedResponse],
  *    NotConflicted->409, Gone->422, NotFound->404.
  */
@@ -86,6 +88,11 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                     )
                     ProposeOutcome.InvalidRequest -> call.invalidProposeRequest(
                         "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
+                    )
+                    is ProposeOutcome.InvalidCreateContent -> call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_CREATE_CONTENT,
+                        outcome.message,
                     )
                 }
             }
@@ -161,11 +168,6 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                     )
                     is ApplyOutcome.Failed ->
                         call.respondError(HttpStatusCode.UnprocessableEntity, ErrorCodes.APPLY_FAILED, outcome.reason)
-                    ApplyOutcome.CreateUnsupported -> call.respondError(
-                        HttpStatusCode.UnprocessableEntity,
-                        ErrorCodes.CREATE_APPLY_UNSUPPORTED,
-                        "create-apply is not supported in this release (deferred)",
-                    )
                     ApplyOutcome.NotPending ->
                         call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
                     ApplyOutcome.NotFound ->

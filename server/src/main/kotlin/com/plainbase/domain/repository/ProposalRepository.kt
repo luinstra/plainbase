@@ -81,18 +81,6 @@ interface ProposalRepository {
     ): Boolean
 
     /**
-     * DIRECT terminal CAS: PENDING -> FAILED (the create-unsupported path — NEVER claims APPLYING, so a CREATE
-     * proposal can never enter APPLYING; mirrors the `reject` PENDING->REJECTED idiom). Returns true iff one row moved.
-     */
-    fun failPending(
-        id: ProposalId,
-        statusReason: String,
-        approverIssuer: String?,
-        approverExternalId: String?,
-        at: Instant,
-    ): Boolean
-
-    /**
      * Terminal CAS: CONFLICTED -> FAILED (the rebase `Gone` path — the target page was deleted; stamps a durable
      * reason so the row is not a dangling CONFLICTED. No approver — the rebase actor lives in the audit row).
      */

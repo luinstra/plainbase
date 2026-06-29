@@ -223,22 +223,27 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
         }
     }
 
-    // ---- (a) agent-create stop-gap: the glob gate extends to DIRECT page creation --------------------
+    // ---- (a) agent-create: the glob gate splits DIRECT page creation (C1: degrade, not 403) -----------
 
-    test("agent-create: a PROPOSE agent POST /pages is 403 — NO page created, NO proposal, a DENIED CREATE audit row") {
+    test(
+        "agent-create: a PROPOSE agent POST /pages DEGRADES to a create-proposal (202); NO page created; an allowed CREATE@\"proposal\" audit",
+    ) {
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.PROPOSE) { app, harness, store, _, _ ->
-            app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
-            store.read(TreePath.require("docs/newpage.md")) shouldBe null
-            harness.proposalRepository.all().shouldBeEmpty() // a deny, NOT a degrade-to-proposal (5.5 dead-letter)
-            harness.auditRepository.recent(50).creates().single().decision shouldBe "denied"
+            val resp = app.postCreate("docs")
+            withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
+            Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("proposal_id").jsonPrimitive.content.shouldNotBeEmpty()
+            store.read(TreePath.require("docs/newpage.md")) shouldBe null // nothing written — it is a proposal now
+            harness.proposalRepository.all().shouldHaveSize(1)
+            harness.proposalRepository.all().single().operation shouldBe com.plainbase.domain.repository.ProposalOperation.CREATE
+            harness.auditRepository.recent(50).creates().single { it.resource == "proposal" }.decision shouldBe "allowed"
         }
     }
 
-    test("agent-create: a COMMIT agent OUT-of-glob POST /pages is 403 — NO page created") {
+    test("agent-create: a COMMIT agent OUT-of-glob POST /pages DEGRADES (202); NO page created; a PENDING create-proposal") {
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
-            app.postCreate("notes").status shouldBe HttpStatusCode.Forbidden
+            app.postCreate("notes").status shouldBe HttpStatusCode.Accepted
             store.read(TreePath.require("notes/newpage.md")) shouldBe null
-            harness.auditRepository.recent(50).creates().single().decision shouldBe "denied"
+            harness.proposalRepository.all().single().status shouldBe ProposalStatus.PENDING
         }
     }
 
@@ -250,10 +255,20 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
         }
     }
 
-    test("agent-create: a COMMIT agent under the DEFAULT empty globs is 403 (every agent create degrades... to a deny)") {
+    test("agent-create: a COMMIT agent under the DEFAULT empty globs DEGRADES (202); NO page created") {
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT, globs = emptyList()) { app, harness, store, _, _ ->
+            app.postCreate("docs").status shouldBe HttpStatusCode.Accepted
+            store.read(TreePath.require("docs/newpage.md")) shouldBe null
+            harness.proposalRepository.all().shouldHaveSize(1)
+        }
+    }
+
+    test("agent-create: a READ_ONLY agent POST /pages is 403 (the degrade's inner checkCreate denies); NO page, NO proposal") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.READ_ONLY) { app, harness, store, _, _ ->
             app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
             store.read(TreePath.require("docs/newpage.md")) shouldBe null
+            harness.proposalRepository.all().shouldBeEmpty()
+            harness.auditRepository.recent(50).creates().single { it.resource == "proposal" }.decision shouldBe "denied"
         }
     }
 
