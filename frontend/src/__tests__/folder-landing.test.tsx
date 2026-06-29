@@ -164,7 +164,7 @@ describe("folder landing views (ADR-0003)", () => {
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Index Title"));
   });
 
-  it("a folder WITH an index renders the index prose AND the generated listing below it, excluding the index", async () => {
+  it("a folder WITH an index renders ONLY the index prose, suppressing the generated listing", async () => {
     stubNotFound();
     const withIndex = tree([
       pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/guides/index"),
@@ -178,14 +178,9 @@ describe("folder landing views (ADR-0003)", () => {
 
     // The authored index renders as prose…
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Home"));
-    // …with the generated listing BELOW it (scope queries to the listing — the sidebar lists the
-    // index too, legitimately). The sibling page + subfolder appear…
-    const listing = view.container.querySelector("[data-pb-folder-children]")!;
-    expect(listing).not.toBeNull();
-    expect(listing.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
-    expect(listing.querySelector('a[href="/docs/guides/advanced"]')).not.toBeNull();
-    // …but the index itself is NOT a row in the listing (it's the prose, not a card).
-    expect(listing.querySelector('a[href="/docs/guides/index"]')).toBeNull();
+    // …and REPLACES the generated child listing entirely — children stay reachable via the sidebar
+    // tree (which the full router still renders), but the landing region carries no listing.
+    expect(view.container.querySelector("[data-pb-folder-children]")).toBeNull();
   });
 
   it("redirects a landing page's own bare URL to its folder URL — one canonical path", async () => {
@@ -201,12 +196,12 @@ describe("folder landing views (ADR-0003)", () => {
       qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
     });
 
-    // The address bar canonicalizes to the folder URL, and the folder landing renders (index
-    // prose + the generated listing) — not a bare page.
+    // The address bar canonicalizes to the folder URL, and the folder landing renders the index
+    // prose as the WHOLE landing (no generated listing) — not a bare page.
     await waitFor(() => {
       expect(history.location.pathname).toBe("/docs/guides");
       expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Home");
-      expect(view.container.querySelector("[data-pb-folder-children]")).not.toBeNull();
+      expect(view.container.querySelector("[data-pb-folder-children]")).toBeNull();
     });
   });
 
@@ -315,6 +310,48 @@ describe("folder landing views (ADR-0003)", () => {
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides The Page"));
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled(); // the README's html was never fetched
+  });
+
+  it("a _folder.yaml-less ancestor crumb shows its index child's frontmatter title", async () => {
+    stubNotFound();
+    // The `runbooks` folder has no _folder.yaml (title null) but carries an index titled "Runbooks";
+    // its breadcrumb ancestor crumb derives that title via folderTitle, not the raw "runbooks" name.
+    const crumbTree: TreeResponse = {
+      root: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs",
+        page_count: 0,
+        children: [
+          {
+            type: "folder",
+            name: "runbooks",
+            title: null,
+            description: null,
+            path: "runbooks",
+            url: "/docs/runbooks",
+            page_count: 2,
+            children: [
+              pageNode(INDEX_ID, "runbooks/index.md", "Runbooks", "/docs/runbooks/index"),
+              pageNode(PAGE_ID, "runbooks/deploy.md", "Deploy", "/docs/runbooks/deploy"),
+            ],
+          },
+        ],
+      },
+    };
+    const { view } = renderAt("/docs/runbooks/deploy", crumbTree, (qc) => {
+      qc.setQueryData(pageByPathQuery("runbooks/deploy").queryKey, { ...pageResponse(PAGE_ID, "/docs/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
+      qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, { ...htmlResponse(PAGE_ID, "Deploy"), path: "runbooks/deploy.md" });
+      qc.setQueryData(pageQuery(PAGE_ID).queryKey, { ...pageResponse(PAGE_ID, "/docs/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
+    });
+
+    await waitFor(() => expect(view.container.querySelector(".pb-breadcrumbs")).not.toBeNull());
+    const crumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs/runbooks"]');
+    expect(crumb).not.toBeNull();
+    expect(crumb!.textContent).toBe("Runbooks"); // index title, not the raw "runbooks" dir name
   });
 
   it("still 404s when the location matches no folder url in the tree", async () => {

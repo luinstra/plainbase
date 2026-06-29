@@ -68,6 +68,13 @@ export function landingPage(folder: TreeFolder): TreePage | null {
   return landingChild(folder.children);
 }
 
+/** A folder's human display title: an explicit _folder.yaml title wins, else the index/README child's
+ *  (frontmatter) title, else the raw directory name. A created dir (no _folder.yaml) thus shows its
+ *  index page's title. */
+export function folderTitle(folder: TreeFolder): string {
+  return folder.title ?? landingPage(folder)?.title ?? folder.name;
+}
+
 /**
  * A folder's children with its landing page (index/README) removed — server tree order otherwise
  * intact. A folder's landing IS the folder URL, so it's never repeated as a child row: a subfolder

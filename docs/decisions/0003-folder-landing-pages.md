@@ -13,9 +13,11 @@ The original decision rendered a folder's index/README *either* as prose *or* as
 listing, and kept the landing page **independently reachable at its own bare-page URL** (no
 redirect). Owner review during the revamp changed both:
 
-- **Prose THEN listing.** A folder with an index/README now renders the authored prose AND the
-  generated child listing below it (the index itself excluded from the listing), so a curated
-  intro and the directory contents coexist. A folder with no index stays a pure listing.
+- **Index REPLACES the listing** (refined in Phase 5.5). A folder with an index/README renders
+  that authored page AS the whole landing — the in-page generated child listing is suppressed, so
+  the index has full control of its folder URL. The children aren't lost: they stay in the sidebar
+  tree under the folder, and the index keeps its own `/p/{id}` permalink. A folder with no index
+  stays a pure generated listing.
 - **One canonical path.** A landing page no longer has a second life at its own bare-page URL —
   that URL now redirects to the folder URL (`DocsPage` → `folderForLanding`). The sidebar surfaces
   a folder's index through the folder link (the root through a home link to `/docs`), never as a

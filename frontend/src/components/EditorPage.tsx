@@ -484,11 +484,15 @@ export function NewPage() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
   const [folder, setFolder] = useState("");
+  const [section, setSection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // In section mode the Folder field IS the new section's path; a section needs a non-blank path
+  // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
+  const sectionReady = !section || folder.trim() !== "";
 
   const create = useMutation({
-    mutationFn: () => createPage({ folder: folder.trim() || undefined, title: title.trim() }),
+    mutationFn: () => createPage({ folder: folder.trim() || undefined, title: title.trim(), slug: section ? "index" : undefined }),
     onSuccess: (result) => {
       if (result.kind === "created") {
         invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
@@ -515,7 +519,8 @@ export function NewPage() {
           event.preventDefault();
           setError(null);
           setNotice(null);
-          if (title.trim()) create.mutate();
+          // Guard the blank-section case explicitly so a section create never POSTs without a path.
+          if (title.trim() && sectionReady) create.mutate();
         }}
       >
         <label className="flex flex-col gap-1 text-sm text-muted">
@@ -530,7 +535,7 @@ export function NewPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-muted">
-          Folder (optional)
+          {section ? "Section folder path" : "Folder (optional)"}
           <input
             className="rounded-md border border-edge bg-surface px-3 py-2 font-mono text-ink"
             data-pb-new-folder
@@ -538,12 +543,23 @@ export function NewPage() {
             onChange={(event) => setFolder(event.target.value)}
             placeholder="guides"
           />
+          {section && <span className="text-xs text-faint">Creates {folder.trim() ? `${folder.trim()}/index.md` : "<folder>/index.md"}</span>}
+        </label>
+        <label className="flex items-start gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            className="mt-0.5 rounded border border-edge bg-surface text-accent"
+            data-pb-new-section
+            checked={section}
+            onChange={(event) => setSection(event.target.checked)}
+          />
+          <span>Create a new section (this page becomes its landing page)</span>
         </label>
         <button
           type="submit"
           className="self-start rounded-md border border-edge bg-accent px-4 py-2 text-sm font-medium text-accent-contrast disabled:opacity-50"
           data-pb-new-create
-          disabled={create.isPending || !title.trim()}
+          disabled={create.isPending || !title.trim() || !sectionReady}
         >
           {create.isPending ? "Creating…" : "Create page"}
         </button>

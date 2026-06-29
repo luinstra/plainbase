@@ -3,7 +3,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder, TreeNode, TreePage } from "../api/types";
-import { landingPage, nonLandingChildren, pageHref } from "../lib/tree";
+import { folderTitle, landingPage, nonLandingChildren, pageHref } from "../lib/tree";
 
 /** Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. */
 export function Sidebar() {
@@ -64,7 +64,7 @@ function NodeRows({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathna
  */
 function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPathname: string }) {
   const [open, setOpen] = useState(true);
-  const label = folder.title ?? folder.name;
+  const label = folderTitle(folder);
   const active = folder.url !== null && folder.url === currentPathname;
   // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
   // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
@@ -101,7 +101,11 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
       </div>
       {open && (
         <div id={childrenId} className="ml-3 border-l border-edge pl-2">
-          <NodeList nodes={folder.children} currentPathname={currentPathname} />
+          {/* A folder with a `url` surfaces its landing (index/README) THROUGH the label link above,
+              so it's dropped from the child rows (one canonical path — matches the root). A loser
+              folder has no url and an inert label, so its landing can only be reached as a child row:
+              keep the full children there or the index page becomes unreachable from the tree. */}
+          <NodeList nodes={folder.url ? nonLandingChildren(folder) : folder.children} currentPathname={currentPathname} />
         </div>
       )}
     </li>

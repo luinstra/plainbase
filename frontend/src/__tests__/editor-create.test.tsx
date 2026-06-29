@@ -155,6 +155,47 @@ describe("W6 new-page creation", () => {
     expect(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")?.disabled).toBe(false);
   });
 
+  it("the new-section checkbox POSTs slug:index with the folder field as the section path", async () => {
+    const SECTION_URL = "/docs/runbooks/index";
+    const { view, fetchSpy } = renderNew(
+      jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201),
+      (qc) => {
+        // Prime the destination (the index page's own url canonicalizes to /docs/runbooks) so the
+        // post-create navigation renders without a live fetch.
+        qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
+        qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      },
+    );
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-folder]")!, { target: { value: "runbooks" } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!);
+
+    // The load-bearing fact: the create POSTs a section request — slug "index", folder = the section path.
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string)).toEqual({ folder: "runbooks", title: "Runbooks", slug: "index" });
+  });
+
+  it("the new-section checkbox with a blank folder leaves Create disabled and does NOT POST", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    fireEvent.change(view.container.querySelector<HTMLInputElement>("[data-pb-new-title]")!, { target: { value: "Runbooks" } });
+    fireEvent.click(view.container.querySelector<HTMLInputElement>("[data-pb-new-section]")!);
+
+    // A section needs a path: Create is disabled and a click never POSTs.
+    const create = view.container.querySelector<HTMLButtonElement>("[data-pb-new-create]")!;
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    expect(fetchSpy.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
   it("a create collision surfaces page_exists with the server path", async () => {
     const { view } = renderNew(jsonResponse({ error: { code: "page_exists", message: "A page already exists at guides/my-new-page.md", path: "guides/my-new-page.md" } }, 409));
 

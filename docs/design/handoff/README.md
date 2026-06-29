@@ -186,20 +186,23 @@ Three columns: sidebar · reading column (≤720px) · right rail.
 - **Doc footer:** `Last updated … · Edit this page` (mono) + prev/next pager.
 
 ### 4. Folder landing — `FolderListing` / `FolderLanding`  → ref: `Folder Landing.html`
-**One rule for every folder, root included.** Optional `index.md` prose on top
-(authored markdown, rendered standard); then the **generated child listing**:
+**One rule for every folder, root included.** A folder with an `index.md`/`README.md`
+renders that authored page AS the whole landing — the index content IS the folder view, and
+the **generated child listing is suppressed** (the children stay in the sidebar tree, and the
+index keeps its own `/p/{id}` permalink). A folder with **no** index shows the generated
+child listing instead:
 - **Subfolders → cards** in a responsive `auto-fill, minmax(216px,1fr)` grid. Card =
   folder icon + name + one-line description (from `_folder.yaml`) + `path/ · N pages`.
 - **Pages → a compact list** in a `auto-fill, minmax(310px,1fr)` grid (flows to
   columns when long). Row = page icon + title + status dot + date.
-- A folder with no `index.md` simply drops the prose and shows the listing.
 - These auto-fill grids are what handle all shapes: many folders, many files, or both.
 
 ### 5. Welcome / home  → ref: `Welcome Page.html`
 **Is the root folder landing** — *not* a distinct template. Root `index.md` (welcome
-blurb + an authored `## Start here` links list) on top; generated cards for the
-top-level folders below. "Start here" is **authored markdown**, not app-rendered
-featured chrome.
+blurb + an authored `## Start here` links list) **is** the landing: under the Phase 5.5
+REPLACE rule the index content replaces the generated card listing (top-level folders
+stay reachable via the sidebar tree). "Start here" is **authored markdown**, not
+app-rendered featured chrome.
 
 ### 6. Search palette — `SearchPalette.tsx` / `.pb-search`  → ref: `Search Palette.html`
 `⌘K` overlay over a dimmed app. Input row (⌕ + input + `esc`) · results · footer hints.

@@ -157,6 +157,73 @@ describe("SidebarNav", () => {
     expect(container.querySelector('a[href="/docs/index"]')).toBeNull();
   });
 
+  it("labels a _folder.yaml-less folder with its index child's frontmatter title, not the raw dir name", () => {
+    // A created section dir has no _folder.yaml (title null); its human label is the index page's title.
+    const indexTitled: TreeFolder = {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: "/docs",
+      page_count: 0,
+      children: [
+        {
+          type: "folder",
+          name: "runbooks",
+          title: null,
+          description: null,
+          path: "runbooks",
+          url: "/docs/runbooks",
+          page_count: 1,
+          children: [
+            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<SidebarNav root={indexTitled} currentPathname="/docs" />);
+    const folderLink = container.querySelector('a[href="/docs/runbooks"]')!;
+    expect(folderLink).not.toBeNull();
+    expect(folderLink.textContent).toBe("Runbooks"); // the index title, NOT "runbooks"
+    // The folder's index child is surfaced ONLY by the folder row (its one canonical path) — it is
+    // NOT also listed as a child page row at its own bare url.
+    expect(container.querySelector('a[href="/docs/runbooks/index"]')).toBeNull();
+    expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(0);
+  });
+
+  it("keeps a loser folder's index child as a row (no url to surface it through the label)", () => {
+    // A collision-loser folder (url null) has an inert label, so its index/README can't be reached
+    // via the folder link — it must remain a child row or it's unreachable from the tree.
+    const loserWithIndex: TreeFolder = {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: "/docs",
+      page_count: 0,
+      children: [
+        {
+          type: "folder",
+          name: "runbooks",
+          title: null,
+          description: null,
+          path: "runbooks",
+          url: null,
+          page_count: 1,
+          children: [
+            { type: "page", id: "id-loser-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/p/id-loser-index", status: "active", updated: null },
+          ],
+        },
+      ],
+    };
+    const { container } = render(<SidebarNav root={loserWithIndex} currentPathname="/docs" />);
+    // The loser folder label is inert (no link), so the index survives as a child row at its permalink.
+    expect(container.querySelector('a[href="/p/id-loser-index"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(1);
+  });
+
   it("matches the stable-markup snapshot", () => {
     const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
     expect(container.firstChild).toMatchSnapshot();
