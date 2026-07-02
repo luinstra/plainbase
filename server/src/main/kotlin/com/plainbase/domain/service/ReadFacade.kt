@@ -64,10 +64,11 @@ interface ReadFacade {
 
     /**
      * A content-tree asset read (read-gated — the gate fires BEFORE membership, so existence never leaks). The
-     * outcome SEPARATES "not a content asset" from "indexed but the on-disk file vanished": only [AssetReadOutcome
-     * .NotContentAsset] may fall through to the PUBLIC bundled-static lookup. An indexed asset whose file vanished
-     * is [AssetReadOutcome.IndexedButMissing] → 404 (disk is source of truth; a vanished upload must NEVER unmask
-     * a bundled-static name it shadowed).
+     * asset route does an UPFRONT embedded-bundle lookup (bundle-wins) BEFORE calling this, so a request that names
+     * a real `static/assets/` bundle file is served the bundle and never reaches here — `assetRead` only decides the
+     * outcome for NON-bundle paths. The outcome still SEPARATES "not a content asset" from "indexed but the on-disk
+     * file vanished" ([AssetReadOutcome.NotContentAsset] vs [AssetReadOutcome.IndexedButMissing]) — both are genuine
+     * 404 misses for a non-bundle path; the route maps each to a plain 404 (disk is source of truth).
      */
     fun assetRead(principal: Principal, path: TreePath): AssetReadOutcome
 
@@ -92,14 +93,15 @@ interface ReadFacade {
 }
 
 /**
- * The outcome of [ReadFacade.assetRead] — it SEPARATES content-tree MEMBERSHIP from the disk READ so the asset
- * route can never conflate "this path isn't a content asset" with "an indexed asset's file vanished". Only
- * [NotContentAsset] is eligible for the public bundled-static fallback; an [IndexedButMissing] is a 404 (disk is
- * source of truth — a vanished upload must not unmask a bundled-static name it shadowed).
+ * The outcome of [ReadFacade.assetRead] for a NON-bundle path (a real bundle name is served upfront by the route's
+ * bundle-wins check and never reaches here). It still SEPARATES content-tree MEMBERSHIP from the disk READ — so a
+ * "this path isn't a content asset" never conflates with "an indexed asset's file vanished" — but with bundle-wins
+ * both [NotContentAsset] and [IndexedButMissing] are genuine 404 misses (the route maps each to a plain 404; disk is
+ * source of truth).
  */
 sealed interface AssetReadOutcome {
 
-    /** The path is not in the content tree's asset set — the route may fall through to bundled static. */
+    /** The path is not in the content tree's asset set (and is not a bundle name) — a 404 miss. */
     data object NotContentAsset : AssetReadOutcome
 
     /** The path is an indexed content asset; [bytes] are its current on-disk content. */
@@ -109,6 +111,6 @@ sealed interface AssetReadOutcome {
         override fun hashCode(): Int = bytes.contentHashCode()
     }
 
-    /** The path is an indexed content asset but its on-disk file vanished — a 404, NEVER the bundled fallback. */
+    /** The path is an indexed content asset but its on-disk file vanished — a 404 (disk is source of truth). */
     data object IndexedButMissing : AssetReadOutcome
 }

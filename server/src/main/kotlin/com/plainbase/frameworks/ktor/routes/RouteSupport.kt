@@ -454,11 +454,23 @@ private object SpaShell {
 
 /**
  * An embedded SPA bundle file under `static/assets/` (where the Vite build emits its js/css) for a
- * [TreePath]-validated `/assets/`-relative path, or null. Used only as the asset route's fallback;
- * the [TreePath] validation upstream guarantees the lookup cannot traverse out of `static/assets/`.
+ * [TreePath]-validated `/assets/`-relative path, or null. The asset route's bundle-wins lookup — it runs
+ * BEFORE the content-tree read, so a real bundle name is always served the embedded bytes (a content asset
+ * can never shadow a `<script src>`/`<link href>` slot). The [TreePath] validation upstream guarantees the
+ * lookup cannot traverse out of `static/assets/`.
  */
 internal fun staticResourceBytes(relativePath: String): ByteArray? =
     SpaShell::class.java.classLoader.getResourceAsStream("static/assets/$relativePath")?.use { it.readBytes() }
+
+/**
+ * The `Content-Security-Policy` header name (not a named constant in this Ktor). ONE literal, shared by
+ * the per-asset sandbox header ([assetRoute]) and the shell-CSP plugin ([shellSecurityHeadersPlugin]) so
+ * the two never drift.
+ */
+internal const val CONTENT_SECURITY_POLICY = "Content-Security-Policy"
+
+/** The MIME-sniff defense header (not a named constant in this Ktor); shared by the asset + shell paths. */
+internal const val X_CONTENT_TYPE_OPTIONS = "X-Content-Type-Options"
 
 /** The small extension → content-type map for served assets (§A4); unknown → octet-stream. */
 internal fun assetContentType(fileName: String): ContentType {
@@ -467,6 +479,28 @@ internal fun assetContentType(fileName: String): ContentType {
     // Text types get an explicit charset; assets in the tree are UTF-8 by the content conventions.
     return if (type.contentType == "text" && type.charset() == null) type.withCharset(Charsets.UTF_8) else type
 }
+
+/**
+ * Types that are non-executable as a TOP-LEVEL document — served without a sandbox CSP. Anything NOT
+ * listed here (svg, js/mjs, pdf, any future scriptable [ASSET_CONTENT_TYPES] entry) is sandboxed by
+ * default — inert-unless-proved-safe. Derived DELIBERATELY from the map: every map value is either listed
+ * inert here or is intentionally scriptable, so a future map addition not added here is sandboxed (safe).
+ */
+private val INERT_ASSET_TYPES: Set<ContentType> = setOf(
+    ContentType.Image.PNG, ContentType.Image.JPEG, ContentType.Image.GIF,
+    ContentType.parse("image/webp"), ContentType.parse("image/x-icon"),
+    ContentType.Text.CSS, ContentType.Text.Plain, ContentType.Text.CSV,
+    ContentType.Application.Json, ContentType.parse("application/yaml"),
+    ContentType.Application.OctetStream,
+    ContentType.parse("font/woff"), ContentType.parse("font/woff2"),
+)
+
+/**
+ * True ⇒ the asset response needs the per-asset sandbox CSP (item 6). Compares without charset params so
+ * `text/plain; charset=UTF-8` (the charset [assetContentType] appends to text types) matches `text/plain`.
+ */
+internal fun assetNeedsSandbox(contentType: ContentType): Boolean =
+    contentType.withoutParameters() !in INERT_ASSET_TYPES
 
 private val ASSET_CONTENT_TYPES: Map<String, ContentType> = mapOf(
     "svg" to ContentType.Image.SVG,
