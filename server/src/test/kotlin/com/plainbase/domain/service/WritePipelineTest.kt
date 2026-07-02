@@ -203,6 +203,42 @@ class WritePipelineTest : FunSpec({
         }
     }
 
+    // C1b item 2: a CAS copy-fallback that may have TRUNCATED the target reports Unreadable(targetMutated
+    // = true); the pipeline then RETAINS the write-ahead mark (inverse of test 5's cleared case) so
+    // reconcile drift-skips a partial (stays marked) and commits+clears a fully-landed copy.
+    test("a mutated-target Unreadable retains the dirty mark; reconcile drift-skips a partial and clears a fully-landed copy") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = targetOf(harness)
+                // CAS reports a mutated target WITHOUT writing — the on-disk bytes are controlled separately below.
+                // The delegate is SCANNED so reconcile's read() sees the indexed page (a fresh store's read is null).
+                val realStore = com.plainbase.frameworks.filesystem.LocalContentStore(root).also { it.scan() }
+                val mutatingStore = object : ContentStore by realStore {
+                    override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String) =
+                        CasResult.Unreadable("copy truncated the target", targetMutated = true)
+                }
+                val pipeline = harness.writePipeline(store = mutatingStore)
+                val saveBytes = "---\ntitle: Edit Me\n---\n\n# Edit Me\n\nthe intended save.\n".toByteArray()
+
+                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>()
+                harness.dirtyPages.all().shouldHaveSize(1) // mark RETAINED over the mutated target (expectedHash = saveBytes')
+
+                // Reconcile over the still-ORIGINAL on-disk bytes (a partial/never-completed copy): the hash
+                // no longer matches expectedHash → drift-skip, the page stays marked.
+                pipeline.reconcileDirtyPages()
+                harness.dirtyPages.all().shouldHaveSize(1)
+
+                // Reconcile over a fully-landed copy (the intended bytes are now on disk): hash matches
+                // expectedHash → commit + reindex + clear the mark.
+                Files.write(root.resolve("guides/edit-me.md"), saveBytes)
+                pipeline.reconcileDirtyPages()
+                harness.dirtyPages.all().isEmpty() shouldBe true
+            }
+        }
+    }
+
     // W2 P2: a search-sync failure on CREATE surfaces as WrittenButUnindexed (NOT a clean Written), the
     // dirty row is RETAINED, and a later reconcile (once search recovers) clears it. Proves the create
     // path does NOT rely on rebuild()'s swallowed-listener search sync for its searchability guarantee.

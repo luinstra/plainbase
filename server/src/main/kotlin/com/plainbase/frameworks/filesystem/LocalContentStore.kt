@@ -25,7 +25,6 @@ import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
 import kotlin.concurrent.atomics.AtomicReference
@@ -66,6 +65,7 @@ class LocalContentStore(
     private val root: Path,
     private val ignoreRules: IgnoreRules = IgnoreRules(),
     exclusions: List<Path> = emptyList(),
+    private val atomics: FileAtomics = FileAtomics.Real,
 ) : ContentStore {
 
     // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
@@ -371,12 +371,12 @@ class LocalContentStore(
         try {
             Files.write(tmp, bytes)
             try {
-                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                atomics.atomicMove(tmp, target)
             } catch (_: AtomicMoveNotSupportedException) {
                 // NFS/SMB: atomic rename unsupported — fall back to copy+delete (NOT crash-atomic;
                 // the pre-write intent log above is what makes an interrupted run reconcilable).
                 logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
-                Files.copy(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+                atomics.copyReplace(tmp, target)
             }
         } finally {
             Files.deleteIfExists(tmp)
@@ -421,10 +421,18 @@ class LocalContentStore(
                 return CasResult.Mismatch(currentBytes = current, currentHash = current?.let(hasher))
             }
             try {
-                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                atomics.atomicMove(tmp, target)
             } catch (_: AtomicMoveNotSupportedException) {
                 logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
-                Files.copy(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+                try {
+                    atomics.copyReplace(tmp, target)
+                } catch (e: IOException) {
+                    // The non-atomic copy may have TRUNCATED/partially replaced the target: report mutated
+                    // so the pipeline keeps the write-ahead mark (reconcile then commits a fully-landed copy
+                    // or drift-skips a partial — operator-visible, never silent corruption). An atomicMove
+                    // or pre-move failure stays targetMutated=false (atomicity → nothing landed).
+                    return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error", targetMutated = true)
+                }
             }
             return CasResult.Written(newHash = hasher(bytes))
         } catch (e: IOException) {
@@ -520,7 +528,7 @@ class LocalContentStore(
             Files.write(tmp, bytes)
             try {
                 // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.
-                Files.createLink(target, tmp)
+                atomics.createLink(target, tmp)
             } catch (_: FileAlreadyExistsException) {
                 return CreateResult.Exists(path) // a file already occupies the target — nothing written
             } catch (e: Exception) {
@@ -558,7 +566,7 @@ class LocalContentStore(
             Files.write(tmp, bytes)
             try {
                 // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.
-                Files.createLink(target, tmp)
+                atomics.createLink(target, tmp)
             } catch (_: FileAlreadyExistsException) {
                 return CreateResult.Exists(path) // a file already occupies the target — nothing written
             } catch (e: Exception) {
@@ -590,10 +598,10 @@ class LocalContentStore(
             tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
             Files.write(tmp, bytes)
             try {
-                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                atomics.atomicMove(tmp, target)
             } catch (_: AtomicMoveNotSupportedException) {
                 logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
-                Files.copy(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+                atomics.copyReplace(tmp, target)
             }
             CreateResult.Created(newHash = hasher(bytes))
         } catch (e: IOException) {
