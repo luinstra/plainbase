@@ -183,7 +183,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       # Keyed on the lockfile: the browser revision is a function of the pinned @playwright/test
-      # version. The task's own `playwright install chromium` becomes a fast no-op on a warm cache.
+      # version. The task's own ensure-chromium.mjs sees the browser present on a warm cache and
+      # skips the installer spawn entirely.
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:

@@ -25,6 +25,7 @@ import com.plainbase.frameworks.koin.restModule
 import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.spike.NativeSpike
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.koin.core.context.startKoin
@@ -140,7 +141,7 @@ private fun serve() {
         // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
         // Events arriving while the initial build is in flight coalesce into at most one follow-up
         // rebuild via the scheduler's single-flight dirty flag.
-        val scheduler = RebuildScheduler(rebuild = { builder.rebuild() })
+        val scheduler = RebuildScheduler(rebuild = { builder.rebuild() }, alarm = ExecutorAlarm())
         val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
         try {
             // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The

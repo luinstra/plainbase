@@ -304,14 +304,21 @@ class LocalContentStore(
         // Indexed-only gate (see class header), file OR directory; unindexed -> null per the contract.
         if (!snap.isIndexedEntry(path)) return null
         val osPath = resolveOnDisk(path, snap)
-        // One filesystem hit, no-follow: a missing target throws and is reported as null (port contract).
+        // Mirror read()'s structure: existence probe (no-follow, exists not isRegularFile — stat serves
+        // files AND directories) first, then containment proven BEFORE reading the returned attributes.
+        // A merely-missing entry was a silent null before this ordering too (readAttributes threw ahead
+        // of the containment check); what the reorder buys is the read() parity and never acting on
+        // attributes of an unproven path. The one still-warning case — a dangling/escaping symlink
+        // swapped in post-scan — warns and returns null, unchanged (safe). Two filesystem hits where
+        // one sufficed — stat is not a hot path, and the ordering discipline is worth it.
+        if (!Files.exists(osPath, LinkOption.NOFOLLOW_LINKS)) return null
+        if (!isWithinRoot(osPath)) {
+            logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
+            return null
+        }
         val attrs = try {
             Files.readAttributes(osPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
         } catch (_: IOException) {
-            return null
-        }
-        if (!isWithinRoot(osPath)) {
-            logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
             return null
         }
         return ContentStat(

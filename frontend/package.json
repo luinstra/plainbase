@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "smoke": "playwright install chromium && playwright test"
+    "smoke": "node scripts/ensure-chromium.mjs && playwright test"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.3",

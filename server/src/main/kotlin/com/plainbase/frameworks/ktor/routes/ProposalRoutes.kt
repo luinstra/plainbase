@@ -225,7 +225,7 @@ internal suspend fun ApplicationCall.invalidProposeRequest(message: String) =
 
 /** Strict-decode the JSON envelope (the `parseCreateRequest` idiom): null on bad UTF-8 OR malformed JSON for the DTO. */
 private fun parseProposeRequest(body: ByteArray): ProposeChangeRequest? {
-    val text = strictUtf8(body) ?: return null
+    val text = strictUtf8Decode(body) ?: return null
     return try {
         RestJson.decodeFromString(ProposeChangeRequest.serializer(), text)
     } catch (_: SerializationException) {
@@ -234,21 +234,10 @@ private fun parseProposeRequest(body: ByteArray): ProposeChangeRequest? {
 }
 
 private fun parseRejectRequest(body: ByteArray): RejectChangeRequest? {
-    val text = strictUtf8(body) ?: return null
+    val text = strictUtf8Decode(body) ?: return null
     return try {
         RestJson.decodeFromString(RejectChangeRequest.serializer(), text)
     } catch (_: SerializationException) {
-        null
-    }
-}
-
-private fun strictUtf8(bytes: ByteArray): String? {
-    val decoder = Charsets.UTF_8.newDecoder()
-        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-    return try {
-        decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
-    } catch (_: java.nio.charset.CharacterCodingException) {
         null
     }
 }

@@ -5,6 +5,7 @@ import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.longs.shouldBeLessThan
@@ -32,7 +33,7 @@ class WatcherPipelineTest : FunSpec({
                 RebuildScheduler(rebuild = {
                     rebuilds.incrementAndGet()
                     harness.builder.rebuild()
-                }).use { scheduler ->
+                }, alarm = ExecutorAlarm()).use { scheduler ->
                     store.watch { scheduler.schedule() }.use {
                         repeat(1_000) { writePage(root, "page-%04d.md".format(it), "# Page $it\n") }
                         awaitUntil(120_000, "burst never converged to 1,000 pages") {
@@ -53,7 +54,7 @@ class WatcherPipelineTest : FunSpec({
         }) { root ->
             val store = LocalContentStore(root)
             IndexHarness(root, contentStore = store).use { harness ->
-                RebuildScheduler(rebuild = { harness.builder.rebuild() }).use { scheduler ->
+                RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm()).use { scheduler ->
                     store.watch { scheduler.schedule() }.use {
                         harness.builder.rebuild() // startup build AFTER watch registration (§B2 ordering)
 

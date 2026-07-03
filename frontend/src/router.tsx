@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { Admin } from "./components/Admin";
 import { EditorPage, NewPage } from "./components/EditorPage";
+import { ErrorView } from "./components/ErrorView";
 import { History } from "./components/History";
 import { NotFoundView } from "./components/NotFound";
 import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
@@ -166,6 +167,9 @@ export function createAppRouter(queryClient: QueryClient, history?: RouterHistor
     history,
     context: { queryClient },
     defaultPreload: "intent",
+    // Per-match branded boundary: a route render crash keeps the Shell mounted and auto-resets
+    // on the next navigation (vs the global backstop, which unmounts everything unbranded).
+    defaultErrorComponent: ErrorView,
     scrollRestoration: true,
   });
 }

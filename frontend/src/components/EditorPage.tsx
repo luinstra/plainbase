@@ -89,6 +89,14 @@ interface ConflictView {
   currentPath: string | null;
 }
 
+/** The save's terminal outcome banner — at most one at a time, by construction (was four
+ *  interacting useStates + clearOutcomeBanners ordering; the union deletes the masking class). */
+type SaveOutcome =
+  | { kind: "notice"; message: string }
+  | { kind: "conflict"; conflict: ConflictView }
+  | { kind: "refusal"; field: string; message: string }
+  | { kind: "deleted" };
+
 function Editor({
   id,
   initialPath,
@@ -124,10 +132,7 @@ function Editor({
   const [savedBuffer, setSavedBuffer] = useState(initialBuffer);
   const dirty = buffer !== savedBuffer;
 
-  const [conflict, setConflict] = useState<ConflictView | null>(null);
-  const [refusal, setRefusal] = useState<{ field: string; message: string } | null>(null);
-  const [deleted, setDeleted] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<SaveOutcome | null>(null);
   // The preview OVERLAYS the body editor (it's a preview *of the body*): the Page-info form rail stays
   // visible the whole time, and CodeMirror stays mounted underneath the overlay (toggling off reveals it
   // with cursor/scroll/undo intact). Preview off by default also gates its server fetch (below), so a
@@ -184,10 +189,7 @@ function Editor({
         // Advance the dirty baseline to the saved bytes — the editor reads clean (Save disabled, no
         // redundant PUT) until the user edits again.
         setSavedBuffer(sent);
-        setConflict(null);
-        setRefusal(null);
-        setDeleted(false);
-        setNotice("warning" in result.written ? result.written.warning.message : "Saved.");
+        setOutcome({ kind: "notice", message: "warning" in result.written ? result.written.warning.message : "Saved." });
         // ONE invalidation point (queries.ts): tree, search (full-text goes stale on any edit), this page's
         // id-keyed + by-path reads. The by-path leg uses the mounted URL splat (NOT the `.md` file path); a
         // page_moved changes that key and the 200 doesn't carry the new URL, so the helper also clears the
@@ -197,24 +199,21 @@ function Editor({
       }
       case "conflict": {
         const { reason } = result.conflict;
-        // Each terminal outcome fully supersedes the previous one — clear the sibling banners so a
-        // stale refusal/notice can't linger beside (or, under the notice render-gate, mask) this one.
-        setRefusal(null);
-        setNotice(null);
         // A deliberate re-save targets the new base — the hash is ALWAYS the server's `current_hash`.
         if (result.conflict.current_hash) setBaseHash(result.conflict.current_hash);
         if (reason === "page_deleted") {
-          setDeleted(true);
-          setConflict(null);
+          setOutcome({ kind: "deleted" });
           return;
         }
-        setDeleted(false);
         if (reason === "page_moved" && result.conflict.current_path) setDocPath(result.conflict.current_path);
-        setConflict({
-          reason,
-          message: result.conflict.message,
-          currentContent: result.conflict.current_content,
-          currentPath: result.conflict.current_path,
+        setOutcome({
+          kind: "conflict",
+          conflict: {
+            reason,
+            message: result.conflict.message,
+            currentContent: result.conflict.current_content,
+            currentPath: result.conflict.current_path,
+          },
         });
         return;
       }
@@ -222,31 +221,18 @@ function Editor({
         // P5: an agent COMMIT write outside `agentDirectCommit.globs` was filed as a proposal, NOT applied.
         // Do NOT advance the saved baseline (the editor stays dirty — these bytes are not on disk) and surface a
         // clear non-"Saved" notice. Unreachable from the Human/cookie-auth SPA, but the result kind is exhaustive.
-        clearOutcomeBanners();
-        setNotice("Submitted as a proposal for review.");
+        setOutcome({ kind: "notice", message: "Submitted as a proposal for review." });
         return;
       case "unsupported":
-        clearOutcomeBanners();
-        setRefusal({ field: result.unsupported.field, message: result.unsupported.message });
+        setOutcome({ kind: "refusal", field: result.unsupported.field, message: result.unsupported.message });
         return;
       case "too-large":
-        // Clear any prior conflict/refusal/deleted first — otherwise the notice render-gate
-        // (`!conflict && !refusal && !deleted`) hides this fresh failure behind a stale banner.
-        clearOutcomeBanners();
-        setNotice(`Document exceeds ${result.maxBytes} bytes — trim it and try again.`);
+        setOutcome({ kind: "notice", message: `Document exceeds ${result.maxBytes} bytes — trim it and try again.` });
         return;
       case "error":
-        clearOutcomeBanners();
-        setNotice(result.error.status === 503 ? "Couldn't save (transient) — please retry." : result.error.message);
+        setOutcome({ kind: "notice", message: result.error.status === 503 ? "Couldn't save (transient) — please retry." : result.error.message });
         return;
     }
-  }
-
-  /** Clears the three outcome banners so a fresh notice/refusal always surfaces (FIX 2 — no stale masking). */
-  function clearOutcomeBanners() {
-    setConflict(null);
-    setRefusal(null);
-    setDeleted(false);
   }
 
   return (
@@ -278,12 +264,14 @@ function Editor({
         </div>
 
         {!editable && <UneditableBanner />}
-        {conflict && <ConflictBanner conflict={conflict} />}
-        {refusal && <RefusalBanner refusal={refusal} />}
-        {deleted && <DeletedBanner buffer={buffer} initialPath={initialPath} />}
-        {notice && !conflict && !refusal && !deleted && (
+        {outcome?.kind === "conflict" && <ConflictBanner conflict={outcome.conflict} />}
+        {/* The narrowed outcome is a SUPERSET of the prop's {field, message} — legal only because TS
+            skips excess-property checks on non-literal args; don't assume the prop type is exact. */}
+        {outcome?.kind === "refusal" && <RefusalBanner refusal={outcome} />}
+        {outcome?.kind === "deleted" && <DeletedBanner buffer={buffer} initialPath={initialPath} />}
+        {outcome?.kind === "notice" && (
           <p className="text-sm text-muted" data-pb-editor-notice>
-            {notice}
+            {outcome.message}
           </p>
         )}
 

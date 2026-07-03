@@ -1,0 +1,341 @@
+{
+  "treeResponse": {
+    "root": {
+      "type": "folder",
+      "name": "",
+      "title": null,
+      "description": null,
+      "path": "",
+      "url": "/docs",
+      "page_count": 0,
+      "children": [
+        {
+          "type": "folder",
+          "name": "guides",
+          "title": "Guides",
+          "description": "How-to guides",
+          "path": "guides",
+          "url": "/docs/guides",
+          "page_count": 1,
+          "children": [
+            {
+              "type": "page",
+              "id": "01970000-0000-7000-8000-000000000001",
+              "title": "Deploy Guide",
+              "slug": "deploy-guide",
+              "path": "guides/deploy-guide.md",
+              "url": "/docs/guides/deploy-guide",
+              "status": "published",
+              "updated": "2026-06-01"
+            }
+          ]
+        },
+        {
+          "type": "folder",
+          "name": "attic",
+          "title": null,
+          "description": null,
+          "path": "attic",
+          "url": null,
+          "page_count": 0,
+          "children": []
+        },
+        {
+          "type": "page",
+          "id": "01970000-0000-7000-8000-000000000002",
+          "title": "Shadowed",
+          "slug": "shadowed",
+          "path": "shadowed.md",
+          "url": null,
+          "status": "published",
+          "updated": null
+        }
+      ]
+    }
+  },
+  "pageResponse": {
+    "id": "01970000-0000-7000-8000-000000000001",
+    "path": "guides/deploy-guide.md",
+    "slug": "deploy-guide",
+    "url": null,
+    "title": "Deploy Guide",
+    "markdown": "# Deploy Guide\n\nShip it.\n",
+    "frontmatter": { "title": "Deploy Guide", "tags": ["ops", "deploy"] },
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "id_materialized": true,
+    "commit": null,
+    "citation": {
+      "page_id": "01970000-0000-7000-8000-000000000001",
+      "heading_id": null,
+      "path": "guides/deploy-guide.md",
+      "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit": null,
+      "uri": "plainbase://01970000-0000-7000-8000-000000000001@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "pageHtmlResponse": {
+    "id": "01970000-0000-7000-8000-000000000002",
+    "path": "shadowed.md",
+    "slug": "shadowed",
+    "url": null,
+    "title": "Shadowed",
+    "html": "<h1 id=\"shadowed\">Shadowed</h1>",
+    "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "commit": null,
+    "headings": [{ "id": "shadowed", "level": 1, "text": "Shadowed" }],
+    "citation": {
+      "page_id": "01970000-0000-7000-8000-000000000002",
+      "heading_id": "shadowed",
+      "path": "shadowed.md",
+      "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit": "1111111111111111111111111111111111111111",
+      "uri": "plainbase://01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "errorEnvelope": {
+    "error": { "code": "page_not_found", "message": "No page with that id" }
+  },
+  "searchResponse": {
+    "query": "deploy",
+    "engine": "fts5",
+    "limit": 20,
+    "offset": 0,
+    "total": 1,
+    "hits": [
+      {
+        "page_id": "01970000-0000-7000-8000-000000000002",
+        "path": "shadowed.md",
+        "url": null,
+        "title": "Shadowed",
+        "heading_id": null,
+        "heading_text": null,
+        "heading_path": [],
+        "snippet": "Deploy targets are listed here.",
+        "highlights": [{ "start": 0, "end": 6 }],
+        "score": 1.25,
+        "citation": {
+          "page_id": "01970000-0000-7000-8000-000000000002",
+          "heading_id": null,
+          "path": "shadowed.md",
+          "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "commit": null,
+          "uri": "plainbase://01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  },
+  "writtenResponse": {
+    "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "commit": null
+  },
+  "writtenButUnindexedResponse": {
+    "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "commit": null,
+    "warning": {
+      "code": "reindex_deferred",
+      "message": "Saved to disk; search/history update deferred to next startup reconciliation."
+    }
+  },
+  "degradedToProposalResponse": {
+    "degraded": true,
+    "proposal_id": "01970000-0000-7000-8000-0000000000a1",
+    "status": "PENDING",
+    "unified_diff": "--- a/guides/deploy-guide.md\n+++ b/guides/deploy-guide.md\n"
+  },
+  "writeConflictEnvelope": {
+    "error": {
+      "code": "conflict",
+      "reason": "content_changed",
+      "message": "The page changed on disk since you loaded it.",
+      "current_content": "# Deploy Guide\n\nEdited elsewhere.\n",
+      "current_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "current_path": "guides/deploy-guide.md"
+    }
+  },
+  "writeConflictEnvelopeDeleted": {
+    "error": {
+      "code": "conflict",
+      "reason": "page_deleted",
+      "message": "The page no longer exists on disk.",
+      "current_content": null,
+      "current_hash": null,
+      "current_path": null
+    }
+  },
+  "unsupportedEditEnvelope": {
+    "error": {
+      "code": "slug_change_unsupported",
+      "field": "slug",
+      "message": "Changing slug is a move, not a save (deferred)."
+    }
+  },
+  "bodyTooLargeEnvelope": {
+    "error": {
+      "code": "body_too_large",
+      "message": "Request body exceeds the 1048576-byte limit",
+      "max_bytes": 1048576
+    }
+  },
+  "pageExistsEnvelope": {
+    "error": {
+      "code": "page_exists",
+      "message": "A page already exists at guides/deploy-guide.md",
+      "path": "guides/deploy-guide.md"
+    }
+  },
+  "createPageRequest": {
+    "title": "Deploy Guide"
+  },
+  "createdResponse": {
+    "id": "01970000-0000-7000-8000-000000000001",
+    "url": "/docs/guides/deploy-guide",
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "commit": null
+  },
+  "createdButUnindexedResponse": {
+    "id": "01970000-0000-7000-8000-000000000001",
+    "url": null,
+    "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "commit": null,
+    "warning": {
+      "code": "reindex_deferred",
+      "message": "Saved to disk; search/history update deferred to next startup reconciliation."
+    }
+  },
+  "previewResponse": {
+    "html": "<h1 id=\"deploy-guide\">Deploy Guide</h1>",
+    "headings": [{ "id": "deploy-guide", "level": 1, "text": "Deploy Guide" }]
+  },
+  "historyResponse": {
+    "git_enabled": true,
+    "commits": [
+      {
+        "sha": "1111111111111111111111111111111111111111",
+        "author_name": "Ada Lovelace",
+        "author_email": "ada@example.com",
+        "author_time": "2026-06-01T12:00:00Z",
+        "committer_name": "Ada Lovelace",
+        "committer_email": "ada@example.com",
+        "committer_time": "2026-06-01T12:00:00Z",
+        "message": "docs: update deploy guide"
+      }
+    ]
+  },
+  "diffResponse": {
+    "git_enabled": true,
+    "from": "1111111111111111111111111111111111111111",
+    "to": "2222222222222222222222222222222222222222",
+    "path": "guides/deploy-guide.md",
+    "unified_diff": "--- a/guides/deploy-guide.md\n+++ b/guides/deploy-guide.md\n"
+  },
+  "sessionResponse": {
+    "authenticated": false,
+    "username": null,
+    "csrf_token": null,
+    "auth_mode": "builtin"
+  },
+  "tokenListResponse": {
+    "tokens": [
+      {
+        "id": "01970000-0000-7000-8000-0000000000b1",
+        "label": "ci-bot",
+        "mode": "propose",
+        "created_at": "2026-06-01T12:00:00Z",
+        "last_used_at": null,
+        "expires_at": null,
+        "revoked_at": null
+      }
+    ]
+  },
+  "createdTokenResponse": {
+    "id": "01970000-0000-7000-8000-0000000000b1",
+    "plaintext": "pb_c2VjcmV0LXRva2Vu"
+  },
+  "auditListResponse": {
+    "entries": [
+      {
+        "id": "01970000-0000-7000-8000-0000000000c1",
+        "ts": "2026-06-01T12:00:00Z",
+        "principal_kind": "human",
+        "issuer": null,
+        "external_id": null,
+        "action": "page.write",
+        "resource": "guides/deploy-guide.md",
+        "decision": "allow"
+      }
+    ]
+  },
+  "roleListResponse": {
+    "roles": [
+      {
+        "issuer": "proxy",
+        "external_id": "ada@example.com",
+        "role": "admin",
+        "created_at": "2026-06-01T12:00:00Z"
+      }
+    ]
+  },
+  "userListResponse": {
+    "users": [
+      {
+        "id": "01970000-0000-7000-8000-0000000000d1",
+        "username": "ada",
+        "display_name": null,
+        "disabled": false
+      }
+    ]
+  },
+  "listChangesResponse": {
+    "proposals": [
+      {
+        "id": "01970000-0000-7000-8000-0000000000a2",
+        "operation": "create",
+        "status": "PENDING",
+        "target_path": "guides/rollback.md",
+        "page_id": null,
+        "base_drifted": false,
+        "author_label": "ci-bot",
+        "created_at": "2026-06-01T12:00:00Z",
+        "rationale": "Add a rollback guide."
+      }
+    ]
+  },
+  "changeDetail": {
+    "id": "01970000-0000-7000-8000-0000000000a3",
+    "operation": "create",
+    "status": "PENDING",
+    "target_path": "guides/rollback.md",
+    "page_id": null,
+    "base_hash": null,
+    "base_drifted": false,
+    "author_label": "ci-bot",
+    "author_issuer": "plainbase",
+    "author_external_id": "01970000-0000-7000-8000-0000000000b1",
+    "created_at": "2026-06-01T12:00:00Z",
+    "rationale": "Add a rollback guide.",
+    "unified_diff": "--- /dev/null\n+++ b/guides/rollback.md\n",
+    "approver_issuer": null,
+    "approver_external_id": null,
+    "decision_comment": null,
+    "decided_at": null,
+    "applied_commit": null,
+    "status_reason": null
+  },
+  "applyResultResponse": {
+    "new_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "commit_sha": null,
+    "applied_at": "2026-06-02T09:00:00Z",
+    "warnings": null
+  },
+  "conflictedResponse": {
+    "code": "conflicted",
+    "current_hash": null,
+    "current_path": null
+  },
+  "rebasedResponse": {
+    "new_base_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "unified_diff": "--- a/guides/deploy-guide.md\n+++ b/guides/deploy-guide.md\n",
+    "status": "PENDING"
+  },
+  "rejectChangeRequest": {}
+}

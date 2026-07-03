@@ -544,6 +544,52 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("stat of an INDEXED entry replaced post-scan by a dangling or escaping symlink returns null") {
+        val tmp = Files.createTempDirectory("pb-symlink-stat")
+        val outside = Files.createTempDirectory("pb-symlink-stat-target")
+        try {
+            Files.writeString(tmp.resolve("dangling.md"), "dangling")
+            Files.writeString(tmp.resolve("escaping.md"), "escaping")
+            val secret = outside.resolve("secret.md")
+            Files.writeString(secret, "OUT-OF-ROOT-SECRET")
+
+            val store = LocalContentStore(tmp)
+            store.scan()
+
+            // TOCTOU swap AFTER the scan indexed the real files: the membership gate passes, so the
+            // no-follow probe + containment recheck inside stat() are what must refuse the links.
+            Files.delete(tmp.resolve("dangling.md"))
+            Files.delete(tmp.resolve("escaping.md"))
+            try {
+                Files.createSymbolicLink(tmp.resolve("dangling.md"), outside.resolve("no-such-target.md"))
+                Files.createSymbolicLink(tmp.resolve("escaping.md"), secret)
+            } catch (_: IOException) {
+                return@test // platform/permissions disallow symlinks — nothing to assert
+            }
+
+            store.stat(TreePath.require("dangling.md")).shouldBeNull()
+            store.stat(TreePath.require("escaping.md")).shouldBeNull()
+        } finally {
+            tmp.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    test("stat of an INDEXED entry deleted post-scan returns null (merely missing, no symlink)") {
+        val tmp = Files.createTempDirectory("pb-stat-missing")
+        try {
+            Files.writeString(tmp.resolve("page.md"), "# page")
+            val store = LocalContentStore(tmp)
+            store.scan()
+
+            Files.delete(tmp.resolve("page.md"))
+
+            store.stat(TreePath.require("page.md")).shouldBeNull()
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
     test("a symlinked _folder.yaml is not followed: folder meta is null, no out-of-root content read") {
         val tmp = Files.createTempDirectory("pb-symlink-meta")
         val outside = Files.createTempDirectory("pb-symlink-meta-target")

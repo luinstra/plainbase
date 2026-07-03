@@ -1,7 +1,11 @@
 /**
- * PB-REST-1 wire shapes (frozen, §A4) — transcribed from the server DTOs
- * (server: frameworks/ktor/dto/RestDtos.kt). The SPA consumes `id`/`path`/`url`
- * verbatim; URL semantics are never re-derived client-side.
+ * The server wire shapes mirrored client-side — transcribed from the six server DTO families
+ * (server: frameworks/ktor/dto/): RestDtos.kt (PB-REST-1, frozen), SearchDtos.kt (PB-SEARCH-1,
+ * frozen), WriteDtos.kt (PB-WRITE-1, frozen) + PreviewDtos.kt (PreviewResponse, non-frozen),
+ * HistoryDtos.kt (non-frozen), AuthDtos.kt, ProposalDtos.kt (PB-PROPOSE-1, frozen) — each section
+ * header below names its source. The SPA consumes `id`/`path`/`url` verbatim; URL semantics are
+ * never re-derived client-side. Every shape here is pinned against the server by the shared wire
+ * golden (`src/api/__fixtures__/wire-golden.json`, asserted from both sides).
  */
 
 export interface TreeFolder {
@@ -209,8 +213,9 @@ export interface PreviewResponse {
 }
 
 /**
- * W5 history/diff read shapes (NON-FROZEN — server-as-authority, no golden pins them;
- * transcribed from server frameworks/ktor/dto/HistoryDtos.kt). `git_enabled` lets the client tell
+ * W5 history/diff read shapes (NON-FROZEN — server-as-authority; the shared wire golden pins the
+ * transcription SYNC like every section here, so evolving a shape means touching fixture + twins
+ * together; transcribed from server frameworks/ktor/dto/HistoryDtos.kt). `git_enabled` lets the client tell
  * "Git off" (false) apart from "Git on, no commits yet" (true + empty `commits`). Timestamps are
  * ISO-8601 strings (the server's kotlin.time.Instant never reaches the wire).
  */

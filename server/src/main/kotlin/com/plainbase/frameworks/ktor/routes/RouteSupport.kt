@@ -36,6 +36,9 @@ import io.ktor.utils.io.readRemaining
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.KSerializer
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 
 /** Responds [value] through the scoped [RestJson] serializer (present-null guaranteed, §A4). */
 internal suspend fun <T> ApplicationCall.respondRest(serializer: KSerializer<T>, value: T, status: HttpStatusCode = HttpStatusCode.OK) {
@@ -67,14 +70,18 @@ internal suspend fun <T : Any> ApplicationCall.receiveAuthRequest(serializer: KS
     return parsed
 }
 
-/** Strict UTF-8 decode (the [com.plainbase.domain.content.PercentCoding]/PageCreateRoutes idiom): null on malformed input. */
-private fun strictUtf8Decode(bytes: ByteArray): String? {
-    val decoder = java.nio.charset.Charset.forName("UTF-8").newDecoder()
-        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+/**
+ * Strict UTF-8 decode (the [com.plainbase.domain.content.PercentCoding] idiom): null on any malformed/unmappable
+ * input. The ONE shared route-layer decoder — the auth, create, and proposal request parsers all reject bad
+ * bytes through it (JSON is defined over valid Unicode; a lenient U+FFFD substitution would corrupt content).
+ */
+internal fun strictUtf8Decode(bytes: ByteArray): String? {
+    val decoder = Charsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
     return try {
-        decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
-    } catch (_: java.nio.charset.CharacterCodingException) {
+        decoder.decode(ByteBuffer.wrap(bytes)).toString()
+    } catch (_: CharacterCodingException) {
         null
     }
 }
