@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.search
 
+import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.pageContent
@@ -7,6 +8,7 @@ import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.doubles.shouldBeLessThan
+import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
 import java.sql.DriverManager
@@ -32,7 +34,8 @@ class Fts5CorpusPerfTest : FunSpec({
             repeat(pageCount) { n -> writePage(root, "section-%02d/page-%03d.md".format(n % 10, n), pageContent(n)) }
         }) { root ->
             IndexHarness(root).use { harness ->
-                val snapshot = harness.builder.rebuild()
+                val snapshot: PageIndex
+                val pagePassMillis = measureTimeMillis { snapshot = harness.builder.rebuild() }
                 snapshot.pages.size shouldBe pageCount
                 val splitter = SectionSplitter()
                 val documents = snapshot.pages.map(splitter::split)
@@ -76,9 +79,19 @@ class Fts5CorpusPerfTest : FunSpec({
                     // The recorded measurements (plan S2 acceptance: "recorded in the test output").
                     println("search-perf: 1000-page corpus, ${documents.sumOf { it.sections.size }} section docs")
                     println("search-perf: index build %d ms; trigram repopulate (INSERT..SELECT) %d ms".format(buildMillis, trigram.third))
+                    println(
+                        "search-perf: full reindex composite %d ms (page pass %d ms + engine rebuild %d ms; budget 60000 ms)"
+                            .format(pagePassMillis + buildMillis, pagePassMillis, buildMillis),
+                    )
                     println("search-perf: search.db %d KiB, trigram share %d KiB".format(trigram.first / 1024, trigram.second / 1024))
                     println("search-perf: warm query p95 %.2f ms over 200 samples".format(p95Millis))
 
+                    // Assertions AFTER the prints, so a CI failure still shows the timing breakdown.
+                    // Master criterion: full reindex < 60 s over the 1,000-page corpus — the OFFLINE operator path's
+                    // shape (ReindexCommand): the page pass + the engine generation swap, measured without booting
+                    // HTTP. The LIVE admin reindex route runs ONLY the engine swap over the published snapshot
+                    // (IndexBuilder.rebuildSearchIndex) — a strict subset bounded a fortiori by the engine half.
+                    (pagePassMillis + buildMillis) shouldBeLessThan 60_000L
                     p95Millis shouldBeLessThan 200.0
                 }
             }

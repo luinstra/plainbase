@@ -158,6 +158,13 @@ jobs:
       - name: Enforced builtin smoke (native binary)
         run: bash scripts/ci/enforced-auth-smoke.sh ./server/build/native/nativeCompile/plainbase 8081
 
+      # C2 master criterion: native startup < 1 s — exec-to-first-200-/healthz, gated on the median
+      # of 5 sequential restarts at ms granularity (the 1 s-granularity smoke above can't assert
+      # this). Port 8082: the job already used 8080 (smoke) and 8081 (enforced smoke), and both
+      # earlier servers have been killed by the time this step binds.
+      - name: Native startup bound (exec -> healthz median < 1 s)
+        run: bash scripts/ci/native-startup-bound.sh ./server/build/native/nativeCompile/plainbase 8082
+
       - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
