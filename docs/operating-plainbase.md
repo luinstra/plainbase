@@ -100,3 +100,50 @@ Exit codes: `0` success, `1` runtime failure (including the lock refusal), `2` u
 loss** — there are no migrations, ever. Delete it and reindex (or just restart, or let the next
 content change trigger a rebuild): the engine-truth diff self-heals from an empty index back to the
 full corpus. Only the content tree and `DATA_DIR/plainbase.db` carry durable state.
+
+One clarification on the delete-and-rebuild path: **stop the server before deleting `search.db`**
+(or just restart afterwards — a fresh boot recreates and repopulates it). Deleting the file under a
+running server unlinks it while the server's open connections keep reading and writing the unlinked
+copy, so the on-disk file only reappears on restart. On a *running* server, use
+`POST /api/v1/admin/reindex` for a rebuild-in-place instead — never a live delete.
+
+## Losing `DATA_DIR`: what recovers and what doesn't
+
+`DATA_DIR` can vanish entirely — a lost volume, a wiped container — and Plainbase boots clean
+against the surviving `CONTENT_DIR`. The content tree is the source of truth, so most state
+re-derives; the app database `DATA_DIR/plainbase.db` also holds *real* state that does not.
+
+**Recovers on the next boot, automatically:**
+
+- the directory itself (created on startup),
+- a fresh `plainbase.db`, created and migrated to the current schema,
+- a rebuilt, fully populated `search.db`,
+- the id of every page that carries `id:` in its frontmatter — those `/p/{id}` permalinks and
+  citations keep working,
+- `redirect_from` aliases (re-derived from frontmatter).
+
+**Lost, by stated trade-off:**
+
+- users and password hashes — re-run `plainbase admin setup-token` to bootstrap the first admin
+  (the server logs the same hint at boot when no enabled admin exists),
+- agent API tokens — re-mint them; token secrets are shown once and never stored,
+- sessions, roles, and the audit log,
+- pending proposals,
+- move-history URL aliases: old URLs from past renames 404 unless re-declared as `redirect_from`,
+- ids of pages that never carried a frontmatter id — fresh ids are minted, so old `/p/{id}`
+  permalinks and citations to *those* pages break.
+
+**Mitigation, before disaster:**
+
+- run `plainbase adopt --write-ids` so every page's identity lives in the tree itself and survives
+  any `DATA_DIR` loss,
+- back up `CONTENT_DIR` always; back up `DATA_DIR/plainbase.db` too if users, tokens, or proposals
+  matter.
+
+Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
+`search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and
+`LostDataDirRecoveryTest` (whole-`DATA_DIR` loss through the serve-boot recovery seams, asserting
+which ids survive and that `search.db` repopulates at boot). What those two drills do *not* assert:
+`redirect_from` re-derivation and move-alias loss are pinned by the broader `IndexBuilder` suite, not
+by these drills; the whole-database row losses (users, tokens, sessions, roles, audit log, proposals)
+follow directly from nuking `plainbase.db` and are not separately tested.
