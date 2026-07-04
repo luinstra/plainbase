@@ -1,8 +1,9 @@
 # Operating Plainbase
 
 Operator notes for running Plainbase in production and on a dev box. This document covers search
-freshness, the manual-reindex paths, and the filesystem-native virtue. (Backups and the Git layer
-are later phases.)
+freshness, the manual-reindex paths, the filesystem-native virtue, adopting an existing repo,
+backups and disaster recovery, performance budgets and the startup gate, and the recorded v0.1
+limitations.
 
 For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
@@ -107,6 +108,38 @@ running server unlinks it while the server's open connections keep reading and w
 copy, so the on-disk file only reappears on restart. On a *running* server, use
 `POST /api/v1/admin/reindex` for a rebuild-in-place instead — never a live delete.
 
+## When to upgrade to Meilisearch
+
+Plainbase's default search is embedded SQLite FTS5 — zero containers, ranked and section-granular
+out of the box (see [the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk)
+above: search is additive, never a gatekeeper). Meilisearch is a **deliberate future upgrade
+tier**, not a gap in the default — reach for it when you want typo tolerance, meaningfully better
+relevance ranking, or CJK tokenization that FTS5 doesn't do well.
+
+Meilisearch runs **out of process**. Compute-hungry search features never live in the native
+binary — the same pattern that keeps embeddings/OCR out of it too (project `CLAUDE.md`). The
+`docker-compose.yml` wiring for it is **reserved, not wired**: the `SEARCH_ENGINE`/`MEILI_URL`
+lines there are commented out, and no `meilisearch` service exists in the compose file today.
+Turning this tier on is future work — this section documents the intended shape, not something you
+can flip on with an env var (there isn't one; see
+[Configuration](configuration.md#meilisearch-is-not-a-config-key)).
+
+Meilisearch's own query-latency budget is checked manually today, not gated in CI — unlike the
+shipped FTS5 p95 < 200 ms budget (see [Performance & the startup gate](#performance--the-startup-gate)),
+which a corpus perf test enforces on every build.
+
+## Backups
+
+Back up `CONTENT_DIR` always — it's the canonical source of truth (see
+[the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above).
+Back up `DATA_DIR/plainbase.db` too if users, agent tokens, proposals, roles, or the audit log
+matter to you — it's the one piece of `DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db`
+needs no backup at all: it's fully [derived state](#searchdb-is-derived-state), rebuildable from
+the content tree at any time.
+
+What actually recovers if you lose `DATA_DIR` without a backup — and what doesn't — is the next
+section.
+
 ## Losing `DATA_DIR`: what recovers and what doesn't
 
 `DATA_DIR` can vanish entirely — a lost volume, a wiped container — and Plainbase boots clean
@@ -147,3 +180,115 @@ which ids survive and that `search.db` repopulates at boot). What those two dril
 `redirect_from` re-derivation and move-alias loss are pinned by the broader `IndexBuilder` suite, not
 by these drills; the whole-database row losses (users, tokens, sessions, roles, audit log, proposals)
 follow directly from nuking `plainbase.db` and are not separately tested.
+
+## Adopting an existing repo
+
+`plainbase adopt` gives an existing Markdown tree Plainbase-native page identity — a stable `id:`
+in each page's frontmatter that survives moves, renames, and (per the section above) a lost
+`DATA_DIR`.
+
+Start read-only, always:
+
+```
+plainbase adopt --write-ids --dry-run
+```
+
+This is **PREVIEW mode** — it opens a read-only database driver and writes nothing at all,
+database included; it prints what *would* be materialized and what *would* be refused (and why),
+so you can review before committing to anything.
+
+When the preview looks right, materialize it:
+
+```
+plainbase adopt --write-ids
+```
+
+This writes an `id:` line into every page's frontmatter (MATERIALIZE). The CLI logs each intended
+write (`intent: write id <id> -> <path>`) *before* performing it, so an interrupted run is
+reconcilable — re-running `adopt` is idempotent. On network filesystems (NFS/SMB) the CLI also
+emits a durability caveat: atomic rename isn't available there, so writes fall back to
+copy+delete, which is not crash-atomic.
+
+Bare `plainbase adopt` (no flags) is **RECORD mode** — it writes `id_map` rows to `plainbase.db`
+instead of touching your files (and does create/migrate that database). It's the lower-commitment
+option, but the trade-off below still applies until a page is actually materialized.
+
+The trade-off: an unmaterialized page is keyed by its **path**, not a durable id — move it outside
+Plainbase before adopting, and it gets a fresh id on adoption (the same trade-off as
+[Losing DATA_DIR](#losing-data_dir-what-recovers-and-what-doesnt) above, from the disaster-recovery
+angle). `--write-ids` is the fix: once a page carries its own `id:`, its identity lives in the
+tree, not in derived state.
+
+Exact usage: `plainbase adopt [--write-ids [--dry-run]]` — no other flag combination is accepted.
+
+## Performance & the startup gate
+
+Three classes of number back Plainbase's performance story — keep them straight, because only some
+are checked-in contracts.
+
+**Cited budgets (asserted on every build, checked-in thresholds):**
+
+- Page-render p95 < 300 ms, measured at index time over a 1,000-page + 20-large-page corpus
+  (`RenderCorpusPerfTest`).
+- Full reindex (page pass + engine rebuild) < 60 s over the 1,000-page corpus
+  (`Fts5CorpusPerfTest`).
+- FTS5 search p95 < 200 ms, warm, over the same corpus (`Fts5CorpusPerfTest`).
+- Native-startup CI regression tripwire: 2000 ms (`ci.yml`, the `native-gate` job).
+
+**Measured-during-C2 observations** (reproduce them yourself rather than trusting these numbers as
+they age):
+
+- Native cold-start (exec → first `200 /healthz`, against an *empty* content dir): ~467 ms local
+  median, ~933 ms median on GitHub's shared CI runners (one run measured 1004 ms) — CI runners run
+  roughly 2x slower than local/prod hardware, which is why the CI gate above is a 2000 ms tripwire,
+  not the real target.
+- Reproduce it yourself:
+
+  ```
+  scripts/ci/native-startup-bound.sh <path-to-plainbase-launcher> [port=8082] [budget-ms=1000]
+  ```
+
+  This boots the launcher 5 times against a fresh, empty `DATA_DIR` + `CONTENT_DIR` per run and
+  gates on the median. The strict **< 1 s target stays local/prod** (the script's own default
+  budget); CI merely tripwires regressions at roughly 2x its own median.
+
+**Why the split:** booting against an empty content dir isolates process-exec + class-init + Koin +
+SQLDelight open/migrate + the CIO bind + the first request — *not* corpus indexing. (Booting the
+~41-page demo corpus instead measures ~1005 ms median — corpus-index-dominated, not startup; that
+time is already budgeted by the render/reindex thresholds above, so it doesn't belong in the
+startup gate.)
+
+### Git-write stall bound
+
+Every git invocation Plainbase makes funnels through one executor with a bounded wait: **a 30 s
+timeout, plus bounded per-stream (stdin/stdout/stderr) drain grace** after a force-kill. There is
+no single exact total to quote, because one save issues roughly a dozen such invocations in
+sequence (capturing HEAD, seeding a temp index, hashing the blob, updating it, writing the tree,
+creating the commit, updating the ref, and a couple more) — so a wedged repo (a stuck filesystem, a
+hung `git` hook shimmed in from outside Plainbase's pinned config, etc.) can stall a single save
+for **a small multiple of the per-invocation bound**, not one fixed number of seconds. There's no
+circuit breaker today — a trip-after-N-failures breaker is a v0.1.x candidate.
+
+## Known limitations (v0.1)
+
+Recorded cuts — conscious v0.1 trade-offs, not gaps discovered later and not TODOs:
+
+- **Audit-log read asymmetry.** Denied *reads* are deliberately not audited (`checkRead`'s KDoc
+  says so plainly: "Not audited") — only mutating denials (edit/create/manage/approve) record a
+  decision row. A read-probing agent leaves no trail in the audit log. Don't treat the audit log as
+  a complete access log; it's a complete *mutation* log.
+- **Sub-1280px metadata rail cut.** The frontmatter edit rail is hidden below Tailwind's `xl`
+  breakpoint (≈1280 px viewport width) — below that width the frontmatter form isn't editable in
+  the UI, though the raw markdown buffer still is. A conscious v0.1 cut, not a bug.
+
+**Maintainer watch-items** (correct today, worth re-checking if the surrounding code moves):
+
+- The editor's `bufferRef`/`commitBuffer` invariant — *every* buffer write must go through
+  `commitBuffer`, which updates the ref in the same tick it schedules the `setState`, so the ref
+  never lags the rendered buffer. A future edit that writes buffer state directly would silently
+  reintroduce a stale-read race.
+- The frontend token-discipline gate's known false negative: the fixed `COLOR_PROPERTIES` list
+  only catches a **named color** (`red`, `white`, …) in a **listed** property. A named color in an
+  *unlisted* property — a `box-shadow`, a gradient stop — slips through undetected. Hex literals and
+  color functions (`rgb()`, `hsl()`, `oklch()`, …) are caught position-independently regardless of
+  property, so this gap is narrower than it sounds, but it's real.
