@@ -22,6 +22,15 @@ RUN ./gradlew :server:installDist --no-daemon ${RELEASE_VERSION:+-PreleaseVersio
 # Base pinned by digest (C5 item 8); re-resolve with
 # `docker buildx imagetools inspect eclipse-temurin:21-jre` when bumping the JRE line.
 FROM eclipse-temurin:21-jre@sha256:d2b9f8f12212cadcfdf889461531784e8fd097feade954d65b31ee7a71c473ec
+
+# OCI labels GHCR reads for the package page: `source` connects the package to this repo (so the
+# page shows the repo README + inherits its visibility), `description` is the one line of
+# image-specific text shown below the package name (<= 512 chars, plain text), `licenses` is the
+# SPDX id. Static values — no re-resolution needed.
+LABEL org.opencontainers.image.source="https://github.com/luinstra/plainbase" \
+      org.opencontainers.image.description="Plainbase: a filesystem-native, agent-native docs server - your content stays plain Markdown on disk. This is the JVM container tier (a JRE image built via installDist); for the fast-start path prefer a native binary from the GitHub Releases. Runs auth-off over plaintext by default, so front it with an authenticating reverse proxy for any multi-user or public deployment." \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl git \
     && rm -rf /var/lib/apt/lists/*
