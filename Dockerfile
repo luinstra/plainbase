@@ -9,7 +9,7 @@ WORKDIR /src
 ARG RELEASE_VERSION=""
 
 # Warm the dependency cache first for better layer reuse.
-COPY gradlew gradlew.bat settings.gradle.kts build.gradle.kts ./
+COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle/ gradle/
 RUN ./gradlew --version --no-daemon
 
