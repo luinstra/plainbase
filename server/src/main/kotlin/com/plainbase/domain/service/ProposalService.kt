@@ -424,7 +424,7 @@ sealed interface ProposeOutcome {
     data class InvalidCreateContent(val message: String) : ProposeOutcome
 }
 
-/** The outcome of an apply (P1b — the §WI-5 wire contract maps these). */
+/** The outcome of an apply (the wire contract maps these). */
 sealed interface ApplyOutcome {
     data class Applied(val view: ProposalView, val newHash: String, val commit: String?, val reindexDeferred: Boolean) : ApplyOutcome
 
@@ -438,7 +438,7 @@ sealed interface ApplyOutcome {
     data object NotFound : ApplyOutcome
 }
 
-/** The outcome of a rebase (P1b, edits only). */
+/** The outcome of a rebase (edits only). */
 sealed interface RebaseOutcome {
     data class Rebased(val view: ProposalView) : RebaseOutcome
 
@@ -451,7 +451,7 @@ sealed interface RebaseOutcome {
     data object NotFound : RebaseOutcome
 }
 
-/** The outcome of a reject (the §WI-5 E2 wire contract maps these). */
+/** The outcome of a reject (the wire contract maps these). */
 sealed interface RejectOutcome {
     data class Rejected(val view: ProposalView) : RejectOutcome
 

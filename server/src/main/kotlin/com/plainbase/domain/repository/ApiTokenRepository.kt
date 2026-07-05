@@ -4,7 +4,7 @@ import kotlin.time.Instant
 
 /**
  * The at-rest store for agent `pb_` API tokens (A2, §0.2). Lives in the APP database (`plainbase.db`) — security
- * truth is app state, like the §B3 checkpoint and the W1 dirty-page journal — NEVER disposable `search.db`
+ * truth is app state, like the §B3 checkpoint and the write-ahead dirty-page journal — NEVER disposable `search.db`
  * (ADR-0004). The lookup key is the PUBLIC `id` prefix; the secret never lives here, only its raw SHA-256
  * ([ApiTokenRow.secretHash]). `all()` returns metadata only — there is no plaintext column to leak.
  *

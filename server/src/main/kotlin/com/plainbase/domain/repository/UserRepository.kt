@@ -45,7 +45,7 @@ interface UserRepository {
     /** Every user's metadata (NO `password_hash` — the list/admin surface has no secret to leak). */
     fun all(): List<UserMeta>
 
-    /** How many ENABLED builtin admins exist — the bootstrap/recovery gate (WI-13): mint without `--force` iff zero. */
+    /** How many ENABLED builtin admins exist — the bootstrap/recovery gate: mint without `--force` iff zero. */
     fun countEnabledAdmins(): Long
 }
 

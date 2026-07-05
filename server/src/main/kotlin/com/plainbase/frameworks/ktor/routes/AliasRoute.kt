@@ -19,7 +19,7 @@ import io.ktor.server.routing.get
  * A live canonical path always shadows an alias; the indexer's shadow sweep drops such rows at
  * rebuild, and the belt-and-suspenders check here keeps the invariant even mid-rebuild.
  *
- * A3 (§WI-5): ONLY the alias-redirect arm is `read`-gated — [com.plainbase.domain.service.ReadFacade
+ * A3: ONLY the alias-redirect arm is `read`-gated — [com.plainbase.domain.service.ReadFacade
  * .resolveDocsRedirect] returns the target only when there IS a live alias AND the principal may read it; on no
  * alias OR a deny it returns null and we fall through to the PUBLIC SPA-shell arm, so unauthenticated SPA
  * navigation still loads the shell and a denied caller cannot tell an alias exists (no 301 existence-leak). The

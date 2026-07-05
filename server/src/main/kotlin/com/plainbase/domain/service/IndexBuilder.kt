@@ -123,7 +123,7 @@ class IndexBuilder(
         )
         urls.issues.forEach(idMap::record)
 
-        // ONE batched last-commit read for the whole page set (W5 D-3 / fix-C corollary): never one query
+        // ONE batched last-commit read for the whole page set (fix-C corollary): never one query
         // per page. NoOp → empty map → every commit null off Git (the frozen-golden invariant). The map
         // is keyed by the same TreePath the draft carries; an uncommitted page is simply absent (→ null).
         val commitMap = history.lastCommits(drafts.map { it.file.path })
@@ -182,7 +182,7 @@ class IndexBuilder(
     /**
      * The MANAGE-gated rescan entry (A3): the admin `rescan` route reaches the full pass ONLY through this thin
      * wrapper, which requires a [ManageGrant] minted by `PolicyService.checkManage()`. The no-arg [rebuild] stays
-     * for the MANY internal callers (the watcher loop, startup reconcile, the W2 create's post-write index, the
+     * for the MANY internal callers (the watcher loop, startup reconcile, the create route's post-write index, the
      * asset facade's post-write rebuild) — they are not a manage admin action, so they keep the ungated path.
      * "Gain a grant param, keep the logic": the gated overload is the new surface, the body is the shared no-arg.
      */
@@ -242,7 +242,7 @@ class IndexBuilder(
      *
      * THROWS [IllegalStateException] if [pageId] is absent or its file is unreadable on the SAVE path:
      * the CAS just wrote those bytes, so a missing page is a real invariant violation, never a silent
-     * success (debate MUST-FIX 4). `WritePipeline.reconcileDirtyPages` tolerates a vanished page at its
+     * success. `WritePipeline.reconcileDirtyPages` tolerates a vanished page at its
      * OWN call site, never here.
      */
     @Synchronized

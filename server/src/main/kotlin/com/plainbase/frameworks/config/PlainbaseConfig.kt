@@ -39,7 +39,7 @@ data class PlainbaseConfig(
      * 1 MiB document cap is wrong for them. Default 10 MiB; raisable per deploy (raising is additive).
      */
     val maxAssetBytes: Long = DEFAULT_MAX_ASSET_BYTES,
-    /** W4 Git-history layer config (ADR-0006): enablement tri-state + the commit identity. */
+    /** Git-history layer config (ADR-0006): enablement tri-state + the commit identity. */
     val git: GitConfig = GitConfig(),
     /** Phase-4 auth substrate (ADR-0008): bind-guard + secure-context inputs; restart-only (§0.9). */
     val auth: AuthConfig = AuthConfig(),
@@ -109,7 +109,7 @@ data class PlainbaseConfig(
     fun isNonLoopbackBind(): Boolean = RemoteAddress.isNonLoopbackBind(host)
 
     /**
-     * The `Secure` attribute for the `pb_session` cookie (ADR-0008, WI-8). True whenever the transport is TLS-fronted
+     * The `Secure` attribute for the `pb_session` cookie (ADR-0008). True whenever the transport is TLS-fronted
      * — MIRRORING the bind guard's "proxy declared ⇒ TLS upstream" logic: a non-loopback bind is fronted by TLS, AND
      * the canonical production deployment (LOOPBACK bind behind a TLS-terminating proxy, [bindGuardRefusal]) declares
      * [AuthConfig.trustedProxyCidrs] — that too is TLS-fronted, so the cookie must carry `Secure`. ONLY pure
@@ -172,7 +172,7 @@ data class PlainbaseConfig(
         /** W3b default asset cap: 10 MiB. Raisable via `PLAINBASE_MAX_ASSET_BYTES` (raising is additive). */
         const val DEFAULT_MAX_ASSET_BYTES: Long = 10_485_760
 
-        /** W4 default Git author/committer identity (D1) — Phase 3 has no principal. */
+        /** Default Git author/committer identity — Phase 3 has no principal. */
         const val DEFAULT_GIT_AUTHOR_NAME: String = "Plainbase"
         const val DEFAULT_GIT_AUTHOR_EMAIL: String = "plainbase@localhost"
 
@@ -347,7 +347,7 @@ private fun Config.boolStrict(path: String): Boolean? {
 }
 
 /**
- * W4 Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in CONTENT_DIR
+ * Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in CONTENT_DIR
  * (the detection lives in `historyModule`, not here); `true`/`false` override either direction.
  * [authorName]/[authorEmail] are the commit identity (Phase 3 default `Plainbase <plainbase@localhost>`;
  * the author/committer split is plumbed for Phase 4). There is no amend/squash knob — one commit per save, always (fix D).

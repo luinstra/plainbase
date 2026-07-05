@@ -27,7 +27,7 @@ import org.koin.dsl.module
 import kotlin.time.Clock
 
 /**
- * Wires the chunk-6 REST read path (+ the S4 search read path + the W1 write pipeline) and the A3 choke point:
+ * Wires the REST read path (+ the search read path + the write pipeline) and the A3 choke point:
  * the [PolicyService] + the guarded facades + the [RouteContext] the routing layer receives. Constructor DSL
  * only — no reflection (native-image gate).
  */
@@ -116,7 +116,7 @@ val restModule = module {
     // scope (RouteContextFactory option (b)). RestModule passes the raw ProposalService + the labeler in.
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
-    // KtorServer), so two processes never race a double-generate (WI-9 fold-in). The key bytes never log.
+    // KtorServer), so two processes never race a double-generate. The key bytes never log.
     single { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
     single<RouteContext> {
         val config = get<PlainbaseConfig>()

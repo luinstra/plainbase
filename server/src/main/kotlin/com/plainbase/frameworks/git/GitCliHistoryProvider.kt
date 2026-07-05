@@ -13,16 +13,16 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
- * The Git-on adapter (ADR-0006, chunk W4): ONE new commit per save over the same working tree the
+ * The Git-on adapter (ADR-0006): ONE new commit per save over the same working tree the
  * content store serves, via pure plumbing on a per-operation temp index — never porcelain `git commit`,
- * never the live index. The recipe (POST round-3, empirically verified on Git 2.54.0) is the only
- * correct sequence; see the W4 addendum §3 D-3 for the full provenance.
+ * never the live index. The recipe (empirically verified on Git 2.54.0) is the only
+ * correct sequence.
  *
  * [exec] is the hermetic chokepoint; [workTree] is the content root the repo must be rooted EXACTLY at
  * (so init never advances an ancestor checkout when CONTENT_DIR sits inside one); [gitHome] (created
- * lazily at the first commit — P1-3) holds the isolated config home and the per-op temp indexes; [clock]
- * feeds reproducible commit timestamps; the optional [maintenance] dispatcher runs auto-GC OFF the W1
- * monitor (F3, defaulted so tests stub/observe).
+ * lazily at the first commit) holds the isolated config home and the per-op temp indexes; [clock]
+ * feeds reproducible commit timestamps; the optional [maintenance] dispatcher runs auto-GC OFF the
+ * write-pipeline monitor (defaulted so tests stub/observe).
  */
 class GitCliHistoryProvider(
     private val exec: GitExecutor,
@@ -31,7 +31,7 @@ class GitCliHistoryProvider(
     private val defaultAuthor: CommitIdentity,
     private val defaultCommitter: CommitIdentity,
     private val clock: Clock,
-    // The repo-relative path to STAGE in git for a TreePath — raw-on-disk-name-preserving (r6b), so a
+    // The repo-relative path to STAGE in git for a TreePath — raw-on-disk-name-preserving, so a
     // non-NFC on-disk file is committed at its real path, not the NFC phantom `path.value`. Injected as a
     // function (loose coupling, like `maintenance`) so the provider never depends on the whole ContentStore
     // port; wired to ContentStore::resolveRepoRelativePath. Defaults to TreePath.value for tests/no-store.
@@ -96,10 +96,10 @@ class GitCliHistoryProvider(
             if (!unborn) {
                 val baseTree = exec.run(listOf("rev-parse", "$oldHead^{tree}")).let { if (it.ok) GitExecutor.parseSha(it.stdout) else null }
                 if (baseTree == newTree) {
-                    // A clean no-op only if HEAD is STILL the captured base (P2-3, mirrors the r6d/update-ref
+                    // A clean no-op only if HEAD is STILL the captured base (mirrors the update-ref
                     // CAS philosophy): the tree compare is against the STALE oldHead, so if an external actor
                     // advanced HEAD after the capture (e.g. committed a different version of this path), a
-                    // bare "no-op success" would let W1 clear the dirty row and SILENTLY DROP the user's save
+                    // bare "no-op success" would let the write pipeline clear the dirty row and SILENTLY DROP the user's save
                     // relative to the new tip. Re-read HEAD; if it moved, raise so the orThrow path leaves the
                     // page dirty and reconcile retries against the fresh tip (where the bytes are a real diff).
                     val currentHead = exec.run(listOf("rev-parse", "--verify", "HEAD")).let {
@@ -121,7 +121,7 @@ class GitCliHistoryProvider(
                 }
             }
 
-            // (6) commit-tree with identity env; the new SHA is commit-tree's OWN stdout (F7) — never a
+            // (6) commit-tree with identity env; the new SHA is commit-tree's OWN stdout — never a
             // post-update-ref rev-parse HEAD (a concurrent external commit would yield the wrong SHA).
             val now = clock.now()
             val identityEnv = identityEnv(author ?: defaultAuthor, committer ?: defaultCommitter, now)
@@ -140,23 +140,23 @@ class GitCliHistoryProvider(
             val newCommit = GitExecutor.parseSha(commitResult.stdout) ?: error("commit-tree did not return a SHA: ${commitResult.stderr}")
 
             // (7) update-ref with an old-value CAS: a HEAD that moved out-of-band since step 2 fails here
-            // (W1 leaves the page dirty) rather than overwriting a concurrent commit (P0-1 ref-CAS). The
-            // target is the branch ref captured at step 2 (P2-1), not a fresh symbolic-ref read.
+            // (the write pipeline leaves the page dirty) rather than overwriting a concurrent commit (ref-CAS). The
+            // target is the branch ref captured at step 2, not a fresh symbolic-ref read.
             updateRef(branchRef, newCommit, oldHead).orThrow("update-ref")
 
             // (7b) Porcelain-parity: the staging ran under the per-op temp index, so the LIVE .git/index is
             // untouched — leaving the saved path stale (absent on a fresh repo) means an external `git status`
             // shows a phantom deletion. Surgically stage ONLY the just-committed blob into the live index
-            // (P2-3: NOT `read-tree HEAD`, which would wipe the user's unrelated staged work). The working
+            // (NOT `read-tree HEAD`, which would wipe the user's unrelated staged work). The working
             // tree already matches (ContentStore wrote the bytes), so `git status` for the saved path is then
             // clean. Best-effort, NON-FATAL (the commit already landed); skipped if HEAD switched branches or
-            // advanced past our commit (r6d) — the expected HEAD is the commit we just created.
+            // advanced past our commit — the expected HEAD is the commit we just created.
             syncLiveIndex(branchRef, newCommit, blobSha, repoRelativePath)
 
-            // (8) Hydrate from the SHA we created, keyed on that SHA (F7).
+            // (8) Hydrate from the SHA we created, keyed on that SHA.
             val commit = show(newCommit)
 
-            // (9) Best-effort auto-maintenance OFF the W1 monitor, non-fatal (F3): plumbing skips the
+            // (9) Best-effort auto-maintenance OFF the write-pipeline monitor, non-fatal: plumbing skips the
             // auto-GC porcelain runs, so loose objects would grow unbounded without this.
             dispatchMaintenance()
             return commit
@@ -254,10 +254,10 @@ class GitCliHistoryProvider(
     override fun diff(from: String, to: String, path: TreePath): FileDiff {
         // `--no-ext-diff --no-textconv` (before the refs) disarm a repo-local `diff.external`/custom diff
         // driver/`textconv` from `.git/config` or `.gitattributes` — otherwise hitting the diff read-path
-        // would run that helper as the server user (the read-path analog of W4's hostile-`.gitattributes`
-        // commit paranoia: arbitrary command execution from attacker-controlled repo config).
+        // would run that helper as the server user (the read-path analog of the Git-commit path's hostile-`.gitattributes`
+        // paranoia: arbitrary command execution from attacker-controlled repo config).
         val result = exec.run(listOf("diff", "--no-ext-diff", "--no-textconv", from, to, "--", repoPath(path)))
-        // A bad/unknown ref is a CLIENT error the route maps to 404 (W5 P2): distinguish it from an
+        // A bad/unknown ref is a CLIENT error the route maps to 404: distinguish it from an
         // OPERATIONAL failure (timeout, corrupt/inaccessible repo, unsupported flag) by git's bad-object
         // stderr signature, and let every OTHER non-zero exit propagate as a GitCommandException (→ 500 via
         // the route's default error path). Collapsing operational failures to 404 would hide them as "no diff".
@@ -269,9 +269,9 @@ class GitCliHistoryProvider(
     }
 
     /**
-     * Readies the content-root repo at startup (W5 P1): a NESTED `git init` at [workTree] when it has no
+     * Readies the content-root repo at startup: a NESTED `git init` at [workTree] when it has no
      * own `.git`, never advancing an ancestor checkout (the [ensureRepo] `Files.exists(workTree/.git)`
-     * guard). Called AFTER the data-dir lock (P1-3) and BEFORE the first rebuild's `lastCommits` read, so
+     * guard). Called AFTER the data-dir lock and BEFORE the first rebuild's `lastCommits` read, so
      * a forced-on content root never aborts serve (plain dir → operational failure) nor reads the wrong
      * ancestor repo. Idempotent — [commit] still calls [ensureRepo] too (harmless belt-and-suspenders).
      */
@@ -506,7 +506,7 @@ class GitCliHistoryProvider(
     /**
      * Classifies a failed read-path `git log`: an unborn HEAD / empty repo is the one BENIGN non-zero exit
      * ("no history yet" → empty), but a timeout, corrupt/inaccessible repo, or an unsupported flag is an
-     * OPERATIONAL failure that must surface (the W4 fail-loud idiom — [orThrow]/[GitCommandException]),
+     * OPERATIONAL failure that must surface (the Git fail-loud idiom — [orThrow]/[GitCommandException]),
      * never collapse to empty. Collapsing the latter would persist a false `commit = null` for a page that
      * genuinely has history (`IndexBuilder.reindex` does `log(path, 1).firstOrNull()?.sha`) and report a
      * false empty on `/history`. A born repo asked for a never-committed path exits 0 with empty stdout, so
@@ -536,7 +536,7 @@ class GitCliHistoryProvider(
 
     /**
      * True for a `git diff` failure caused by an UNRESOLVABLE `from`/`to` ref — the client error the route
-     * maps to 404 ("no such commit"), distinct from an operational failure (W5 P2). Stable under the pinned
+     * maps to 404 ("no such commit"), distinct from an operational failure. Stable under the pinned
      * LC_ALL=C: git reports a bad ref as "fatal: bad object <sha>", "unknown revision or path not in the
      * working tree", "bad revision <ref>", or "ambiguous argument '<ref>': unknown revision". Anything else
      * (timeout, corrupt repo, permission, unsupported flag) is operational and must surface as 500.
@@ -565,8 +565,8 @@ class GitCliHistoryProvider(
         private const val SHOW_FORMAT = "%H%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%B"
         private const val LOG_FORMAT = SHOW_FORMAT
 
-        /** First-parent history flags applied to `log` and `lastCommits` alike (W5 debate MUST-FIX 3 +
-         *  revision BLOCKING 3). `--first-parent` is the TRAVERSAL flag: it walks only the first parent of
+        /** First-parent history flags applied to `log` and `lastCommits` alike. `--first-parent` is the
+         *  TRAVERSAL flag: it walks only the first parent of
          *  each merge, so a side-branch-only commit is never reported as a path's last touch. `--diff-merges=
          *  first-parent` is the DISPLAY flag: a merge that resolves the path against its first parent still
          *  shows (and thus attributes) the change. Together they realize the documented semantic: "the last
@@ -591,7 +591,7 @@ class GitCliHistoryProvider(
 
         private const val COMMIT_FIELD_COUNT = 8
 
-        // Per-`git log` pathspec-byte budget for [lastCommits] batching (P2). 128 KiB is far under the
+        // Per-`git log` pathspec-byte budget for [lastCommits] batching. 128 KiB is far under the
         // smallest realistic OS `ARG_MAX` (macOS ~1 MiB, Linux ~2 MiB) once env + the rest of argv are
         // accounted for, yet large enough that normal trees (thousands of ~40-byte `.md` paths) fit in one
         // invocation — so the common case is still ONE process, with batching kicking in only for huge trees.
@@ -611,7 +611,7 @@ class GitCliHistoryProvider(
         private val UNBORN_HEAD_STDERR =
             Regex("""does not have any commits yet|bad default revision 'HEAD'|ambiguous argument 'HEAD': unknown revision""")
 
-        // The git stderr signatures for an UNRESOLVABLE diff ref (W5 P2) — a client 404, not an operational
+        // The git stderr signatures for an UNRESOLVABLE diff ref — a client 404, not an operational
         // 500. Stable under LC_ALL=C across versions: a bad object id, an unknown revision, a bad revision, or
         // an ambiguous-argument unknown-revision. Anything else (timeout, corrupt repo, unsupported flag) is
         // operational and propagates as a GitCommandException.
@@ -623,7 +623,7 @@ class GitCliHistoryProvider(
 /**
  * Best-effort git auto-maintenance: `maintenance run --auto` on modern git, falling back to `gc --auto`
  * on hosts predating `git maintenance` (< 2.30). Shared by the provider's default dispatcher and the
- * production off-thread wiring so the fallback is live in BOTH (P2-C). Best-effort; the caller owns
+ * production off-thread wiring so the fallback is live in BOTH. Best-effort; the caller owns
  * threading + non-fatal handling.
  */
 internal fun runAutoMaintenance(exec: GitExecutor) {
@@ -631,14 +631,14 @@ internal fun runAutoMaintenance(exec: GitExecutor) {
     if (!auto.ok) exec.run(listOf("gc", "--auto"))
 }
 
-/** A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the W1 catch. */
+/** A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the write-pipeline catch. */
 open class GitCommandException(step: String, exitCode: Int, stderr: String) :
     RuntimeException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
 
 /**
- * A `git diff` over a ref that does not resolve to a commit (W5 P2) — a CLIENT error the diff route maps to
+ * A `git diff` over a ref that does not resolve to a commit — a CLIENT error the diff route maps to
  * 404 `not_found`, distinct from an operational [GitCommandException] (which propagates → 500). Subtypes
- * [GitCommandException] so the W1 commit-path catch and the provider-level `shouldThrow<GitCommandException>`
+ * [GitCommandException] so the write-pipeline commit-path catch and the provider-level `shouldThrow<GitCommandException>`
  * read tests stay correct; the route catches THIS narrower type for its 404.
  */
 class UnknownRevisionException(step: String, exitCode: Int, stderr: String) : GitCommandException(step, exitCode, stderr)

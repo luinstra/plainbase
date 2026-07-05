@@ -16,7 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * W5 per-page history read surface (non-frozen, D-4/D-5):
+ * Per-page history read surface (non-frozen):
  *  - `GET /api/v1/pages/{id}/history` — the file's commits newest-first.
  *  - `GET /api/v1/pages/{id}/diff?from={sha}&to={sha}` — the file's unified diff between two commits.
  *
@@ -24,14 +24,14 @@ import kotlinx.coroutines.withContext
  * requires Git mode" copy) — never a 404 for the FEATURE; a 404 here always means the page id is unknown
  * (distinct concern, mirrors [pageRoutes]). The `git_enabled` flag comes from [com.plainbase.domain
  * .history.HistoryProvider.enabled], never type-sniffing. A bad/unknown `from`/`to` SHA in `diff` is a
- * 404 `not_found` (D-6: "no such thing", the unknown-asset family); a malformed (non-hex) param is a 400
+ * 404 `not_found` ("no such thing", the unknown-asset family); a malformed (non-hex) param is a 400
  * `invalid_query`. The git reads run off the CIO event loop on `Dispatchers.IO`.
  *
  * KNOWN LIMIT (owner-deferred 2026-06-18, review-burst security lens): each request is bounded per-call
  * (GitExecutor's stdout byte cap + the process timeout), but there is NO concurrency cap across requests —
  * N simultaneous `/history`/`/diff` calls spawn N git subprocesses. Acceptable for the single-binary
  * self-hosted model; a bounded git-read semaphore (+ 503 on saturation) is a tracked follow-up hardening
- * item, deliberately NOT bolted onto W5 (concurrency-limiting is a cross-cutting server concern).
+ * item, deliberately NOT bolted onto the history reads (concurrency-limiting is a cross-cutting server concern).
  */
 fun Route.historyRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
@@ -61,7 +61,7 @@ fun Route.historyRoutes(ctx: RouteContext) {
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 // Off Git the no-op provider returns an empty diff; the flag tells the client to render its own
                 // "Git off" copy rather than treat the empty diff as a real one.
-                // Only an UNRESOLVABLE ref is a 404 (W5 P2): an operational diff failure (timeout, corrupt repo,
+                // Only an UNRESOLVABLE ref is a 404: an operational diff failure (timeout, corrupt repo,
                 // unsupported flag) is a plain GitCommandException that propagates to the default 500 path —
                 // collapsing it to 404 would hide a real failure as "no diff / not found".
                 val diff = try {

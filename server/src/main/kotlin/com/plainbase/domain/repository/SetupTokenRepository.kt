@@ -4,7 +4,7 @@ import kotlin.time.Instant
 
 /**
  * The at-rest store for one-time setup + password-reset tokens (A4a). ONE table serves BOTH the first-admin
- * bootstrap AND admin-issued password resets (the synthesis §7 "reset reuses the setup-token mechanism" — a
+ * bootstrap AND admin-issued password resets (reset reuses the setup-token mechanism — a
  * [SetupTokenPurpose] column discriminates). Lives in the APP database (`plainbase.db`) — security truth is app
  * state — NEVER disposable `search.db` (ADR-0004). A row is keyed by the raw `SHA-256` of the one-time token
  * ([SetupTokenRow.tokenHash]); the PK lookup IS the match (no plaintext stored).

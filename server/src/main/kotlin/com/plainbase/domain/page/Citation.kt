@@ -9,7 +9,7 @@ import com.plainbase.domain.content.TreePath
  *  - [path] — the content-root-relative FILE path (NFC, `/`-separated, no leading `/`);
  *  - [contentHash] — `sha256:` + 64 lowercase hex of the EXACT raw file bytes (pre-decode, BOM
  *    included) — the same value Phase 3 CAS uses;
- *  - [commit] — the last commit touching the file in Git mode (W5, the page's snapshot-resident
+ *  - [commit] — the last commit touching the file in Git mode (the page's snapshot-resident
  *    last-commit SHA); null off Git / for an uncommitted page / in Phase 1-2 — the field is present
  *    from day one;
  *  - [uri] — the §A4 grammar `plainbase://{page_id} [ "#" heading_id ] "@" ref`; Phase 1's ref is

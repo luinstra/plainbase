@@ -44,22 +44,22 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  *
  * The §A5 reindex single-flight lives here (the manage op owns it, never exposed to a route); the asset write's
  * INTERNAL post-write `IndexBuilder.rebuild()` uses the UNGATED no-arg overload (it is part of the EDIT write,
- * not a manage admin action — §WI-3).
+ * not a manage admin action).
  */
 class GuardedMutatingFacade(
     private val policy: PolicyService,
     private val writePipeline: WritePipeline,
     private val contentStore: ContentStore,
     private val indexBuilder: IndexBuilder,
-    // P5: the degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
+    // The degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
     // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) — invoked only at
-    // request time, never during assembly. Defaulted so the many non-P5 test constructors compile unchanged.
+    // request time, never during assembly. Defaulted so the many older test constructors compile unchanged.
     private val proposals: () -> ProposalFacade = { error("ProposalFacade not wired for this GuardedMutatingFacade") },
-    // P5: the validated `agentDirectCommit.globs` (config-parsed). Empty (the default) ⇒ every agent write degrades.
+    // The validated `agentDirectCommit.globs` (config-parsed). Empty (the default) ⇒ every agent write degrades.
     private val agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
-    // P5 (b1): the C4 author labeler — resolves an agent's snapshot (issuer, externalId, label) so a DIRECT agent
+    // The author labeler — resolves an agent's snapshot (issuer, externalId, label) so a DIRECT agent
     // commit is git-attributed to the AGENT (author == committer), matching its agent-attributed audit row instead of
-    // the server "Plainbase" identity. Defaulted null so the many non-P5 test constructors compile unchanged; the agent
+    // the server "Plainbase" identity. Defaulted null so the many older test constructors compile unchanged; the agent
     // DirectCommit path requires it (it is only ever reached with globs configured, where the production wiring + the
     // testRouteContext harness both thread it in via buildRouteContext).
     private val proposalLabeler: ProposalAuthorLabeler? = null,
@@ -73,9 +73,9 @@ class GuardedMutatingFacade(
     private val reindexInFlight = AtomicBoolean(false)
 
     override fun save(principal: Principal, request: SaveRequest): SaveResult {
-        // P5 gate (WI-4): the agent direct-commit-vs-degrade decision is consulted ONLY for a genuine agent PUT
+        // The agent direct-commit-vs-degrade decision is consulted ONLY for a genuine agent PUT
         // (Principal.Agent AND origin == DIRECT_PUT). Human/Anonymous ALWAYS, and the proposal-APPLY path REGARDLESS
-        // of its principal (an off-mode agent CAN drive approve — finding #11), take the strict audit-first direct
+        // of its principal (an off-mode agent CAN drive approve), take the strict audit-first direct
         // path UNCHANGED. The bypass is the WriteOrigin discriminator the apply caller sets, never an assumption about
         // the approver's principal type.
         if (principal !is Principal.Agent || request.origin == WriteOrigin.PROPOSAL_APPLY) {
@@ -97,7 +97,7 @@ class GuardedMutatingFacade(
         }
 
         // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME server-
-        // resolved current.path the pipeline writes (WI-3 — smuggling closed by construction).
+        // resolved current.path the pipeline writes (smuggling closed by construction).
         val decision = if (mode == null) {
             AgentWriteDecision.DegradeToProposal(current.path)
         } else {
@@ -105,7 +105,7 @@ class GuardedMutatingFacade(
         }
         return when (decision) {
             // DirectCommit: audit EDIT@pageId, then the EXISTING direct write over the SAME `current` object the
-            // decision matched — so decision.targetPath === the WriteIntent's path by construction (WI-3). b1: the
+            // decision matched — so decision.targetPath === the WriteIntent's path by construction. The
             // agent's resolved identity threads in as BOTH git author AND committer (its commit is agent-attributed,
             // matching the audit row — never the server "Plainbase" default).
             is AgentWriteDecision.DirectCommit -> {
@@ -237,15 +237,15 @@ class GuardedMutatingFacade(
     /**
      * The out-of-glob / non-COMMIT create degrade (the create twin of [degradeToProposal]): file a create-proposal
      * through the SAME guarded [ProposalFacade.propose] so the audit is identical to a shipped propose and `checkCreate`
-     * runs (a READ_ONLY/revoked principal is denied there → AccessDenied → 403, decision 5). The id is the one the
-     * create route already minted + baked into the bytes (WI-1) — PIN it so the stored row + blob agree, no re-mint.
+     * runs (a READ_ONLY/revoked principal is denied there → AccessDenied → 403). The id is the one the
+     * create route already minted + baked into the bytes — PIN it so the stored row + blob agree, no re-mint.
      */
     private fun degradeCreateToProposal(principal: Principal, intent: CreateIntent): CreateOutcome {
         val outcome = proposals().propose(
             principal,
             ProposeCommand.Create(
                 targetPath = intent.path,
-                proposedContent = intent.bytes, // already composed + id-baked by the create route (WI-1 degrade arm)
+                proposedContent = intent.bytes, // already composed + id-baked by the create route (degrade arm)
                 rationale = DEGRADE_RATIONALE,
                 pageId = intent.pageId, // PIN the already-minted id — no re-mint
             ),

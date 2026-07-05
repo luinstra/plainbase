@@ -62,8 +62,8 @@ class KtorServer(
 private val logger = KotlinLogging.logger {}
 
 /**
- * Shared between the real server and `testApplication` tests. [secureCookie] mirrors the secure context (ADR-0008,
- * WI-8): the `pb_session` cookie's `Secure` attribute is true whenever the transport is TLS-fronted — a non-loopback
+ * Shared between the real server and `testApplication` tests. [secureCookie] mirrors the secure context (ADR-0008):
+ * the `pb_session` cookie's `Secure` attribute is true whenever the transport is TLS-fronted — a non-loopback
  * bind OR a loopback bind that declares a trusted proxy (the canonical prod deployment, see
  * [PlainbaseConfig.secureCookie]) — and false ONLY on pure loopback-dev with no proxy (a `Secure` cookie would never
  * be sent back over plain http://localhost). Defaults to false (the dev/test loopback default).
@@ -131,7 +131,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         // prefix, so registration order and match order agree; the alias-before-shell ordering is
         // structural inside docsRoutes.
         healthRoute()
-        // A4a builtin auth surface (WI-7): registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
+        // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
         // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
         // (404) — leaving them live would let a leftover builtin user/session authenticate as Principal.Human and
         // bypass the proxy/off identity path. login/session/setup/reset call NO facade `check*` (PolicyService
@@ -161,7 +161,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         // P3: the in-binary MCP server (SSE-on-CIO) at `/api/v1/mcp` — agent-only connect auth on the SSE GET. Mounted
         // here (a distinct constant prefix), BEFORE apiFallbackRoute(), so the §A4 "API → fallback → static" order holds.
         plainbaseMcp(ctx)
-        // W5 per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
+        // Per-page history/diff reads — `/{id}/history` and `/{id}/diff`, distinct paths from the GETs.
         historyRoutes(ctx)
         // W3b read-only preview render (private, non-contractual); the asset upload folds into pageWriteRoutes.
         previewRoute(ctx)

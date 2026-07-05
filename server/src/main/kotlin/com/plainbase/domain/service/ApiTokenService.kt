@@ -13,7 +13,7 @@ import kotlin.time.Clock
 import kotlin.time.Duration
 
 /**
- * The single mint / authenticate / revoke path the bearer-extraction seam (§WI-5) and the `admin` CLI (§WI-8)
+ * The single mint / authenticate / revoke path the bearer-extraction seam and the `admin` CLI
  * share. Composes the [TokenMinter] (SecureRandom), the [TokenSecretHasher] (SHA-256 + constant-time verify),
  * the [ApiTokenRepository], and an injectable [Clock] — `clock.now()` everywhere a timestamp is read, so
  * expiry/last-used are deterministic in tests (§0.9), never an inline `Instant.now()`.
@@ -53,7 +53,7 @@ class ApiTokenService(
     }
 
     /**
-     * Resolves a presented bearer to a [Principal]. Anti-enumeration (§WI-6): an unknown id and a wrong secret
+     * Resolves a presented bearer to a [Principal]. Anti-enumeration: an unknown id and a wrong secret
      * are INDISTINGUISHABLE — both return [Principal.Anonymous] AND run the constant-time compare exactly once
      * (the verifier compares against a dummy hash when the row is absent, so the unknown-id path never
      * early-outs and the timing of "this prefix exists" is not observable). A revoked or expired token is also

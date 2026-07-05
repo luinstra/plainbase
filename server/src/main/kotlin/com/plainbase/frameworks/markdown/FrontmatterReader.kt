@@ -149,7 +149,7 @@ class FrontmatterReader : FrontmatterParser {
     /**
      * Strips a single pair of matching surrounding quotes (`"…"` or `'…'`); leaves anything else
      * verbatim. A double-quoted value additionally has its YAML escapes decoded (`\"` → `"`, `\\` →
-     * `\`) so a value the writer double-quote-escaped (the W2 YAML-safe composition) round-trips
+     * `\`) so a value the writer double-quote-escaped (the create route's YAML-safe composition) round-trips
      * byte-faithfully — flexmark hands the value back with the surrounding quotes AND the escapes
      * literal, so the decode belongs here. Single-quoted values use no backslash escapes in YAML, so
      * their interior is taken verbatim.

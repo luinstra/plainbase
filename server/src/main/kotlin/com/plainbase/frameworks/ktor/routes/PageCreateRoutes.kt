@@ -31,7 +31,7 @@ import io.ktor.server.routing.route
 import kotlinx.serialization.SerializationException
 
 /**
- * PB-WRITE-1 (chunk W2): `POST /api/v1/pages` — new-page creation. A JSON request (`folder`, `title`,
+ * PB-WRITE-1: `POST /api/v1/pages` — new-page creation. A JSON request (`folder`, `title`,
  * optional `slug`/`body`); the SERVER mints the id, derives the on-disk path + filename via the frozen
  * §A4/PB-SLUG-1 machinery (the client never derives a path), composes a YAML-safe frontmatter+body
  * buffer, and writes it VERBATIM through [com.plainbase.domain.service.WritePipeline.create] — the same
@@ -41,8 +41,8 @@ import kotlinx.serialization.SerializationException
  * This route owns its OWN status `when`: a create returns **201** (a new resource), not the PUT's 200,
  * so it does NOT reuse the frozen `WriteDtos.toWire` (which hard-codes `Written → 200` and carries the
  * edit-only retry-idempotency shim). The clean-create 201 carries `CreatedResponse` — PB-WRITE-1's
- * `WrittenResponse` shape PLUS the minted `id` + the server-authoritative canonical `url` (W6,
- * owner+debate-approved additive revision: 201 identifies the created resource so the client navigates
+ * `WrittenResponse` shape PLUS the minted `id` + the server-authoritative canonical `url` (an
+ * owner-approved additive revision: 201 identifies the created resource so the client navigates
  * to the server's url, never a client-derived slug). The create-specific failure codes (`page_exists`,
  * `invalid_create_request`) are append-only additions to the frozen `ErrorCodes`.
  */
@@ -215,7 +215,7 @@ private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
  * outcomes are reachable from a create — a create has no `base_hash`/prior identity, so `Conflict`/
  * `UnsupportedEdit` are unreachable and `error(...)` if they ever appear.
  *
- * The clean-create 201 carries the minted [id] + the SERVER-AUTHORITATIVE canonical url (W6): after a
+ * The clean-create 201 carries the minted [id] + the SERVER-AUTHORITATIVE canonical url: after a
  * clean `Written` the pipeline's rebuild has already published the page, so the url is the real
  * `IndexedPage.url` looked up by id ([createUrl]) — the slugified/collision-de-duped form, NEVER the raw
  * on-disk [path]. The `WrittenButUnindexed` twin returns a present-`null` url instead: the page is

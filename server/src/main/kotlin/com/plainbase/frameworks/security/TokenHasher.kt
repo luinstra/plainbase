@@ -10,7 +10,7 @@ import java.security.MessageDigest
  * high-entropy from `SecureRandom`, so a slow KDF buys nothing. (The [Sha256TokenHasher] alias names the
  * concrete scheme at wiring sites.)
  *
- * The verifier never logs the secret, the candidate, or the stored hash (secret hygiene, §WI-9).
+ * The verifier never logs the secret, the candidate, or the stored hash (secret hygiene).
  */
 class TokenHasher : TokenSecretHasher {
 

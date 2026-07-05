@@ -206,12 +206,12 @@ object NativeSpike {
     // ---- 4. FTS5 via the production search stack (search.db access path, ADR-0004) -------
 
     /**
-     * Chunk-S2 retarget: the check exercises the PRODUCTION `SearchDb` + `Fts5SearchProvider`
+     * The check exercises the PRODUCTION `SearchDb` + `Fts5SearchProvider`
      * (raw JDBC over a temp-file DB) instead of inline SQL — proving inside the native image the
      * exact classes the server runs: WAL open, generation rebuild, bm25 weights ranking a title
      * hit over repeated body hits, the MATCH builder's quoting/prefix-star, snippet sentinels
-     * converted to A3 offsets, the `highlight()` round-trip (S0 surface, kept proven), per-page
-     * replace + indexedState, and the trigram CJK-rescue fallback (S0 verdict PASS, now
+     * converted to A3 offsets, the `highlight()` round-trip (spike surface, kept proven), per-page
+     * replace + indexedState, and the trigram CJK-rescue fallback (spike verdict PASS, now
      * production code). Check name kept (`sqlite-fts5-match`).
      */
     private fun fts5Match(): String {

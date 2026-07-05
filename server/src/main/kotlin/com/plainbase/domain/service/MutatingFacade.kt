@@ -86,12 +86,12 @@ class SaveRequest(
 )
 
 /**
- * P5/C1: which write entrypoint a write came from — carried by both [SaveRequest.origin] (an edit) and the
- * [MutatingFacade.create] `origin` argument (a create). The agent direct-commit decision (WI-4) is consulted ONLY for
+ * Which write entrypoint a write came from — carried by both [SaveRequest.origin] (an edit) and the
+ * [MutatingFacade.create] `origin` argument (a create). The agent direct-commit decision is consulted ONLY for
  * [DIRECT_PUT]; a [PROPOSAL_APPLY] write (an EDIT save OR a CREATE) carries already-approved, already-reviewed content
  * and ALWAYS direct-writes through the pipeline, bypassing the glob decision REGARDLESS of the caller's principal
- * type/mode (the apply path can pass a [Principal.Agent] in `auth.mode=off`, where everyone is permitted — finding
- * #11). For a create-apply this is load-bearing: an approved OUT-OF-GLOB create MUST land, not re-degrade into a second
+ * type/mode (the apply path can pass a [Principal.Agent] in `auth.mode=off`, where everyone is permitted).
+ * For a create-apply this is load-bearing: an approved OUT-OF-GLOB create MUST land, not re-degrade into a second
  * proposal (a dead-letter).
  *
  * SECURITY INVARIANT: `origin` is SERVER-SET ONLY — neither [SaveRequest] nor the create `origin` is deserialized from
@@ -117,15 +117,15 @@ sealed interface SaveResult {
     /** The edit reached the pipeline; [outcome] is mapped through the frozen `toWire`. */
     data class Written(val outcome: WriteOutcome) : SaveResult
 
-    /** P5: an agent COMMIT write OUTSIDE `agentDirectCommit.globs` was degraded to a proposal (202 Accepted). */
+    /** An agent COMMIT write OUTSIDE `agentDirectCommit.globs` was degraded to a proposal (202 Accepted). */
     data class DegradedToProposal(val proposalId: ProposalId, val unifiedDiff: String) : SaveResult
 
-    /** P5: the degrade's `proposeEdit` hit a stale base_hash / missing target → 400 stale_base (no proposal stored). */
+    /** The degrade's `proposeEdit` hit a stale base_hash / missing target → 400 stale_base (no proposal stored). */
     data object DegradeStaleBase : SaveResult
 }
 
 /**
- * The outcome of [MutatingFacade.create] (C1): a direct create (the pipeline [WriteOutcome]) or a degrade to a
+ * The outcome of [MutatingFacade.create]: a direct create (the pipeline [WriteOutcome]) or a degrade to a
  * create-proposal (202) — split from [WriteOutcome] so the create wire shapes don't pollute the pipeline outcome.
  */
 sealed interface CreateOutcome {
@@ -133,12 +133,12 @@ sealed interface CreateOutcome {
     /** The create reached the pipeline (Human/Anonymous, an in-glob COMMIT agent, or the apply path); [outcome] maps to status. */
     data class DirectCreated(val outcome: WriteOutcome) : CreateOutcome
 
-    /** C1: an agent direct create OUTSIDE `agentDirectCommit.globs` (or non-COMMIT/null-mode) was degraded to a proposal (202 Accepted). */
+    /** An agent direct create OUTSIDE `agentDirectCommit.globs` (or non-COMMIT/null-mode) was degraded to a proposal (202 Accepted). */
     data class DegradedToProposal(val proposalId: ProposalId, val unifiedDiff: String) : CreateOutcome
 
     /**
-     * The degrade's `proposeCreate` refused the blob (FrontmatterPatcher) — 400 invalid_create_content. (See WI-1/SD-1:
-     * the create route composes valid bytes, so the degrade path does not hit this in practice; present for total mapping.)
+     * The degrade's `proposeCreate` refused the blob (FrontmatterPatcher) — 400 invalid_create_content. (The
+     * create route composes valid bytes, so the degrade path does not hit this in practice; present for total mapping.)
      */
     data class InvalidContent(val message: String) : CreateOutcome
 }

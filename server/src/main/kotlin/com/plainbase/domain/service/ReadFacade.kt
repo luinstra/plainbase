@@ -87,7 +87,7 @@ interface ReadFacade {
      * collision loser), or null when there is no LIVE alias OR the principal may not read the target. Returning
      * null on a DENY (rather than throwing) is deliberate: the `docsRoutes` shell-fallback arm is PUBLIC, so an
      * unauthorized caller must fall through to the shell EXACTLY like any unknown path — a 401 here would itself
-     * leak that an alias exists (§WI-5). A live canonical path shadows an alias (§A4).
+     * leak that an alias exists. A live canonical path shadows an alias (§A4).
      */
     fun resolveDocsRedirect(principal: Principal, path: TreePath): String?
 }

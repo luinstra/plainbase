@@ -23,5 +23,13 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["src/test-setup.ts"],
+    // Keep the per-test ceiling strictly ABOVE Testing-Library's `asyncUtilTimeout` (5000ms, set in
+    // test-setup.ts). At the vitest default (also 5000ms) the two ceilings collide: a slow-but-correct
+    // `waitFor` on a contended CI runner races the test timeout, which wins and surfaces the opaque
+    // "Test timed out in 5000ms" instead of `waitFor`'s own assertion message. With the test ceiling
+    // higher, a legitimately slow settle passes, while a genuinely broken assertion still fails fast at
+    // the 5000ms `waitFor` ceiling with a useful message.
+    testTimeout: 15000,
+    hookTimeout: 15000,
   },
 });

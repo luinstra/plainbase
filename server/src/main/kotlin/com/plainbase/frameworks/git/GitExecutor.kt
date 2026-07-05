@@ -11,10 +11,10 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 
 /**
- * The single hermetic `git` chokepoint (ADR-0006, chunk W4): EVERY git invocation funnels through
+ * The single hermetic `git` chokepoint (ADR-0006): EVERY git invocation funnels through
  * [run]. The process is pinned reproducible and isolated — pinned `-c` config on every call, a cleared
  * + nulled environment, hooks disabled, args always a `List<String>` (no shell), a bounded wait, and
- * SEPARATE concurrent stdout/stderr drains so a stderr warning can NEVER corrupt a parsed SHA (F1).
+ * SEPARATE concurrent stdout/stderr drains so a stderr warning can NEVER corrupt a parsed SHA.
  *
  * No reflection, no `@Volatile`, kotlin stdlib only — native-image safe. The provider above this never
  * touches `ProcessBuilder`; this never knows the commit recipe.
@@ -23,20 +23,20 @@ import kotlin.concurrent.thread
 class GitExecutor(
     private val workTree: Path,
     private val home: Path,
-    // Bounded wait — never an unbounded waitFor() under the W1 writer monitor (P1-1). Injectable so a
+    // Bounded wait — never an unbounded waitFor() under the write-pipeline writer monitor. Injectable so a
     // timeout test can prove the force-kill path without a 30s wall-clock cost; production uses the default.
     private val timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS,
     // The git executable — "git" (resolved on PATH) in production. Injectable so the hardening tests can
-    // point at a fake `git` script that shapes stdout/stderr deterministically (the F1 stderr proof, the
+    // point at a fake `git` script that shapes stdout/stderr deterministically (the stderr proof, the
     // flood/timeout proofs). ProcessBuilder resolves a bare name via the JVM's PATH, not the child env.
     private val gitBinary: String = "git",
     // Byte ceilings on what a single git invocation may emit. The timeout bounds TIME, not BYTES — but
-    // W5's reads return attacker/size-controlled output (`/history` full `git log`, `/diff` full diff, the
+    // the history reads return attacker/size-controlled output (`/history` full `git log`, `/diff` full diff, the
     // startup `lastCommits` walk), so a repo with huge messages / very deep history / a huge diff could
     // emit enough WITHIN the timeout to exhaust JVM/native-image memory. On exceed the process is
     // force-killed and the call comes back a failure GitResult (NOT a throw — the provider's fail-loud
-    // path turns it into a GitCommandException, preserving the "executor never throws, W1 monitor always
-    // releases" contract). The defaults are generous so a normal/large-but-sane repo never trips them;
+    // path turns it into a GitCommandException, preserving the "executor never throws, write-pipeline monitor
+    // always releases" contract). The defaults are generous so a normal/large-but-sane repo never trips them;
     // injectable so a test can drive the path cheaply.
     private val maxStdoutBytes: Long = DEFAULT_MAX_STDOUT_BYTES,
     private val maxStderrBytes: Long = DEFAULT_MAX_STDERR_BYTES,
@@ -45,8 +45,8 @@ class GitExecutor(
     /**
      * Runs `git [args]` in [workTree] with the pinned config + isolated env (caller [env] overlaid last;
      * [stdin] written-then-closed when present). Never throws on a non-zero exit or a missing binary — a
-     * failed `start()` ([IOException]) and a timeout both come back as a [GitResult] failure so the W1
-     * monitor is always released and dirty-page recovery stays intact.
+     * failed `start()` ([IOException]) and a timeout both come back as a [GitResult] failure so the
+     * write-pipeline monitor is always released and dirty-page recovery stays intact.
      *
      * stdout and stderr are drained on separate threads and kept DISTINCT in the result: stdout is parsed
      * as data (SHAs, trees), stderr is diagnostic only.
@@ -104,8 +104,8 @@ class GitExecutor(
             drainCapped(process.errorStream, stderrBuffer, maxStderrBytes, process, overflowed)
         }
 
-        // Write stdin on its OWN thread too (P2): a calling-thread write of a >pipe-buffer payload (~64 KiB)
-        // to a hung git that never reads it would block BEFORE waitFor even starts, holding the W1 monitor
+        // Write stdin on its OWN thread too: a calling-thread write of a >pipe-buffer payload (~64 KiB)
+        // to a hung git that never reads it would block BEFORE waitFor even starts, holding the write-pipeline monitor
         // forever. Off-thread, the bounded waitFor below still fires; the force-kill then breaks the pipe and
         // the write fails with a swallowed broken-pipe IOException. No stdin → close the stream as before.
         val stdinWriter: Thread? = if (stdin != null) {
@@ -123,14 +123,14 @@ class GitExecutor(
 
         val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
         if (!finished) {
-            // Kill DESCENDANTS too (P2-1): destroyForcibly() kills only the direct process, so a grandchild
+            // Kill DESCENDANTS too: destroyForcibly() kills only the direct process, so a grandchild
             // that inherited stdout/stderr would keep the pipes open and block the drains. ProcessHandle
             // .descendants() is standard JDK / native-safe; guard it anyway.
             runCatching { process.descendants().forEach { runCatching { it.destroyForcibly() } } }
             process.destroyForcibly()
             runCatching { process.descendants().forEach { runCatching { it.destroyForcibly() } } }
-            // BOUNDED joins: even if a stuck child still holds a pipe, the calling thread (the W1 writer) is
-            // guaranteed to return within timeoutSeconds + grace — never the unbounded join that defeated P1-1.
+            // BOUNDED joins: even if a stuck child still holds a pipe, the calling thread (the write-pipeline writer) is
+            // guaranteed to return within timeoutSeconds + grace — never the unbounded join that would defeat the bounded wait.
             stdinWriter?.join(TIMEOUT_DRAIN_GRACE_MILLIS)
             stdoutDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
             stderrDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
@@ -196,14 +196,14 @@ class GitExecutor(
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        /** Default bounded wait — never an unbounded `waitFor()` under the W1 writer monitor (P1-1). */
+        /** Default bounded wait — never an unbounded `waitFor()` under the write-pipeline writer monitor. */
         const val DEFAULT_TIMEOUT_SECONDS = 30L
 
-        /** Bounded grace for the post-force-kill drain joins (P2-1) — caps the call at timeout + this. */
+        /** Bounded grace for the post-force-kill drain joins — caps the call at timeout + this. */
         private const val TIMEOUT_DRAIN_GRACE_MILLIS = 2000L
 
         /**
-         * Default stdout byte ceiling per git invocation (W5): 64 MiB. GENEROUS by design — a normal or
+         * Default stdout byte ceiling per git invocation: 64 MiB. GENEROUS by design — a normal or
          * even large-but-sane repo's `git log`/`diff` is far under this, so the cap is a safety floor that
          * should never bind in practice, only stop a pathological repo (giant commit messages, a huge diff,
          * extreme history depth) from OOM-ing the in-memory drain. Kept a documented constant rather than a
