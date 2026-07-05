@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Short, durable records of decisions with long-lived consequences — the *why* behind choices that
+Short, durable records of decisions with long-lived consequences - the *why* behind choices that
 aren't obvious from the code and would otherwise be re-litigated. One file per decision, numbered,
 append-only (supersede rather than rewrite).
 
