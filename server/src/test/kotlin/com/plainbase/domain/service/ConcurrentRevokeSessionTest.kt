@@ -67,9 +67,15 @@ class ConcurrentRevokeSessionTest : FunSpec({
             }
             val auther = thread {
                 repeat(200) {
+                    // Read the revoke flag BEFORE authenticating. If it is already set, the revoke has
+                    // committed and (atomic store→load happens-before) this authenticate's conditional UPDATE
+                    // runs strictly after it — so a grant here is a REAL linearization violation. Reading it
+                    // AFTER (as before) misattributes a legitimate pre-revoke grant to "after revoke" whenever
+                    // the revoker sets the flag in the gap between authenticate returning and the check — a
+                    // false positive that flaked the assert below.
+                    val alreadyRevoked = revoked.load()
                     val ok = service.authenticate(minted.plaintext) != null
-                    // Once the revoke has COMMITTED, no authenticate may grant (the atomic UPDATE linearizes them).
-                    if (revoked.load() && ok) grantedAfterRevoke.store(true)
+                    if (alreadyRevoked && ok) grantedAfterRevoke.store(true)
                 }
             }
             revoker.join()
