@@ -36,6 +36,10 @@ Filesystem-native, agent-native internal docs product. Master plan:
   = the native gate (8/8 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
+- **Native-tag by default on divergence surfaces:** tests exercising NIO edge behavior, process
+  execution (`GitExecutor`), the xerial JDBC/JNI seam, charset/Unicode decoding, or SecureRandom/
+  crypto get `@Tag("native")` (kotlin.test dialect) so they run under the native image — pure
+  domain-logic tests stay Kotest/JVM-only. Surface coverage, not line coverage; keep nativeTest lean.
 
 ### Frontend tests — always go through Gradle, never raw `vitest`/`playwright`
 
