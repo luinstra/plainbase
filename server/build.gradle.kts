@@ -275,7 +275,7 @@ tasks.test {
 // (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
 // alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
 // inside the image. Not wired into `check` — that would re-run the same classes twice per build.
-val acceptanceTest by tasks.registering(Test::class) {
+val acceptanceTest = tasks.register<Test>("acceptanceTest") {
     description = "Runs ONLY the Phase-1 acceptance gate (Phase1AcceptanceTest + ForeverApiGoldenSuite)."
     group = "verification"
     useJUnitPlatform()
@@ -289,7 +289,7 @@ val acceptanceTest by tasks.registering(Test::class) {
 // the `nativeTestCompile` rewire under graalvmNative); the image's test set and classpath both come
 // from here, which is what keeps Kotest/MockK out of the native binary. Not wired into `check`
 // (those tests already run under `test`); its sole job is to record the native test list.
-val nativeTestList by tasks.registering(Test::class) {
+val nativeTestList = tasks.register<Test>("nativeTestList") {
     description = "Runs ONLY the nativeTest source set, recording the test list for the native image."
     group = "verification"
     val nativeTestSourceSet = sourceSets["nativeTest"]
