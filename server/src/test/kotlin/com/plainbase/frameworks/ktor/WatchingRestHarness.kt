@@ -7,6 +7,7 @@ import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import io.ktor.server.testing.ApplicationTestBuilder
@@ -48,7 +49,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             searchIndexer = searchIndexer,
         )
         // Mirror Application.serve(): watcher registers, then the first rebuild runs.
-        scheduler = RebuildScheduler(rebuild = { harness.builder.rebuild() })
+        scheduler = RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm())
         watch = store.watch { scheduler.schedule() }
         harness.builder.rebuild()
         // A3: auth ON, loopback-dev (OFF) open behavior (this watcher harness exercises search-after-edit logic).

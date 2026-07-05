@@ -1,8 +1,6 @@
 package com.plainbase.domain.service
 
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 /**
  * Coalesces watch events into serialized [rebuild] runs (§B2). An event's only effect is
@@ -18,14 +16,14 @@ import java.util.concurrent.TimeUnit
  *    arriving during a rebuild collapse into exactly one follow-up.
  *
  * Pure timing logic over an injectable [clock] and [Alarm], so the unit tests drive it with fake
- * time; production uses the default single-daemon-thread alarm, which also makes rebuilds
- * single-flight structurally (they run on the alarm thread). A throwing [rebuild] is contained and
- * logged — the scheduler keeps serving events.
+ * time; production passes the frameworks `ExecutorAlarm` (one daemon thread), which also makes
+ * rebuilds single-flight structurally (they run on the alarm thread). A throwing [rebuild] is
+ * contained and logged — the scheduler keeps serving events.
  */
 class RebuildScheduler(
     private val rebuild: () -> Unit,
     private val clock: () -> Long = System::currentTimeMillis,
-    private val alarm: Alarm = ExecutorAlarm(),
+    private val alarm: Alarm,
 ) : AutoCloseable {
 
     /** One-shot timer port: runs [action] about [delayMillis] from now. Faked in tests, real thread in production. */
@@ -100,21 +98,5 @@ class RebuildScheduler(
         const val MAX_LATENCY_MILLIS = 5_000L
 
         private val logger = KotlinLogging.logger {}
-    }
-}
-
-/** The production [RebuildScheduler.Alarm]: one daemon thread, owned (and closed) by its scheduler. */
-private class ExecutorAlarm : RebuildScheduler.Alarm, AutoCloseable {
-
-    private val executor = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "plainbase-rebuild-scheduler").apply { isDaemon = true }
-    }
-
-    override fun after(delayMillis: Long, action: () -> Unit) {
-        executor.schedule(action, delayMillis, TimeUnit.MILLISECONDS)
-    }
-
-    override fun close() {
-        executor.shutdownNow()
     }
 }

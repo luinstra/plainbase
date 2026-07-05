@@ -70,7 +70,8 @@ class WritePipeline(
 
         // (2) Atomic, disk-authoritative CAS (fix A + MUST-FIX 2).
         return when (val cas = contentStore.compareAndSwapWrite(intent.path, intent.baseHash, intent.bytes, citations::contentHash)) {
-            // Nothing was written for these three — restore the prior recovery record, or clear.
+            // Nothing was written for Deleted/Mismatch and a non-mutated Unreadable — restore the prior
+            // recovery record, or clear.
             is CasResult.Deleted -> {
                 restoreOrClear(intent.pageId, prior)
                 conflict(intent, reason = "page_deleted", current = null)
@@ -80,7 +81,11 @@ class WritePipeline(
                 conflict(intent, reason = "content_changed", current = cas.currentBytes)
             }
             is CasResult.Unreadable -> {
-                restoreOrClear(intent.pageId, prior)
+                // A mutated target (a non-atomic copy-fallback that may have truncated/partially replaced
+                // the file) KEEPS the write-ahead mark set at (1) — expectedHash = the INTENDED bytes'
+                // hash — so reconcile commits a fully-landed copy or drift-skips a partial. Only a
+                // NON-mutated Unreadable (nothing landed) restores-or-clears.
+                if (!cas.targetMutated) restoreOrClear(intent.pageId, prior)
                 WriteOutcome.Unreadable(cas.cause)
             }
             is CasResult.Written -> commitAndIndex(intent, newHash = cas.newHash)

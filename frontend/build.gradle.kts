@@ -17,6 +17,7 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
     args.set(listOf("run", "build"))
     inputs.files("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html")
     inputs.dir("src")
+    inputs.dir("public") // copied verbatim into dist/ by vite — a changed brand asset must re-embed
     outputs.dir(layout.projectDirectory.dir("dist"))
 }
 
@@ -25,9 +26,7 @@ val npmBuild = tasks.register<NpmTask>("npmBuild") {
 val npmTest = tasks.register<NpmTask>("npmTest") {
     dependsOn(tasks.npmInstall)
     args.set(listOf("run", "test"))
-    inputs.files("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html")
-    inputs.dir("src")
-    inputs.dir("e2e") // scanned by the token-discipline test
+    // No inputs declared: the task always runs by design (the token-discipline gate must run on every build).
     outputs.upToDateWhen { false }
 }
 

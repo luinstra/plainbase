@@ -20,10 +20,11 @@ Open http://localhost:8080 — the SPA shell is served against the bundled
 demo docs (`fixtures/demo-docs`). Point the bind mount in
 `docker-compose.yml` at your own Markdown tree to adopt it.
 
-The compose file also starts **Meilisearch, the OPTIONAL search tier**.
 Plainbase's default search is embedded SQLite FTS5 and needs no containers at
-all; you run the compose tier when you want a deliberately better engine
-(typo tolerance, superior relevance, CJK tokenization).
+all. Meilisearch is a **deliberate future upgrade tier** (typo tolerance,
+superior relevance, CJK tokenization) — its compose wiring is reserved
+(commented out, not wired) so the upgrade path is known ahead of time; see
+[When to upgrade to Meilisearch](docs/operating-plainbase.md#when-to-upgrade-to-meilisearch).
 
 ## Quickstart (single binary — the default tier)
 
@@ -32,9 +33,9 @@ all; you run the compose tier when you want a deliberately better engine
 ```
 
 Native binaries (no JRE required) are produced by the CI native gate for
-linux-x64; the platform matrix grows by Phase 6. The universal JAR
-(`server/build/distributions/`) is the release floor and runs anywhere with
-Java 21+.
+linux-x64 today; additional platforms land with the `v0.1.0` release. The
+universal JAR (`server/build/distributions/`) is the release floor and runs
+anywhere with Java 21+.
 
 ## Configuration
 
@@ -45,6 +46,18 @@ Java 21+.
 | `PLAINBASE_HOST` | `127.0.0.1` | Bind address. |
 | `PLAINBASE_PORT` | `8080` | HTTP port. |
 | `PLAINBASE_LOG_LEVEL` | `INFO` | Root log level (`ERROR`/`WARN`/`INFO`/`DEBUG`). |
+
+Full reference: [Configuration](docs/configuration.md) (every key, the three `auth.mode`s, the
+proxy/MCP CIDR nuance).
+
+## Docs
+
+- [Configuration](docs/configuration.md) — the full environment-variable reference.
+- [Operating Plainbase](docs/operating-plainbase.md) — search freshness, manual reindex, adopting
+  an existing repo, backups, performance + the startup gate, known limitations.
+- [Connect your agent (MCP)](docs/connect-your-agent.md) — mint a token, point an MCP client at the
+  server, a worked search → read → propose session.
+- [Design summary](docs/DESIGN_SUMMARY.md) — architecture & product framing.
 
 ## Development
 
@@ -67,6 +80,25 @@ uses:
 asdf install        # one-time: installs the pinned GraalVM
 ```
 
+### What CI checks
+
+Five jobs gate `main` (`.github/workflows/ci.yml`):
+
+- **`build-test`** — the JVM universal-JAR floor: `./gradlew build` + the full-stack dependency
+  spike.
+- **`enforced-auth-smoke`** — the builtin auth/CSRF matrix on loopback (anon `401`, bootstrap, CSRF
+  present/absent/cross-origin, a PB-WRITE-1 save, an agent-bearer read + REST revoke). Every other
+  job here boots `auth.mode=off` by default, so this is the one job that actually exercises
+  enforced-mode auth — closing that gap was chunk C1c.
+- **`docker-image`** — the compose-tier image build plus a non-loopback proxy/transport smoke (a
+  `421` transport refusal and the full proxy CSRF path — only reachable from outside loopback).
+- **`native-gate` (linux-x64)** — `nativeCompile` → `nativeTest` → the spike (8/8) → the
+  enforced-auth smoke again, against the native binary → the native-startup regression tripwire.
+- **`frontend-smoke`** — Playwright, booting both an auth-off and an enforced-builtin server;
+  carries the CSP zero-violation gate (`csp.spec.ts`) and the enforced-builtin approval flow
+  (`review.spec.ts`). Deliberately outside `./gradlew build` — a browser-download flake must never
+  paint the JAR floor red.
+
 ### The native dependency spike
 
 `plainbase spike` exercises every load-bearing dependency with real
@@ -85,7 +117,9 @@ targeting 21; CI covers linux-x64). The reachability metadata that made
 flexmark (BitFieldSet enum universes), JGit (config enums), the MCP SDK
 (polymorphic JSONRPC serializers), and kotlinx DTO lookups work under
 native-image lives in `server/src/main/resources/META-INF/native-image/`.
-Native startup: ~3ms to first request handler.
+Native startup (cold exec → first `200 /healthz`, against an empty content dir): ~467 ms measured
+local median — see [Performance & the startup gate](docs/operating-plainbase.md#performance--the-startup-gate)
+(the ~3 ms figure sometimes quoted is the Ktor module-init slice, a narrower window, not cold-start).
 
 ### Architecture
 

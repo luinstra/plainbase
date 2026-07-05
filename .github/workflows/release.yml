@@ -1,0 +1,688 @@
+name: Release
+
+# ---- C5: tag-triggered v0.1.0 release workflow -----------------------------------------------------
+#
+# ONE-TIME SETUP (item 0, addendum): before the FIRST release tag, connect the GHCR package
+# `ghcr.io/luinstra/plainbase` to this repository and set its visibility to PUBLIC in the package
+# settings. GHCR packages default PRIVATE even on a public repo, and there is no reliable documented
+# private->public flip via a workflow GITHUB_TOKEN -- this is a manual, one-time account/package
+# setting, NOT per-release state. This workflow does NOT depend on flipping visibility at run time; it
+# ENFORCES the result via the unauthenticated-pull gate in the assembly job. Practical sequence: the
+# first `-rc` push runs, the pull gate fails, do the one-time visibility flip, then re-run -- the gate
+# passes on every subsequent run.
+#
+# rc-image retention (item 5, MINOR sonnet): every `-rc.N` tag pushes a real public attested image, so
+# repeated dry-runs accumulate throwaway public images. DECISION: accept them as cheap and clearly
+# non-`vX.Y.Z`-tagged; add a GHCR retention/expiry rule for `*-rc.*` only if the package clutters.
+#
+# SUPPLY-CHAIN HARDENING (build-review BLOCKINGs): this workflow signs attestations under write/package
+# privileges, so (1) the tag is validated to a strict version shape in `meta` before any privileged use,
+# (2) tag/digest values reach `run:` shells only via quoted `env:` vars (never inline `${{ }}` string
+# substitution), and (3) every `uses:` is pinned to a full commit SHA (a moved tag or compromised
+# action could otherwise alter the build or forge attestations). The standing `.github/workflows/ci.yml`
+# (PR/main floor) is a separate concern and is UNTOUCHED by this file.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Never let two runs of the same tag race (risk 3, B2).
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# Minimal top-level default; every job re-declares its own narrower/wider set (least-privilege,
+# job-scoped -- risk 6).
+permissions:
+  contents: read
+
+jobs:
+  # ---- The single source of the version + rc expression (item 1) --------------------------------
+  meta:
+    name: Version + rc detection
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_rc: ${{ steps.version.outputs.is_rc }}
+    steps:
+      - name: Validate tag + derive version + rc flag
+        id: version
+        env:
+          # Indirection: the raw ref never touches the shell as inline `${{ }}` (mirrors the pattern the
+          # whole workflow uses). Git ref rules permit `;`, `$()`, backtick, `|`, `&`, `"` -- so the tag
+          # is UNTRUSTED input feeding privileged downstream jobs and MUST be validated here first.
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Strict version shape: vMAJOR.MINOR.PATCH with an optional -rc.N. Anything else is rejected
+          # BEFORE the value is interpolated into any privileged run block / gradle property / image tag.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid release tag. Expected vMAJOR.MINOR.PATCH or" \
+                 "vMAJOR.MINOR.PATCH-rc.N (e.g. v0.1.0 or v0.1.0-rc.1)."
+            exit 1
+          fi
+          version="${TAG#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-rc* ]]; then
+            echo "is_rc=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_rc=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Tag $TAG -> version=$version"
+
+  # ---- Per-platform native build+gate+upload jobs (item 2) ---------------------------------------
+  # Four DISCRETE per-OS jobs (shell/.exe/vcvars divergence), gate sequence IDENTICAL to ci.yml's
+  # native-gate (114-177): nativeCompile -> nativeTest -> spike (8/8, HARD). NO `continue-on-error`
+  # anywhere here -- a real spike failure must fail its OWN job hard; fail-isolation lives in the
+  # assembly job's `needs`/`if` (item 4), never on these gate steps (callout 5).
+
+  native-linux-x64:
+    name: Native gate (linux-x64)
+    runs-on: ubuntu-latest
+    needs: meta
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: graalvm/setup-graalvm@cabbb10818fabc989d6dbd508e4846596d20dd2d # v1.6.0
+        with:
+          java-version: "25"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build native binary (self-reports the tag, item 8)
+        run: ./gradlew :server:nativeCompile -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run test suite as native image
+        # -PreleaseVersion is passed here too (MINOR fable): otherwise nativeTest regenerates BuildInfo as
+        # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
+        run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+        run: ./server/build/native/nativeCompile/plainbase spike
+
+      - name: Rename asset + log its checksum
+        run: |
+          mkdir -p dist
+          cp server/build/native/nativeCompile/plainbase dist/plainbase-linux-x64
+          chmod +x dist/plainbase-linux-x64
+          sha256sum dist/plainbase-linux-x64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plainbase-linux-x64
+          path: dist/plainbase-linux-x64
+
+  native-linux-arm64:
+    # Design Fork A (addendum): REQUIRED per master-plan §6. The `v0.1.0-rc.1` dry-run built this job
+    # green end-to-end on the FREE hosted arm64-linux runner (repo is public -- callout 6; `-J-Xmx6g`
+    # rules out QEMU anyway), so it is PROMOTED from best-effort to the assembly required-platform set.
+    name: Native gate (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: meta
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: graalvm/setup-graalvm@cabbb10818fabc989d6dbd508e4846596d20dd2d # v1.6.0
+        with:
+          java-version: "25"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build native binary (self-reports the tag, item 8)
+        run: ./gradlew :server:nativeCompile -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run test suite as native image
+        # -PreleaseVersion is passed here too (MINOR fable): otherwise nativeTest regenerates BuildInfo as
+        # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
+        run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+        run: ./server/build/native/nativeCompile/plainbase spike
+
+      - name: Rename asset + log its checksum
+        run: |
+          mkdir -p dist
+          cp server/build/native/nativeCompile/plainbase dist/plainbase-linux-arm64
+          chmod +x dist/plainbase-linux-arm64
+          sha256sum dist/plainbase-linux-arm64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plainbase-linux-arm64
+          path: dist/plainbase-linux-arm64
+
+  native-macos-arm64:
+    name: Native gate (macos-arm64)
+    runs-on: macos-14
+    needs: meta
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: graalvm/setup-graalvm@cabbb10818fabc989d6dbd508e4846596d20dd2d # v1.6.0
+        with:
+          java-version: "25"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build native binary (self-reports the tag, item 8)
+        run: ./gradlew :server:nativeCompile -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run test suite as native image
+        # -PreleaseVersion is passed here too (MINOR fable): otherwise nativeTest regenerates BuildInfo as
+        # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
+        run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+        run: ./server/build/native/nativeCompile/plainbase spike
+
+      - name: Rename asset + log its checksum
+        run: |
+          mkdir -p dist
+          cp server/build/native/nativeCompile/plainbase dist/plainbase-macos-arm64
+          chmod +x dist/plainbase-macos-arm64
+          shasum -a 256 dist/plainbase-macos-arm64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plainbase-macos-arm64
+          path: dist/plainbase-macos-arm64
+
+  native-windows-x64:
+    # BEST-EFFORT (per DoD/master plan §6 -- Windows is the one deliberately best-effort platform):
+    # isolated at the assembly job's needs/if level (item 4), never via continue-on-error here.
+    name: Native gate (windows-x64, best-effort)
+    runs-on: windows-latest
+    needs: meta
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    defaults:
+      run:
+        # Uniform shell across all four platform jobs (PowerShell/bash divergence note, addendum item
+        # 2); setup-graalvm still wires the MSVC/vcvars environment native-image needs, and those env
+        # vars are inherited regardless of shell.
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: graalvm/setup-graalvm@cabbb10818fabc989d6dbd508e4846596d20dd2d # v1.6.0
+        with:
+          java-version: "25"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build native binary (self-reports the tag, item 8)
+        run: ./gradlew :server:nativeCompile -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run test suite as native image
+        # -PreleaseVersion is passed here too (MINOR fable): otherwise nativeTest regenerates BuildInfo as
+        # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
+        run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
+
+      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+        run: ./server/build/native/nativeCompile/plainbase.exe spike
+
+      - name: Rename asset + log its checksum
+        run: |
+          mkdir -p dist
+          cp server/build/native/nativeCompile/plainbase.exe dist/plainbase-windows-x64.exe
+          sha256sum dist/plainbase-windows-x64.exe
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plainbase-windows-x64
+          path: dist/plainbase-windows-x64.exe
+
+  # ---- Universal-JAR job (item 3) -- the release FLOOR, always required -------------------------
+  jar:
+    name: Universal JAR
+    runs-on: ubuntu-latest
+    needs: meta
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
+
+      - name: Build universal distribution (self-reports the tag, item 8; mirrors Dockerfile installDist)
+        run: ./gradlew :server:installDist -PreleaseVersion="$VERSION" --console=plain
+
+      # POSITIVE stamp assertion (MINOR fable): HealthRouteTest asserts BuildInfo.VERSION == reported, which
+      # is self-consistent BY CONSTRUCTION -- so a stamping regression (property typo, blank fall-through)
+      # would ship SNAPSHOT with every gate green. `generateBuildInfo` is the SAME task the native jobs
+      # drive, so this one check over the release-floor job gates the whole stamping mechanism.
+      - name: Verify the release stamp actually took
+        run: |
+          gen="server/build/generated/source/buildInfo/kotlin/com/plainbase/BuildInfo.kt"
+          grep -F "\"${VERSION}\"" "$gen" \
+            || { echo "::error::BuildInfo.kt did not stamp version '${VERSION}' -- version-stamping regressed."; exit 1; }
+
+      - name: Tar the dist + log its checksum
+        run: |
+          asset="plainbase-jvm-${VERSION}.tar.gz"
+          tar -czf "$asset" -C server/build/install plainbase
+          sha256sum "$asset"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plainbase-jvm
+          path: plainbase-jvm-${{ needs.meta.outputs.version }}.tar.gz
+
+  # ---- GHCR image publish job -- x64-only JVM tier (item 5) --------------------------------------
+  image:
+    name: GHCR JVM image
+    runs-on: ubuntu-latest
+    needs: meta
+    # packages:write is IMAGE-JOB-ONLY (risk 6); the digest crosses to the assembly job as a job
+    # OUTPUT below, so assembly never needs registry-write privilege. contents:read also covers the
+    # `gh release view` published-release gate below.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      # BLOCKING 1: docker/build-push-action uploads `.dockerbuild` build-record artifacts BY DEFAULT.
+      # The assembly job downloads artifacts into the staging manifest, so a stray build record would be
+      # checksummed, attested, and shipped as a release asset. Disable the upload at the source (belt;
+      # the assembly download is also scoped to `plainbase-*` as suspenders).
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Idempotency / immutability (risk 3, 7; BLOCKING 4). We do NOT compare image digests across runs:
+      # even with `provenance: false` the OCI image CONFIG blob carries a build-time `created` timestamp
+      # (no SOURCE_DATE_EPOCH / rewrite-timestamp), so a cold-cache rebuild of IDENTICAL source yields a
+      # DIFFERENT digest across runs -- a digest-equality guard would hard-fail a legit rerun (e.g. the
+      # item-0 "gate failed -> flip visibility -> re-run" path, or pushing the rc tag twice). The REAL
+      # invariant is: a PUBLISHED release's image is never overwritten (enforced here) and consumers pin
+      # by `@sha256` (the release captures the digest once, item 7). A rerun/rc re-push simply produces a
+      # fresh digest that flows consistently WITHIN its run -- benign.
+      - name: Refuse to overwrite a PUBLISHED release's image tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v${VERSION}"
+          # Fail CLOSED on a transient API error (MINOR fable): only a DEFINITIVE "release not found" is
+          # treated as safe-to-push. A network / rate-limit error must NOT read as "no release" -- that
+          # would let a rerun overwrite a PUBLISHED release's image tag with no backstop.
+          set +e
+          info="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft 2>err.txt)"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            if [ "$(echo "$info" | jq -r '.isDraft')" = "false" ]; then
+              echo "::error::A PUBLISHED release for $tag already exists -- refusing to overwrite its" \
+                   "image tag. Cut a NEW tag instead (rc.N+1 or the next vX.Y.Z)."
+              exit 1
+            fi
+            echo "$tag exists only as a DRAFT (crashed prior run / rc rerun) -- safe to re-push the image."
+          elif grep -qi "release not found" err.txt; then
+            echo "No existing release for $tag -- first image push for this tag."
+          else
+            echo "::error::Could not determine release state for $tag (failing closed): $(cat err.txt)"
+            exit 1
+          fi
+
+      # B1 (REV-2): the rc run PUSHES too -- push on BOTH rc and real tags, only the tag STRING and the
+      # release PUBLISH transition (assembly job) differ by is_rc. This is the ONLY thing that keeps the
+      # riskiest chain from going untested (push -> capture digest -> pin compose -> attest -> unauth pull).
+      #
+      # `provenance: false` (BLOCKING 4 reframe): NOT for cross-run digest reproducibility (impossible
+      # here per the note above) but for a CLEAN single-platform image manifest. With BuildKit's default
+      # provenance on, the push produces an OCI INDEX (image + attestation-manifest sibling); we instead
+      # want one image manifest whose digest is exactly what we attest by digest and pin in the compose.
+      # Supply-chain provenance is NOT lost -- it is the explicit attest-build-provenance step below.
+      - name: Build + push image (self-reports the tag, item 8)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: ghcr.io/luinstra/plainbase:${{ needs.meta.outputs.version }}
+          build-args: |
+            RELEASE_VERSION=${{ needs.meta.outputs.version }}
+
+      - name: Attest image provenance (by digest, not a re-hashed tarball)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ghcr.io/luinstra/plainbase
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # ---- Manifest-driven assembly / publish job (items 3, 4, 6, 7, 9) -------------------------------
+  # The SINGLE terminal fan-in. contents:write is RELEASE-JOB-ONLY (risk 6); NO packages:write -- the
+  # image digest arrives as a job OUTPUT (needs.image.outputs.digest) so this job attests + pins the
+  # compose WITHOUT registry-write privilege.
+  assembly:
+    name: Assemble + publish release
+    runs-on: ubuntu-latest
+    needs:
+      - meta
+      - native-linux-x64
+      - native-linux-arm64
+      - native-macos-arm64
+      - native-windows-x64
+      - jar
+      - image
+    # JAR is the non-negotiable floor: if it never succeeded, don't even attempt assembly.
+    if: ${{ always() && needs.jar.result == 'success' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      # All tag/digest values reach the shells below ONLY as quoted env vars (never inline `${{ }}`).
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.meta.outputs.version }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+    steps:
+      # Step 1: download the uploaded artifacts into one flat staging dir. Scoped to `plainbase-*` (our
+      # upload-artifact names) so a `.dockerbuild` build record (BLOCKING 1) can never enter the shipped
+      # manifest. The release-compose + SHA256SUMS are GENERATED in staging (not downloaded), so the
+      # pattern doesn't exclude them.
+      - name: Download platform/JAR artifacts (plainbase-* only)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: staging
+          pattern: plainbase-*
+          merge-multiple: true
+
+      - name: List staged assets
+        run: ls -la staging
+
+      # Step 2: required-platform hard check. REQUIRED = linux-x64, linux-arm64, macos-arm64, jar,
+      # image (linux-arm64 PROMOTED after the v0.1.0-rc.1 dry-run proved it green -- Design Fork A).
+      # BEST-EFFORT (windows only) missing = skip silently.
+      - name: Required-platform hard check
+        env:
+          LINUX_X64: ${{ needs.native-linux-x64.result }}
+          LINUX_ARM64: ${{ needs.native-linux-arm64.result }}
+          MACOS_ARM64: ${{ needs.native-macos-arm64.result }}
+          WINDOWS_X64: ${{ needs.native-windows-x64.result }}
+          JAR_RESULT: ${{ needs.jar.result }}
+          IMAGE_RESULT: ${{ needs.image.result }}
+        run: |
+          fail=0
+          require() {
+            local name="$1" result="$2"
+            if [ "$result" != "success" ]; then
+              echo "::error::REQUIRED job '$name' did not succeed (result: $result)."
+              fail=1
+            else
+              echo "$name: OK"
+            fi
+          }
+          require "linux-x64" "$LINUX_X64"
+          require "linux-arm64" "$LINUX_ARM64"
+          require "macos-arm64" "$MACOS_ARM64"
+          require "jar" "$JAR_RESULT"
+          require "image" "$IMAGE_RESULT"
+          # BEST-EFFORT platform: log, never fail the release on its absence. Windows is the one
+          # deliberately best-effort platform per §6; linux-arm64 was PROMOTED to REQUIRED (above)
+          # after the v0.1.0-rc.1 dry-run proved it green end-to-end.
+          if [ "$WINDOWS_X64" != "success" ]; then
+            echo "::warning::windows-x64 did not succeed (result: $WINDOWS_X64) -- best-effort by design;" \
+                 "not blocking assembly."
+          fi
+          if [ "$fail" = "1" ]; then
+            echo "::error::One or more REQUIRED jobs failed -- refusing to assemble a release."
+            exit 1
+          fi
+
+      # Step 3: GENERATE the release-compose FIRST (item 7) -- pinned to the pushed image digest, drops
+      # `build: .`. This must happen before SHA256SUMS (step 6, B4) so the compose is covered. The
+      # committed repo docker-compose.yml (`build: .`, dev quickstart) is NEVER touched (callout 2, 4).
+      # The loopback/security warning is copied verbatim from the dev compose (MINOR codex+sonnet): a
+      # user who widens the port map hits the same insecure-http + auth.mode=off footgun.
+      - name: Generate release docker-compose.yml (pinned to the pushed image digest)
+        run: |
+          image="ghcr.io/luinstra/plainbase@${DIGEST}"
+          cat > staging/docker-compose.yml <<COMPOSE_EOF
+          # Plainbase v${VERSION} -- RELEASE compose (GENERATED at release time, NOT the dev quickstart).
+          # Pinned to the published GHCR image by digest for reproducibility. This ships the JVM tier;
+          # for the fast-start path download a native binary from this release instead. The repo's
+          # committed docker-compose.yml (\`build: .\`) stays the separate LOCAL DEV quickstart.
+          #
+          # This tier runs plaintext with auth.mode=off (no login) -- a knowing single-user dev posture,
+          # NOT production. For a real MULTI-USER / public deployment, do NOT publish this app directly:
+          # front it with a TLS-terminating reverse proxy that authenticates users. See the reference SSO
+          # topology in docs/deploy/reverse-proxy-sso.md.
+          services:
+            plainbase:
+              image: $image
+              # Published to the HOST LOOPBACK only -- reachable at http://localhost:8080, not on the LAN.
+              # (The 127.0.0.1 prefix is load-bearing: a bare "8080:8080" would publish on 0.0.0.0 -- every
+              # interface -- which, with the insecure-http + auth.mode=off dev posture below, would expose
+              # an unauthenticated plaintext server to the whole LAN.)
+              ports:
+                - "127.0.0.1:8080:8080"
+              environment:
+                CONTENT_DIR: /content
+                DATA_DIR: /data
+                # 0.0.0.0 binds every interface INSIDE the container so the published loopback port reaches
+                # the app. A non-loopback bind without TLS/proxy/override is REFUSED by the fail-closed bind
+                # guard -- PLAINBASE_INSECURE_HTTP below is the explicit, knowing dev override (it logs
+                # loudly). auth.mode stays off (the default -- no login in this single-user dev tier).
+                PLAINBASE_HOST: 0.0.0.0
+                PLAINBASE_INSECURE_HTTP: "true"
+              volumes:
+                # Point this bind mount at your own Markdown tree.
+                - ./content:/content
+                - plainbase-data:/data
+              restart: unless-stopped
+
+          volumes:
+            plainbase-data:
+          COMPOSE_EOF
+          cat staging/docker-compose.yml
+
+      # Step 4: release-notes platform table from ONLY the present artifacts (item 9).
+      - name: Generate release notes
+        run: |
+          {
+            echo "# Plainbase v${VERSION}"
+            echo
+            echo "## MVP Definition of Done"
+            echo "- Polished site: a clean, navigable rendered view of the content tree."
+            echo "- Stable identity: pages keep a durable ID/URL across renames and moves."
+            echo "- Full-text search: fast, relevant search over the whole corpus."
+            echo "- Browser editing -> files: edits made in the browser land as real Markdown files."
+            echo "- Optional Git commits: edits can be committed to Git when the content tree is a repo."
+            echo "- History/diffs: page history and diffs are viewable in the browser."
+            echo "- Agent API: search / read / cite / propose over MCP and REST for agent workflows."
+            echo "- Review queue: agent-proposed changes land in a human-reviewable queue before merge."
+            echo "- Self-hosted deploy: a single native binary or container, no external services required."
+            echo
+            echo "## Artifacts"
+            echo
+            echo "| Asset | SHA256 |"
+            echo "|---|---|"
+            for f in staging/*; do
+              name="$(basename "$f")"
+              [ "$name" = "SHA256SUMS" ] && continue
+              sum="$(sha256sum "$f" | cut -d' ' -f1)"
+              echo "| \`$name\` | \`$sum\` |"
+            done
+            echo
+            echo "Full checksums: see the attached \`SHA256SUMS\`. Every asset above also carries a"
+            echo "build-provenance attestation."
+            echo
+            echo "## Docker image (JVM tier -- NOT the native binary)"
+            echo
+            echo "\`ghcr.io/luinstra/plainbase@${DIGEST}\` is the JVM tier (\`installDist\` on a JRE base):"
+            echo "slower cold start and higher memory than the native binaries above. Prefer a platform"
+            echo "binary for the fast-start path. The attached, digest-pinned \`docker-compose.yml\` targets"
+            echo "this image, and runs plaintext with \`auth.mode=off\` (no login) by default -- a knowing"
+            echo "single-user dev posture, NOT production. For a multi-user or public deployment, front it"
+            echo "with a TLS-terminating, authenticating reverse proxy (see \`docs/deploy/reverse-proxy-sso.md\`)."
+            echo
+            echo "## Unsigned binaries"
+            echo
+            echo "The macOS and Windows native binaries are UNSIGNED for v0.1.0 -- code-signing /"
+            echo "notarization is DEFERRED to v0.1.x. Gatekeeper / SmartScreen will warn on first run:"
+            echo "- macOS: \`xattr -d com.apple.quarantine ./plainbase-macos-arm64\`, or right-click -> Open."
+            echo "- Windows: SmartScreen -> \"More info\" -> \"Run anyway\"."
+            echo
+            echo "On Linux and macOS, set the executable bit on the downloaded binary first:"
+            echo "\`chmod +x ./plainbase-linux-x64\` (or whichever file you downloaded)."
+            echo
+            echo "## Setup: GHCR package visibility (maintainers, one-time)"
+            echo
+            echo "GHCR packages default PRIVATE even on a public repo. Before the first release, connect"
+            echo "the \`ghcr.io/luinstra/plainbase\` package to this repository and set its visibility to"
+            echo "Public in package settings (there is no supported per-run visibility flip). This"
+            echo "workflow enforces the result via an unauthenticated-pull gate and fails loudly if the"
+            echo "image isn't public yet."
+          } > release-notes.md
+          cat release-notes.md
+
+      # Step 5: public-pullability GATE -- the ENFORCEMENT of record (B3, REV-3), not any API flip.
+      # BEFORE any publish, prove the image is pullable by an UNAUTHENTICATED client.
+      - name: Public-pullability gate -- unauthenticated pull must succeed
+        run: |
+          docker logout ghcr.io || true
+          ref="ghcr.io/luinstra/plainbase@${DIGEST}"
+          max_attempts=3
+          attempt=1
+          until docker pull "$ref"; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::Unauthenticated pull of $ref failed after $max_attempts attempts. The GHCR" \
+                   "package is likely still PRIVATE -- do the one-time visibility flip (item 0: connect" \
+                   "the package to this repo and set Public in package settings), then re-run this workflow."
+              exit 1
+            fi
+            echo "Pull attempt $attempt failed, retrying in 10s (GHCR eventual consistency)..."
+            attempt=$((attempt + 1))
+            sleep 10
+          done
+          echo "Unauthenticated pull of $ref succeeded -- the image is publicly pullable."
+
+      # Step 6: ONE SHA256SUMS over the COMPLETE final upload set, computed AFTER step 3 so the
+      # release-compose (itself pinning a security-relevant digest) is covered (B4).
+      - name: Compute SHA256SUMS over the complete shipped set
+        working-directory: staging
+        run: |
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      # Invariant: every staged asset EXCEPT SHA256SUMS itself has exactly one SHA256SUMS line, and
+      # SHA256SUMS names nothing that isn't staged (self-reference carved out -- MINOR codex+sonnet).
+      # Exact field-equality on the filename column (not an unanchored substring grep) so a name that
+      # is a prefix of another can't false-match (MINOR codex+opus).
+      - name: Assert SHA256SUMS coverage invariant
+        working-directory: staging
+        run: |
+          bad=0
+          for f in *; do
+            [ "$f" = "SHA256SUMS" ] && continue
+            count="$(awk -v f="$f" '$2 == f {n++} END {print n + 0}' SHA256SUMS)"
+            if [ "$count" != "1" ]; then
+              echo "::error::$f: expected exactly one SHA256SUMS line, found $count."
+              bad=1
+            fi
+          done
+          while read -r _hash name; do
+            if [ "$name" = "SHA256SUMS" ]; then
+              echo "::error::SHA256SUMS lists itself -- the self-reference carve-out is violated."
+              bad=1
+              continue
+            fi
+            if [ ! -f "$name" ]; then
+              echo "::error::SHA256SUMS names '$name', which is not present in staging."
+              bad=1
+            fi
+          done < SHA256SUMS
+          if [ "$bad" != "0" ]; then
+            echo "::error::SHA256SUMS coverage invariant violated."
+            exit 1
+          fi
+          echo "SHA256SUMS coverage OK: every staged asset except itself has exactly one line, no dangling names."
+
+      # Step 7: attest EACH staged binary + the JAR + the release-compose (their FINAL published
+      # bytes) -- the image was already attested BY DIGEST in the image job (item 5/6). Driven by
+      # `subject-checksums` (SHA256SUMS itself), not a static path/glob list: this is the SAME
+      # manifest-driven principle as the rest of assembly -- whatever SHA256SUMS names (i.e. whatever
+      # actually staged, minus itself) is exactly what gets attested, so a missing best-effort
+      # platform is never even a candidate glob-miss.
+      - name: Attest build provenance -- binaries, JAR, and release-compose
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-checksums: staging/SHA256SUMS
+
+      # Step 8: draft-then-publish with concrete rerun rules (risk 3, B2).
+      - name: Fail if a PUBLISHED release for this tag already exists
+        run: |
+          tag="v${VERSION}"
+          # Fail CLOSED on a transient API error (MINOR fable): a network / rate-limit failure must not
+          # read as "no release" and silently skip the stale-draft cleanup or mask a published release.
+          set +e
+          info="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft 2>err.txt)"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            is_draft="$(echo "$info" | jq -r '.isDraft')"
+            if [ "$is_draft" = "false" ]; then
+              echo "::error::A PUBLISHED release for $tag already exists. Never mutate a published release" \
+                   "-- cut a new tag instead."
+              exit 1
+            fi
+            echo "A stale DRAFT release exists for $tag (crashed prior run / prior rerun) -- deleting it so" \
+                 "this run starts clean, no stale/duplicate assets."
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+          elif grep -qi "release not found" err.txt; then
+            echo "No existing release for $tag."
+          else
+            echo "::error::Could not determine release state for $tag (failing closed): $(cat err.txt)"
+            exit 1
+          fi
+
+      - name: Create draft release
+        run: |
+          tag="v${VERSION}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --title "$tag" \
+            --notes-file release-notes.md
+
+      - name: Upload release assets (binaries, JAR, SHA256SUMS, release-compose)
+        run: |
+          tag="v${VERSION}"
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" staging/* --clobber
+
+      - name: Publish (rc dry-run stays a DRAFT -- never published, no `latest`)
+        if: ${{ needs.meta.outputs.is_rc == 'false' }}
+        run: |
+          tag="v${VERSION}"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

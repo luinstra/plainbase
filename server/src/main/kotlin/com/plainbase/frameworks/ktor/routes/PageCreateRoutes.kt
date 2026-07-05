@@ -29,9 +29,6 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.SerializationException
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.CodingErrorAction
 
 /**
  * PB-WRITE-1 (chunk W2): `POST /api/v1/pages` — new-page creation. A JSON request (`folder`, `title`,
@@ -180,18 +177,6 @@ private fun parseCreateRequest(body: ByteArray): CreatePageRequest? {
     return try {
         RestJson.decodeFromString(CreatePageRequest.serializer(), text)
     } catch (_: SerializationException) {
-        null
-    }
-}
-
-/** Strict UTF-8 decode (the [com.plainbase.domain.content.PercentCoding] idiom): null on any malformed/unmappable input. */
-private fun strictUtf8Decode(bytes: ByteArray): String? {
-    val decoder = Charsets.UTF_8.newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
-    return try {
-        decoder.decode(ByteBuffer.wrap(bytes)).toString()
-    } catch (_: CharacterCodingException) {
         null
     }
 }

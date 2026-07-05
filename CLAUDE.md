@@ -36,6 +36,10 @@ Filesystem-native, agent-native internal docs product. Master plan:
   = the native gate (8/8 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
   native artifact only.
+- **Native-tag by default on divergence surfaces:** tests exercising NIO edge behavior, process
+  execution (`GitExecutor`), the xerial JDBC/JNI seam, charset/Unicode decoding, or SecureRandom/
+  crypto get `@Tag("native")` (kotlin.test dialect) so they run under the native image — pure
+  domain-logic tests stay Kotest/JVM-only. Surface coverage, not line coverage; keep nativeTest lean.
 
 ### Frontend tests — always go through Gradle, never raw `vitest`/`playwright`
 
@@ -76,25 +80,27 @@ command string. Use these stable `./gradlew :*` invocations instead:
 moment + the reason, don't auto-run). Trigger for **frozen-contract, concurrency-heavy, or
 phase-closing** chunks:
 
-- **Before building:** a four-model `/octo:debate` on design soundness. (S7/S8: caught a silent
+Both escalations are crew-native — **`/octo` is retired; never invoke or recommend it.**
+
+- **Before building:** a multi-model `/crew:debate` on design soundness. (S7/S8: caught a silent
   data-correctness bug that measure-twice had approved.)
-- **After building:** **review-until-clean**, two complementary fan-outs:
+- **After building:** **review-until-clean** via `/crew:review` (crew-native multi-model panel —
+  bundles the codex + Gemini-via-`agy` + opus + sonnet dispatch), two complementary fan-outs:
   - **First pass — diverse fan-out, run in parallel to drain the latent-bug backlog in fewer rounds.**
     Across *models* (cross-model diversity is the highest-yield: on W5 Codex caught a `git diff` RCE via
     repo-local `diff.external` while Gemini caught an empty-message log-parser field-shift — neither caught
     the other's, and the advisor verify caught neither) AND across *lenses* (≥3 reviewers with distinct
     mandates — e.g. security/RCE · correctness+frozen-contract+concurrency · deployment/ops/scale —
-    since same-model instances share blind spots, the lens diversity buys back the correlation). Models:
-    `/codex:review` (or focused `codex exec -s read-only` per lens) + a Gemini-3.1-Pro pass via `agy`
-    (the `gemini` CLI is retired; run `agy` from the repo cwd with `--dangerously-skip-permissions` +
-    review instructions — it runs `git diff` itself; do NOT inline the diff).
+    since same-model instances share blind spots, the lens diversity buys back the correlation). When a
+    lens needs its own mandate beyond `/crew:review`'s default panel, seat custom `crew:reviewer` agents
+    (per-spawn model override) — one per lens.
   - **Confirm rounds — fix → re-review until a round returns empty/cosmetic.** Some findings are
     causally sequential (a fix exposes/creates the next — W5: throw-on-failure → diff-route taxonomy →
     git-version gate), so a few rounds are inherent; parallelism can't collapse that tail. Drop a model
     once it plateaus clean (W5: Gemini went clean by R2; Codex kept finding real items to R7). A final
     parallel diverse-lens burst all-clean is strong evidence of earned-clean. Validate every finding
     against real code before fixing; fix the CLASS not the instance.
-  (S8: `/codex:review` caught a misleading operator doc + a CLI exit-code bug.)
+  (S8: the cross-model review caught a misleading operator doc + a CLI exit-code bug.)
 
 The owner can say "always debate"/"always review" to make either automatic. **When a debate or
 review finds a hole the spec missed, widen the spec AND its tests — not just the code.**

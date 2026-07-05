@@ -82,7 +82,9 @@ interface ContentStore {
      * Returns the bytes verbatim on a [CasResult.Written] (no reserialization, no patcher); a
      * [CasResult.Mismatch] when the on-disk hash differs from [baseHash] or an external write landed
      * between the read and the rename; [CasResult.Deleted] when the indexed file is gone; and
-     * [CasResult.Unreadable] when the read/stat threw (permission/locked/partial/transient FS).
+     * [CasResult.Unreadable] when the read/stat threw (permission/locked/partial/transient FS) OR the
+     * non-atomic copy-fallback (no-atomic-move FS) failed mid-copy — the latter carries
+     * [CasResult.Unreadable.targetMutated] = true because the target may have been partially replaced.
      */
     fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult
 
@@ -162,8 +164,16 @@ sealed interface CasResult {
     /** The indexed file is gone (deleted, or never indexed) — nothing to compare-and-swap against. */
     data object Deleted : CasResult
 
-    /** The read/stat threw (permission/locked/partial/transient FS); [cause] is diagnostic. */
-    data class Unreadable(val cause: String) : CasResult
+    /**
+     * The read/stat threw (permission/locked/partial/transient FS); [cause] is diagnostic.
+     *
+     * [targetMutated] is true ONLY when a non-atomic copy-fallback failure may have TRUNCATED/partially
+     * replaced the target on disk (a no-atomic-move FS). The pipeline then RETAINS the write-ahead dirty
+     * mark so reconcile commits a fully-landed copy or drift-skips a partial — never a silent corruption.
+     * It stays false for every pre-move / atomic-move failure (atomicity → nothing landed = nothing
+     * written), which is the default the existing positional `Unreadable("…")` sites keep.
+     */
+    data class Unreadable(val cause: String, val targetMutated: Boolean = false) : CasResult
 }
 
 /** The outcome of [ContentStore.createExclusive] (PB-WRITE-1, chunk W2 — write-if-absent). */

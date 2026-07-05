@@ -34,7 +34,9 @@ class AuthMatrixTest : FunSpec({
     fun withApp(role: Role?, block: suspend (io.ktor.server.testing.ApplicationTestBuilder) -> Unit) {
         val root = Files.createTempDirectory("plainbase-authmatrix")
         try {
-            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nbody.\n")
+            // The `role: admin` frontmatter is a content-tree CLAIM, never a PolicyService input (roleFor reads only DB
+            // subject_role/token rows) — so every verdict below doubles as a non-escalation assertion (PolicyServiceTest:134).
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\nrole: admin\n---\n\n# Doc\n\nbody.\n")
             IndexHarness(root, contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)).use { harness ->
                 harness.builder.rebuild()
                 val principal: Principal = when (role) {
@@ -155,7 +157,8 @@ class AuthMatrixTest : FunSpec({
     test("an Agent bearer resolves through check(): READ_ONLY agent reads (200) but cannot manage (403)") {
         val root = Files.createTempDirectory("plainbase-authmatrix-agent")
         try {
-            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n")
+            // `role: admin` here is a content claim, not a PolicyService input — the READ_ONLY verdicts must hold unchanged.
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\nrole: admin\n---\n\n# Doc\n")
             IndexHarness(root, contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)).use { harness ->
                 harness.builder.rebuild()
                 // A real loopback bearer for a READ_ONLY agent — the genuine extraction path (loopback is secure).
@@ -175,6 +178,38 @@ class AuthMatrixTest : FunSpec({
                         header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
                     }
                     manage.status shouldBe HttpStatusCode.Forbidden
+                }
+            }
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    test("a REVOKED Agent bearer is 401 at the route layer: the same token that just read 200 reads 401 after revoke") {
+        val root = Files.createTempDirectory("plainbase-authmatrix-revoked")
+        try {
+            Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\nrole: admin\n---\n\n# Doc\n")
+            IndexHarness(root, contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root)).use { harness ->
+                harness.builder.rebuild()
+                // Latches the service-level pin (ApiTokenServiceTest: revoked → Anonymous) to the WIRE status: revocation
+                // is enforced on the single authenticate path, so the very same bearer flips 200 → 401 with no restart.
+                val minted = harness.apiTokens.mint(label = "ci-revoked", mode = AgentMode.READ_ONLY)
+                val ctx = harness.testRouteContext(
+                    contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root),
+                    searchProvider = harness.fts(root),
+                    enforced = true, // the REAL extractPrincipal over the bearer (no fixed-principal seam)
+                )
+                testApplication {
+                    application { plainbaseModule(ctx) }
+                    client.get("/api/v1/pages/by-path/doc") {
+                        header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
+                    }.status shouldBe HttpStatusCode.OK
+
+                    harness.apiTokens.revoke(minted.id)
+
+                    client.get("/api/v1/pages/by-path/doc") {
+                        header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
+                    }.status shouldBe HttpStatusCode.Unauthorized
                 }
             }
         } finally {

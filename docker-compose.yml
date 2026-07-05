@@ -9,10 +9,10 @@
 # (Caddy + oauth2-proxy) is the STANDALONE stack under `deploy/proxy/` — see
 # `docs/deploy/reverse-proxy-sso.md`.
 #
-# NOTE: Meilisearch is the OPTIONAL search tier (§2.4/§5.6). Plainbase defaults to
-# embedded SQLite FTS5 and needs no containers at all (single native binary).
-# Run compose when you want the upgraded search engine (typo tolerance, better
-# relevance). It is included here so the upgrade path is one `docker compose up`.
+# NOTE: Meilisearch is a DELIBERATE FUTURE upgrade tier (§2.4/§5.6), not a running service here.
+# Plainbase defaults to embedded SQLite FTS5 and needs no containers at all (single native
+# binary). The commented SEARCH_ENGINE/MEILI_URL lines below are a reserved stub for a future
+# phase — no `meilisearch` service is wired into this compose file today.
 
 services:
   plainbase:

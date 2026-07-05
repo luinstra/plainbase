@@ -13,6 +13,7 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.IOException
 import java.nio.file.Files
@@ -22,9 +23,13 @@ import java.nio.file.Path
 /**
  * Acceptance tests for the java.nio [LocalContentStore] (chunk 1).
  *
- * JVM-only Kotest — NOT @Tag("native"): `LocalContentStore` is plain java.nio and behaves
- * identically on JVM and native; its temp-dir integration tests do not belong in the
- * closed-world native image (the native gate stays as-is).
+ * JVM-only Kotest — NOT @Tag("native"): this file holds the logic/containment integration tests,
+ * which drive control flow over a temp-dir tree and do not belong in the closed-world native image.
+ * The claim they rest on — that the real java.nio primitives (createLink / atomicMove / copyReplace,
+ * and symlink → toRealPath escape detection) behave identically on JVM and native — is no longer an
+ * assumption: it is pinned separately by `FileAtomicsRealNativeTest`, which exercises those primitives
+ * UNDER the native image. So this file stays JVM-only for the logic tests; the real-FS primitive
+ * behavior is tested natively there.
  *
  * Non-ASCII literals are written editor-proof so a tool that NFC-normalizes the source cannot
  * silently collapse the NFD/NFC distinction (which would let the Linux half of a collision test
@@ -539,6 +544,52 @@ class LocalContentStoreTest : FunSpec({
         }
     }
 
+    test("stat of an INDEXED entry replaced post-scan by a dangling or escaping symlink returns null") {
+        val tmp = Files.createTempDirectory("pb-symlink-stat")
+        val outside = Files.createTempDirectory("pb-symlink-stat-target")
+        try {
+            Files.writeString(tmp.resolve("dangling.md"), "dangling")
+            Files.writeString(tmp.resolve("escaping.md"), "escaping")
+            val secret = outside.resolve("secret.md")
+            Files.writeString(secret, "OUT-OF-ROOT-SECRET")
+
+            val store = LocalContentStore(tmp)
+            store.scan()
+
+            // TOCTOU swap AFTER the scan indexed the real files: the membership gate passes, so the
+            // no-follow probe + containment recheck inside stat() are what must refuse the links.
+            Files.delete(tmp.resolve("dangling.md"))
+            Files.delete(tmp.resolve("escaping.md"))
+            try {
+                Files.createSymbolicLink(tmp.resolve("dangling.md"), outside.resolve("no-such-target.md"))
+                Files.createSymbolicLink(tmp.resolve("escaping.md"), secret)
+            } catch (_: IOException) {
+                return@test // platform/permissions disallow symlinks — nothing to assert
+            }
+
+            store.stat(TreePath.require("dangling.md")).shouldBeNull()
+            store.stat(TreePath.require("escaping.md")).shouldBeNull()
+        } finally {
+            tmp.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    test("stat of an INDEXED entry deleted post-scan returns null (merely missing, no symlink)") {
+        val tmp = Files.createTempDirectory("pb-stat-missing")
+        try {
+            Files.writeString(tmp.resolve("page.md"), "# page")
+            val store = LocalContentStore(tmp)
+            store.scan()
+
+            Files.delete(tmp.resolve("page.md"))
+
+            store.stat(TreePath.require("page.md")).shouldBeNull()
+        } finally {
+            tmp.toFile().deleteRecursively()
+        }
+    }
+
     test("a symlinked _folder.yaml is not followed: folder meta is null, no out-of-root content read") {
         val tmp = Files.createTempDirectory("pb-symlink-meta")
         val outside = Files.createTempDirectory("pb-symlink-meta-target")
@@ -559,6 +610,42 @@ class LocalContentStoreTest : FunSpec({
             result.files.map { it.path.value } shouldContainExactly listOf("section/page.md")
             val folder = result.folders.single { it.path.value == "section" }
             folder.meta.shouldBeNull() // out-of-root meta never parsed
+        } finally {
+            tmp.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    // ---- DoD-4: store-level create rejection is a CONTRACT (rejectionReason as a pinned reason) --------
+    // The DoD-4 trio, each pinned in its own layer (this comment is the release-notes anchor):
+    //   (1) structural `../` rejection — TreePathTest.kt (a TreePath can never CARRY `..`, so a store-level
+    //       `../` test is unwritable by design; nothing to duplicate here);
+    //   (2) store-level symlinked-ancestor rejection — THIS test (createExclusive + writeAssetExclusive);
+    //   (3) route-level 400 for both — WriteRouteCreateTest.kt.
+    // Guard-3 (LocalContentStore's outside-root real-path escape, :757) stays defense-in-depth and untested
+    // directly: every REACHABLE escape is intercepted earlier — a symlinked ancestor hits guard 2 (below), a
+    // lexical escape cannot exist in a TreePath — so forcing it would need a contrived filesystem. Reasons are
+    // asserted by SUBSTRING (freeze the invariant, not the diagnostic prose).
+    test("createExclusive AND writeAssetExclusive reject a symlinked ancestor; nothing is written through the link") {
+        val tmp = Files.createTempDirectory("pb-symlink-ancestor-create")
+        val outside = Files.createTempDirectory("pb-symlink-ancestor-target")
+        val hasher: (ByteArray) -> String = { it.size.toString() }
+        try {
+            try {
+                Files.createSymbolicLink(tmp.resolve("escape"), outside) // `escape` -> an out-of-root directory
+            } catch (_: IOException) {
+                return@test // platform/permissions disallow symlinks — nothing to assert
+            }
+            val store = LocalContentStore(tmp)
+            store.scan()
+
+            store.createExclusive(TreePath.require("escape/page.md"), "# page\n".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Rejected>().reason shouldContain "symlink"
+            store.writeAssetExclusive(grantForTests(), TreePath.require("escape/img.png"), "binary".toByteArray(), hasher)
+                .shouldBeInstanceOf<CreateResult.Rejected>().reason shouldContain "symlink"
+
+            // Nothing landed THROUGH the link — the out-of-root target directory stays empty.
+            Files.newDirectoryStream(outside).use { it.count() } shouldBe 0
         } finally {
             tmp.toFile().deleteRecursively()
             outside.toFile().deleteRecursively()

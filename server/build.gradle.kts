@@ -211,6 +211,48 @@ tasks.processResources {
     dependsOn(copyFrontend)
 }
 
+// ---- Version self-report (C5 item 8): generate `com.plainbase.BuildInfo` from `project.version` -----
+// (root build.gradle.kts derives `version` from `-PreleaseVersion`, SNAPSHOT as the dev fallback) so the
+// binary self-reports the TAG-DRIVEN version with no drift (PlainbaseConfig.VERSION delegates to it). A
+// generated Kotlin `const` needs NO runtime resource lookup/reflection — cleaner for the native bet than a
+// classpath `version.properties` (Fork B of the addendum; kept only as a documented fallback).
+val generatedBuildInfoDir = layout.buildDirectory.dir("generated/source/buildInfo/kotlin")
+
+val generateBuildInfo =
+    tasks.register("generateBuildInfo") {
+        group = "build"
+        description = "Generates com.plainbase.BuildInfo.VERSION from project.version"
+        val versionValue = project.version.toString()
+        inputs.property("version", versionValue)
+        outputs.dir(generatedBuildInfoDir)
+        doLast {
+            // Defense-in-depth on the generated-source seam: `project.version` is tag-driven in the
+            // release workflow (`-PreleaseVersion=${GITHUB_REF_NAME#v}`), so a hostile tag could try to
+            // inject Kotlin here. The release workflow already validates the tag shape, but this seam
+            // refuses anything outside a version alphabet regardless of how it was invoked.
+            require(versionValue.matches(Regex("[A-Za-z0-9.+-]+"))) { "unexpected version: $versionValue" }
+            val packageDir = generatedBuildInfoDir.get().asFile.resolve("com/plainbase")
+            packageDir.mkdirs()
+            packageDir.resolve("BuildInfo.kt").writeText(
+                """
+                |package com.plainbase
+                |
+                |// GENERATED at build time from `project.version` — do not edit (server/build.gradle.kts:generateBuildInfo).
+                |object BuildInfo {
+                |    const val VERSION: String = "$versionValue"
+                |}
+                |
+                """.trimMargin(),
+            )
+        }
+    }
+
+sourceSets {
+    main {
+        kotlin.srcDir(generateBuildInfo)
+    }
+}
+
 // ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
 //
 // The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
@@ -233,7 +275,7 @@ tasks.test {
 // (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
 // alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
 // inside the image. Not wired into `check` — that would re-run the same classes twice per build.
-val acceptanceTest by tasks.registering(Test::class) {
+val acceptanceTest = tasks.register<Test>("acceptanceTest") {
     description = "Runs ONLY the Phase-1 acceptance gate (Phase1AcceptanceTest + ForeverApiGoldenSuite)."
     group = "verification"
     useJUnitPlatform()
@@ -247,7 +289,7 @@ val acceptanceTest by tasks.registering(Test::class) {
 // the `nativeTestCompile` rewire under graalvmNative); the image's test set and classpath both come
 // from here, which is what keeps Kotest/MockK out of the native binary. Not wired into `check`
 // (those tests already run under `test`); its sole job is to record the native test list.
-val nativeTestList by tasks.registering(Test::class) {
+val nativeTestList = tasks.register<Test>("nativeTestList") {
     description = "Runs ONLY the nativeTest source set, recording the test list for the native image."
     group = "verification"
     val nativeTestSourceSet = sourceSets["nativeTest"]

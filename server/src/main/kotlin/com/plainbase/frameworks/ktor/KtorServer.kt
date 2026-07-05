@@ -121,6 +121,10 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
     // SSE — the in-binary MCP transport (P3). Installed ONCE at module scope (the `mcp(Route)` overload asserts it);
     // it touches NO content negotiation, so the app-wide `json()` above is left untouched.
     install(SSE)
+    // C1a: stamp the shell Content-Security-Policy on every text/html response (the SPA shell from BOTH
+    // staticResources and respondSpaShell). Built once from the embedded shell's inline-script hash;
+    // skipped (with a warning) when no frontend is bundled. Must precede routing so it sees every respond.
+    installShellSecurityHeaders()
     routing {
         // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → /docs SPA shell →
         // static. Ktor resolves by specificity, and every surface below owns a distinct constant
