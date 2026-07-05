@@ -15,15 +15,15 @@ import java.nio.file.Files
 import kotlin.time.Clock
 
 /**
- * Wires the optional Git-history layer (ADR-0006, chunk W4). The impl is selected by `git.enabled`
+ * Wires the optional Git-history layer (ADR-0006). The impl is selected by `git.enabled`
  * (explicit override) falling back to detection of a repo in CONTENT_DIR. The [WriteHistoryHook] single
- * adapts the chosen [HistoryProvider] to the W1 seam — `RestModule` passes it into the `WritePipeline`.
+ * adapts the chosen [HistoryProvider] to the write-pipeline seam — `RestModule` passes it into the `WritePipeline`.
  *
- * The git-home is NOT created here (it touches an unvalidated/unlocked DATA_DIR — P1-3); the provider
+ * The git-home is NOT created here (it touches an unvalidated/unlocked DATA_DIR); the provider
  * creates it lazily at the first commit.
  */
 val historyModule = module {
-    // repoPath stages the RAW on-disk repo-relative path (r6b) — loose coupling: the provider gets a
+    // repoPath stages the RAW on-disk repo-relative path — loose coupling: the provider gets a
     // function, not the whole ContentStore (registered in contentModule).
     single<HistoryProvider> { selectHistoryProvider(get(), get<ContentStore>()::resolveRepoRelativePath) }
     single<WriteHistoryHook> {
@@ -35,9 +35,9 @@ val historyModule = module {
 /**
  * Selects the history adapter for [config] (the testable core of [historyModule]): a [GitExecutor] over
  * CONTENT_DIR, then [gitEnabled] (the `git.enabled` override or repo auto-detection) → either a
- * [GitCliHistoryProvider] (with the off-monitor maintenance dispatcher wired — F3) or [NoOpHistoryProvider].
- * [repoPath] resolves the raw on-disk repo-relative path to stage in git (r6b). The git-home is NOT created
- * here (P1-3) — the provider creates it lazily at the first commit.
+ * [GitCliHistoryProvider] (with the off-monitor maintenance dispatcher wired) or [NoOpHistoryProvider].
+ * [repoPath] resolves the raw on-disk repo-relative path to stage in git. The git-home is NOT created
+ * here — the provider creates it lazily at the first commit.
  */
 internal fun selectHistoryProvider(
     config: PlainbaseConfig,
@@ -53,8 +53,8 @@ internal fun selectHistoryProvider(
             defaultCommitter = CommitIdentity(config.git.authorName, config.git.authorEmail),
             clock = Clock.System,
             repoPath = repoPath,
-            // Auto-maintenance off the W1 monitor (F3): a daemon thread so it never blocks the save's
-            // return, running the shared helper so the `gc --auto` fallback is live on git < 2.30 too (P2-C).
+            // Auto-maintenance off the write-pipeline monitor: a daemon thread so it never blocks the save's
+            // return, running the shared helper so the `gc --auto` fallback is live on git < 2.30 too.
             maintenance = { Thread { runCatching { runAutoMaintenance(exec) } }.apply { isDaemon = true }.start() },
         )
     } else {

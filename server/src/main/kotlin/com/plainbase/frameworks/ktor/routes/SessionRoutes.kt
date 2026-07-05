@@ -9,7 +9,7 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
 /**
- * `GET /api/v1/session` — PUBLIC (A4a WI-7 + A4b): the SPA reads the current auth state + a FRESH CSRF token to use
+ * `GET /api/v1/session` — PUBLIC (A4a + A4b): the SPA reads the current auth state + a FRESH CSRF token to use
  * on subsequent mutations. It runs the secure-context gate (a credential MAY be present) but calls NO facade
  * `check*` (an anonymous "am I logged in?" must not 401). Registered in BOTH builtin AND proxy modes (login/setup/
  * admin-user stay builtin-only).

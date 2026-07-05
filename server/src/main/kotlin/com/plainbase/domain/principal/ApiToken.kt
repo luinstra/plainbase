@@ -101,7 +101,7 @@ interface TokenSecretHasher {
     /**
      * Constant-time verify of [secret] against [storedHash] — or, when the id was UNKNOWN (no row), against a
      * fixed dummy hash so the unknown-id path runs the SAME single compare and returns false with no early-out
-     * (anti-enumeration, §WI-6).
+     * (anti-enumeration).
      */
     fun verify(secret: ByteArray, storedHash: ByteArray?): Boolean
 }

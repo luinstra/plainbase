@@ -5,13 +5,13 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.AgentMode
 
 /**
- * P5 — the PURE decision core for an agent's `PUT /api/v1/pages/{id}` write: does a COMMIT-capable agent's write to
+ * The PURE decision core for an agent's `PUT /api/v1/pages/{id}` write: does a COMMIT-capable agent's write to
  * [targetPath] land DIRECTLY (it falls inside `agentDirectCommit.globs`), or DEGRADE to a human-reviewed proposal?
  *
  * Domain-pure (no IO, no clock, no repo — covered by `DomainPurityTest`), and deliberately NOT a port: it is a total
  * function over its three inputs. [GuardedMutatingFacade] consults it on the agent DIRECT_PUT path only; the match
  * target is the SERVER-RESOLVED `current.path` the pipeline writes (never a client-supplied path), so "passes a glob
- * ⇔ the pipeline writes there" is true BY CONSTRUCTION (the [AgentWriteDecision.targetPath] identity, WI-3).
+ * ⇔ the pipeline writes there" is true BY CONSTRUCTION (the [AgentWriteDecision.targetPath] identity).
  *
  * Fail-safe direction: every ambiguity resolves to [AgentWriteDecision.DegradeToProposal]. A wrong degrade is an
  * unnecessary human review (safe); a wrong direct-commit is an unreviewed privileged write (escalation).

@@ -26,7 +26,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
- * `plainbase reindex` — the OFFLINE/ops full-search-rebuild path (S8 Resolution 2). It runs the
+ * `plainbase reindex` — the OFFLINE/ops full-search-rebuild path. It runs the
  * page-index pass and then a clean generation-swap rebuild of `DATA_DIR/search.db` from the
  * resulting snapshot, the SAME atomic `IndexBuilder.rebuildSearchIndex()` the endpoint uses.
  *

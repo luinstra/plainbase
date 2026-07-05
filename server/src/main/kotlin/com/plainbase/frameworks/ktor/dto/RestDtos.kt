@@ -91,7 +91,7 @@ object ErrorCodes {
     /** 415: a PUT without the accepted text/markdown media type. */
     const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"
 
-    // ---- PB-WRITE-1 (W2): the new-page-creation vocabulary (append-only) -----------------------------
+    // ---- PB-WRITE-1: the new-page-creation vocabulary (append-only) -----------------------------
 
     /** 409: POST /api/v1/pages targets a path that already exists on disk — nothing written; the body carries the path. */
     const val PAGE_EXISTS: String = "page_exists"
@@ -294,7 +294,7 @@ fun PagePayload.toDto(): PageResponse = PageResponse(
     frontmatter = page.frontmatter.toJsonObject(idMaterialized = page.materialized),
     contentHash = page.contentHash,
     idMaterialized = page.materialized,
-    commit = page.commit, // the page's snapshot-resident last commit (W5); null off Git
+    commit = page.commit, // the page's snapshot-resident last commit; null off Git
     citation = citation.toDto(),
 )
 

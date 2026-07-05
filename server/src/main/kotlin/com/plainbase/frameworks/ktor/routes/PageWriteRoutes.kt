@@ -33,9 +33,9 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 
 /**
- * PB-WRITE-1 (chunk W3a, FROZEN): `PUT /api/v1/pages/{id}` — the one content-mutating save route.
- * A thin wire mapping over W1's [com.plainbase.domain.service.WritePipeline.write]; W1 owns the
- * correctness (disk-authoritative CAS, the rename guard, the write-ahead dirty mark), W3a pins the
+ * PB-WRITE-1 (FROZEN): `PUT /api/v1/pages/{id}` — the one content-mutating save route.
+ * A thin wire mapping over the write pipeline's [com.plainbase.domain.service.WritePipeline.write]; the pipeline owns the
+ * correctness (disk-authoritative CAS, the rename guard, the write-ahead dirty mark), this route pins the
  * outcome→wire mapping forever.
  *
  * The request is RAW: the body is the EXACT document bytes (`Content-Type: text/markdown`, written
@@ -118,10 +118,10 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
             }
         }
 
-        // W3b (NON-FROZEN): `POST /api/v1/pages/{id}/assets` — uploads a raw binary into the page's OWN
+        // The asset upload (NON-FROZEN): `POST /api/v1/pages/{id}/assets` — uploads a raw binary into the page's OWN
         // folder. NOT a page (no frontmatter, no minted id, no WritePipeline) — it maps CreateResult
         // directly, never the page-shaped toWire/WriteOutcome. The write goes through the new fail-closed,
-        // never-creates-a-dir `ContentStore.writeAssetExclusive` (design call 2), which reuses W2's
+        // never-creates-a-dir `ContentStore.writeAssetExclusive`, which reuses the create route's
         // containment guards as ONE source of truth.
         post("/{id}/assets") {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
@@ -259,7 +259,7 @@ private fun isValidAssetSegment(name: String): Boolean {
  */
 private fun isAssetSkippedName(name: String): Boolean = name.equals(FOLDER_META_NAME, ignoreCase = true) || name.startsWith(".")
 
-/** 409 `page_exists` for an asset name already taken — reuses W2's envelope (a thing exists at path). */
+/** 409 `page_exists` for an asset name already taken — reuses the create route's envelope (a thing exists at path). */
 private suspend fun ApplicationCall.respondAssetExists(path: TreePath) {
     respondText(
         RestJson.encodeToString(

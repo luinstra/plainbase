@@ -254,7 +254,7 @@ internal suspend fun ApplicationCall.respondTransportInsecure() {
 
 /**
  * The secure-context gate for a PUBLIC pre-auth route that carries its credential in the BODY (login, setup-consume,
- * reset-consume — WI-9). The credential-conditional seam ([PrincipalExtraction]) only fires when a `pb_` bearer or
+ * reset-consume). The credential-conditional seam ([PrincipalExtraction]) only fires when a `pb_` bearer or
  * `pb_session` cookie is PRESENT, so a body credential would otherwise slip past it and be read+verified over a leaky
  * transport. This evaluates the SAME credential-AGNOSTIC [isSecureContext] predicate over the SAME socket-peer source
  * the seam uses ([request.local.remoteAddress] — never a client header) + ALL `X-Forwarded-Proto` values + the
@@ -273,7 +273,7 @@ internal suspend fun ApplicationCall.refuseIfInsecureContext(trustedProxyCidrs: 
 }
 
 /**
- * The route-layer non-blank guard for the A4a auth bodies (WI-9): the `invalid_auth_request` contract documents a
+ * The route-layer non-blank guard for the A4a auth bodies: the `invalid_auth_request` contract documents a
  * blank field as malformed, but the DTO decode accepts blank strings. Each route passes the fields it requires
  * non-blank ((name → value) pairs) — `username`/`token` always; `password`/`newPassword`/`currentPassword` where a
  * blank secret is never valid (setup-consume always requires a password; reset/change set a NEW one). On the first
@@ -308,7 +308,7 @@ internal suspend fun RouteContext.principalOrRefuseToShell(call: ApplicationCall
     }
 
 /**
- * The 400 for a malformed proxy identity header ([PrincipalExtraction.ProxyIdentityRejected], A4b WI-6): a trusted
+ * The 400 for a malformed proxy identity header ([PrincipalExtraction.ProxyIdentityRejected], A4b): a trusted
  * proxy passed the secret+transport gate but sent a malformed subject — operator MISCONFIG, not an attacker, so 400
  * not 401/421. The message names the CLASS of problem; it NEVER echoes the offending value (the reason category is in
  * the operator log, not the wire).

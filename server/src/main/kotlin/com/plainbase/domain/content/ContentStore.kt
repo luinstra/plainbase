@@ -44,9 +44,9 @@ interface ContentStore {
     /**
      * The repo-relative path to STAGE in git for [path] — slash-separated, raw-on-disk-name-preserving (so
      * it may differ from [TreePath.value] on a normalization-preserving filesystem, where an NFD on-disk
-     * name is kept verbatim while the [TreePath] is NFC). The Git history layer (chunk W4) must stage THIS
+     * name is kept verbatim while the [TreePath] is NFC). The Git history layer must stage THIS
      * string, not [TreePath.value], or the committed git path is a phantom that does not match the real file
-     * (history diverges from the content tree; W5's path-keyed citations miss it).
+     * (history diverges from the content tree; the history layer's path-keyed citations miss it).
      *
      * Total — never throws. A not-yet-indexed / brand-new page falls back to [TreePath.value]; new pages are
      * NFC by construction, so that is the correct on-disk form. The separator is always `/` (git paths are
@@ -60,12 +60,12 @@ interface ContentStore {
      * The implementation writes to a temporary sibling and renames into place
      * (`ATOMIC_MOVE`), falling back to copy+delete on filesystems that do not support atomic
      * rename (NFS/SMB). Each intended write is logged (path) before it is performed, so an
-     * interrupted run is detectable (chunk 4b's adopt durability requirement).
+     * interrupted run is detectable (the adopt durability requirement).
      */
     fun write(path: TreePath, bytes: ByteArray)
 
     /**
-     * The PB-WRITE-1 indexed-only, hash-guarded, identity-rechecked atomic write (debate MUST-FIX 2).
+     * The PB-WRITE-1 indexed-only, hash-guarded, identity-rechecked atomic write.
      *
      * A read-then-[write] split has a window — an external editor or a watcher rename between the two
      * — that could lose an update or write a ghost file. This resolves [path] ONCE to a single on-disk
@@ -89,7 +89,7 @@ interface ContentStore {
     fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult
 
     /**
-     * Exclusively creates the file at [path] with [bytes] — write-if-absent (PB-WRITE-1, chunk W2).
+     * Exclusively creates the file at [path] with [bytes] — write-if-absent (PB-WRITE-1).
      * Returns [CreateResult.Created] (with the written bytes' [hasher] hash) when the file did not
      * exist and the create + atomic rename landed; [CreateResult.Exists] (carrying the REAL attempted
      * on-disk [TreePath]) when a file is ALREADY at [path] on disk (nothing written);
@@ -105,8 +105,8 @@ interface ContentStore {
     fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult
 
     /**
-     * The binary twin of [createExclusive] for an uploaded asset (chunk W3b): write-if-absent into a
-     * page's OWN, already-existing folder. It reuses the SAME P1 containment guards as [createExclusive]
+     * The binary twin of [createExclusive] for an uploaded asset: write-if-absent into a
+     * page's OWN, already-existing folder. It reuses the SAME containment guards as [createExclusive]
      * (the scan-skipped-name / excluded-subtree / symlinked-ancestor / outside-root refusals + the
      * NFC-leaf collision guard) as ONE source of truth — never a re-derived weaker check — but differs in
      * exactly two ways an asset demands and a page does not:
@@ -148,7 +148,7 @@ interface ContentStore {
     }
 }
 
-/** The outcome of [ContentStore.compareAndSwapWrite] (PB-WRITE-1, debate MUST-FIX 2). */
+/** The outcome of [ContentStore.compareAndSwapWrite] (PB-WRITE-1). */
 sealed interface CasResult {
 
     /** The on-disk hash matched [baseHash] and the rename completed; [newHash] is the written bytes' hash. */
@@ -176,7 +176,7 @@ sealed interface CasResult {
     data class Unreadable(val cause: String, val targetMutated: Boolean = false) : CasResult
 }
 
-/** The outcome of [ContentStore.createExclusive] (PB-WRITE-1, chunk W2 — write-if-absent). */
+/** The outcome of [ContentStore.createExclusive] (PB-WRITE-1, write-if-absent). */
 sealed interface CreateResult {
 
     /** The file did not exist and the create + atomic rename landed; [newHash] is the written bytes' hash. */
@@ -186,7 +186,7 @@ sealed interface CreateResult {
     data class Exists(val path: TreePath) : CreateResult
 
     /**
-     * The target can never name content (W2 P1 containment): a path segment is ignored (dotfile/glob)
+     * The target can never name content (containment): a path segment is ignored (dotfile/glob)
      * or excluded (DATA_DIR), or an existing ancestor is a symlink / resolves outside the content root
      * (links-are-not-content). NOTHING written. [reason] is diagnostic; the route maps it to a 4xx.
      */

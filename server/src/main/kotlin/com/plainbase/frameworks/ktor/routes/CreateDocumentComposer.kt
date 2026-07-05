@@ -1,14 +1,14 @@
 package com.plainbase.frameworks.ktor.routes
 
 /*
- * The ONE shared SERVER-COMPOSED frontmatter+body composer (C1, WI-2): the single seam the direct `POST /api/v1/pages`
+ * The ONE shared SERVER-COMPOSED frontmatter+body composer: the single seam the direct `POST /api/v1/pages`
  * path, the agent create-degrade (via that same route, before the degrade), and the byte-identical differential test
  * reference, so they can never drift. The EXPLICIT-agent-propose path does NOT use this — it patches the agent's
- * whole-doc blob with the surgical `FrontmatterPatcher` instead (SD-1). create-apply does NOT call this either: it
+ * whole-doc blob with the surgical `FrontmatterPatcher` instead. create-apply does NOT call this either: it
  * writes the stored bytes VERBATIM (it is a downstream consumer of the bytes this composed at propose/degrade time).
  *
  * Pure stdlib (no framework/domain imports), so it stays frameworks-side where its only callers live (`DomainPurityTest`
- * unaffected). The OUTPUT is byte-frozen — the W2 golden + the differential test depend on the exact bytes.
+ * unaffected). The OUTPUT is byte-frozen — the create golden + the differential test depend on the exact bytes.
  */
 
 /**

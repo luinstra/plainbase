@@ -18,27 +18,27 @@ import com.plainbase.domain.repository.Stage
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
- * The serialized write pipeline (PB-WRITE-1, chunk W1): the single funnel for a content-mutating
+ * The serialized write pipeline (PB-WRITE-1): the single funnel for a content-mutating
  * save. Every [write] runs under ONE `@Synchronized` monitor (the house [IndexBuilder] idiom, never
  * `@Volatile`); the disk write is a single atomic, disk-authoritative compare-and-swap, and the index
  * update is a targeted O(changed-page) reindex. Pure domain — no framework imports.
  *
  * The critical section, in order:
- *  0. **Edit-classification guard** (debate MUST-FIX 1): a buffer that changes `id`/`slug`/
+ *  0. **Edit-classification guard**: a buffer that changes `id`/`slug`/
  *     `redirect_from` is a RENAME, not an edit — REJECTED with [WriteOutcome.UnsupportedEdit], never
  *     silently fixed and never rebuild()-fallen-back. This is what makes the targeted reindex's
  *     skip-the-checkpoint sound by construction.
- *  1. **Write-ahead dirty mark** (debate MUST-FIX 5): the page is marked dirty with the about-to-be
+ *  1. **Write-ahead dirty mark**: the page is marked dirty with the about-to-be
  *     written bytes' hash BEFORE the disk write, so a crash between the write and the post-steps is
  *     recoverable.
- *  2. **Atomic, disk-authoritative CAS** ([ContentStore.compareAndSwapWrite], debate MUST-FIX 2):
+ *  2. **Atomic, disk-authoritative CAS** ([ContentStore.compareAndSwapWrite]):
  *     one operation resolves + rechecks identity + renames. No read-then-write TOCTOU window.
- *  3. **Targeted reindex** ([IndexBuilder.reindex], debate MUST-FIX 3/4): one page re-rendered and
+ *  3. **Targeted reindex** ([IndexBuilder.reindex]): one page re-rendered and
  *     single-page search upsert; THROWS on a vanished save-path page (caught → [WriteOutcome
  *     .WrittenButUnindexed]).
  *  4. **Clear the mark** only after every post-step succeeds.
  *
- * Lock-ordering topology (Resolution 5): the pipeline monitor calls into the [IndexBuilder] monitor
+ * Lock-ordering topology: the pipeline monitor calls into the [IndexBuilder] monitor
  * (via [IndexBuilder.reindex]) — strictly one-directional, no back-edge, so no deadlock with a
  * concurrent watcher `rebuild()` (which takes only the IndexBuilder monitor).
  */
@@ -57,7 +57,7 @@ class WritePipeline(
     fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
         // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3): the gated mutator
         // CANNOT be reached without a minted grant. The body is unchanged.
-        // (0) Edit-classification guard — a rename is rejected, never half-applied (MUST-FIX 1).
+        // (0) Edit-classification guard — a rename is rejected, never half-applied.
         classifyEdit(intent)?.let { return it }
 
         // Capture any prior dirty row (a real WrittenButUnindexed recovery record from an earlier
@@ -65,10 +65,10 @@ class WritePipeline(
         // than clobbering/clearing it, so a not-actually-written attempt never destroys a prior record.
         val prior = dirtyPages.get(intent.pageId)
 
-        // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk write (MUST-FIX 5).
+        // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk write.
         dirtyPages.mark(intent.pageId, intent.path, expectedHash = citations.contentHash(intent.bytes), stage = Stage.WRITING)
 
-        // (2) Atomic, disk-authoritative CAS (fix A + MUST-FIX 2).
+        // (2) Atomic, disk-authoritative CAS (fix A).
         return when (val cas = contentStore.compareAndSwapWrite(intent.path, intent.baseHash, intent.bytes, citations::contentHash)) {
             // Nothing was written for Deleted/Mismatch and a non-mutated Unreadable — restore the prior
             // recovery record, or clear.
@@ -93,13 +93,13 @@ class WritePipeline(
     }
 
     /**
-     * One new-page creation (PB-WRITE-1, chunk W2), on the SAME monitor as [write] so a create
+     * One new-page creation (PB-WRITE-1), on the SAME monitor as [write] so a create
      * serializes with every edit and every watcher rebuild. No CAS / edit-classification: a create has
      * no prior content to classify and no `base_hash` — the collision check is the filesystem's own
      * exclusive create ([ContentStore.createExclusive]), a pipeline outcome, never a route pre-check.
      *
      * The critical section mirrors [write]'s write-ahead-then-post-steps shape:
-     *  0. **Canonical-URL collision guard** (round-8/10/11): the prospective page/folder canonical URL,
+     *  0. **Canonical-URL collision guard**: the prospective page/folder canonical URL,
      *     read against the published snapshot, must not be owned by a DIFFERENT page/folder/live-alias —
      *     a hit → [WriteOutcome.SlugConflict], NOTHING written. The race safety is the `@Synchronized`
      *     monitor (shared with [write] and the watcher rebuild): it serializes WHOLE create sequences, so
@@ -116,12 +116,12 @@ class WritePipeline(
      *  1. write-ahead dirty mark with the about-to-be-written bytes' hash (a fresh pageId has no prior
      *     journal row, so the no-write branches just clear);
      *  2. exclusive create — [CreateResult.Exists] → [WriteOutcome.AlreadyExists]; [CreateResult
-     *     .Rejected] → [WriteOutcome.InvalidLocation] (P1 containment); [CreateResult.Unreadable] →
+     *     .Rejected] → [WriteOutcome.InvalidLocation] (containment); [CreateResult.Unreadable] →
      *     [WriteOutcome.Unreadable]; [CreateResult.Created] → the post-steps;
-     *  3. bind identity, run the history hook (no-op until W4), index via a full [IndexBuilder.rebuild]
+     *  3. bind identity, run the history hook (no-op until Git history), index via a full [IndexBuilder.rebuild]
      *     (its own scan picks up the just-created file, sidestepping the indexed-only read gate and
      *     reusing every collision/alias/checkpoint rule), then a targeted [IndexBuilder.reindex] whose
-     *     PROPAGATING single-page search upsert surfaces an FTS-sync failure (P2). A post-step throw is
+     *     PROPAGATING single-page search upsert surfaces an FTS-sync failure. A post-step throw is
      *     caught → [WriteOutcome.WrittenButUnindexed] (the bytes ARE on disk, the page IS dirty).
      */
     @Synchronized
@@ -142,7 +142,7 @@ class WritePipeline(
                 WriteOutcome.AlreadyExists(create.path)
             }
             is CreateResult.Rejected -> {
-                dirtyPages.clear(intent.pageId) // P1: an uncreatable location — NOTHING written
+                dirtyPages.clear(intent.pageId) // an uncreatable location — NOTHING written
                 WriteOutcome.InvalidLocation(create.reason)
             }
             is CreateResult.Unreadable -> {
@@ -150,7 +150,7 @@ class WritePipeline(
                 WriteOutcome.Unreadable(create.cause)
             }
             is CreateResult.Created -> createAndIndex(intent, newHash = create.newHash)
-            // ParentMissing is produced ONLY by ContentStore.writeAssetExclusive (W3b assets); the page
+            // ParentMissing is produced ONLY by ContentStore.writeAssetExclusive (asset writes); the page
             // create path uses createExclusive, which creates parents and never returns it. Unreachable here.
             CreateResult.ParentMissing -> error("createExclusive never returns ParentMissing; it is asset-write-only (W3b)")
         }
@@ -160,11 +160,11 @@ class WritePipeline(
     private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
         try {
             idMap.bind(intent.path, intent.pageId, materialized = true) // the create composed the id INTO frontmatter
-            // W5/C1: the create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
+            // The create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
             // identity); create-apply threads the proposer->author + approver->committer (an in-glob agent: both = agent).
             val commit = historyHook.commit(intent.path, intent.bytes, intent.author, intent.committer)
             indexBuilder.rebuild() // re-scans disk; picks up the new file, reuses every collision/alias/URL rule
-            // P2: rebuild()'s publication-listener search sync is best-effort (its listener exceptions are
+            // rebuild()'s publication-listener search sync is best-effort (its listener exceptions are
             // swallowed+logged), so a failed FTS sync would otherwise yield a clean 201 with the page
             // missing from search and no retry. A targeted reindex() of the now-published page upserts it
             // via the PROPAGATING SearchIndexer.syncPage — a search-sync failure throws here, so it lands
@@ -187,8 +187,8 @@ class WritePipeline(
      * machinery rebuild uses ([CanonicalUrlBuilder]/[HeadingSlugger]); evaluated under the create monitor
      * against the fresh [IndexBuilder.current], so two concurrent URL-colliding creates serialize — the
      * second sees the first's published claim. Same-role per ADR-0002:
-     *  - each NEW (not-yet-indexed) FOLDER segment's URL vs existing FOLDER URLs (round 10);
-     *  - the new PAGE's URL vs existing PAGE URLs (round 8) and LIVE aliases (a dangling alias whose
+     *  - each NEW (not-yet-indexed) FOLDER segment's URL vs existing FOLDER URLs;
+     *  - the new PAGE's URL vs existing PAGE URLs and LIVE aliases (a dangling alias whose
      *    target id is absent from the snapshot is ignored — the next rebuild's shadow-sweep drops it,
      *    so it must not permanently block the create).
      *
@@ -233,7 +233,7 @@ class WritePipeline(
     }
 
     /**
-     * A no-write outcome restores any prior dirty row rather than clearing it (MUST-FIX 2 / the
+     * A no-write outcome restores any prior dirty row rather than clearing it (the
      * dirty-row-clobber fix): the write-ahead [mark][DirtyPageRepository.mark] overwrote it with THIS
      * attempt's hash, but nothing was actually written, so the earlier on-disk-but-unindexed recovery
      * record must survive. With no prior row, the page simply clears (nothing to reconcile).
@@ -247,9 +247,9 @@ class WritePipeline(
     }
 
     /**
-     * Deterministic startup reconciliation of a prior interrupted save (fix H / MUST-FIX 5), once,
+     * Deterministic startup reconciliation of a prior interrupted save (fix H), once,
      * under the pipeline monitor. It cannot race an in-flight save (the engine is not serving yet); a
-     * watcher `rebuild()` may race but is safe by the one-directional lock order (Resolution 5).
+     * watcher `rebuild()` may race but is safe by the one-directional lock order.
      *
      * Drift-skip: a page whose on-disk hash no longer matches the recorded [com.plainbase.domain
      * .repository.DirtyPage.expectedHash] had an external edit land after the crash — do NOT re-commit
@@ -275,7 +275,7 @@ class WritePipeline(
                     }
                     continue
                 }
-                historyHook.commit(page.path, onDisk) // W4: idempotent commit recovery
+                historyHook.commit(page.path, onDisk) // idempotent commit recovery
                 indexBuilder.reindex(page.pageId) // reindex tolerated to throw here only if the page truly vanished — caught below
                 dirtyPages.clear(page.pageId)
             } catch (e: Exception) {
@@ -287,21 +287,21 @@ class WritePipeline(
     /** (3)+(4) Post-write steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun commitAndIndex(intent: WriteIntent, newHash: String): WriteOutcome =
         try {
-            // W5: the save's commit SHA (null off Git). P1b threads the proposer->author + approver->committer
+            // The save's commit SHA (null off Git). Threads the proposer->author + approver->committer
             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
             val commit = historyHook.commit(intent.path, intent.bytes, intent.author, intent.committer)
-            indexBuilder.reindex(intent.pageId) // targeted O(1); THROWS on a vanished save-path page (MUST-FIX 4)
+            indexBuilder.reindex(intent.pageId) // targeted O(1); THROWS on a vanished save-path page
             dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
         } catch (e: Exception) {
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
-            // the next startup reconciles. The cause is mapped to a structured code at the W3 route.
+            // the next startup reconciles. The cause is mapped to a structured code at the wire route.
             logger.error(e) { "save wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
             WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = e.message ?: e::class.simpleName ?: "unknown")
         }
 
     /**
-     * The id/slug/redirect_from rename guard (MUST-FIX 1): any change to a URL/identity-deriving field
+     * The id/slug/redirect_from rename guard: any change to a URL/identity-deriving field
      * is a rename, returned as [WriteOutcome.UnsupportedEdit]; a pure content edit returns null. An
      * unknown page returns null too — the CAS then reports `page_deleted`.
      *
@@ -353,10 +353,10 @@ data class WriteIntent(
 )
 
 /**
- * One new-page creation (PB-WRITE-1, chunk W2). [path] is the server-derived on-disk location,
+ * One new-page creation (PB-WRITE-1). [path] is the server-derived on-disk location,
  * [pageId] the freshly minted identity (materialized into [bytes]' frontmatter from birth), [bytes]
  * the EXACT composed document buffer to write VERBATIM (frontmatter + body) — never reserialized.
- * [author]/[committer] are the optional git attribution C1 threads from the create-apply call site (the
+ * [author]/[committer] are the optional git attribution threaded from the create-apply call site (the
  * proposer->author, approver->committer); a plain POST /pages leaves them null → the server default identity (and an
  * in-glob COMMIT agent direct create stamps the agent identity as BOTH, the `save()` b1 idiom).
  */
@@ -370,15 +370,15 @@ data class CreateIntent(
 )
 
 /**
- * The Git seam (PB-WRITE-1): a no-op default in W1, keeping the `WrittenButUnindexed`/commit-recovery
- * paths real and testable WITHOUT importing anything from `domain/history/` (W4). W4 rewires the Koin
+ * The Git seam (PB-WRITE-1): a no-op default in the base write layer, keeping the `WrittenButUnindexed`/commit-recovery
+ * paths real and testable WITHOUT importing anything from `domain/history/`. The Git/history integration rewires the Koin
  * `single` to its real `HistoryProvider.commit` adapter — a wiring change, not a signature change.
  *
- * Returns the recorded commit SHA (W5, F4): the save's new commit in Git mode, or null when history is
- * off / the no-op default. The SHA threads into [WriteOutcome.Written.commit] so the W3 response carries
+ * Returns the recorded commit SHA: the save's new commit in Git mode, or null when history is
+ * off / the no-op default. The SHA threads into [WriteOutcome.Written.commit] so the wire response carries
  * the save's commit. A plain `String?` (not a domain `Commit`) keeps this seam framework-free.
  *
- * [author]/[committer] (P1b) carry the optional git attribution → the proposer (author) + approver (committer) on
+ * [author]/[committer] carry the optional git attribution → the proposer (author) + approver (committer) on
  * the apply path; null elsewhere → the server default identity. A `fun interface` SAM method cannot carry default
  * values, so the no-attribution callers pass `null, null` explicitly (the no-arg [commit] extension below keeps the
  * non-apply call sites terse).

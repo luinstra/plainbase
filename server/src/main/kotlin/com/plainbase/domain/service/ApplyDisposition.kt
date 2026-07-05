@@ -31,7 +31,7 @@ fun dispositionOf(outcome: WriteOutcome, proposedHash: String): ApplyDisposition
     is WriteOutcome.WrittenButUnindexed -> ApplyDisposition.Applied(outcome.newHash, commit = null, reindexDeferred = true)
     is WriteOutcome.Conflict ->
         // Idempotent-replay: the disk ALREADY equals the proposed bytes (interrupted replay / concurrent identical
-        // apply) -> APPLIED, not CONFLICTED. Mirrors the W1 idempotent re-commit philosophy.
+        // apply) -> APPLIED, not CONFLICTED. Mirrors the write-pipeline idempotent re-commit philosophy.
         if (outcome.currentHash == proposedHash) {
             ApplyDisposition.Applied(proposedHash, commit = null, reindexDeferred = false)
         } else {

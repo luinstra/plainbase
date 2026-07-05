@@ -6,7 +6,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The W5 history/diff read shapes (D-5). Plain server-as-authority DTOs, explicitly NOT a frozen PB-*
+ * The history/diff read shapes. Plain server-as-authority DTOs, explicitly NOT a frozen PB-*
  * contract (no golden pins them): the history route owns its evolution, and the `git_enabled` flag lets
  * a client tell "Git off" (empty + false) apart from "Git on, no commits yet" (empty + true). The commit
  * timestamps are emitted as ISO-8601 text (the [kotlin.time.Instant] type never reaches the wire).
@@ -25,7 +25,7 @@ data class CommitDto(
 
 /**
  * `GET …/history` response. [commits] is newest-first; an empty list with [gitEnabled] true means
- * "no history yet" (distinct from Git off). Pagination is out of scope (W5) but the list shape admits
+ * "no history yet" (distinct from Git off). Pagination is out of scope but the list shape admits
  * an additive cursor field later without breaking this non-frozen contract.
  */
 @Serializable

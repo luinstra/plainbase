@@ -14,14 +14,14 @@ import java.security.MessageDigest
  * [MessageDigest.isEqual] on the raw 32 bytes DOES transfer here: it is a raw-byte equality of two known-length
  * arrays, not a hash lookup). When an `Origin`/`Referer` header is PRESENT it must be same-origin
  * (fail-closed-WHEN-PRESENT); an ABSENT Origin is NEVER a hard fail (a trusted proxy may strip it —
- * `SecureContext`/ADR-0008). SameSite=Lax (the cookie attribute, WI-8) is the secondary defense.
+ * `SecureContext`/ADR-0008). SameSite=Lax (the cookie attribute) is the secondary defense.
  *
  * EXEMPT: an agent `pb_` bearer ([Principal.Agent]) — it carries no ambient cookie, so it cannot be CSRF'd.
  * [Principal.Anonymous] is also exempt (no session to protect). [requiresCsrf] keys off the principal TYPE (every
  * [Principal.Human] mutation needs CSRF — cookie- AND proxy-sourced); the MECHANISM choice (the A4a synchronizer
  * token vs the A4b stateless double-submit) lives in `enforceCsrf`, branching on the [PrincipalExtraction.Resolved]
  * [Source]. Login is pre-session (no session yet) — it is NOT in scope here (Origin + secure-context + rate-limit
- * guard it instead, WI-9).
+ * guard it instead).
  */
 object CsrfGuard {
 

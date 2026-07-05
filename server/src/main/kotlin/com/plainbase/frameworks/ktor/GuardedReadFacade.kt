@@ -108,7 +108,7 @@ class GuardedReadFacade(
 
     // Ungated: `enabled` is a server CAPABILITY flag, not page existence — it leaks nothing about the content tree, so
     // it needs no read check. The history/diff routes call this AFTER their own pageById checkRead has passed; a second
-    // checkRead on the same authorized request was redundant (W5/A3 minor).
+    // checkRead on the same authorized request was redundant.
     override fun gitEnabled(principal: Principal): Boolean = history.enabled
 
     override fun assetRead(principal: Principal, path: TreePath): AssetReadOutcome {

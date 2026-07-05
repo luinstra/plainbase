@@ -23,9 +23,9 @@ import org.koin.dsl.module
  */
 val indexModule = module {
     single<FrontmatterParser> { FrontmatterReader() }
-    // One UUIDv7 mint shared by the identity service (adopt-time ids) and the W2 create route.
+    // One UUIDv7 mint shared by the identity service (adopt-time ids) and the create route.
     single<IdProvider> { UuidV7IdProvider() }
-    // The P1a proposal-id mint — a SEPARATE port (IdProvider is typed to PageId, can't mint a ProposalId).
+    // The proposal-id mint — a SEPARATE port (IdProvider is typed to PageId, can't mint a ProposalId).
     single<ProposalIdProvider> { UuidV7ProposalIdProvider() }
     single { PageIdentityService(get()) }
     single { FrontmatterPatcher() }

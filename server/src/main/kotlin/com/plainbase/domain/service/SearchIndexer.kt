@@ -56,7 +56,7 @@ class SearchIndexer(
     }
 
     /**
-     * Single-page upsert (the PB-WRITE-1 targeted-reindex path, debate MUST-FIX 3): one
+     * Single-page upsert (the PB-WRITE-1 targeted-reindex path): one
      * [com.plainbase.domain.search.PageDocuments] through the provider's already-per-page-transactional
      * [SearchProvider.index] — genuine O(1), NOT the corpus-wide [indexedState] diff [sync] makes. Used
      * only from `IndexBuilder.reindex`, under the rebuild monitor.

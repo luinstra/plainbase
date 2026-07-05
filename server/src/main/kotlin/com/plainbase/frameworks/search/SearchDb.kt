@@ -124,7 +124,7 @@ class SearchDb(path: Path) : AutoCloseable {
                 )
                 """.trimIndent(),
             )
-            // The §B5 trigram rescue (S0 verdict: PASS): substring semantics for what unicode61
+            // The §B5 trigram rescue (spike verdict: PASS): substring semantics for what unicode61
             // cannot match (CJK runs), consulted only when the primary MATCH yields zero hits.
             statement.execute("CREATE VIRTUAL TABLE section_trigram USING fts5(title, body, tokenize = 'trigram')")
             statement.execute("INSERT INTO search_meta(key, value) VALUES ('schema_version', '$SCHEMA_VERSION')")

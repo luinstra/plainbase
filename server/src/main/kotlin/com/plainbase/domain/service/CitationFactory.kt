@@ -18,7 +18,7 @@ class CitationFactory {
         "sha256:" + MessageDigest.getInstance("SHA-256").digest(rawBytes).toHexString()
 
     /** A page-level citation ([Citation.headingId] null); `commit` rides the snapshot — the page's last
-     *  commit in Git mode (W5), null off Git. */
+     *  commit in Git mode, null off Git. */
     fun pageLevel(page: IndexedPage, contentHash: String): Citation =
         Citation(pageId = page.id, headingId = null, path = page.path, contentHash = contentHash, commit = page.commit)
 }

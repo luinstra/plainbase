@@ -73,7 +73,7 @@ enum class ProxyRejectReason { MULTI_VALUE, BLANK, CONTROL_CHARS, OVERSIZED }
  * a non-secure transport is [PrincipalExtraction.InsecureTransportRefused] and neither [tokens] nor [sessions] is
  * consulted — the secret must not be touched over a leaky transport. Bearer wins over cookie (see file note).
  *
- * [builtinAuthEnabled] gates the cookie source: the `pb_session` cookie is consulted ONLY in BUILTIN mode (WI-7).
+ * [builtinAuthEnabled] gates the cookie source: the `pb_session` cookie is consulted ONLY in BUILTIN mode.
  * In OFF/PROXY the auth routes are never registered, so no session is ever minted — but a leftover/stray cookie
  * from a prior BUILTIN run must NOT resolve to a `Principal.Human` that bypasses the proxy/off identity path; when
  * builtin auth is disabled the cookie is ignored (resolved as if absent), so only the bearer source remains.
@@ -126,7 +126,7 @@ private const val MAX_PROXY_IDENTITY_LENGTH = 256
  * non-anonymous Agent, return it; otherwise try the cookie. A valid cookie → `Resolved(Human, csrf)`; an
  * absent/garbage/revoked cookie with no valid bearer → `Resolved(Anonymous)`.
  *
- * [builtinAuthEnabled] (WI-7): when false (OFF/PROXY mode) the [cookie] is dropped up-front — a leftover
+ * [builtinAuthEnabled]: when false (OFF/PROXY mode) the [cookie] is dropped up-front — a leftover
  * `pb_session` from a prior BUILTIN run must never resolve to a `Principal.Human` that bypasses the proxy/off
  * identity path. The bearer source is mode-independent (agents authenticate in every mode), so only the cookie is
  * gated.
@@ -150,13 +150,13 @@ fun decidePrincipalExtraction(
     val effectiveCookie = cookie?.takeIf { builtinAuthEnabled } // OFF/PROXY: ignore a stray session cookie (resolve as absent)
     // The proxy identity header is the credential in PROXY mode, so the "any credential present?" short-circuit must
     // count it — otherwise a proxy request carrying ONLY the identity header would early-return Anonymous before the
-    // transport gate fires (WI-3).
+    // transport gate fires.
     val proxyIdentityPresent = proxyAuthEnabled && proxyIdentityValues.isNotEmpty()
     if (pbBearer == null && effectiveCookie == null && !proxyIdentityPresent) {
         return PrincipalExtraction.Resolved(Principal.Anonymous) // gate does not fire — no credential present
     }
     if (!isSecureContext(remoteHost, forwardedProtoValues, trustedProxyCidrs)) {
-        // WI-6 diagnosability: a proxy request that fails the gate logs WHICH half failed (CIDR miss vs proto
+        // Diagnosability: a proxy request that fails the gate logs WHICH half failed (CIDR miss vs proto
         // mismatch) so an operator can tell a misrouted/spoofed peer from a missing `X-Forwarded-Proto`. The client
         // always sees the same 421 — no oracle. Never logs the secret/identity value.
         if (proxyIdentityPresent) logProxyGateFailure(remoteHost, forwardedProtoValues, trustedProxyCidrs)
@@ -180,7 +180,7 @@ fun decidePrincipalExtraction(
 private val logger = KotlinLogging.logger {}
 
 /**
- * WI-6 diagnosability: distinguishes the two not-authenticated gate-failure reasons (the secret-mismatch reason
+ * Diagnosability: distinguishes the two not-authenticated gate-failure reasons (the secret-mismatch reason
  * lives in [secretMatches]). A non-loopback peer outside [trustedProxyCidrs] is a CIDR miss; an in-CIDR peer whose
  * `X-Forwarded-Proto` isn't all-`https` is a proto mismatch. Operator log ONLY (the client sees an identical 421);
  * never logs the secret/identity value.
@@ -201,7 +201,7 @@ private fun logProxyGateFailure(remoteHost: String, forwardedProtoValues: List<S
  * bad secret is "no identity"); only WITH the secret matched is the identity header validated, where a
  * malformed/duplicate/blank/control/oversized value is a misconfig → [PrincipalExtraction.ProxyIdentityRejected].
  * The three not-authenticated reasons log DISTINCT operator lines while the caller sees one [Principal.Anonymous]
- * (no oracle); the secret and identity VALUES never log (WI-6 hygiene).
+ * (no oracle); the secret and identity VALUES never log (hygiene).
  */
 private fun resolveProxyIdentity(
     proxyIdentityValues: List<String>,
@@ -227,15 +227,15 @@ private fun resolveProxyIdentity(
 }
 
 /**
- * Constant-time secret check (MINOR fold-in): exactly ONE presented value (a duplicate header is an attack/misconfig
- * — treat as not authenticated, BLOCKING-1) AND a fixed-length-digest constant-time match. Both sides are SHA-256'd
+ * Constant-time secret check: exactly ONE presented value (a duplicate header is an attack/misconfig
+ * — treat as not authenticated) AND a fixed-length-digest constant-time match. Both sides are SHA-256'd
  * to 32 bytes BEFORE [MessageDigest.isEqual] so a wrong/missing/odd-length presented secret all do identical work
  * (the [com.plainbase.frameworks.security.TokenHasher.verify] shape). A missing header compares the empty string,
  * so the timing is identical to a wrong one.
  */
 private fun secretMatches(presentedProxySecrets: List<String>, configuredProxySecret: String?): Boolean {
     if (presentedProxySecrets.size > 1) return false // duplicate secret header — never first/last-pick
-    if (configuredProxySecret == null) return false // the WI-2 startup guard makes this unreachable in proxy mode
+    if (configuredProxySecret == null) return false // the startup guard makes this unreachable in proxy mode
     val presented = presentedProxySecrets.singleOrNull().orEmpty()
     val sha256 = MessageDigest.getInstance("SHA-256")
     return MessageDigest.isEqual(sha256.digest(presented.encodeToByteArray()), sha256.digest(configuredProxySecret.encodeToByteArray()))

@@ -23,7 +23,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * 200 (`WriteOutcome.Written`): exactly two keys; `commit` is populated with the save's commit SHA in
- * Git mode (W5) and null off Git / no history. NO `warning` key.
+ * Git mode and null off Git / no history. NO `warning` key.
  */
 @Serializable
 data class WrittenResponse(
@@ -32,7 +32,7 @@ data class WrittenResponse(
 )
 
 /**
- * 200 (`WriteOutcome.WrittenButUnindexed`, R2): a DISTINCT type carrying a non-null [warning]. The
+ * 200 (`WriteOutcome.WrittenButUnindexed`): a DISTINCT type carrying a non-null [warning]. The
  * bytes are durably on disk; `content_hash` is the next CAS token, so a warning-blind client stays
  * safe. "200 means *saved*, not *saved-and-indexed*."
  */
@@ -47,7 +47,7 @@ data class WrittenButUnindexedResponse(
 data class WriteWarning(val code: String, val message: String)
 
 /**
- * 202 Accepted (P5): an agent COMMIT write fell OUTSIDE `agentDirectCommit.globs` and was degraded to a proposal. A
+ * 202 Accepted: an agent COMMIT write fell OUTSIDE `agentDirectCommit.globs` and was degraded to a proposal. A
  * NEW shape — NEVER a field on the frozen two-key [WrittenResponse] (`encodeDefaults=true` would emit any added field
  * on EVERY PUT-200, breaking the golden corpus + the frontend type). [degraded] is always true — the discriminator a
  * client checks before treating a PUT response as an applied write. [status] is always [ProposalStatusWire.PENDING];
@@ -64,7 +64,7 @@ data class DegradedToProposalResponse(
 /**
  * 201 (`POST /api/v1/pages`, `WriteOutcome.Written`): the clean-create response. It conforms to
  * PB-WRITE-1's `WrittenResponse` shape (`content_hash` + present-`null` `commit`) and ADDS the two
- * fields a create owes the client (W6, owner+debate-approved additive revision): the minted [id] and
+ * fields a create owes the client (an owner-approved additive revision): the minted [id] and
  * the SERVER-AUTHORITATIVE canonical [url]. `url` is the published `IndexedPage.url` (the slugified,
  * collision-de-duped canonical path), NEVER re-composed from the on-disk file path. Distinct from
  * the PUT-shared [WrittenResponse] so a save never grows an `id`/`url` key.
@@ -125,7 +125,7 @@ data class BodyTooLargeEnvelope(val error: BodyTooLargeBody)
 data class BodyTooLargeBody(val code: String, val message: String, @SerialName("max_bytes") val maxBytes: Long)
 
 /**
- * W2 request for `POST /api/v1/pages` (JSON, NOT raw — this is metadata, not a document): the server
+ * The request for `POST /api/v1/pages` (JSON, NOT raw — this is metadata, not a document): the server
  * mints the id, derives the on-disk path + slug, and composes the frontmatter+body bytes. `folder` is
  * the content-relative parent (`""`/omitted = root); `title` is required non-blank; `slug` is the
  * optional author slug intent; `body` is the optional Markdown body (the server adds the frontmatter).
@@ -139,7 +139,7 @@ data class CreatePageRequest(
 )
 
 /**
- * W2 409 envelope (kept distinct from the frozen [ErrorEnvelope] — it carries an extra `path`, exactly
+ * The create 409 envelope (kept distinct from the frozen [ErrorEnvelope] — it carries an extra `path`, exactly
  * as [BodyTooLargeBody] carries `max_bytes` without mutating [ErrorBody]). `path` is the REAL attempted
  * on-disk path relayed end-to-end (createExclusive → AlreadyExists → here), the actionable datum.
  */
@@ -206,13 +206,13 @@ sealed interface WriteWire {
 
 /**
  * Maps a [WriteOutcome] to the frozen PB-WRITE-1 wire, applying the retry-idempotency shim
- * (Resolution / debate "Other frozen items"): a stale `base_hash` whose on-disk bytes ALREADY equal
+ * (the "Other frozen items" rule): a stale `base_hash` whose on-disk bytes ALREADY equal
  * the submitted bytes is a network-retry of a write that landed — a 200 no-op, not a false 409. It is
- * a pure wire-layer shim (no W1 signature change): a `content_changed` [WriteOutcome.Conflict] whose
+ * a pure wire-layer shim (no write-pipeline signature change): a `content_changed` [WriteOutcome.Conflict] whose
  * `currentHash` equals `hash(submitted)` becomes a [WrittenResponse] with that hash.
  *
  * [submittedHash] is `CitationFactory.contentHash` over the exact submitted body bytes (the same
- * frozen hash W1 keyed the CAS on — no second hash definition).
+ * frozen hash the write pipeline keyed the CAS on — no second hash definition).
  */
 fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
     is WriteOutcome.Written ->
@@ -235,7 +235,7 @@ fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
             WriteWire.of(HttpStatusCode.OK, WrittenResponse.serializer(), WrittenResponse(contentHash = submittedHash, commit = null))
         } else {
             // FROZEN page_deleted shape: ALL current_* are null — the file is gone, so the path it WAS at
-            // is not surfaced (W1 still carries the stale snapshot path on `currentPath`; the wire nulls it
+            // is not surfaced (the write pipeline still carries the stale snapshot path on `currentPath`; the wire nulls it
             // to keep `page_deleted` a clean "nothing to rebase against" signal, per the PB-WRITE-1 freeze).
             val deleted = reason == WriteConflictReason.PAGE_DELETED
             WriteWire.of(
@@ -271,7 +271,7 @@ fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
             ErrorEnvelope(ErrorBody(ErrorCodes.CONTENT_UNREADABLE, "The page could not be read on disk; nothing was written. Retry.")),
         )
 
-    // W2: AlreadyExists / InvalidLocation / SlugConflict are produced ONLY by WritePipeline.create; the
+    // AlreadyExists / InvalidLocation / SlugConflict are produced ONLY by WritePipeline.create; the
     // create route owns their status mapping (409 page_exists / 400 invalid_create_request / 409
     // slug_conflict). The frozen PUT toWire never produces them — these branches only keep the sealed
     // `when` exhaustive, adding NO new envelope/serializer dependency to the freeze.

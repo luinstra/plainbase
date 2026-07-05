@@ -27,7 +27,7 @@ import io.ktor.server.application.ApplicationCall
  * `restModule` AND the route-test harnesses, so production and tests wire the choke point identically.
  *
  * [extract] defaults to the real A1/A2 [extractPrincipal] over [tokens]/[trustedProxyCidrs]; a harness may pass a
- * fixed-`Principal` source (a test-construction choice — auth is never turned off, §WI-9).
+ * fixed-`Principal` source (a test-construction choice — auth is never turned off).
  */
 @Suppress("LongParameterList")
 fun buildRouteContext(

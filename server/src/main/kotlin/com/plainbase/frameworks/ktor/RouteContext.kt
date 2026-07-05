@@ -30,18 +30,18 @@ class RouteContext(
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,
     val trustedProxyCidrs: List<String>,
-    /** PB-WRITE-1 (W2) id mint for `POST /api/v1/pages` — injected so tests mint deterministically. */
+    /** PB-WRITE-1 id mint for `POST /api/v1/pages` — injected so tests mint deterministically. */
     val idProvider: IdProvider,
     /** PB-WRITE-1 body cap (forwarded from config) — route-wire config, not a mutator. */
     val maxWriteBodyBytes: Long,
-    /** W3b asset upload cap (forwarded from config). */
+    /** Asset upload cap (forwarded from config). */
     val maxAssetBytes: Long,
-    /** P3 MCP DNS-rebinding HOST allowlist (fail-closed to the bind host; the `mcp()` mount reads it). Loopback in tests. */
+    /** MCP DNS-rebinding HOST allowlist (fail-closed to the bind host; the `mcp()` mount reads it). Loopback in tests. */
     val mcpAllowedHosts: List<String> = listOf("127.0.0.1", "localhost"),
-    /** P3 MCP DNS-rebinding ORIGIN allowlist (fail-closed to the bind host). Loopback origins in tests. */
+    /** MCP DNS-rebinding ORIGIN allowlist (fail-closed to the bind host). Loopback origins in tests. */
     val mcpAllowedOrigins: List<String> = listOf("http://127.0.0.1", "http://localhost"),
     /**
-     * A4a (WI-7): true ONLY in `auth.mode=builtin`. Gates the builtin auth surface — the `pb_session` cookie source
+     * A4a: true ONLY in `auth.mode=builtin`. Gates the builtin auth surface — the `pb_session` cookie source
      * in [extract] is consulted only when true (in OFF/PROXY a stray cookie is ignored), and `plainbaseModule`
      * registers the login/session/setup/admin-user routes only when true.
      */

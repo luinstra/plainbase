@@ -417,7 +417,7 @@ class LocalContentStore(
             tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
             Files.write(tmp, bytes)
             // Re-stat the target immediately before the rename: a non-cooperating external write since
-            // the read changes the file key or mtime — detect it rather than clobber it (MUST-FIX 2).
+            // the read changes the file key or mtime — detect it rather than clobber it.
             val now = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
             if (now.fileKey() != before.fileKey || now.lastModifiedTime() != before.modified) {
                 val current = try {
@@ -710,7 +710,7 @@ class LocalContentStore(
         }
 
     /**
-     * The W2 P1 create-containment gate: returns a rejection reason iff the requested [path] can never
+     * The create-containment gate: returns a rejection reason iff the requested [path] can never
      * legitimately name content, or null when a create may proceed. Fails closed (an [IOException]
      * resolving the real path is "not contained"). Three guards, mirroring the scan/read invariants:
      *  1. **Scan-skipped-name segment** — any ancestor (or the leaf) whose NAME the scan would skip
@@ -718,7 +718,7 @@ class LocalContentStore(
      *     excluded subtree (DATA_DIR) → a ghost the next rebuild discards, so refuse it up front. The
      *     name predicate is the SAME one [collectCandidates]/[isScanEligible] use, so the create-reject
      *     set cannot drift from scan's skip set (this is what closes the "scan skips X but create allows
-     *     it" class — round-2 dotfiles, round-9 `_folder.yaml`).
+     *     it" class — dotfiles, `_folder.yaml`).
      *  2. **Symlinked existing ancestor** — links are not content; an existing ancestor directory that
      *     is a symlink would let a create write THROUGH it (the scan never enters it), so refuse.
      *  3. **Real-path escape** — the nearest EXISTING ancestor's resolved real path must stay inside

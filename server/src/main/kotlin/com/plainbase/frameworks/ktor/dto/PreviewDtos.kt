@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /*
- * W3b — the NON-FROZEN response shapes for the two W1-only routes (`POST /api/v1/preview` and
+ * The NON-FROZEN response shapes for the two write-only routes (`POST /api/v1/preview` and
  * `POST /api/v1/pages/{id}/assets`). Deliberately kept OUT of the frozen `RestDtos.kt`/`WriteDtos.kt`
  * so neither frozen file grows a field: preview is PRIVATE / non-contractual (the markup is the
  * renderer's evolving output; only the wire keys are stable-by-convention) and the asset shapes are

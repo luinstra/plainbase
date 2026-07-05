@@ -11,9 +11,9 @@ import kotlin.io.encoding.Base64
  * proxy-CSRF tokens stay valid (no spurious 403s after a bounce). `SecureRandom` + `app_meta.upsert` are both
  * native-proven (NativeSpike), so no new metadata.
  *
- * MUST be called INSIDE the DataDirLock region (the A4a WI-13 single-instance boot lock) so two processes never
+ * MUST be called INSIDE the DataDirLock region (the A4a single-instance boot lock) so two processes never
  * race a double-generate. Mirrors `AdminCommand`'s direct-repo precedent — a single key does not warrant a domain
- * port (OPEN-QUESTION 3). The key material is NEVER logged.
+ * port. The key material is NEVER logged.
  */
 fun loadOrCreateProxyCsrfKey(db: PlainbaseDb, random: SecureRandom = SecureRandom()): ByteArray {
     val queries = db.appMetaQueries

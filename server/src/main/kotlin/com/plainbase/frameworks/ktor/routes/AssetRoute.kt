@@ -52,7 +52,7 @@ import io.ktor.server.routing.get
  * disk is the source of truth for binaries, and a just-deleted asset answering 404 is correct, not a
  * torn read. There is nothing per-asset to keep coherent with the snapshot.
  *
- * A3 (§WI-5, the SPLIT): the read GATE fires inside `assetRead` BEFORE the membership test, so an
+ * A3 (the SPLIT): the read GATE fires inside `assetRead` BEFORE the membership test, so an
  * anonymous request to a content asset gets 401/403 (`AccessDenied` → [guarded]) — never a 404 that
  * distinguishes "exists but unauth" from "absent" (no existence leak). A bundle name returns at the top
  * check, before the gate runs, so the public shell still loads anonymously.

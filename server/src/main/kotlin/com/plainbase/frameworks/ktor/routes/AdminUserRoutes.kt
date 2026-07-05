@@ -19,7 +19,7 @@ import io.ktor.server.routing.post
  * `checkManage`-gated [com.plainbase.domain.service.AdminFacade] (which mints a `ManageGrant`, audits, and throws
  * `AccessDenied` on deny → [guarded] maps it to 401/403). The route reaches a user/role/session mutator ONLY
  * through that facade — NEVER a raw repo (the `ChokePointArchitectureTest` invariant). The role-grant write goes
- * through the SAME `RoleRepository.upsert` path the WI-11 CLI uses.
+ * through the SAME `RoleRepository.upsert` path the admin CLI uses.
  */
 fun Route.adminUserRoutes(ctx: RouteContext) {
     post("/api/v1/admin/users") {
