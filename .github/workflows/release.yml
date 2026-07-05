@@ -117,10 +117,9 @@ jobs:
           path: dist/plainbase-linux-x64
 
   native-linux-arm64:
-    # Design Fork A (addendum): attempted as a REAL native gate on the FREE hosted arm64-linux
-    # runner (repo is public -- callout 6, `-J-Xmx6g` rules out QEMU emulation anyway). Currently
-    # BEST-EFFORT in the assembly required-platform set (see the assembly job's required check) until
-    # a `v0.1.0-rc.1` dry-run proves this job green end-to-end; PROMOTE it there once that is true.
+    # Design Fork A (addendum): REQUIRED per master-plan §6. The `v0.1.0-rc.1` dry-run built this job
+    # green end-to-end on the FREE hosted arm64-linux runner (repo is public -- callout 6; `-J-Xmx6g`
+    # rules out QEMU anyway), so it is PROMOTED from best-effort to the assembly required-platform set.
     name: Native gate (linux-arm64)
     runs-on: ubuntu-24.04-arm
     needs: meta
@@ -424,9 +423,9 @@ jobs:
       - name: List staged assets
         run: ls -la staging
 
-      # Step 2: required-platform hard check. REQUIRED = linux-x64, macos-arm64, jar, image (+
-      # linux-arm64 once Design Fork A's rc dry-run promotes it -- see the native-linux-arm64 job
-      # comment). BEST-EFFORT (windows; linux-arm64 while contested) missing = skip silently.
+      # Step 2: required-platform hard check. REQUIRED = linux-x64, linux-arm64, macos-arm64, jar,
+      # image (linux-arm64 PROMOTED after the v0.1.0-rc.1 dry-run proved it green -- Design Fork A).
+      # BEST-EFFORT (windows only) missing = skip silently.
       - name: Required-platform hard check
         env:
           LINUX_X64: ${{ needs.native-linux-x64.result }}
@@ -447,14 +446,13 @@ jobs:
             fi
           }
           require "linux-x64" "$LINUX_X64"
+          require "linux-arm64" "$LINUX_ARM64"
           require "macos-arm64" "$MACOS_ARM64"
           require "jar" "$JAR_RESULT"
           require "image" "$IMAGE_RESULT"
-          # BEST-EFFORT platforms: log, never fail the release on their absence.
-          if [ "$LINUX_ARM64" != "success" ]; then
-            echo "::warning::linux-arm64 did not succeed (result: $LINUX_ARM64) -- best-effort pending the" \
-                 "Design Fork A rc dry-run promotion; not blocking assembly."
-          fi
+          # BEST-EFFORT platform: log, never fail the release on its absence. Windows is the one
+          # deliberately best-effort platform per §6; linux-arm64 was PROMOTED to REQUIRED (above)
+          # after the v0.1.0-rc.1 dry-run proved it green end-to-end.
           if [ "$WINDOWS_X64" != "success" ]; then
             echo "::warning::windows-x64 did not succeed (result: $WINDOWS_X64) -- best-effort by design;" \
                  "not blocking assembly."
