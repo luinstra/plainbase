@@ -7,7 +7,10 @@ plugins {
 }
 
 group = "com.plainbase"
-version = "0.1.0-SNAPSHOT"
+// C5: the release workflow drives this from the tag (`-PreleaseVersion=0.1.0`, `.github/workflows/release.yml`);
+// dev/CI builds fall back to the snapshot. `:server` inherits this via `version = rootProject.version`
+// (server/build.gradle.kts) and self-reports it through the generated `BuildInfo` (item 8).
+version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-SNAPSHOT"
 
 spotless {
     kotlinGradle {

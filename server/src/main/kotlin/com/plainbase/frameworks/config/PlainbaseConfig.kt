@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.BuildInfo
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.frameworks.ktor.RemoteAddress
 import com.typesafe.config.Config
@@ -151,7 +152,9 @@ data class PlainbaseConfig(
     fun agentDirectCommitGlobs(): List<CommitGlob> = auth.agentDirectCommitGlobs.map(CommitGlob::parse)
 
     companion object {
-        const val VERSION: String = "0.1.0"
+        // C5 item 8: self-report tracks the release tag (root build.gradle.kts `-PreleaseVersion` ->
+        // project.version -> generated com.plainbase.BuildInfo) instead of a hardcoded literal.
+        const val VERSION: String = BuildInfo.VERSION
 
         const val DEFAULT_PORT: Int = 8080
 

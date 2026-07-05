@@ -211,6 +211,48 @@ tasks.processResources {
     dependsOn(copyFrontend)
 }
 
+// ---- Version self-report (C5 item 8): generate `com.plainbase.BuildInfo` from `project.version` -----
+// (root build.gradle.kts derives `version` from `-PreleaseVersion`, SNAPSHOT as the dev fallback) so the
+// binary self-reports the TAG-DRIVEN version with no drift (PlainbaseConfig.VERSION delegates to it). A
+// generated Kotlin `const` needs NO runtime resource lookup/reflection — cleaner for the native bet than a
+// classpath `version.properties` (Fork B of the addendum; kept only as a documented fallback).
+val generatedBuildInfoDir = layout.buildDirectory.dir("generated/source/buildInfo/kotlin")
+
+val generateBuildInfo =
+    tasks.register("generateBuildInfo") {
+        group = "build"
+        description = "Generates com.plainbase.BuildInfo.VERSION from project.version"
+        val versionValue = project.version.toString()
+        inputs.property("version", versionValue)
+        outputs.dir(generatedBuildInfoDir)
+        doLast {
+            // Defense-in-depth on the generated-source seam: `project.version` is tag-driven in the
+            // release workflow (`-PreleaseVersion=${GITHUB_REF_NAME#v}`), so a hostile tag could try to
+            // inject Kotlin here. The release workflow already validates the tag shape, but this seam
+            // refuses anything outside a version alphabet regardless of how it was invoked.
+            require(versionValue.matches(Regex("[A-Za-z0-9.+-]+"))) { "unexpected version: $versionValue" }
+            val packageDir = generatedBuildInfoDir.get().asFile.resolve("com/plainbase")
+            packageDir.mkdirs()
+            packageDir.resolve("BuildInfo.kt").writeText(
+                """
+                |package com.plainbase
+                |
+                |// GENERATED at build time from `project.version` — do not edit (server/build.gradle.kts:generateBuildInfo).
+                |object BuildInfo {
+                |    const val VERSION: String = "$versionValue"
+                |}
+                |
+                """.trimMargin(),
+            )
+        }
+    }
+
+sourceSets {
+    main {
+        kotlin.srcDir(generateBuildInfo)
+    }
+}
+
 // ---- Test execution split: JVM runs EVERYTHING, native runs ONLY the nativeTest source set ----
 //
 // The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test

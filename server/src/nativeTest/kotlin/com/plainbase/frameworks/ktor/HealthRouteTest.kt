@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.BuildInfo
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -31,7 +32,9 @@ class HealthRouteTest {
             assertEquals(ContentType.Application.Json, response.contentType()?.withoutParameters())
             val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
             assertEquals("ok", body["status"]?.jsonPrimitive?.content)
-            assertEquals("0.1.0", body["version"]?.jsonPrimitive?.content)
+            // The SAME single source of truth the app reports (C5 item 8) — never a hardcoded literal,
+            // which would break the moment a dev build self-reports `0.1.0-SNAPSHOT`.
+            assertEquals(BuildInfo.VERSION, body["version"]?.jsonPrimitive?.content)
         }
     }
 
