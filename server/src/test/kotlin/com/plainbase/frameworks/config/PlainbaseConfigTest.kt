@@ -276,6 +276,184 @@ class PlainbaseConfigTest : FunSpec({
         }
     }
 
+    // --- Q9 storage matrix: strict backend parse, object-mode required keys (tabled messages verbatim),
+    //     local-mode ignored+warn tracking (never fatal), Q10 CONTENT_DIR source tracking --------------------
+
+    fun objectEnv(vararg overrides: Pair<String, String>): Map<String, String> = mapOf(
+        "PLAINBASE_STORAGE_BACKEND" to "object",
+        "PLAINBASE_S3_ENDPOINT" to "https://acct.r2.cloudflarestorage.com",
+        "PLAINBASE_S3_BUCKET" to "docs",
+        "PLAINBASE_S3_ACCESS_KEY_ID" to "AKIA",
+        "PLAINBASE_S3_SECRET_ACCESS_KEY" to "shh",
+    ) + overrides
+
+    test("storage.backend defaults to local with the Q9 defaults (region auto, no prefix, path-style, 60s poll)") {
+        val storage = PlainbaseConfig.fromEnv(emptyMap()).storage
+        storage.backend shouldBe StorageBackend.LOCAL
+        storage.region shouldBe "auto"
+        storage.prefix shouldBe ""
+        storage.pathStyle shouldBe true
+        storage.pollSeconds shouldBe 60L
+    }
+
+    test("an unknown storage.backend fails fast naming the legal values (verbatim)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_STORAGE_BACKEND" to "nfs"))
+        }.message shouldBe "Unknown storage.backend 'nfs' — legal values: local, object"
+    }
+
+    test("object mode with the full required set loads; credentials come from env") {
+        val storage = PlainbaseConfig.fromEnv(objectEnv()).storage
+        storage.backend shouldBe StorageBackend.OBJECT
+        storage.endpoint shouldBe "https://acct.r2.cloudflarestorage.com"
+        storage.bucket shouldBe "docs"
+        storage.accessKeyId shouldBe "AKIA"
+        storage.secretAccessKey shouldBe "shh"
+    }
+
+    test("object mode without an endpoint fails with the tabled message (verbatim)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv() - "PLAINBASE_S3_ENDPOINT")
+        }.message shouldBe "storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)"
+    }
+
+    test("a non-absolute / non-http endpoint fails with the tabled message (verbatim)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_ENDPOINT" to "acct.r2.cloudflarestorage.com"))
+        }.message shouldBe "storage.object.endpoint is not an absolute http(s) URL: 'acct.r2.cloudflarestorage.com'"
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_ENDPOINT" to "ftp://acct.example.com"))
+        }.message shouldBe "storage.object.endpoint is not an absolute http(s) URL: 'ftp://acct.example.com'"
+    }
+
+    test("object mode without a bucket fails with the tabled message (verbatim)") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv() - "PLAINBASE_S3_BUCKET")
+        }.message shouldBe "storage.object.bucket is required when storage.backend=object"
+    }
+
+    test("object mode without env credentials fails with the combined env-only message (verbatim, either half)") {
+        val expected = "PLAINBASE_S3_ACCESS_KEY_ID and PLAINBASE_S3_SECRET_ACCESS_KEY are required when " +
+            "storage.backend=object (secrets stay in env, never plainbase.conf)"
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv() - "PLAINBASE_S3_SECRET_ACCESS_KEY")
+        }.message shouldBe expected
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv() - "PLAINBASE_S3_ACCESS_KEY_ID")
+        }.message shouldBe expected
+    }
+
+    test("credentials are ENV-ONLY: endpoint+bucket from plainbase.conf still demand the env credentials") {
+        val conf = """
+            storage {
+              backend = object
+              object {
+                endpoint = "https://acct.r2.cloudflarestorage.com"
+                bucket = "docs"
+              }
+            }
+        """.trimIndent()
+        withDataDir(conf) { env ->
+            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                .message shouldContain "PLAINBASE_S3_ACCESS_KEY_ID"
+            // With the env credentials supplied, the same file-backed config loads.
+            val loaded = PlainbaseConfig.fromEnvAndFile(
+                env + ("PLAINBASE_S3_ACCESS_KEY_ID" to "k") + ("PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"),
+            )
+            loaded.storage.bucket shouldBe "docs"
+        }
+    }
+
+    test("a malformed storage.object.prefix fails the TreePath funnel naming the key") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_PREFIX" to "docs/../etc"))
+        }.message shouldContain "storage.object.prefix"
+    }
+
+    test("prefix/pathStyle/pollSeconds parse strictly in object mode") {
+        val storage = PlainbaseConfig.fromEnv(
+            objectEnv("PLAINBASE_S3_PREFIX" to "team/docs", "PLAINBASE_S3_PATH_STYLE" to "0", "PLAINBASE_S3_POLL_SECONDS" to "30"),
+        ).storage
+        storage.prefix shouldBe "team/docs"
+        storage.pathStyle shouldBe false
+        storage.pollSeconds shouldBe 30L
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_POLL_SECONDS" to "0"))
+        }.message shouldContain "PLAINBASE_S3_POLL_SECONDS"
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_PATH_STYLE" to "yes"))
+        }.message shouldContain "PLAINBASE_S3_PATH_STYLE"
+    }
+
+    test("local mode ignores storage.object.* keys, naming them in the one startup warning (never fatal)") {
+        // Note the MALFORMED pathStyle: in local mode nothing object-side is parsed, so it cannot throw.
+        val config = PlainbaseConfig.fromEnv(
+            mapOf("PLAINBASE_S3_ENDPOINT" to "https://x.example.com", "PLAINBASE_S3_PATH_STYLE" to "definitely-not-a-bool"),
+        )
+        config.storage.backend shouldBe StorageBackend.LOCAL
+        config.storage.ignoredObjectKeys shouldBe listOf("PLAINBASE_S3_ENDPOINT", "PLAINBASE_S3_PATH_STYLE")
+        val warning = config.storageWarnings().single()
+        warning shouldContain "PLAINBASE_S3_ENDPOINT"
+        warning shouldContain "PLAINBASE_S3_PATH_STYLE"
+    }
+
+    test("credentials present in local mode are ignored SILENTLY (never named, no warning)") {
+        val config = PlainbaseConfig.fromEnv(mapOf("PLAINBASE_S3_ACCESS_KEY_ID" to "k", "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"))
+        config.storage.ignoredObjectKeys shouldBe emptyList<String>()
+        config.storageWarnings() shouldBe emptyList<String>()
+    }
+
+    test("file-side storage.object.* keys in local mode are tracked by their HOCON path") {
+        withDataDir("""storage { object { bucket = "docs" } }""") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).storage.ignoredObjectKeys shouldBe listOf("storage.object.bucket")
+        }
+    }
+
+    test("contentDirSource tracks env over file over default (Q10)") {
+        PlainbaseConfig.fromEnv(mapOf("CONTENT_DIR" to "/tmp/pb-env-tree")).contentDirSource shouldBe ConfigSource.ENV
+        withDataDir("""contentDir = "/tmp/pb-file-tree"""") { env ->
+            PlainbaseConfig.fromEnvAndFile(env).contentDirSource shouldBe ConfigSource.FILE
+            PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/tmp/pb-env-tree")).contentDirSource shouldBe ConfigSource.ENV
+        }
+        PlainbaseConfig.fromEnv(emptyMap()).contentDirSource shouldBe ConfigSource.DEFAULT
+    }
+
+    test("object mode warns when CONTENT_DIR was explicitly set; stays silent on the default") {
+        PlainbaseConfig.fromEnv(objectEnv("CONTENT_DIR" to "/tmp/pb-tree")).storageWarnings().single() shouldContain "CONTENT_DIR"
+        PlainbaseConfig.fromEnv(objectEnv()).storageWarnings() shouldBe emptyList<String>()
+    }
+
+    test("an http object endpoint is refused (cleartext SigV4) unless the insecure override is set") {
+        shouldThrow<IllegalArgumentException> {
+            PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_ENDPOINT" to "http://acct.example.com"))
+        }.message shouldContain "must be https"
+        // The SAME PLAINBASE_INSECURE_HTTP override the bind guard honors relaxes it (a loopback test proxy).
+        PlainbaseConfig.fromEnv(objectEnv("PLAINBASE_S3_ENDPOINT" to "http://acct.example.com", "PLAINBASE_INSECURE_HTTP" to "1"))
+            .storage.endpoint shouldBe "http://acct.example.com"
+        // https is always accepted.
+        PlainbaseConfig.fromEnv(objectEnv()).storage.endpoint shouldBe "https://acct.r2.cloudflarestorage.com"
+    }
+
+    test("objectBackendUnavailableRefusal names object mode with the actionable message; local returns null") {
+        PlainbaseConfig.fromEnv(objectEnv()).objectBackendUnavailableRefusal() shouldContain
+            "storage.backend=object is configured but the object backend is not available"
+        PlainbaseConfig.fromEnv(emptyMap()).objectBackendUnavailableRefusal() shouldBe null
+    }
+
+    test("requireContentDir in object mode ignores the directory and validates the Q9 matrix instead") {
+        // A CONTENT_DIR that does not exist must NOT fail in object mode (it is ignored, Q10)...
+        PlainbaseConfig.fromEnv(objectEnv("CONTENT_DIR" to "/definitely/not/here")).requireContentDir()
+        // ...while a directly-constructed object config missing its required keys is re-asserted here.
+        val bare = PlainbaseConfig(
+            contentDir = Path.of("/tmp"),
+            dataDir = Path.of("/tmp/pb-data"),
+            host = "127.0.0.1",
+            port = PlainbaseConfig.DEFAULT_PORT,
+            storage = StorageConfig(backend = StorageBackend.OBJECT),
+        )
+        shouldThrow<IllegalArgumentException> { bare.requireContentDir() }.message shouldContain "storage.object.endpoint"
+    }
+
     // --- P3 MCP DNS-rebinding allowlist (WI-5): fail-closed to the bind host, never empty, never a wildcard ---
 
     test("no MCP keys → mcpHostAllowlist defaults to the bind host (not empty, not a wildcard)") {

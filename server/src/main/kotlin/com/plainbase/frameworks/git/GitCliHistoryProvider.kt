@@ -33,8 +33,9 @@ class GitCliHistoryProvider(
     private val clock: Clock,
     // The repo-relative path to STAGE in git for a TreePath — raw-on-disk-name-preserving, so a
     // non-NFC on-disk file is committed at its real path, not the NFC phantom `path.value`. Injected as a
-    // function (loose coupling, like `maintenance`) so the provider never depends on the whole ContentStore
-    // port; wired to ContentStore::resolveRepoRelativePath. Defaults to TreePath.value for tests/no-store.
+    // function (loose coupling, like `maintenance`) so the provider never depends on a whole store; wired to
+    // the concrete LocalContentStore::resolveRepoRelativePath (the ContentStore port no longer carries it -
+    // staging git paths is a local-filesystem concern). Defaults to TreePath.value for tests/no-store.
     private val repoPath: (TreePath) -> String = { it.value },
     private val maintenance: (() -> Unit)? = null,
 ) : HistoryProvider {

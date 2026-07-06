@@ -31,7 +31,7 @@ unsigned commits fail the DCO check and can't merge.
 - **Verification floor:** `./gradlew build` must pass (compiles, tests,
   formatting, dependency allowlist). Server changes should also survive the
   native gate: `./gradlew :server:nativeCompile`, then
-  `server/build/native/nativeCompile/plainbase spike` (8/8).
+  `server/build/native/nativeCompile/plainbase spike` (9/9).
 - **Server dependencies default to NO.** Every addition must work under
   GraalVM native-image and be recorded via
   `./gradlew :server:writeDependencyAllowlist`. Netty, Jackson, Gson, and

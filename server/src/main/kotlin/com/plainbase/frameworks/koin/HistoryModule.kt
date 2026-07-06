@@ -1,11 +1,11 @@
 package com.plainbase.frameworks.koin
 
-import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -24,8 +24,10 @@ import kotlin.time.Clock
  */
 val historyModule = module {
     // repoPath stages the RAW on-disk repo-relative path — loose coupling: the provider gets a
-    // function, not the whole ContentStore (registered in contentModule).
-    single<HistoryProvider> { selectHistoryProvider(get(), get<ContentStore>()::resolveRepoRelativePath) }
+    // function, not a whole store. Bound to the CONCRETE LocalContentStore (contentModule registers it
+    // and aliases the ContentStore port to it): staging git paths is a local-filesystem concern the
+    // backend-neutral port deliberately does not carry.
+    single<HistoryProvider> { selectHistoryProvider(get(), get<LocalContentStore>()::resolveRepoRelativePath) }
     single<WriteHistoryHook> {
         val history = get<HistoryProvider>()
         WriteHistoryHook { path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }

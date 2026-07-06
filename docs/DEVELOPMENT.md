@@ -37,7 +37,7 @@ Five jobs gate `main` (`.github/workflows/ci.yml`):
   enforced-mode auth.
 - **`docker-image`** - the compose-tier image build plus a non-loopback proxy/transport smoke (a
   `421` transport refusal and the full proxy CSRF path - only reachable from outside loopback).
-- **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the spike (8/8) → the
+- **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the spike (9/9) → the
   enforced-auth smoke again, against the native binary → the native-startup regression tripwire.
 - **`frontend-smoke`** - Playwright, booting both an auth-off and an enforced-builtin server;
   carries the CSP zero-violation gate (`csp.spec.ts`) and the enforced-builtin approval flow
@@ -51,12 +51,14 @@ windows-x64.
 ## The native dependency spike
 
 `plainbase spike` exercises every load-bearing dependency with real
-assertions (8 checks) - Ktor CIO round-trip, Koin DSL wiring, SQLDelight
-query, FTS5 MATCH, flexmark render, argon2 hash/verify, an MCP SDK stub
-handshake, and the in-binary MCP SSE-on-CIO handshake. It prints PASS/FAIL
-per check and exits non-zero on failure. CI runs it on the JVM **and**
-against the native binary (the native gate). All 8 checks pass on the JVM
-and inside the native binary; CI gates linux-x64 on every push. If a
+assertions (9 checks) - Ktor CIO client TLS round-trip (a pinned self-signed
+loopback cert; the standing native-HTTPS regression guard), Koin DSL wiring,
+SQLDelight query, FTS5 MATCH, flexmark render, argon2 hash/verify, an MCP SDK
+stub handshake, the in-binary MCP SSE-on-CIO handshake, and offline SigV4
+signing vectors. It prints PASS/FAIL per check and exits non-zero on failure.
+CI runs it on the JVM **and** against the native binary (the native gate). All
+9 checks pass on the JVM and inside the native binary; CI gates linux-x64 on
+every push. If a
 dependency ever fails irreparably under native-image, the documented escape
 hatch is: ship JVM-only and move native to the next release - the JAR is
 always the release floor.

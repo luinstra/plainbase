@@ -45,7 +45,7 @@ already-allowlisted xerial sqlite-jdbc driver. The app database remains SQLDelig
 **Positive**
 
 - The full FTS5 surface (virtual tables, MATCH, bm25 weights, snippet/highlight sentinels,
-  trigram tokenizer) is usable directly, with working native-image proof in the 8/8 spike gate.
+  trigram tokenizer) is usable directly, with working native-image proof in the 9/9 spike gate.
 - Zero dependency-surface growth for the native bet; one class owns every search.db statement.
 
 **Trade-offs**

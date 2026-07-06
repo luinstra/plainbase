@@ -56,6 +56,12 @@ object ReindexCommand {
             System.err.println(USAGE) // reindex takes no flags
             return 2
         }
+        // Object mode is not built until C4; this CLI operates on the LOCAL tree (now ignored in object mode),
+        // so refuse it up front — before the lock and any driver open — rather than reindexing the wrong tree.
+        config.objectBackendUnavailableRefusal()?.let {
+            System.err.println("reindex: $it")
+            return 1
+        }
         return try {
             config.requireContentDir() // inside try → a bad config exits 1, honoring the contract (not a stack trace)
             reindex(config)

@@ -15,7 +15,8 @@ import kotlin.io.path.readLines
  * The hexagonal floor, checked structurally (§5.8 / S1 acceptance): `domain/` imports NO framework
  * — no flexmark (the single-renderer rule; the `SectionSplitter` MUST stay a pure consumer of
  * snapshot data), no ktor, no SQL, no DI, no wire serializer — and never reaches into
- * `frameworks/`. The kotlin-logging facade and the JDK are the only sanctioned non-domain imports.
+ * `frameworks/`. The kotlin-logging facade and the JDK (minus its filesystem handle types:
+ * `java.nio.file`, `java.io.File*`; charset/util stay legal) are the only sanctioned non-domain imports.
  *
  * Source-scanning on purpose: a bytecode/classpath check cannot fail on an import the compiler
  * optimized away, and the rule we enforce is about SOURCE dependencies.
@@ -32,6 +33,8 @@ class DomainPurityTest : FunSpec({
         "org.bouncycastle.",
         "io.modelcontextprotocol.",
         "kotlinx.serialization.",
+        "java.nio.file.", // FS handle types are adapter territory (java.nio.charset / java.util stay legal)
+        "java.io.File",
         "com.plainbase.frameworks.", // domain depends on nothing above it
     )
 

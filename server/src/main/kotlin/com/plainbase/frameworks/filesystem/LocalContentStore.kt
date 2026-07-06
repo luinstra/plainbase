@@ -30,8 +30,8 @@ import java.nio.file.attribute.FileTime
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
-/** The on-disk name of a folder's metadata sidecar (§A4). */
-private const val FOLDER_META_NAME = "_folder.yaml"
+/** The on-disk name of a folder's metadata sidecar (§A4). Shared with the [CreateGates] name-skip predicate. */
+internal const val FOLDER_META_NAME = "_folder.yaml"
 
 /**
  * The java.nio [ContentStore] adapter over a local directory ([root]).
@@ -83,6 +83,12 @@ class LocalContentStore(
                 val rootNorm = root.toAbsolutePath().normalize()
                 it.startsWith(rootNorm) && it != rootNorm
             }
+
+    // The READ-ONLY pre-write checks (containment, NFC-equivalent occupancy, the resolve-only parent
+    // walk), factored out as CreateGates so a second backend can run the SAME gates against its mirror
+    // before its authoritative write. This store recomposes the walk with its own directory creation
+    // ([resolveOrCreateParent]) — the seam itself never mutates.
+    private val gates = CreateGates(root, ignoreRules, excludedDirs)
 
     /**
      * Immutable snapshot of the most recent [scan]: the indexed files/folders (the membership
@@ -292,7 +298,7 @@ class LocalContentStore(
         // Defense-in-depth (belt-and-suspenders behind the membership gate): re-verify the resolved
         // file stays inside the content root even against a TOCTOU symlink swapped in between scan
         // and read. Cheap, read-path only.
-        if (!isWithinRoot(osPath)) {
+        if (!isWithinRoot(root, osPath)) {
             logger.warn { "Refusing read of '${path.value}': resolved path escapes content root (links are not content)" }
             return null
         }
@@ -312,7 +318,7 @@ class LocalContentStore(
         // swapped in post-scan — warns and returns null, unchanged (safe). Two filesystem hits where
         // one sufficed — stat is not a hot path, and the ordering discipline is worth it.
         if (!Files.exists(osPath, LinkOption.NOFOLLOW_LINKS)) return null
-        if (!isWithinRoot(osPath)) {
+        if (!isWithinRoot(root, osPath)) {
             logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
             return null
         }
@@ -353,7 +359,21 @@ class LocalContentStore(
         return resolveOnDisk(parent, snap).resolve(rawLeaf)
     }
 
-    override fun resolveRepoRelativePath(path: TreePath): String {
+    /**
+     * The repo-relative path to STAGE in git for [path]: slash-separated, raw-on-disk-name-preserving (so
+     * it may differ from [TreePath.value] on a normalization-preserving filesystem, where an NFD on-disk
+     * name is kept verbatim while the [TreePath] is NFC). The Git history layer must stage THIS string,
+     * not [TreePath.value], or the committed git path is a phantom that does not match the real file
+     * (history diverges from the content tree; the history layer's path-keyed citations miss it).
+     *
+     * Total, never throws. A not-yet-indexed / brand-new page falls back to [TreePath.value]; new pages
+     * are NFC by construction, so that is the correct on-disk form. The separator is always `/` (git
+     * paths are `/`-joined), never an OS-specific separator.
+     *
+     * Deliberately NOT on the [ContentStore] port: staging git paths over the served directory is a
+     * local-filesystem concern, so the history wiring (`historyModule`) binds to this concrete adapter.
+     */
+    fun resolveRepoRelativePath(path: TreePath): String {
         // The raw on-disk path relative to the content root, re-joined with '/' (git paths are '/'-joined,
         // never OS backslashes). resolveOnDisk is total and raw-name-preserving, so a non-NFC on-disk name is
         // staged verbatim; a brand-new/unscanned page falls back to its NFC name (the correct fresh form).
@@ -398,7 +418,7 @@ class LocalContentStore(
         // One identity capture: read the current bytes AND the file key + mtime in the same breath, so
         // the recheck before the rename compares against exactly what the hash was computed over.
         val before = try {
-            if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(target)) return CasResult.Deleted
+            if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(root, target)) return CasResult.Deleted
             val attrs = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
             FileIdentity(bytes = Files.readAllBytes(target), fileKey = attrs.fileKey(), modified = attrs.lastModifiedTime())
         } catch (e: IOException) {
@@ -458,7 +478,7 @@ class LocalContentStore(
         // the read path re-checks — BEFORE creating any parent dirs or reserving the target. An ignored
         // or excluded segment, a symlinked existing ancestor, or an ancestor that resolves outside the
         // content root can never name content; refuse rather than write through it.
-        rejectionReason(path, target)?.let { reason ->
+        gates.rejectionReason(path, target)?.let { reason ->
             logger.warn { "Refusing create of '${path.value}': $reason" }
             return CreateResult.Rejected(reason)
         }
@@ -479,7 +499,7 @@ class LocalContentStore(
         }
         // NFC-equivalent LEAF guard: same reasoning as the parent, for the file itself — a non-NFC
         // sibling the scan has not yet seen occupies the path; treat it as already-present.
-        if (nfcEquivalentSiblingExists(resolvedTarget)) return CreateResult.Exists(path)
+        if (gates.nfcEquivalentSiblingExists(resolvedTarget)) return CreateResult.Exists(path)
         return writeIfAbsent(path, resolvedTarget, bytes, hasher)
     }
 
@@ -509,13 +529,13 @@ class LocalContentStore(
         // SAME P1 containment as createExclusive (one source of truth), now on the confirmed-directory
         // parent: scan-skipped-name segments, an excluded subtree, a symlinked existing ancestor, an
         // ancestor resolving outside root.
-        rejectionReason(path, target)?.let { reason ->
+        gates.rejectionReason(path, target)?.let { reason ->
             logger.warn { "Refusing asset write of '${path.value}': $reason" }
             return CreateResult.Rejected(reason)
         }
         // NFC-equivalent LEAF guard (same as createExclusive): a non-NFC sibling the scan hasn't seen
         // occupies the path; treat it as already-present. O_EXCL is the true serialization point below.
-        if (nfcEquivalentSiblingExists(target)) return CreateResult.Exists(path)
+        if (gates.nfcEquivalentSiblingExists(target)) return CreateResult.Exists(path)
         logger.info { "Writing asset file: ${path.value} (${bytes.size} bytes)" }
         // Asset difference (2): fail closed — the createLink O_EXCL write ONLY, no reserve-then-move.
         return writeAssetIfAbsent(path, target, bytes, hasher)
@@ -620,70 +640,22 @@ class LocalContentStore(
     }
 
     /**
-     * Resolves [path]'s on-disk PARENT directory, creating any missing segment but REUSING an existing
-     * on-disk sibling that NFC-normalizes to the segment (P2 NFC-parent guard) instead of minting a
-     * duplicate. Returns the on-disk parent [Path], or null if a parent segment is occupied by a
-     * non-directory NFC-equivalent (the create then surfaces as [CreateResult.Exists] — a page cannot
-     * be created under a file). Root itself is never created (it always exists).
+     * Resolves [path]'s on-disk PARENT directory, creating any missing segment: the READ-ONLY gate walk
+     * ([CreateGates.resolveParent]) reuses an existing on-disk sibling that NFC-normalizes to each
+     * segment (P2 NFC-parent guard) instead of minting a duplicate, and the creation of the
+     * genuinely-missing tail stays HERE — the seam never mutates. Returns the on-disk parent [Path], or
+     * null if a parent segment is occupied by a non-directory NFC-equivalent (the create then surfaces
+     * as [CreateResult.Exists] — a page cannot be created under a file). Root itself is never created
+     * (it always exists).
      */
     private fun resolveOrCreateParent(path: TreePath): Path? {
-        val parentTree = path.parent ?: return root // a top-level file: parent is the content root
-        var dir = root
-        for (segment in parentTree.segments) {
-            val existing = nfcEquivalentChild(dir, segment)
-            if (existing != null) {
-                if (!Files.isDirectory(existing, LinkOption.NOFOLLOW_LINKS)) return null // a file holds this segment
-                dir = existing // reuse the existing (possibly non-NFC raw-named) dir — no duplicate
-            } else {
-                dir = Files.createDirectory(dir.resolve(segment)) // genuinely new: mint it NFC-named
-            }
+        val resolution = gates.resolveParent(path)
+        if (resolution.occupiedByFile) return null // a file holds a parent segment
+        var dir = resolution.existingPrefix
+        for (segment in resolution.missing) {
+            dir = Files.createDirectory(dir.resolve(segment)) // genuinely new: mint it NFC-named
         }
         return dir
-    }
-
-    /**
-     * The existing child of [dir] that the scan would INDEX for the NFC [segment], or null. When two or
-     * more raw on-disk names NFC-collide to [segment] (a real B3 collision on a byte-preserving FS),
-     * `scan()` keeps a single WINNER by [RawByteOrder] (unsigned-byte-first) and excludes the losers —
-     * so the create MUST resolve to that same winner, else it could write under a loser dir whose whole
-     * subtree the next rebuild excludes (a 201 with an unindexed file). This mirrors [resolveCollision]'s
-     * `sortedWith(compareBy(RawByteOrder) { rawName }).first()` byte-for-byte, over the same
-     * scan-eligible candidates (symlinks / `_folder.yaml` / ignored / excluded entries are NOT content,
-     * exactly as [collectCandidates] filters them, so they never win the segment).
-     */
-    private fun nfcEquivalentChild(dir: Path, segment: String): Path? {
-        // The `/`-joined on-disk-relative prefix of [dir], for the glob-ignore check (root → null).
-        val dirPrefix = root.relativize(dir).joinToString("/").takeIf { it.isNotEmpty() }
-        return try {
-            Files.newDirectoryStream(dir).use { stream ->
-                stream
-                    .filter { child -> Nfc.normalize(child.fileName.toString()) == segment && isScanEligible(child, dirPrefix) }
-                    .minWithOrNull(compareBy(RawByteOrder) { it.fileName.toString() })
-            }
-        } catch (_: IOException) {
-            null
-        }
-    }
-
-    /**
-     * The SINGLE source of truth for "scan would skip a segment by NAME alone" (independent of whether
-     * it exists on disk yet): the `_folder.yaml` metadata sidecar ([FOLDER_META_NAME]) OR an
-     * [IgnoreRules]-ignored name (dotfile / `content.ignore` glob). [collectCandidates] applies exactly
-     * these name skips, so both the create-reject gate ([rejectionReason]) and the scan-eligibility
-     * filter ([isScanEligible]) defer to this — a created page can never land at a name scan won't index.
-     * (The on-disk-entry skips — excluded DATA_DIR subtree, symlink — are existence-dependent and stay in
-     * [isScanEligible] / the [rejectionReason] ancestor walk.)
-     */
-    private fun isScanSkippedName(name: String, relativePath: String): Boolean =
-        name == FOLDER_META_NAME || ignoreRules.isIgnored(name, relativePath)
-
-    /** Whether [child] (under the `/`-joined [dirPrefix], null at root) is a content candidate — the [collectCandidates] filter. */
-    private fun isScanEligible(child: Path, dirPrefix: String?): Boolean {
-        val rawName = child.fileName.toString()
-        val relativePath = if (dirPrefix == null) rawName else "$dirPrefix/$rawName"
-        if (isScanSkippedName(rawName, relativePath)) return false
-        if (child.toAbsolutePath().normalize() in excludedDirs) return false
-        return !Files.isSymbolicLink(child)
     }
 
     override fun watch(onChange: (TreePath) -> Unit): AutoCloseable =
@@ -695,101 +667,6 @@ class LocalContentStore(
     /** The `/`-joined content-relative path of a child named [rawName] under [dirPath]. */
     private fun childRelativePath(dirPath: TreePath?, rawName: String): String =
         if (dirPath == null) rawName else "${dirPath.value}/$rawName"
-
-    /**
-     * Defense-in-depth root containment: resolves symlinks on both [target] and [root] to their
-     * real paths and asserts the target stays inside root. Catches a TOCTOU symlink swap between
-     * scan and read. Returns false (and the caller refuses) if the target is missing or escapes;
-     * an [IOException] resolving the real path is treated as "not contained" — fail closed.
-     */
-    private fun isWithinRoot(target: Path): Boolean =
-        try {
-            target.toRealPath().startsWith(root.toRealPath())
-        } catch (_: IOException) {
-            false
-        }
-
-    /**
-     * The create-containment gate: returns a rejection reason iff the requested [path] can never
-     * legitimately name content, or null when a create may proceed. Fails closed (an [IOException]
-     * resolving the real path is "not contained"). Three guards, mirroring the scan/read invariants:
-     *  1. **Scan-skipped-name segment** — any ancestor (or the leaf) whose NAME the scan would skip
-     *     ([isScanSkippedName]: `_folder.yaml`, dotfile, `content.ignore` glob), or a segment under an
-     *     excluded subtree (DATA_DIR) → a ghost the next rebuild discards, so refuse it up front. The
-     *     name predicate is the SAME one [collectCandidates]/[isScanEligible] use, so the create-reject
-     *     set cannot drift from scan's skip set (this is what closes the "scan skips X but create allows
-     *     it" class — dotfiles, `_folder.yaml`).
-     *  2. **Symlinked existing ancestor** — links are not content; an existing ancestor directory that
-     *     is a symlink would let a create write THROUGH it (the scan never enters it), so refuse.
-     *  3. **Real-path escape** — the nearest EXISTING ancestor's resolved real path must stay inside
-     *     root's real path, so a symlink pointing outside the root (or any escape) is caught even when
-     *     the lexical [TreePath] looks contained.
-     */
-    private fun rejectionReason(path: TreePath, target: Path): String? {
-        // (1) Scan-skipped name: check each content-relative segment along the path against the SAME
-        // name-skip predicate scan uses, so no scan-skipped name (incl. `_folder.yaml`) can be created.
-        var relative: TreePath? = null
-        for (segment in path.segments) {
-            relative = relative?.resolveChild(segment) ?: TreePath.require(segment)
-            if (isScanSkippedName(segment, relative.value)) {
-                return "segment '$segment' is one the scan skips (_folder.yaml / dotfile / ignore glob — not content)"
-            }
-        }
-        // (2)+(3) Walk the existing ancestor directories, root-exclusive: none may be a symlink, and the
-        // nearest existing one must resolve inside root. resolveOnDisk(parent) is the same P4-aware
-        // resolution the create itself uses, so the check sees exactly the dirs the create would create
-        // under / write through.
-        // excludedDirs is the EFFECTIVE set (strictly inside root), shared with scan — so an ancestor
-        // DATA_DIR (a legal layout) is absent here and can't make every create reject; only a DATA_DIR
-        // genuinely nested under root matches and rejects a target beneath it.
-        val onDiskParent = target.parent
-        if (onDiskParent != null && excludedDirs.any { onDiskParent.toAbsolutePath().normalize().startsWith(it) }) {
-            return "target lies under an excluded subtree (DATA_DIR)"
-        }
-        // Walk the on-disk ancestor dirs from the target's parent up to (and including) root. Stop once
-        // we reach root; never inspect a dir outside it. The FIRST existing one is the nearest existing
-        // ancestor whose real path must stay inside root.
-        var nearestExisting: Path? = null
-        var ancestor: Path? = onDiskParent
-        while (ancestor != null && ancestor.startsWith(root)) {
-            if (Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
-                if (ancestor != root &&
-                    Files.isSymbolicLink(ancestor)
-                ) {
-                    return "an existing ancestor directory is a symlink (links are not content)"
-                }
-                // A folder segment that names an existing NON-directory (a regular file) can never be a
-                // parent — Files.createDirectories would throw. That is a PERMANENT client error (400),
-                // not the retryable Unreadable (503) the IOException catch would otherwise surface.
-                if (ancestor != root && !Files.isDirectory(ancestor, LinkOption.NOFOLLOW_LINKS)) {
-                    return "an existing ancestor path is a file, not a directory"
-                }
-                if (nearestExisting == null) nearestExisting = ancestor
-            }
-            if (ancestor == root) break
-            ancestor = ancestor.parent
-        }
-        if (nearestExisting != null && !isWithinRoot(nearestExisting)) return "the target resolves outside the content root"
-        return null
-    }
-
-    /**
-     * True iff an existing entry in [target]'s parent directory NFC-normalizes to the SAME leaf name as
-     * [target] — i.e. a non-NFC sibling the scan has not yet seen would collide with this create under
-     * the scan's [Nfc] normalization. The parent is freshly listed (creates are rare; one dir read is
-     * fine); a missing/unreadable parent simply yields false (the [Files.createFile] below then decides).
-     */
-    private fun nfcEquivalentSiblingExists(target: Path): Boolean {
-        val parent = target.parent ?: return false
-        val wantNfc = Nfc.normalize(target.fileName.toString())
-        return try {
-            Files.newDirectoryStream(parent).use { stream ->
-                stream.any { Nfc.normalize(it.fileName.toString()) == wantNfc }
-            }
-        } catch (_: IOException) {
-            false
-        }
-    }
 
     /** A CAS read's captured identity: the bytes hashed, plus the file key + mtime the rename rechecks. */
     private class FileIdentity(val bytes: ByteArray, val fileKey: Any?, val modified: FileTime)

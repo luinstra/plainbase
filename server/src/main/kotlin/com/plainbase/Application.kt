@@ -12,6 +12,7 @@ import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
 import com.plainbase.frameworks.cli.ReindexCommand
+import com.plainbase.frameworks.cli.S3SmokeCommand
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -45,6 +46,8 @@ fun main(args: Array<String>) {
         "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))
         "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1)))
         "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1)))
+        // Hidden (not in the usage line): the credentialed C0 object-store smoke - operator-run, never CI.
+        "s3-smoke" -> exitProcess(S3SmokeCommand.runAsMain(args.drop(1)))
         null, "serve" -> serve()
         else -> {
             System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex | admin)")
@@ -62,9 +65,19 @@ private fun serve() {
     }.koin
 
     val config = koin.get<PlainbaseConfig>()
+    // Object backend refusal FIRST — before requireContentDir, the lock, and every startup side effect
+    // (prune, proxy-CSRF key load, rebuild). It is not built until C4; refuse actionably here rather than
+    // serving the now-ignored CONTENT_DIR or dying later on an uncaught Koin stack trace.
+    config.objectBackendUnavailableRefusal()?.let {
+        System.err.println("serve: $it")
+        exitProcess(1)
+    }
     // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
     // bare NoSuchFileException — and never silently serve an empty tree.
     config.requireContentDir()
+    // Q9/Q10 ignored-key warnings (never fatal): local mode names any configured-but-ignored
+    // storage.object.* keys; object mode warns when CONTENT_DIR was explicitly set.
+    config.storageWarnings().forEach { logger.warn { it } }
     // ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild work.
     // Same idiom as the gates that follow (System.err + exitProcess(1), never a thrown stack trace) — a bind
     // misconfiguration is an operator-actionable startup refusal, not an argument-precondition bug.

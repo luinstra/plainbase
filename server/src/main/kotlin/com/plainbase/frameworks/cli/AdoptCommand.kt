@@ -1,11 +1,13 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -13,6 +15,11 @@ import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 
 /**
  * `plainbase adopt [--write-ids [--dry-run]]` — the chunk 4b adoption CLI.
+ *
+ * **Its mutating modes refuse to run while a server is up.** RECORD/MATERIALIZE write the app db
+ * (MATERIALIZE the tree too) from a second process, so they acquire the DATA_DIR advisory lock
+ * ([DataDirLock]) FIRST, before any driver opens and migrates, and exit 1 if a server holds it
+ * (the reindex/admin rule). PREVIEW's zero-writes read-only-driver contract keeps it lock-free.
  *
  * stdout is a CLI output contract (`println` by design, like `spike`): the per-page report, the
  * rule-naming refusal reasons (the §A3 asymmetric-freeze measurement input), and the pre-write
@@ -30,14 +37,33 @@ object AdoptCommand {
             System.err.println(USAGE)
             return 2
         }
+        // Object mode is not built until C4; this CLI runs a LocalContentStore over the now-ignored CONTENT_DIR,
+        // so refuse it before any driver opens or the lock is taken (every mode, PREVIEW included — a dry run on
+        // the wrong tree is still wrong).
+        config.objectBackendUnavailableRefusal()?.let {
+            System.err.println("adopt: $it")
+            return 1
+        }
 
         // PREVIEW's contract is zero writes, db included: it must not create or migrate the app db,
         // only read whatever identity state an existing install already holds — so an accurate
         // preview never falls out of date, yet a fresh tree gains no plainbase.db from a dry run.
-        val driver = when (mode) {
-            AdoptionPass.Mode.PREVIEW -> DatabaseFactory.createReadOnlyDriver(config.appDatabasePath)
-            else -> DatabaseFactory.createDriver(config.appDatabasePath)
+        // That same contract is why it stays lock-free below.
+        if (mode == AdoptionPass.Mode.PREVIEW) {
+            return adopt(mode, config, DatabaseFactory.createReadOnlyDriver(config.appDatabasePath))
         }
+        // RECORD/MATERIALIZE write the db (MATERIALIZE the files too) and trigger createDriver's
+        // implicit non-idempotent migrate, so they hold the DataDirLock BEFORE the driver opens,
+        // exactly like reindex/admin: never racing or writing underneath a live server.
+        val lock = DataDirLock.tryAcquire(config.dataDir)
+        if (lock == null) {
+            System.err.println("adopt: a Plainbase server is holding ${config.dataDir}; stop it before running this command")
+            return 1
+        }
+        return lock.use { adopt(mode, config, DatabaseFactory.createDriver(config.appDatabasePath)) }
+    }
+
+    private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver): Int {
         try {
             val pass = AdoptionPass(
                 contentStore = LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules()),

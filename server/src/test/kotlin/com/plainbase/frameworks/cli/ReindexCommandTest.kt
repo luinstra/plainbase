@@ -2,6 +2,8 @@ package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
@@ -40,6 +42,18 @@ class ReindexCommandTest : FunSpec({
     test("extra arguments are a usage error (exit 2)") {
         withReindexTree { config ->
             ReindexCommand.run(listOf("--bogus"), config) shouldBe 2
+        }
+    }
+
+    test("storage.backend=object refuses reindex (exit 1, actionable message), taking no lock and writing nothing") {
+        withReindexTree { config ->
+            val objectConfig = config.copy(storage = StorageConfig(backend = StorageBackend.OBJECT))
+            val err = captureStderr { ReindexCommand.run(emptyList(), objectConfig) shouldBe 1 }
+            err shouldContain "storage.backend=object is configured but the object backend is not available"
+            // The refusal precedes the lock and any driver open: no db/search.db, and the lock is free.
+            Files.exists(objectConfig.appDatabasePath) shouldBe false
+            Files.exists(objectConfig.searchDatabasePath) shouldBe false
+            DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { }
         }
     }
 

@@ -2,6 +2,9 @@ package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.StorageConfig
+import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -102,6 +105,47 @@ class AdoptCommandTest : FunSpec({
         }
     }
 
+    test("RECORD and MATERIALIZE refuse with exit 1 when a server holds the lock, touching neither db nor files") {
+        withCliTree { config ->
+            val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
+            DataDirLock.tryAcquire(config.dataDir)!!.use {
+                listOf(emptyList(), listOf("--write-ids")).forEach { args ->
+                    val err = captureStderr { AdoptCommand.run(args, config) shouldBe 1 }
+                    err shouldContain "adopt: a Plainbase server is holding ${config.dataDir}"
+                }
+                // The refusal precedes the driver open AND the adoption pass: no db, no file writes.
+                Files.exists(config.appDatabasePath) shouldBe false
+                Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
+            }
+            // After release, a run succeeds.
+            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 }
+        }
+    }
+
+    test("storage.backend=object refuses adopt in EVERY mode (exit 1), taking no lock and touching neither db nor files") {
+        withCliTree { config ->
+            val objectConfig = config.copy(storage = StorageConfig(backend = StorageBackend.OBJECT))
+            val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
+            // RECORD, MATERIALIZE, AND PREVIEW (a dry run on the now-ignored local tree is still wrong).
+            listOf(emptyList(), listOf("--write-ids"), listOf("--write-ids", "--dry-run")).forEach { args ->
+                val err = captureStderr { AdoptCommand.run(args, objectConfig) shouldBe 1 }
+                err shouldContain "storage.backend=object is configured but the object backend is not available"
+            }
+            Files.exists(objectConfig.appDatabasePath) shouldBe false
+            Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
+            DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { }
+        }
+    }
+
+    test("PREVIEW stays lock-free: adopt --write-ids --dry-run runs while a server holds the lock") {
+        withCliTree { config ->
+            DataDirLock.tryAcquire(config.dataDir)!!.use {
+                val out = captureStdout { AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0 }
+                out shouldContain "dry run: nothing was written"
+            }
+        }
+    }
+
     test("plain adopt records identities without touching any file") {
         withCliTree { config ->
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
@@ -141,6 +185,19 @@ private fun captureStdout(block: () -> Unit): String {
         block()
     } finally {
         System.setOut(previous)
+    }
+    return buffer.toString(Charsets.UTF_8)
+}
+
+/** Captures System.err for the duration of [block]: the lock-held refusal message under test. */
+private fun captureStderr(block: () -> Unit): String {
+    val buffer = ByteArrayOutputStream()
+    val previous = System.err
+    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
+    try {
+        block()
+    } finally {
+        System.setErr(previous)
     }
     return buffer.toString(Charsets.UTF_8)
 }

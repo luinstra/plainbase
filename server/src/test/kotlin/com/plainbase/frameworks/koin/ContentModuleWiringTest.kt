@@ -1,10 +1,16 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.koin.dsl.koinApplication
+import org.koin.dsl.module
 
 /**
  * DI wiring smoke test for the content adapter.
@@ -30,6 +36,31 @@ class ContentModuleWiringTest : FunSpec({
         try {
             val store = app.koin.get<ContentStore>()
             store.shouldBeInstanceOf<LocalContentStore>()
+        } finally {
+            app.close()
+        }
+    }
+
+    test("storage.backend=object refuses ContentStore resolution actionably (the hybrid adapter is not built yet)") {
+        val objectConfig = module {
+            single {
+                PlainbaseConfig.fromEnv(emptyMap()).copy(
+                    storage = StorageConfig(
+                        backend = StorageBackend.OBJECT,
+                        endpoint = "https://acct.r2.cloudflarestorage.com",
+                        bucket = "docs",
+                        accessKeyId = "k",
+                        secretAccessKey = "s",
+                    ),
+                )
+            }
+        }
+        val app = koinApplication { modules(objectConfig, contentModule) }
+        try {
+            val failure = shouldThrowAny { app.koin.get<ContentStore>() }
+            // Koin wraps instance-creation failures; the actionable message must survive somewhere in the chain.
+            generateSequence<Throwable>(failure) { it.cause }
+                .any { it.message?.contains("storage.backend=object") == true } shouldBe true
         } finally {
             app.close()
         }

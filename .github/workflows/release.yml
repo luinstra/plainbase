@@ -72,7 +72,7 @@ jobs:
 
   # ---- Per-platform native build+gate+upload jobs (item 2) ---------------------------------------
   # Four DISCRETE per-OS jobs (shell/.exe/vcvars divergence), gate sequence IDENTICAL to ci.yml's
-  # native-gate (114-177): nativeCompile -> nativeTest -> spike (8/8, HARD). NO `continue-on-error`
+  # native-gate (114-177): nativeCompile -> nativeTest -> spike (9/9, HARD). NO `continue-on-error`
   # anywhere here -- a real spike failure must fail its OWN job hard; fail-isolation lives in the
   # assembly job's `needs`/`if` (item 4), never on these gate steps (callout 5).
 
@@ -101,7 +101,7 @@ jobs:
         # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
         run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
 
-      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
 
       - name: Rename asset + log its checksum
@@ -144,7 +144,7 @@ jobs:
         # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
         run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
 
-      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
 
       - name: Rename asset + log its checksum
@@ -184,7 +184,7 @@ jobs:
         # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
         run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
 
-      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
 
       - name: Rename asset + log its checksum
@@ -232,7 +232,7 @@ jobs:
         # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
         run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
 
-      - name: Run full-stack dependency spike against the native binary (8/8 hard gate)
+      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase.exe spike
 
       - name: Rename asset + log its checksum

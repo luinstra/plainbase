@@ -41,7 +41,7 @@ import io.ktor.server.cio.CIO as ServerCIO
  * The WI-7 enforced-mode MCP harness: a real CIO server serving `plainbaseModule` over an `enforced = true`
  * RouteContext (the `ci-runs-auth-off-blind` rule — under auth.mode=off the whole gate is invisible), driven by a
  * REAL SSE MCP client. There is NO existing SSE `testApplication` harness, so this boots `embeddedServer(CIO, port=0)`
- * on an ephemeral port (the `NativeSpike.ktorCioRoundTrip` idiom) and drives it end-to-end. Mints a PROPOSE (→ EDITOR)
+ * on an ephemeral port (the `NativeSpike.mcpSseHandshake` embedded-CIO-server idiom) and drives it end-to-end. Mints a PROPOSE (→ EDITOR)
  * and a READ_ONLY (→ VIEWER) agent token, seeds ONE page (with a broken link, for validate_links), and syncs the
  * search engine so the read tools return real data.
  */

@@ -4,7 +4,7 @@ import com.plainbase.domain.content.TreePath
 import kotlin.time.Instant
 
 /**
- * The optional Git-history port (ADR-0006): one new commit per save over the SAME directory
+ * The optional Git-history port (ADR-0006): one new commit per save over the same content tree
  * the content store serves. Pure domain — no framework imports (the [DomainPurityTest][com.plainbase
  * .DomainPurityTest] floor); the two adapters live in `frameworks/git/` ([GitCliHistoryProvider][com
  * .plainbase.frameworks.git.GitCliHistoryProvider] over the `git` system binary, [NoOpHistoryProvider]
