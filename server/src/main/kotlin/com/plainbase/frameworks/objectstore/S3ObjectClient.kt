@@ -42,6 +42,10 @@ class S3ObjectClient(
     private val endpoint = Url(config.endpoint)
     private val signer = SigV4Signer(config.accessKeyId, config.secretAccessKey, config.region)
 
+    init {
+        constructions.incrementAndGet() // R9 test hook: a LOCAL boot must construct ZERO of these
+    }
+
     // Bounded timeouts: a hung endpoint must never block `s3-smoke` (or the later C4 hybrid)
     // indefinitely. HttpTimeout ships in ktor-client-core (no new dependency). The request bound
     // covers the whole call (TLS handshake + signed round-trip); static keys mean fresh
@@ -200,6 +204,9 @@ class S3ObjectClient(
     }
 
     companion object {
+        /** R9 test hook (counter-proven boot laziness, never reasoned from `single {}` laziness). */
+        internal val constructions = java.util.concurrent.atomic.AtomicInteger()
+
         private val AMZ_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC)
     }
 }

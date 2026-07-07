@@ -10,6 +10,7 @@ import com.plainbase.frameworks.objectstore.S3Addressing
 import com.plainbase.frameworks.objectstore.S3ClientConfig
 import com.plainbase.frameworks.objectstore.S3ObjectClient
 import com.plainbase.frameworks.objectstore.S3WireKey
+import com.plainbase.frameworks.objectstore.forEachListedObject
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.nio.file.Path
@@ -128,6 +129,10 @@ object S3SmokeCommand {
 
         client.put("${prefix}b.md", v1, PutCondition.IfAbsent).stored("pagination seed b")
         client.put("${prefix}c.md", v1, PutCondition.IfAbsent).stored("pagination seed c")
+        // This probe deliberately does NOT use the shared [forEachListedObject] helper: it captures the
+        // RAW ListObjectsV2 bodies (the `ListResponseParser` goldens) over `listRaw`, and forces
+        // maxKeys=2 to EXERCISE multi-page pagination on a 4-key corpus - a raw-capture concern the
+        // parsed-entry helper cannot serve (it neither exposes raw bodies nor forces a small page size).
         val pages = buildList {
             var token: String? = null
             do {
@@ -175,16 +180,12 @@ object S3SmokeCommand {
 
     /** Deletes every key the run created (everything under [prefix]), pages included. */
     private suspend fun cleanup(client: S3ObjectClient, prefix: String) {
-        var token: String? = null
-        do {
-            val page = client.list(prefix, continuationToken = token)
-            // Keys come back URL-encoded (encoding-type=url) with the WHOLE key - `/` separators
-            // included - percent-encoded (`smoke-<uuid>%2Fb.md`); DELETE takes the raw key. Decode via
-            // the shared S3-wire helper (%2F -> '/', never '+' -> space, so the hostile-key probe's '+'
-            // survives). A per-segment decodeOnce refuses %2F and would strand every scratch key.
-            page.contents.forEach { client.delete(S3WireKey.decode(it.key)) }
-            token = page.nextContinuationToken
-        } while (page.isTruncated)
+        // Keys come back URL-encoded (encoding-type=url) with the WHOLE key - `/` separators included -
+        // percent-encoded (`smoke-<uuid>%2Fb.md`); DELETE takes the raw key. Decode via the shared
+        // S3-wire helper (%2F -> '/', never '+' -> space, so the hostile-key probe's '+' survives). A
+        // per-segment decodeOnce refuses %2F and would strand every scratch key. Pagination (token loop
+        // + isTruncated termination) lives in [forEachListedObject], the one shared helper.
+        client.forEachListedObject(prefix) { entry -> client.delete(S3WireKey.decode(entry.key)) }
     }
 
     private fun configFrom(env: Map<String, String>): S3ClientConfig? {

@@ -130,21 +130,46 @@ which a corpus perf test enforces on every build.
 
 ## Backups
 
-Back up `CONTENT_DIR` always - it's the canonical source of truth (see
-[the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above).
-Back up `DATA_DIR/plainbase.db` too if users, agent tokens, proposals, roles, or the audit log
-matter to you - it's the one piece of `DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db`
-needs no backup at all: it's fully [derived state](#searchdb-is-derived-state), rebuildable from
-the content tree at any time.
+**Back up whatever holds the authoritative content.** Which store that is depends on `storage.backend`:
+in the default **local** mode it is `CONTENT_DIR` (see
+[the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above); in
+**object** mode it is the S3-compatible **bucket**, and `CONTENT_DIR` is ignored entirely (the
+Object-storage subsection below covers that case). Back up `DATA_DIR/plainbase.db` too in EITHER mode
+if users, agent tokens, proposals, roles, or the audit log matter to you - it's the one piece of
+`DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db` needs no backup at all: it's fully
+[derived state](#searchdb-is-derived-state), rebuildable from the authoritative content at any time
+(and in object mode `DATA_DIR/mirror` / `DATA_DIR/mirror-state` are likewise derived and need none).
+
+### Object-storage backend (`storage.backend=object`)
+
+In object mode the S3-compatible **bucket** is the canonical content store - back IT up, the same way
+you'd back up `CONTENT_DIR` locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
+cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
+still holds real state and still wants one.
+
+Because git history over the object backend is not available yet, an object-mode deployment has **no
+commit-grained history** - your content's point-in-time recovery is entirely your bucket's backup
+schedule (this is exactly what the `object mode with git disabled` startup WARN is pointing you at). Pick
+one, sized to how much history you want:
+
+- **R2:** enable [object versioning](https://developers.cloudflare.com/r2/buckets/object-versioning/)
+  with a retention lifecycle rule, or run an `rclone sync` on a cron to a second bucket/host.
+- **AWS S3:** enable bucket [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
+  plus a lifecycle policy (and optionally cross-region replication) for point-in-time restore.
+- **Either:** periodic `rclone`/`aws s3 sync` snapshots to cold storage.
+
+When git-over-the-mirror lands in a later release the WARN goes away and commit history returns.
 
 What actually recovers if you lose `DATA_DIR` without a backup - and what doesn't - is the next
 section.
 
 ## Losing `DATA_DIR`: what recovers and what doesn't
 
-`DATA_DIR` can vanish entirely - a lost volume, a wiped container - and Plainbase boots clean
-against the surviving `CONTENT_DIR`. The content tree is the source of truth, so most state
-re-derives; the app database `DATA_DIR/plainbase.db` also holds *real* state that does not.
+`DATA_DIR` can vanish entirely - a lost volume, a wiped container - and Plainbase boots clean against
+the surviving authoritative content: in **local** mode that is `CONTENT_DIR`, and in **object** mode it
+is the bucket (`CONTENT_DIR` is ignored; `DATA_DIR/mirror` re-hydrates from the bucket on the next
+boot). The authoritative content is the source of truth, so most state re-derives; the app database
+`DATA_DIR/plainbase.db` also holds *real* state that does not.
 
 **Recovers on the next boot, automatically:**
 

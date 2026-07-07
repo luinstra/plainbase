@@ -35,7 +35,7 @@ boot; every key here is restart-only, there is no hot reload.
 | `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | PlainbaseConfig.kt:226 |
 | `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` (:173) | PlainbaseConfig.kt:227 |
 | `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` (:174) | PlainbaseConfig.kt:228 |
-| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | PlainbaseConfig.kt (`local` \| `object`; `object` is not built yet and is refused at startup) |
+| `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | PlainbaseConfig.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
 | `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | PlainbaseConfig.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
 | `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | PlainbaseConfig.kt |
 | `PLAINBASE_S3_ACCESS_KEY_ID` | (env only, never file) | none (**required** in `object` mode) | PlainbaseConfig.kt (secret: env only, never `plainbase.conf`) |
@@ -48,8 +48,18 @@ boot; every key here is restart-only, there is no hot reload.
 Any `storage.object.*` key set while `storage.backend=local` is ignored with a single startup warning
 that names the keys (a shared `plainbase.conf` across a local and an object deploy stays legal). In
 `object` mode `CONTENT_DIR` is ignored (the bucket is the authority); an explicitly-set `CONTENT_DIR`
-warns. **`object` mode is not available in this build yet** - configuring it makes `serve`, `adopt`, and
-`reindex` refuse at startup with an actionable message until the object adapter ships.
+warns.
+
+**`object` mode** makes an S3-compatible bucket the authoritative content store; `DATA_DIR/mirror` is a
+local, derived, deletable cache of the bucket (rebuildable at any time - delete it and it self-heals on
+the next boot). At startup `serve` (and offline `adopt --write-ids` / `reindex`) HYDRATE the mirror from
+the bucket before serving, so a fresh install pulls the whole corpus down first. The first bucket LIST
+doubles as a fail-closed TLS/signature self-check: an unreachable endpoint, a rejected certificate, or a
+bad signature makes startup **refuse with an operator-actionable message and exit** rather than serve a
+stale or empty tree (never disable certificate validation to work around a TLS failure - fix the endpoint
+or this host's CA trust). Git history over the object backend is not available yet, so an object-mode boot
+with `PLAINBASE_GIT_ENABLED=true` refuses fast; leave git unset/false in object mode. See
+[operating-plainbase.md](operating-plainbase.md#backups) for the object-mode backup guidance.
 
 ## `auth.mode` - the three modes
 

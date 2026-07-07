@@ -11,7 +11,7 @@ import java.nio.file.Path
 
 /**
  * The CONTENT_DIR startup guard: serve must fail fast with an operator-actionable message that
- * NAMES the offending path — never the scan's bare `NoSuchFileException`, never a silently empty
+ * NAMES the offending path - never the scan's bare `NoSuchFileException`, never a silently empty
  * tree.
  */
 class PlainbaseConfigTest : FunSpec({
@@ -148,7 +148,7 @@ class PlainbaseConfigTest : FunSpec({
         }
     }
 
-    // --- env-wins strictness (MINOR-5): a PRESENT env key is authoritative — a malformed value fails fast, it
+    // --- env-wins strictness (MINOR-5): a PRESENT env key is authoritative - a malformed value fails fast, it
     //     never silently falls through to file/default (which is the opposite of env-always-wins) -------------
 
     test("the default bind host is loopback (out-of-the-box serve never silently exposes)") {
@@ -189,7 +189,7 @@ class PlainbaseConfigTest : FunSpec({
         PlainbaseConfig.fromEnv(mapOf("PLAINBASE_INSECURE_HTTP" to "0")).auth.insecureHttp shouldBe false
     }
 
-    // P5: agentDirectCommit.globs are validated at LOAD (the requireParseableCidrs idiom) — a malformed pattern fails
+    // P5: agentDirectCommit.globs are validated at LOAD (the requireParseableCidrs idiom) - a malformed pattern fails
     // fast naming it, and a valid set survives unchanged + parses to a CommitGlob via the accessor.
     test("a malformed PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS entry fails fast at load naming the bad pattern") {
         shouldThrow<IllegalArgumentException> {
@@ -206,7 +206,7 @@ class PlainbaseConfigTest : FunSpec({
 
     // --- B3: HOCON substitutions resolve (ADR-0009). ConfigResolveOptions.defaults() resolves within-file refs and
     //     falls back to the JVM system ENVIRONMENT (not system properties); the optional `${?…}` form drops silently
-    //     when its var is unset (a bare `${…}` would throw by design — the supported form is the optional one) ------
+    //     when its var is unset (a bare `${…}` would throw by design - the supported form is the optional one) ------
 
     test("an optional \${?…} substitution for an UNSET var parses without throwing and falls to the default") {
         // PLAINBASE_HOST_FROM_FILE is not set in the test env, so the optional substitution drops to absent; before
@@ -299,7 +299,7 @@ class PlainbaseConfigTest : FunSpec({
     test("an unknown storage.backend fails fast naming the legal values (verbatim)") {
         shouldThrow<IllegalArgumentException> {
             PlainbaseConfig.fromEnv(mapOf("PLAINBASE_STORAGE_BACKEND" to "nfs"))
-        }.message shouldBe "Unknown storage.backend 'nfs' — legal values: local, object"
+        }.message shouldBe "Unknown storage.backend 'nfs' - legal values: local, object"
     }
 
     test("object mode with the full required set loads; credentials come from env") {
@@ -432,12 +432,6 @@ class PlainbaseConfigTest : FunSpec({
             .storage.endpoint shouldBe "http://acct.example.com"
         // https is always accepted.
         PlainbaseConfig.fromEnv(objectEnv()).storage.endpoint shouldBe "https://acct.r2.cloudflarestorage.com"
-    }
-
-    test("objectBackendUnavailableRefusal names object mode with the actionable message; local returns null") {
-        PlainbaseConfig.fromEnv(objectEnv()).objectBackendUnavailableRefusal() shouldContain
-            "storage.backend=object is configured but the object backend is not available"
-        PlainbaseConfig.fromEnv(emptyMap()).objectBackendUnavailableRefusal() shouldBe null
     }
 
     test("requireContentDir in object mode ignores the directory and validates the Q9 matrix instead") {

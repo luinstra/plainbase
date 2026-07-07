@@ -5,10 +5,12 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.git.ObjectGitUnsupportedProvider
 import com.plainbase.frameworks.git.runAutoMaintenance
 import org.koin.dsl.module
 import java.nio.file.Files
@@ -17,17 +19,32 @@ import kotlin.time.Clock
 /**
  * Wires the optional Git-history layer (ADR-0006). The impl is selected by `git.enabled`
  * (explicit override) falling back to detection of a repo in CONTENT_DIR. The [WriteHistoryHook] single
- * adapts the chosen [HistoryProvider] to the write-pipeline seam — `RestModule` passes it into the `WritePipeline`.
+ * adapts the chosen [HistoryProvider] to the write-pipeline seam - `RestModule` passes it into the `WritePipeline`.
  *
  * The git-home is NOT created here (it touches an unvalidated/unlocked DATA_DIR); the provider
  * creates it lazily at the first commit.
  */
 val historyModule = module {
-    // repoPath stages the RAW on-disk repo-relative path — loose coupling: the provider gets a
+    // repoPath stages the RAW on-disk repo-relative path - loose coupling: the provider gets a
     // function, not a whole store. Bound to the CONCRETE LocalContentStore (contentModule registers it
     // and aliases the ContentStore port to it): staging git paths is a local-filesystem concern the
     // backend-neutral port deliberately does not carry.
-    single<HistoryProvider> { selectHistoryProvider(get(), get<LocalContentStore>()::resolveRepoRelativePath) }
+    single<HistoryProvider> {
+        val config = get<PlainbaseConfig>()
+        // Lazy + backend-conditional: only LOCAL mode has a contentDir LocalContentStore to stage
+        // through; object-mode history is NoOp until git-over-the-mirror lands (C5 rebinds this to
+        // get<ObjectContentStore>().mirror::resolveRepoRelativePath), so repoPath is never invoked
+        // there - but the lambda must not force a get<LocalContentStore>() at graph-resolution time
+        // either, which would construct the dead contentDir store the object boot must never build.
+        val repoPath: (TreePath) -> String = { path ->
+            if (config.storage.backend == StorageBackend.LOCAL) {
+                get<LocalContentStore>().resolveRepoRelativePath(path)
+            } else {
+                path.value
+            }
+        }
+        selectHistoryProvider(config, repoPath)
+    }
     single<WriteHistoryHook> {
         val history = get<HistoryProvider>()
         WriteHistoryHook { path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
@@ -39,12 +56,18 @@ val historyModule = module {
  * CONTENT_DIR, then [gitEnabled] (the `git.enabled` override or repo auto-detection) → either a
  * [GitCliHistoryProvider] (with the off-monitor maintenance dispatcher wired) or [NoOpHistoryProvider].
  * [repoPath] resolves the raw on-disk repo-relative path to stage in git. The git-home is NOT created
- * here — the provider creates it lazily at the first commit.
+ * here - the provider creates it lazily at the first commit.
  */
 internal fun selectHistoryProvider(
     config: PlainbaseConfig,
     repoPath: (TreePath) -> String = { it.value },
 ): HistoryProvider {
+    // Object mode short-circuits BEFORE gitEnabled: git-over-the-mirror lands in a later change, so an
+    // explicit git.enabled=true refuses at the gate check (ObjectGitUnsupportedProvider), and anything
+    // else is NoOp - auto-detection against the now-ignored CONTENT_DIR is meaningless and must not run.
+    if (config.storage.backend == StorageBackend.OBJECT) {
+        return if (config.git.enabled == true) ObjectGitUnsupportedProvider else NoOpHistoryProvider
+    }
     val exec = GitExecutor(workTree = config.contentDir, home = config.dataDir.resolve("git-home"))
     return if (gitEnabled(config, exec)) {
         GitCliHistoryProvider(
@@ -68,15 +91,15 @@ internal fun selectHistoryProvider(
  * Whether to run the Git provider: the explicit [PlainbaseConfig.GitConfig.enabled] override wins either
  * direction; `null` auto-detects a repo in CONTENT_DIR. Detection must catch `.git`-as-a-FILE (linked
  * worktree / submodule, P1-2): `Files.exists` (dir OR file) then a hermetic `rev-parse
- * --is-inside-work-tree` confirmation — `Files.isDirectory` alone would miss a worktree and silently
+ * --is-inside-work-tree` confirmation - `Files.isDirectory` alone would miss a worktree and silently
  * pick NoOp.
  *
  * Crucially, the presence of `.git` means Git mode is INTENDED, so ANY failure to confirm it is NOT a
  * reason to drop history (P1, refining P2-2): a missing binary (exitCode -1), `fatal: detected dubious
- * ownership` (exit 128, common under Docker/uid-mismatch), a permission error — all leave Git mode ON so
+ * ownership` (exit 128, common under Docker/uid-mismatch), a permission error - all leave Git mode ON so
  * the startup gate produces the actionable "install git / set PLAINBASE_GIT_ENABLED=false" error instead
  * of silently recording NO history in a real repo. ONLY a DEFINITIVE run (git ran successfully and
- * explicitly reported "false" — a bare repo or inside `.git`) drops to NoOp.
+ * explicitly reported "false" - a bare repo or inside `.git`) drops to NoOp.
  */
 internal fun gitEnabled(config: PlainbaseConfig, exec: GitExecutor): Boolean {
     config.git.enabled?.let { return it }

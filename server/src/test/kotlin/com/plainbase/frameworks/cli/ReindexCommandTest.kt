@@ -12,12 +12,13 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.file.Files
 
 /**
- * The `plainbase reindex` CLI contract (S8 Resolution 2 / criteria 6–8 JVM half + criterion 14).
+ * The `plainbase reindex` CLI contract (S8 Resolution 2 / criteria 6-8 JVM half + criterion 14).
  * A temp content tree + temp DATA_DIR drives the real `ReindexCommand.run`; the resulting
  * search.db is reopened independently and queried to prove the rebuild took. The cross-process
  * lock leg holds the DATA_DIR lock and asserts the exact refusal message + exit 1.
@@ -45,15 +46,38 @@ class ReindexCommandTest : FunSpec({
         }
     }
 
-    test("storage.backend=object refuses reindex (exit 1, actionable message), taking no lock and writing nothing") {
+    test(
+        "storage.backend=object with an incomplete Q9 matrix fails fast at requireContentDir (exit 1), " +
+            "taking no lock and writing nothing - C4 replaced the outright refusal with real object wiring, " +
+            "but requireContentDir()'s pre-lock Q9 gate still refuses a config missing its required keys",
+    ) {
         withReindexTree { config ->
             val objectConfig = config.copy(storage = StorageConfig(backend = StorageBackend.OBJECT))
             val err = captureStderr { ReindexCommand.run(emptyList(), objectConfig) shouldBe 1 }
-            err shouldContain "storage.backend=object is configured but the object backend is not available"
-            // The refusal precedes the lock and any driver open: no db/search.db, and the lock is free.
+            err shouldNotContain "storage.backend=object is configured but the object backend is not available"
+            // The gate precedes the lock and any driver open: no db/search.db, and the lock is free.
             Files.exists(objectConfig.appDatabasePath) shouldBe false
             Files.exists(objectConfig.searchDatabasePath) shouldBe false
             DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { }
+        }
+    }
+
+    test(
+        "storage.backend=object, fully configured but unreachable: reindex hydrates first, fails fast and " +
+            "actionably (exit 1) rather than silently reindexing an empty/stale mirror",
+    ) {
+        withReindexTree { config ->
+            val objectConfig = config.copy(
+                storage = StorageConfig(
+                    backend = StorageBackend.OBJECT,
+                    endpoint = "https://127.0.0.1:9", // loopback, nothing listening - fails fast, not a timeout
+                    bucket = "docs",
+                    accessKeyId = "k",
+                    secretAccessKey = "s",
+                ),
+            )
+            // The failure is logged via the facade (logger.error), not println - the exit code is the contract.
+            captureStderr { ReindexCommand.run(emptyList(), objectConfig) shouldBe 1 }
         }
     }
 

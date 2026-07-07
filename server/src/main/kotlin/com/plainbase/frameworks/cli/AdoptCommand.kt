@@ -1,20 +1,25 @@
 package com.plainbase.frameworks.cli
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import java.nio.file.Path
 
 /**
- * `plainbase adopt [--write-ids [--dry-run]]` — the chunk 4b adoption CLI.
+ * `plainbase adopt [--write-ids [--dry-run]]` - the chunk 4b adoption CLI.
  *
  * **Its mutating modes refuse to run while a server is up.** RECORD/MATERIALIZE write the app db
  * (MATERIALIZE the tree too) from a second process, so they acquire the DATA_DIR advisory lock
@@ -37,16 +42,9 @@ object AdoptCommand {
             System.err.println(USAGE)
             return 2
         }
-        // Object mode is not built until C4; this CLI runs a LocalContentStore over the now-ignored CONTENT_DIR,
-        // so refuse it before any driver opens or the lock is taken (every mode, PREVIEW included — a dry run on
-        // the wrong tree is still wrong).
-        config.objectBackendUnavailableRefusal()?.let {
-            System.err.println("adopt: $it")
-            return 1
-        }
 
         // PREVIEW's contract is zero writes, db included: it must not create or migrate the app db,
-        // only read whatever identity state an existing install already holds — so an accurate
+        // only read whatever identity state an existing install already holds - so an accurate
         // preview never falls out of date, yet a fresh tree gains no plainbase.db from a dry run.
         // That same contract is why it stays lock-free below.
         if (mode == AdoptionPass.Mode.PREVIEW) {
@@ -64,19 +62,49 @@ object AdoptCommand {
     }
 
     private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver): Int {
+        var store: ContentStore? = null
         try {
+            val database = DatabaseFactory.createDatabase(driver)
+            when (config.storage.backend) {
+                StorageBackend.LOCAL -> store = LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules())
+                StorageBackend.OBJECT -> {
+                    // Object mode adopts over the DATA_DIR mirror (the bucket is the authority).
+                    // RECORD/MATERIALIZE hydrate first - under the lock already held, race-free (the
+                    // server is down). PREVIEW hydrates NOTHING (its contract is zero writes and it is
+                    // lock-free): it reads the existing mirror as-is, point-in-time, possibly stale.
+                    val dirtyPages = SqlDelightDirtyPageRepository(database)
+                    // Assign BEFORE hydrate so a hydrate-failure early return still closes the transport.
+                    val hybrid = ObjectContentStoreFactory.build(config, IgnoreRules()) { dirtyPages.all().map { it.path }.toSet() }
+                    store = hybrid
+                    if (mode != AdoptionPass.Mode.PREVIEW) {
+                        try {
+                            hybrid.hydrate()
+                        } catch (e: Exception) {
+                            System.err.println("adopt: ${e.message}")
+                            return 1
+                        }
+                    }
+                }
+            }
             val pass = AdoptionPass(
-                contentStore = LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules()),
-                idMap = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)),
+                contentStore = store,
+                idMap = SqlDelightIdMapRepository(database),
                 identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
             )
             val report = pass.run(mode) { path, id -> println("intent: write id $id -> ${path.value}") }
-            print(render(report, config))
+            print(render(report, adoptedRoot(config)))
         } finally {
+            (store as? AutoCloseable)?.close() // release the object-store transport (LocalContentStore is not closeable)
             driver.close()
         }
         return 0
+    }
+
+    /** The tree the pass actually walked: CONTENT_DIR locally, the DATA_DIR mirror in object mode. */
+    private fun adoptedRoot(config: PlainbaseConfig) = when (config.storage.backend) {
+        StorageBackend.LOCAL -> config.contentDir
+        StorageBackend.OBJECT -> config.dataDir.resolve("mirror")
     }
 
     /** The exact documented flag surface; anything else (including `--dry-run` alone) is a usage error. */
@@ -92,8 +120,8 @@ object AdoptCommand {
         }
     }
 
-    private fun render(report: AdoptionPass.Report, config: PlainbaseConfig): String = buildString {
-        appendLine("adopt: ${report.pages.size} page(s) under ${config.contentDir}")
+    private fun render(report: AdoptionPass.Report, root: Path): String = buildString {
+        appendLine("adopt: ${report.pages.size} page(s) under $root")
         when (report.mode) {
             AdoptionPass.Mode.RECORD -> renderRecord(report)
             AdoptionPass.Mode.PREVIEW -> renderPreview(report)
@@ -155,5 +183,5 @@ object AdoptCommand {
     private const val NETWORK_FS_CAVEAT =
         "note: on network filesystems (NFS/SMB) atomic rename is unsupported and writes fall back to " +
             "copy+delete, which is not crash-atomic; every write is intent-logged (path + id) before it " +
-            "is performed, and adopt is idempotent — re-run after an interruption to reconcile."
+            "is performed, and adopt is idempotent - re-run after an interruption to reconcile."
 }
