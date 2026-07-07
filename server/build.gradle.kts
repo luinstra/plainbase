@@ -336,6 +336,12 @@ graalvmNative {
             // JEP 472 grant for sqlite-jdbc's System.load, baked into the image at build time
             // (mirrors applicationDefaultJvmArgs above; without it every start warns on stderr).
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
+            // Runtime (-R:) default max heap, compiled into the image — NOT the -J: builder-JVM heap
+            // below, which tunes only the image build. Without it the Serial GC (CE default) lets RSS
+            // ratchet toward a large physical-memory-derived default and squat there. 256m boots the
+            // ~1k–3k design range with wide margin (measured) and keeps the boot-OOM cliff far from
+            // realistic corpora; it stays overridable by a runtime -Xmx for very large trees.
+            buildArgs.add("-R:MaxHeapSize=256m")
             buildArgs.add("-J-Xmx6g")
             resources.autodetect()
         }
@@ -343,6 +349,9 @@ graalvmNative {
             buildArgs.add("--no-fallback")
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
             buildArgs.add("-J-Xmx6g")
+            // Deliberately NO -R:MaxHeapSize here: the JUnit test set needs more runtime heap than the
+            // shipped `main` default, and the `spike` gate already runs that capped main binary — so the
+            // runtime cap stays gated without starving the test image.
             // The test image must also embed classpath resources (the SPA shell
             // under static/) or HealthRouteTest's root-route check 404s natively.
             resources.autodetect()

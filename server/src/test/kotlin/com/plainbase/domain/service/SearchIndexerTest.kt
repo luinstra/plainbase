@@ -10,6 +10,7 @@ import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.mockk.confirmVerified
 import io.mockk.every
@@ -157,5 +158,23 @@ class SearchIndexerTest : FunSpec({
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
         indexed.captured.map { it.pageId } shouldBe listOf(idA, idB)
+    }
+
+    test("cold-start full upsert streams in bounded batches, not one corpus-sized index call") {
+        // The other tests drive <=3-page corpora (a single index call), so they never exercise the
+        // >INDEX_BATCH chunking path. A cold sync of a large corpus must upsert in bounded slices —
+        // once each, in full — so the batching is a locked-in behavior, not an accident.
+        val many = (0 until 600).map { i ->
+            page(PageId.require("0197a3f2-8c4d-7e91-b3a2-%012x".format(i)), "s/p-$i.md", hash('a'))
+        }
+        val (provider, indexer) = harness(emptyMap())
+
+        indexer.sync(snapshot(*many.toTypedArray()))
+
+        val batches = mutableListOf<List<PageDocuments>>()
+        verify { provider.index(capture(batches)) }
+        (batches.size > 1) shouldBe true // bounded: never one corpus-sized call
+        batches.all { it.size <= SearchIndexer.INDEX_BATCH } shouldBe true
+        batches.flatten().map { it.pageId } shouldContainExactlyInAnyOrder many.map { it.id }
     }
 })
