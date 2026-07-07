@@ -49,6 +49,23 @@ boot; every key here is restart-only, there is no hot reload.
   [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) for a worked deployment (Caddy +
   oauth2-proxy).
 
+## Heap size (native binary) - not an env var
+
+The native binary ships with a compiled-in max heap of **256 MiB** (`-R:MaxHeapSize=256m`, baked at
+build time in `server/build.gradle.kts`). This bounds resident memory: GraalVM's Serial GC would
+otherwise let the heap ratchet toward a large physical-memory-derived default and squat there. 256 MiB
+boots the intended corpus range with wide margin; steady RSS lands ~90-160 MiB depending on corpus
+size (a ~50-90 MiB share is off-heap - mmap'd SQLite, JNI, resident image code - and this knob does
+not touch it).
+
+Override it per process with a standard JVM flag, which always wins over the compiled-in default:
+
+    plainbase -Xmx512m serve         # or -XX:MaxHeapSize=512m
+
+Raise it for a very large corpus. The startup index build holds the whole content tree in memory, so
+a large enough corpus (many thousands of pages) can eventually exceed 256 MiB and fail to boot with
+`OutOfMemoryError: Garbage-collected heap size exceeded`. If you hit that on startup, raise `-Xmx`.
+
 ## Meilisearch is not a config key
 
 `SEARCH_ENGINE` / `MEILI_URL` do **not** exist as Plainbase configuration - grepping
