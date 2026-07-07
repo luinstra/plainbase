@@ -37,7 +37,17 @@ class SearchIndexer(
             return
         }
         if (stale.isNotEmpty()) provider.delete(stale)
-        if (changed.isNotEmpty()) provider.index(changed.map(splitter::split))
+        // Cold start (empty engine) makes `changed` the WHOLE corpus, so stream the split documents
+        // through the provider in bounded batches rather than materialize every page's at once — the
+        // same working-set guard `rebuild` gets from its Sequence param. Each page stays its own
+        // transaction inside the provider (§B4 per-page atomicity is untouched). One behavior shift vs
+        // the old eager `.map` (which threw before any write): a page that throws mid-run — in `split`
+        // or the provider index write — now leaves the earlier chunks already committed (partial, not
+        // zero, progress), benign because the next sync's engine-truth diff re-detects and repairs the
+        // rest, exactly as the §B4 self-heal already promises.
+        if (changed.isNotEmpty()) {
+            changed.asSequence().map(splitter::split).chunked(INDEX_BATCH).forEach(provider::index)
+        }
         logger.info { "search sync: ${changed.size} page(s) upserted, ${stale.size} deleted" }
     }
 
@@ -67,6 +77,9 @@ class SearchIndexer(
     }
 
     companion object {
+        /** Caps the split-document working set of a full-corpus [sync]; a cold start upserts every page. */
+        internal const val INDEX_BATCH = 256
+
         private val logger = KotlinLogging.logger {}
     }
 }
