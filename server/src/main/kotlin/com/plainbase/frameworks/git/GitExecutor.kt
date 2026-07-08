@@ -51,11 +51,26 @@ class GitExecutor(
      * stdout and stderr are drained on separate threads and kept DISTINCT in the result: stdout is parsed
      * as data (SHAs, trees), stderr is diagnostic only.
      */
-    fun run(args: List<String>, env: Map<String, String> = emptyMap(), stdin: ByteArray? = null): GitResult {
+    fun run(args: List<String>, env: Map<String, String> = emptyMap(), stdin: ByteArray? = null): GitResult =
+        runInternal(args, env, stdin, includeWorkTree = true)
+
+    /**
+     * Cluster-1 fix (C5): probes `git --version` WITHOUT the `-C <workTree>` prefix every other call
+     * carries. `--version` reads no repository, so dropping `-C` is a no-op for local mode (whose
+     * work tree already exists by the time this runs) - but it is load-bearing for the object-mode
+     * pre-lock gate: `gateCheck()` runs at `Application.kt`'s `serve()` BEFORE the lock and before
+     * hydrate's mkdir, so a missing `DATA_DIR/mirror` would otherwise make every call (including this
+     * probe) fail with git's `cannot change to '<dir>'` and misreport the binary itself as missing.
+     */
+    fun versionProbe(): GitResult = runInternal(listOf("--version"), emptyMap(), null, includeWorkTree = false)
+
+    private fun runInternal(args: List<String>, env: Map<String, String>, stdin: ByteArray?, includeWorkTree: Boolean): GitResult {
         val command = buildList {
             add(gitBinary)
-            add("-C")
-            add(workTree.toString())
+            if (includeWorkTree) {
+                add("-C")
+                add(workTree.toString())
+            }
             addAll(PINNED_CONFIG)
             addAll(args)
         }

@@ -17,6 +17,7 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.configModule
 import com.plainbase.frameworks.koin.contentModule
@@ -101,8 +102,10 @@ private fun serve() {
         System.err.println("serve: ${e.message}")
         exitProcess(1)
     }
-    // Rev-3.4 DR nudge: every C4-era object boot that survives the gate check is git-disabled, so name
-    // the exposure ONCE (backups are operator-owned; git-over-the-mirror lands in a later change).
+    // Rev-3.4 DR nudge: an object boot that survives the gate check with git DISABLED (`git.enabled`
+    // unset/false) has no commit-grained history, so name the exposure ONCE (backups are operator-owned).
+    // Since C5, `git.enabled=true` in object mode wires a real GitCliHistoryProvider + bundle DR, so this
+    // WARN no longer fires unconditionally on every object boot - only the git-disabled ones.
     objectModeGitDisabledWarning(config, koin.get<HistoryProvider>())?.let { logger.warn { it } }
     // Hold the DATA_DIR advisory lock for the server's whole lifetime, acquired
     // BEFORE any rebuild/watcher registration. A second server on the same DATA_DIR - or an offline
@@ -123,10 +126,22 @@ private fun serve() {
         // mirror through the port, which is what makes a retained-mark recovery commit-or-drift-skip
         // correctly. The first LIST is also the R16 fail-closed TLS/signature self-check; its refusal
         // surfaces via the same System.err + exit(1) idiom as the other gates.
-        // (C5 inserts bundle-restore IMMEDIATELY BEFORE this call, in this same lock region.)
+        //
+        // C5: when git is enabled, a bundle-DR restore runs strictly BEFORE hydrate, and the boot
+        // reconcile strictly AFTER - both in this same lock region, hydrate/hydrate's mirror walk. Nested
+        // behind `config.git.enabled == true` so a git-DISABLED object boot never constructs `GitBundleDr`
+        // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
+        // hydrate-only C4 boot).
         if (config.storage.backend == StorageBackend.OBJECT) {
             try {
-                koin.get<ObjectContentStore>().hydrate()
+                if (config.git.enabled == true) {
+                    val bundleDr = koin.get<GitBundleDr>()
+                    val restored = bundleDr.restore() // gate + FORK-2 sentinel truth table (2b); a non-404 GET failure aborts boot
+                    koin.get<ObjectContentStore>().hydrate(strict = restored.isRestored) // restore path is STRICT (FORK 1)
+                    bundleDr.reconcileBootCommit(restored) // ONE plumbing commit or no-op; clears the sentinel
+                } else {
+                    koin.get<ObjectContentStore>().hydrate()
+                }
             } catch (e: Exception) {
                 // exitProcess skips the outer finally - release the lock explicitly (the prepare() idiom).
                 lock.close()
@@ -187,7 +202,13 @@ private fun serve() {
             scheduler.close()
             // Release the object-store transport (the ktor HttpClient) on shutdown; the poll is already
             // stopped by watch.close() above. LOCAL mode has no transport to close.
-            if (config.storage.backend == StorageBackend.OBJECT) koin.get<ObjectContentStore>().close()
+            if (config.storage.backend == StorageBackend.OBJECT) {
+                // C5: the final graceful-shutdown bundle ship BEFORE the transport it needs closes; same
+                // `git.enabled` guard as the boot-side wiring so a git-disabled object boot never touches
+                // GitBundleDr here either. Order load-bearing.
+                if (config.git.enabled == true) koin.get<GitBundleDr>().close()
+                koin.get<ObjectContentStore>().close()
+            }
         }
     } finally {
         lock.close()

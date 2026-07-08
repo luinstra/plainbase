@@ -7,11 +7,10 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.objectstore.ObjectContentStore
-import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
@@ -74,16 +73,18 @@ class ContentModuleWiringTest : FunSpec({
     }
 
     test(
-        "object mode + explicit git.enabled=true refuses at gateCheck() with the actionable message " +
-            "(BOUND decision 2); enabled=false/null stays NoOp",
+        "object mode + explicit git.enabled=true resolves a real GitCliHistoryProvider over the mirror " +
+            "whose gateCheck() PASSES when git is present (C5 BOUND decision 1 - replaces the C4 refusal)",
     ) {
         withTempDataDir { dataDir ->
             val app = koinApplication {
                 modules(objectConfigModule(dataDir, gitEnabled = true), contentModule, repositoryModule, securityModule, historyModule)
             }
             try {
-                val failure = shouldThrow<IllegalStateException> { app.koin.get<HistoryProvider>().gateCheck() }
-                failure.message shouldContain "git history over the object backend"
+                val history = app.koin.get<HistoryProvider>()
+                history.shouldBeInstanceOf<GitCliHistoryProvider>()
+                history.enabled shouldBe true
+                history.gateCheck() // does not throw - the object-mode git binary/version probe passes pre-lock
             } finally {
                 app.close()
             }

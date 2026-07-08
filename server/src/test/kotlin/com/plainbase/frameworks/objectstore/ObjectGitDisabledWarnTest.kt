@@ -28,10 +28,11 @@ import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
 
 /**
- * Rev 3.4's backup-guidance WARN: exactly non-null when object mode boots with git disabled - the
- * every-C4-era-object-boot-is-git-disabled corollary (BOUND decision 2) means this fires on every
- * object boot until C5. No snapshot/manifest writer and no `storage.object.snapshot.*` keys exist
- * (rev 3.4 removed that alternative outright) - a companion source-scan pins both absences.
+ * Rev 3.4's backup-guidance WARN: exactly non-null when object mode boots with git disabled. Since C5,
+ * `git.enabled=true` in object mode wires a real `GitCliHistoryProvider` + bundle DR (a real
+ * `enabled == true` [HistoryProvider]), so this WARN fires only on a git-DISABLED object boot, not on
+ * every object boot. No snapshot/manifest writer and no `storage.object.snapshot.*` keys exist (rev 3.4
+ * removed that alternative outright) - a companion source-scan pins both absences.
  */
 class ObjectGitDisabledWarnTest : FunSpec({
 

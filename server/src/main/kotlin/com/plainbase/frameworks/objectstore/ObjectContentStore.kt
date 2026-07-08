@@ -335,8 +335,18 @@ class ObjectContentStore(
      * luck: `WritePipeline.write` marks the page dirty BEFORE calling `compareAndSwapWrite`
      * (mark-precedes-CAS), so a page whose bytes may be mid-flight to the bucket is ALWAYS present in
      * the journal; boot can never reap an unpushed dirty edit before `reconcileDirtyPages` runs.
+     *
+     * C5 FORK 1 - [strict]: on the RESTORE path (a bundle-restore/reconcile is owed, `Application.kt`
+     * passes `strict = restored.isRestored`), any of the THREE best-effort deferral sites below - (a) a
+     * GET failure/404-while-listed, (b) a mirror-WRITE failure after a good GET, (c) a delete-phase
+     * failure - THROWS instead of deferring, aborting the boot (which retries via the :128-135 idiom,
+     * with the FORK-2 sentinel keeping the reconcile owed until a strict hydrate fully succeeds).
+     * Reason: any of the three leaves the mirror INCOMPLETE, and `GitBundleDr`'s reconcile enumerates
+     * [authoritativeMirrorPaths] AFTER hydrate - a successful-GET-but-failed-WRITE key silently absent
+     * from the mirror would make the reconcile's remove-set FALSE-DELETE it from history (HOLE A
+     * reopening). WARM object boots pass `strict = false` (unchanged C4 best-effort behavior).
      */
-    fun hydrate() {
+    fun hydrate(strict: Boolean = false) {
         Files.createDirectories(mirrorRoot) // deferred out of the factory so PREVIEW (no hydrate) never mkdirs
         val before = state.snapshot()
         val listed = try {
@@ -379,10 +389,18 @@ class ObjectContentStore(
             // eventually-consistent-lagged WOULD lose it; fetching cannot, so it does not guard.
             for ((path, fetched) in results) {
                 if (fetched == null) {
-                    // GET failed or 404'd while the mirror file is missing/stale: DROP the state entry so
-                    // the mirror-file-missing / etag diff stays detectable and a later poll (whose diff is
-                    // etag-only) or the next hydrate re-fetches. Retaining the old etag here would wedge the
-                    // key absent forever (poll would see before[path] == listed.etag and never retry).
+                    // (a) GET failed or 404'd while the mirror file is missing/stale. Best-effort: DROP the
+                    // state entry so the mirror-file-missing / etag diff stays detectable and a later poll
+                    // (whose diff is etag-only) or the next hydrate re-fetches - retaining the old etag here
+                    // would wedge the key absent forever (poll would see before[path] == listed.etag and never
+                    // retry). C5 FORK 1: under `strict`, this leaves the mirror incomplete for a key the
+                    // reconcile enumeration will need - abort the boot instead.
+                    if (strict) {
+                        throw ObjectStoreException(
+                            "strict hydrate (restore path): GET of '${path.value}' failed or 404'd while listed; " +
+                                "the mirror would be incomplete for the boot reconcile",
+                        )
+                    }
                     state.invalidate(path)
                     continue
                 }
@@ -392,8 +410,16 @@ class ObjectContentStore(
                     state.recordConfirmed(path, body.etag)
                     healed++
                 } else {
-                    // Hydrate-apply failure (seam g): boot does NOT fail on a single-key mirror write
-                    // error - the bucket stays authority; the key stays absent and re-heals later.
+                    // (b) Hydrate-apply failure (seam g). Best-effort: boot does NOT fail on a single-key
+                    // mirror write error - the bucket stays authority; the key stays absent and re-heals
+                    // later. C5 FORK 1: under `strict`, a durable-but-unmirrored key here is exactly the
+                    // HOLE A false-delete class - abort the boot instead.
+                    if (strict) {
+                        throw ObjectStoreException(
+                            "strict hydrate (restore path): mirror write of '${path.value}' failed after a successful " +
+                                "GET ($failure); the mirror would be incomplete for the boot reconcile",
+                        )
+                    }
                     logger.warn { "mirror_hydrate_failed: '${path.value}' could not be applied ($failure); the poll will retry" }
                     state.invalidate(path)
                 }
@@ -403,7 +429,17 @@ class ObjectContentStore(
         val dirty = dirtyPaths()
         for (path in (before.keys + mirrorFilePaths()) - listed.keys) {
             if (path in dirty) continue // never reap an unpushed dirty edit (mark-precedes-CAS, above)
-            if (deleteMirrorFile(path)) state.invalidate(path) // drop state ONLY after the file is gone (finding 3)
+            if (deleteMirrorFile(path)) {
+                state.invalidate(path) // drop state ONLY after the file is gone (finding 3)
+            } else if (strict) {
+                // (c) delete-phase failure (a swallowed IOException). C5 FORK 1: under `strict` a file the
+                // bucket no longer has must actually be gone before the reconcile enumerates the mirror -
+                // a surviving stale file would masquerade as authoritative and be re-committed. Abort.
+                throw ObjectStoreException(
+                    "strict hydrate (restore path): deleting bucket-absent mirror file '${path.value}' failed; " +
+                        "the mirror would be incomplete for the boot reconcile",
+                )
+            }
         }
         state.persist()
         logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, ${changed.size - healed} deferred" }
@@ -820,6 +856,34 @@ class ObjectContentStore(
     }
 
     /**
+     * C5 BLOCKING 1: the intention-revealing internal accessor over [mirrorFilePaths] the boot
+     * reconcile (`GitBundleDr`) enumerates against - AFTER a strict hydrate, so this equals the bucket
+     * listing by construction (HOLE A: the reconcile remove-set keys off THIS authority, never raw
+     * disk-absence). `internal` is visible to `GitBundleDr` across packages within the `:server` module.
+     */
+    internal fun authoritativeMirrorPaths(): Set<TreePath> = mirrorFilePaths()
+
+    /**
+     * C5: the bucket-shipped `.git` bundle bytes, or null on a true 404 (no bundle has ever shipped -
+     * a fresh install / an abandoned restore). Any OTHER failure PROPAGATES (HOLE C): [client] throws
+     * on a non-404 status, so a TLS/connect blip is never misread as "no bundle" - that would let
+     * [restore] init a fresh empty repo the next ship would then CLOBBER over real history.
+     */
+    fun getHistoryBundle(): ByteArray? = runBlocking { client.get(bundleKey) }?.bytes
+
+    /** C5: ships the DR bundle unconditionally (`PutCondition.None` - see the invariant comment at [GitBundleDr.ship]'s call site). */
+    fun putHistoryBundle(bytes: ByteArray) {
+        runBlocking { client.put(bundleKey, bytes, PutCondition.None, contentType = null) }
+    }
+
+    /**
+     * `<prefix/>.plainbase/history.bundle` - under the reserved [APP_OWNED_PREFIX] dot-skip law
+     * ([MirrorKeyFunnel]'s eligibility check, wrapped by [eligibleTreePath]) so it is invisible to
+     * scan/hydrate/poll like every other app-owned key.
+     */
+    private val bundleKey get() = keyPrefix + APP_OWNED_PREFIX + "history.bundle"
+
+    /**
      * Deletes [path]'s mirror file (P4 raw-name-aware) and drops now-empty parent directories. Returns
      * true iff the file is now absent (deleted, or already gone); false iff the delete FAILED, so the
      * caller keeps the state entry rather than invalidating/emitting over a file that still serves.
@@ -862,8 +926,13 @@ class ObjectContentStore(
             it is ConnectException || it is UnresolvedAddressException || it is ConnectTimeoutException
         }
 
-    /** The R16 fail-closed boot refusal: TLS/signature/connect rejections name their remedy. */
-    private fun bootRefusal(failure: Exception): Exception {
+    /**
+     * The R16 fail-closed boot refusal: TLS/signature/connect rejections name their remedy. `internal`
+     * (not private) so [com.plainbase.frameworks.git.GitBundleDr.restore] can reuse the SAME
+     * classification for its own pre-hydrate bucket GET (`getHistoryBundle`) - a non-404 transport/
+     * credential failure there must surface this operator-actionable message too, never a raw exception.
+     */
+    internal fun bootRefusal(failure: Exception): Exception {
         val tls = generateSequence<Throwable>(failure) { it.cause }.any { it is javax.net.ssl.SSLException }
         val message = when {
             tls ->
@@ -873,7 +942,9 @@ class ObjectContentStore(
                 "object storage endpoint is unreachable: ${causeOf(failure)}. " +
                     "Check storage.object.endpoint and network reachability; object-mode boot requires the bucket."
             else ->
-                "object storage self-check LIST failed: ${causeOf(failure)}. " +
+                // "self-check" covers BOTH callers sharing this classification: hydrate's own first LIST,
+                // and GitBundleDr.restore's pre-hydrate bundle GET (a non-404 failure there is HOLE C).
+                "object storage self-check failed: ${causeOf(failure)}. " +
                     "Check the endpoint, bucket, credentials, and this host's clock (SigV4); " +
                     "never disable certificate validation to fix this."
         }
