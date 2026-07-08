@@ -147,18 +147,81 @@ you'd back up `CONTENT_DIR` locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-stat
 cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
 still holds real state and still wants one.
 
-Because git history over the object backend is not available yet, an object-mode deployment has **no
-commit-grained history** - your content's point-in-time recovery is entirely your bucket's backup
-schedule (this is exactly what the `object mode with git disabled` startup WARN is pointing you at). Pick
-one, sized to how much history you want:
+With `storage.backend=object` **and** `git.enabled=true`, commit-grained history over object mode is
+available: every save commits over the `DATA_DIR/mirror` worktree exactly as local mode does, and the
+`.git` history itself ships to the bucket as a bundle (`<prefix>/.plainbase/history.bundle`) on a
+debounced cadence (20 commits or 300 seconds, whichever comes first, plus an immediate best-effort ship
+triggered by a fresh process's first commit, plus a graceful-shutdown flush). That first-commit ship is
+async, so a crash in the brief window before it completes can still lose that history: the bundle simply
+hasn't reached the bucket yet. Losing `DATA_DIR` is then recoverable past
+just content: the next boot fetches the bundle, restores `.git` from it, and reconciles any drift
+between the bundle's tip and the bucket's current state into one commit
+(`reconcile: bucket state at boot`).
+
+That reconcile carries one accepted, documented loss class: a proposal **apply** (an approval) that
+lands inside the pre-crash cadence window - after the last shipped bundle, before the next one - has
+its human proposer/approver **attribution** collapse into that single anonymous, server-identity
+reconcile commit on the next boot. Content is never lost (the bucket stays authoritative throughout);
+only the commit granularity and that window's human attribution are. The graceful-shutdown flush, the
+20-commit/300-second cadence, and the first-commit-ships-immediately rule all bound how wide that
+window can get.
+
+**The bundle-growth plateau.** Every ship is a FULL `bundle create --all` (never incremental) followed by
+a whole-bundle PUT; every restore is a whole-bundle GET followed by a whole-bundle `fetch`. All four of
+those git/network calls sit behind fixed ~30-second ceilings (the `GitExecutor` default timeout on
+`bundle create` and the restore-side `fetch`; the object-store client's request timeout on the PUT and
+GET). That is fine at the roughly-1k-page contract this design targets, but the bundle only grows
+(history is never pruned), so past *some* corpus/history size every one of those four calls eventually
+starts exceeding its ceiling and every ship or restore fails. A ship failure alone is silent in the sense
+that content keeps serving fine - the only signal is the escalating WARN-then-ERROR log
+(`SHIP_FAILURE_ESCALATION_THRESHOLD` consecutive failures) telling you the DR bundle has gone stale and
+stayed stale. There is no separate metric or alert for this: watch that log line if your corpus/history is
+approaching a size where a full bundle create/fetch could plausibly run past 30 seconds.
+
+A corrupt or partially-restored local `.git` (a process killed mid-restore, a manually-deleted `.git`
+subpath) self-heals the same way ADR-0004 treats every other piece of `DATA_DIR`: git fails loud in a way
+that is DEFINITIVELY "no real repo here" (absent, or an unborn/never-fetched HEAD), so
+`DATA_DIR/mirror/.git` is renamed aside (`.git.pre-restore-<timestamp>-<uuid>`, dot-prefixed so it never
+shows up as content) and the next boot re-restores cleanly from the bucket-shipped bundle - never a
+silently-served partial repo. A `.git` that git merely **cannot read** in this environment (most commonly
+a dubious-ownership refusal from a DATA_DIR ownership/UID change, or a permissions problem) is a different
+case entirely and is deliberately NOT treated the same way: Plainbase cannot tell an unreadable-but-intact
+repo apart from a genuinely broken one, so rather than guess and risk deleting a complete history it
+aborts the boot with an actionable message naming the likely cause (ownership/permissions) and the fix.
+Resolve the underlying ownership/permission issue and restart; nothing about the mirror is touched while
+the boot is refusing to start.
+
+**Strict-hydrate boot-loop escape hatch.** On the restore path specifically (a bundle-restore/reconcile is
+owed), hydrate runs *strict*: any bucket-fetch or mirror-write failure for a SINGLE key aborts the boot
+outright rather than silently leaving the mirror incomplete (FORK-1 design - a silently-incomplete mirror
+would let the boot reconcile mis-delete that key from history). If that failure is persistent (a
+permanently corrupted or inaccessible bucket object), this is a fail-loud boot loop by design: every
+restart hits the same strict-hydrate failure and aborts again. The operator escape is
+`rm DATA_DIR/restore-pending` - that clears the FORK-2 sentinel, so the next boot sees a complete `.git`
+with no sentinel and takes the ordinary warm, non-strict path instead (skipping that boot's reconcile
+commit; the reconcile obligation is simply dropped, not deferred). Content itself is never at risk during
+any of this - only the commit-grained history reconcile is gated.
+
+That `restore-pending` hatch only helps once `.git` is already complete. A CORRUPT bucket bundle is a
+different failure: the GET succeeds, but the restore fetch itself fails (`fetch.fsckObjects` rejects the
+bundle's contents), so `.git` never becomes complete and every restart re-fetches the same corrupt bundle
+and re-aborts - the sentinel removal does nothing here. The remedy is to delete or replace the bucket's
+`.plainbase/history.bundle` object directly (accepting the loss of the bundled commit-grained history).
+Once that object is gone, the next boot's bundle GET comes back 404, which restore() reads as "no bundle" -
+fresh-init a new local `.git` and proceed normally, same as any first-ever boot with git enabled. Content
+itself was never at risk (the bucket's actual pages are untouched); only the pre-existing commit history
+carried in that bundle is lost.
+
+`git.enabled=false` (or unset - the default) keeps object mode's pre-history posture: **no
+commit-grained history at all**, so content point-in-time recovery is entirely your bucket's backup
+schedule (this is exactly what the `object mode with git disabled` startup WARN is pointing you at when
+git is off). Pick one, sized to how much history you want, in that case:
 
 - **R2:** enable [object versioning](https://developers.cloudflare.com/r2/buckets/object-versioning/)
   with a retention lifecycle rule, or run an `rclone sync` on a cron to a second bucket/host.
 - **AWS S3:** enable bucket [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
   plus a lifecycle policy (and optionally cross-region replication) for point-in-time restore.
 - **Either:** periodic `rclone`/`aws s3 sync` snapshots to cold storage.
-
-When git-over-the-mirror lands in a later release the WARN goes away and commit history returns.
 
 What actually recovers if you lose `DATA_DIR` without a backup - and what doesn't - is the next
 section.
@@ -178,7 +241,12 @@ boot). The authoritative content is the source of truth, so most state re-derive
 - a rebuilt, fully populated `search.db`,
 - the id of every page that carries `id:` in its frontmatter - those `/p/{id}` permalinks and
   citations keep working,
-- `redirect_from` aliases (re-derived from frontmatter).
+- `redirect_from` aliases (re-derived from frontmatter),
+- with `storage.backend=object` **and** `git.enabled=true`: commit-grained **history**, up to the last
+  shipped bundle - `DATA_DIR/mirror/.git` restores from the bucket-shipped `history.bundle`, and the
+  boot reconcile captures exactly the divergence between that bundle's tip and the bucket's current
+  state as one commit (see [Object-storage backend](#object-storage-backend-storagebackendobject)
+  above for the accepted loss class on commits/attribution since the last ship).
 
 **Lost, by stated trade-off:**
 

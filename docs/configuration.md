@@ -57,8 +57,10 @@ the bucket before serving, so a fresh install pulls the whole corpus down first.
 doubles as a fail-closed TLS/signature self-check: an unreachable endpoint, a rejected certificate, or a
 bad signature makes startup **refuse with an operator-actionable message and exit** rather than serve a
 stale or empty tree (never disable certificate validation to work around a TLS failure - fix the endpoint
-or this host's CA trust). Git history over the object backend is not available yet, so an object-mode boot
-with `PLAINBASE_GIT_ENABLED=true` refuses fast; leave git unset/false in object mode. See
+or this host's CA trust). Git history over the object backend IS available: set
+`PLAINBASE_GIT_ENABLED=true` to commit every save into `DATA_DIR/mirror` and ship a bucket-backed
+`history.bundle` (C5's git-over-the-mirror + bundle DR), recovering commit-grained history after a
+`DATA_DIR` loss, not just content. Leave git unset/false to run object mode without history. See
 [operating-plainbase.md](operating-plainbase.md#backups) for the object-mode backup guidance.
 
 ## `auth.mode` - the three modes
