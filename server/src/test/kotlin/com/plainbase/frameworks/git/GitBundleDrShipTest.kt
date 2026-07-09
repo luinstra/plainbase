@@ -387,7 +387,7 @@ private fun bundleDrFor(
 
 /** The `.git.pre-restore-<epoch-millis>-<uuid>` husk dirs (if any) directly under [mirrorRoot]. */
 private fun huskDirs(mirrorRoot: Path): List<Path> =
-    Files.list(mirrorRoot).use { it.toList() }.filter { it.fileName.toString().startsWith(".git.pre-restore-") }
+    Files.list(mirrorRoot).use { it.toList() }.filter { it.fileName.toString().startsWith(GitBundleDr.PRE_RESTORE_HUSK_PREFIX) }
 
 /** A fresh git-home + tmp dir + sentinel-path trio for one test, always cleaned up. */
 private fun <T> withHarness(block: (gitHomeDir: Path, tmpDir: Path, sentinelPath: Path) -> T): T {

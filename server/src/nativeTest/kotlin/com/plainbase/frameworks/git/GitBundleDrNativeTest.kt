@@ -16,12 +16,17 @@ import com.plainbase.frameworks.objectstore.PutOutcome
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Instant
+
+// Mirrors production's `GitBundleDr.PRE_RESTORE_HUSK_PREFIX`, duplicated here because it is `internal` to
+// the `main` module and the `nativeTest` source set is not friend-associated with it.
+private const val HUSK_PREFIX = ".git.pre-restore-"
 
 /**
  * C5's bundle-DR round trip (native, process-exec divergence surface - real `git` subprocesses, no
@@ -167,6 +172,123 @@ class GitBundleDrNativeTest {
             assertFalse(Files.exists(sentinelPath))
         }
     }
+
+    @Test
+    fun `husk reap A - the rename-aside mints a husk and the reap keeps only the newest HUSK_KEEP_COUNT`() {
+        val fake = NativeFakeObjectStore()
+
+        // A source instance ships a real bundle into the SHARED fake bucket (reuse the same fake below, or
+        // the fresh-mirror restore 404s - the B3 trap).
+        val sourceRoot = Files.createTempDirectory("plainbase-bundledr-native-huskA-source")
+        Harness(fake, sourceRoot, sourceRoot.resolveSibling("${sourceRoot.fileName}-restore-pending")).use { source ->
+            fake.seed("page1.md", "page one\n".toByteArray())
+            source.objectStore.hydrate()
+            val page1 = TreePath.require("page1.md")
+            source.provider.commit(page1, requireNotNull(source.mirror.read(page1)))
+            source.bundleDr.ship()
+        }
+
+        val freshMirrorRoot = Files.createTempDirectory("plainbase-bundledr-native-huskA-mirror")
+        val sentinelPath = freshMirrorRoot.resolveSibling("${freshMirrorRoot.fileName}-restore-pending")
+
+        // Four parsable legacy husks (real <epoch>-<uuid> shape) + one NON-matching sibling, each marked.
+        val legacy = listOf(1000L, 2000L, 3000L, 4000L).associateWith { epoch ->
+            seedHusk(freshMirrorRoot, "${HUSK_PREFIX}$epoch-${UUID.randomUUID()}")
+        }
+        val nonMatching = seedHusk(freshMirrorRoot, "${HUSK_PREFIX}not-an-epoch")
+
+        Harness(fake, freshMirrorRoot, sentinelPath).use { harness ->
+            // A REAL-CONTENT incomplete .git: a ref lands, then HEAD is retargeted to an unborn branch, so
+            // `rev-parse --verify HEAD^{commit}` fails "Needed a single revision" (DEFINITIVELY_INCOMPLETE)
+            // while `show-ref` still lists refs/heads/main - the husk-minting rename-aside branch.
+            Files.writeString(freshMirrorRoot.resolve("seed.md"), "x\n")
+            harness.exec.run(listOf("init"))
+            harness.provider.commit(TreePath.require("seed.md"), "x\n".toByteArray())
+            harness.exec.run(listOf("symbolic-ref", "HEAD", "refs/heads/unborn"))
+
+            val restored = harness.bundleDr.restore()
+
+            assertTrue(restored.isRestored, "a bundle exists at the bucket - restore must be owed")
+            assertTrue(
+                harness.exec.run(listOf("rev-parse", "--verify", "HEAD^{commit}")).ok,
+                "the repo must be complete after restore",
+            )
+
+            // The just-minted husk (fixed clock -> epoch 1_780_272_000_000L ms, newest) carries the renamed
+            // old repo, so its HEAD file survives.
+            val minted = huskDirs(freshMirrorRoot)
+                .single { it.fileName.toString().startsWith("${HUSK_PREFIX}1780272000000-") }
+            assertTrue(Files.exists(minted.resolve("HEAD")), "the minted husk preserves the renamed .git")
+
+            // Keep-newest-3: minted + -4000- + -3000- survive; -2000- and -1000- reaped; the non-matching
+            // sibling is SKIPPED, never deleted.
+            assertTrue(Files.exists(legacy.getValue(4000L)))
+            assertTrue(Files.exists(legacy.getValue(3000L)))
+            assertFalse(Files.exists(legacy.getValue(2000L)))
+            assertFalse(Files.exists(legacy.getValue(1000L)))
+            assertTrue(Files.exists(nonMatching))
+        }
+    }
+
+    @Test
+    fun `husk reap B - the absent-git clear-branch bounds legacy husks even when none are minted`() {
+        val fake = NativeFakeObjectStore()
+        val sourceRoot = Files.createTempDirectory("plainbase-bundledr-native-huskB-source")
+        Harness(fake, sourceRoot, sourceRoot.resolveSibling("${sourceRoot.fileName}-restore-pending")).use { source ->
+            fake.seed("page.md", "content\n".toByteArray())
+            source.objectStore.hydrate()
+            val path = TreePath.require("page.md")
+            source.provider.commit(path, requireNotNull(source.mirror.read(path)))
+            source.bundleDr.ship()
+        }
+
+        val freshMirrorRoot = Files.createTempDirectory("plainbase-bundledr-native-huskB-mirror")
+        val sentinelPath = freshMirrorRoot.resolveSibling("${freshMirrorRoot.fileName}-restore-pending")
+        // FOUR matched legacy husks, NO .git at all (the .git-absent clear-branch; nothing is minted here).
+        val legacy = listOf(1000L, 2000L, 3000L, 4000L).associateWith { epoch ->
+            seedHusk(freshMirrorRoot, "${HUSK_PREFIX}$epoch-${UUID.randomUUID()}")
+        }
+
+        Harness(fake, freshMirrorRoot, sentinelPath).use { harness ->
+            val restored = harness.bundleDr.restore()
+            assertTrue(restored.isRestored)
+
+            // The reap fires on a non-minting clear-branch: only the newest 3 legacy husks survive.
+            assertTrue(Files.exists(legacy.getValue(4000L)))
+            assertTrue(Files.exists(legacy.getValue(3000L)))
+            assertTrue(Files.exists(legacy.getValue(2000L)))
+            assertFalse(Files.exists(legacy.getValue(1000L)))
+        }
+    }
+
+    @Test
+    fun `husk reap C - an absent mirrorRoot with an empty bucket restores nothing and never throws (D1 boot-safety)`() {
+        val fake = NativeFakeObjectStore() // empty: no bundle seeded, so getHistoryBundle 404s
+        val parent = Files.createTempDirectory("plainbase-bundledr-native-huskC-parent")
+        val missingMirrorRoot = parent.resolve("mirror-does-not-exist") // deliberately NOT created
+        val sentinelPath = parent.resolve("restore-pending")
+        try {
+            Harness(fake, missingMirrorRoot, sentinelPath).use { harness ->
+                assertFalse(Files.exists(missingMirrorRoot), "the mirror dir must not exist at restore() time")
+                // The marquee empty-bucket first-boot / lost-DATA_DIR shape: deletePartialGit()'s reap opens
+                // a directory stream on a missing mirrorRoot and would otherwise throw NoSuchFileException,
+                // aborting the boot. It must return a clean NOT_RESTORED instead.
+                val restored = harness.bundleDr.restore()
+                assertEquals(GitBundleDr.Restored.NOT_RESTORED, restored)
+            }
+        } finally {
+            parent.toFile().deleteRecursively()
+        }
+    }
+
+    private fun seedHusk(mirrorRoot: Path, name: String): Path {
+        val dir = Files.createDirectory(mirrorRoot.resolve(name))
+        Files.writeString(dir.resolve("marker"), "x")
+        return dir
+    }
+
+    private fun huskDirs(mirrorRoot: Path): List<Path> =
+        Files.newDirectoryStream(mirrorRoot, "${HUSK_PREFIX}*").use { it.toList() }
 
     /** One `GitBundleDr` + collaborators over [mirrorRoot] - the CALLER owns [mirrorRoot]'s lifetime (it
      *  may be reused across successive [Harness] instances to simulate successive boots). */

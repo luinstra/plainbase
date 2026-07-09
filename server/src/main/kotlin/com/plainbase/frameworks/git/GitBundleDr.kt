@@ -427,29 +427,75 @@ class GitBundleDr(
      * [deleteRecursively]'d OUTRIGHT instead. This matters on a git-enabled, never-committed object
      * instance: `prepare()`'s lazy `ensureRepo()` (`GitCliHistoryProvider`) `git init`s an empty repo on
      * EVERY boot that lacks one, so a crash-looping container that never lands a save would otherwise
-     * rename that empty repo aside once per restart - an unbounded (if harmless, dot-prefixed) disk leak.
-     * A `.git` that DOES carry a ref/commit worth a last-ditch look still takes the rename-aside path
-     * exactly as before.
+     * rename that empty repo aside once per restart. A `.git` that DOES carry a ref/commit worth a
+     * last-ditch look still takes the rename-aside path exactly as before, and the minted husks are now
+     * bounded by [reapPreRestoreHusks] (a single trailing reap reached on every branch below).
+     *
+     * Invariant: after any restore that reaches this method (every [GitState.DEFINITIVELY_INCOMPLETE]
+     * restore) and whose [mirrorRoot] exists, at most [HUSK_KEEP_COUNT] matched husks remain under
+     * [mirrorRoot]; a restore whose mirror dir does not yet exist is a clean no-op (see
+     * [reapPreRestoreHusks]).
      */
     @OptIn(ExperimentalPathApi::class)
     private fun deletePartialGit() {
         val gitDir = mirrorRoot.resolve(".git")
-        if (!Files.exists(gitDir)) return
-        if (isUnbornAndEmpty()) {
-            try {
-                gitDir.deleteRecursively()
-            } catch (e: IOException) {
-                logger.warn(e) { "could not delete the unborn/empty .git before restore; leaving it in place" }
+        when {
+            !Files.exists(gitDir) -> Unit // absent: nothing to clear; any legacy husks are still reaped below
+            isUnbornAndEmpty() -> {
+                try {
+                    gitDir.deleteRecursively()
+                } catch (e: IOException) {
+                    logger.warn(e) { "could not delete the unborn/empty .git before restore; leaving it in place" }
+                }
             }
+            else -> {
+                val renamedAside = mirrorRoot.resolve("$PRE_RESTORE_HUSK_PREFIX${clock.now().toEpochMilliseconds()}-${UUID.randomUUID()}")
+                try {
+                    Files.move(gitDir, renamedAside)
+                } catch (e: IOException) {
+                    logger.warn(e) { "could not rename aside the incomplete .git before restore; deleting it instead" }
+                    gitDir.deleteRecursively()
+                }
+            }
+        }
+        reapPreRestoreHusks()
+    }
+
+    /**
+     * Bounds the `.git.pre-restore-*` husks the rename-aside branch mints: keeps the newest
+     * [HUSK_KEEP_COUNT] by the epoch-millis embedded in each name and reaps the rest, best-effort (a
+     * failed reap never fails a restore). Only ever removes what the rename-aside provably minted - a
+     * name that does not match the `<epoch>-<uuid>` shape is SKIPPED, never deleted (the house
+     * fail-closed posture). Runs boot-serial inside the `DataDirLock` region before any watcher/pipeline
+     * thread exists (`Application.kt:135-151`), so it needs no lock. Returns early when [mirrorRoot] does
+     * not yet exist: on a fresh / lost-DATA_DIR boot `deletePartialGit()` runs before the mirror dir is
+     * created ([restore] at `:141`/`:145`, `Files.createDirectories(mirrorRoot)` at `:146`), and a
+     * missing mirror can hold no husks - opening a directory stream on it would throw and abort the boot.
+     */
+    @OptIn(ExperimentalPathApi::class)
+    private fun reapPreRestoreHusks() {
+        if (!Files.exists(mirrorRoot)) return
+        val husks = try {
+            Files.newDirectoryStream(mirrorRoot, "$PRE_RESTORE_HUSK_PREFIX*").use { stream ->
+                stream.mapNotNull { entry ->
+                    val tail = entry.fileName.toString().removePrefix(PRE_RESTORE_HUSK_PREFIX)
+                    // toLongOrNull: an over-long numeric name is SKIPPED, never reaped (fail-safe, no throw).
+                    PRE_RESTORE_HUSK_NAME.matchEntire(tail)?.groupValues?.get(1)?.toLongOrNull()?.let { epoch -> epoch to entry }
+                }
+            }
+        } catch (e: IOException) {
+            logger.warn(e) { "could not list the mirror to reap pre-restore husks; skipping this reap" }
             return
         }
-        val renamedAside = mirrorRoot.resolve(".git.pre-restore-${clock.now().toEpochMilliseconds()}-${UUID.randomUUID()}")
-        try {
-            Files.move(gitDir, renamedAside)
-        } catch (e: IOException) {
-            logger.warn(e) { "could not rename aside the incomplete .git before restore; deleting it instead" }
-            gitDir.deleteRecursively()
-        }
+        husks.sortedWith(compareByDescending<Pair<Long, Path>> { it.first }.thenByDescending { it.second.fileName.toString() })
+            .drop(HUSK_KEEP_COUNT)
+            .forEach { (_, husk) ->
+                try {
+                    husk.deleteRecursively()
+                } catch (e: IOException) {
+                    logger.warn(e) { "could not reap the pre-restore husk $husk; leaving it in place" }
+                }
+            }
     }
 
     /**
@@ -500,6 +546,18 @@ class GitBundleDr(
         private const val TMP_BUNDLE_FILENAME = "history.bundle"
         private const val DEFAULT_BRANCH_REF = "refs/heads/main"
         private const val RECONCILE_MESSAGE = "reconcile: bucket state at boot"
+
+        /** The single owner of the rename-aside husk name prefix: shared by the mint site
+         *  ([deletePartialGit]) and the reap ([reapPreRestoreHusks]) so they cannot drift, and imported by
+         *  `GitBundleDrShipTest.kt`'s `huskDirs()` helper. */
+        internal const val PRE_RESTORE_HUSK_PREFIX = ".git.pre-restore-"
+
+        /** How many `.git.pre-restore-*` husks the reap keeps (newest by embedded epoch-millis). */
+        internal const val HUSK_KEEP_COUNT = 3
+
+        /** The strict minted-husk tail shape `<epoch-millis>-<uuid>`; a non-matching name is skipped, never
+         *  reaped (fail-safe - the reap only removes what the rename-aside provably minted). */
+        private val PRE_RESTORE_HUSK_NAME = Regex("^(\\d+)-[0-9a-fA-F-]{36}$")
 
         private val WHITESPACE = Regex("\\s+")
 
