@@ -17,3 +17,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0007](0007-tree-node-metadata-editorial-dates-provisional-fields.md) | Tree-node metadata: editorial dates now, provisional wire fields, Git last-modified stays distinct | Accepted |
 | [0008](0008-tls-terminates-at-an-external-reverse-proxy.md) | TLS terminates at an external reverse proxy (not in-process), with a fail-closed bind guard | Accepted |
 | [0009](0009-hocon-config-file-not-yaml.md) | The config file is HOCON (`plainbase.conf`), not YAML, layered under env | Accepted |
+| [0010](0010-object-storage-backend.md) | Object-storage backend: an S3-compatible bucket as the content authority | Accepted |

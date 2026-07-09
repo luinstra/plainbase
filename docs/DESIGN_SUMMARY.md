@@ -32,6 +32,8 @@ The canonical knowledge base is a simple tree of files and folders. Pages are Ma
 
 This content tree should be able to live on local disk, a mounted volume, a Git checkout, network storage, or cheap object storage such as S3 or Cloudflare R2.
 
+There is exactly one authority per deployment: the `CONTENT_DIR` directory in a local deploy, or the S3-compatible bucket in a cloud deploy - never two at once. The object-storage backend shipped in the v0.2 storage revamp (`storage.backend=object`); see [ADR-0010](decisions/0010-object-storage-backend.md).
+
 ### Git is a natural layer, not the only foundation
 
 Git is valuable for history, diffs, review, branching, rollback, and collaboration, but the deeper design principle is plain file storage.

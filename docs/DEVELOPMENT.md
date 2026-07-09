@@ -48,6 +48,31 @@ Release builds (`.github/workflows/release.yml`) produce the universal JAR
 plus native binaries for linux-x64, linux-arm64, macos-arm64, and
 windows-x64.
 
+## Pre-release checklist
+
+CI covers everything that runs without credentials or a real bucket. The object-storage backend adds a
+handful of gates CI structurally CANNOT run - they need real credentials and a real bucket, so they are
+owner-run before a release, not part of any automated floor. None of these block a normal PR merge; they
+gate a *release* that ships (or touches) the object-storage backend.
+
+1. **Credentialed `plainbase s3-smoke` from the NATIVE binary, per release platform** (R2 primary; S3
+   compat when creds exist), certificate validation ON (the command has no insecure flag). Record green
+   runs in the deploy guide's [platform table](deploy/object-storage.md#platform-support-honestly).
+   Current honest state: macos-arm64 PROVEN 2026-07-06 (real R2); linux-x64 credential-free TLS+SigV4
+   spike banked in CI; the linux-x64 **real-R2** credentialed smoke is a documented nice-to-have
+   (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 / windows-x64 docs-only
+   until proven.
+2. **`scripts/ops/cloud-startup-budget.sh` against a real, seeded ~1k-corpus (prefix-scoped) R2 bucket**
+   (warm under 3 s / cold under 10 s, a strict bound; the script's corpus-floor preflight must pass). This is the ONLY check
+   on cloud startup budgets anywhere - the CI native-startup tripwire covers the local backend only.
+   Seed the corpus per the recipe in the script header (no ~1k fixture is checked in).
+3. **The two required DR drills**, if the release touched storage / git / DR code paths: content restore
+   and bundle-history restore (recipes in
+   [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse
+   each for real and fill in its "not yet rehearsed" placeholder in the ops doc.
+4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build`, the native
+   gate (`nativeCompile` -> `nativeTest` -> spike 9/9).
+
 ## The native dependency spike
 
 `plainbase spike` exercises every load-bearing dependency with real

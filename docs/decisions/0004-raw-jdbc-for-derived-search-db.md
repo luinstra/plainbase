@@ -59,3 +59,12 @@ already-allowlisted xerial sqlite-jdbc driver. The app database remains SQLDelig
 
 - High: search.db is deletable and migration-free, so the access path can be swapped (or the
   whole file dropped for an external engine, Appendix G) without data or contract consequences.
+
+## Re-affirmation (2026-07 storage revamp)
+
+The derived-deletable stance holds and now covers more of `DATA_DIR`. Premise re-checked against the
+built system: `search.db` remains raw-JDBC derived state (still rebuildable, still migration-free), and
+the same derived-deletable law now also governs the object-mode `DATA_DIR/mirror`, `mirror-state`, and
+(R13) a partial/corrupt object-mode `.git` (renamed aside or deleted, then re-restored from the
+bucket-shipped bundle). No change to this ADR's decision; see
+[ADR-0010](0010-object-storage-backend.md).

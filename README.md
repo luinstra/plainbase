@@ -19,9 +19,12 @@ files.
   Claude Code (or any MCP client) to your team's docs in minutes.
 - **Humans stay in charge.** Agents open change proposals with diffs and
   rationale; nothing lands without a human approving it in the review UI.
-- **No lock-in, structurally.** `CONTENT_DIR` is a plain Markdown folder and
-  it is the *only* canonical state - Git is an optional layer, every index is
-  derived and rebuildable. Leaving Plainbase is copying a directory.
+- **No lock-in, structurally.** Your docs are a plain tree you can always walk
+  away with, and there is exactly one authority per deployment. Local deploy:
+  the `CONTENT_DIR` directory IS the authority. Cloud deploy: an S3-compatible
+  bucket IS the authority (a plain tree of objects any S3 tool can read).
+  Git is an optional layer, every index is derived and rebuildable. Leaving
+  Plainbase is copying a directory or syncing a bucket.
 - **One binary, no fleet.** A single native executable (no JRE, no database
   server, no Node) with embedded SQLite + FTS5 search and sub-second cold
   start. `docker compose up` if you'd rather run a container.
@@ -71,7 +74,7 @@ modes (`read-only` / `propose` / `commit`), and reverse-proxy notes:
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `CONTENT_DIR` | `./content` | Canonical, user-owned Markdown tree. Plainbase only writes here on explicit save/approve. |
+| `CONTENT_DIR` | `./content` | Canonical, user-owned Markdown tree (local mode). Plainbase only writes here on explicit save/approve; ignored in object mode, where the bucket is canonical. |
 | `DATA_DIR` | `./data` | App-owned state: SQLite DB, config, caches, search index. |
 | `PLAINBASE_HOST` | `127.0.0.1` | Bind address. |
 | `PLAINBASE_PORT` | `8080` | HTTP port. |
@@ -82,8 +85,11 @@ Full reference: [Configuration](docs/configuration.md) (every key, the three
 
 ## Your data (hard rule)
 
-- `CONTENT_DIR` - canonical, portable, user-owned. Reinstall Plainbase
-  anywhere against the same tree and nothing is lost.
+- `CONTENT_DIR` - canonical, portable, user-owned (local mode). Reinstall
+  Plainbase anywhere against the same tree and nothing is lost.
+- Object mode (`storage.backend=object`) - the S3-compatible **bucket** is
+  canonical instead; `CONTENT_DIR` is ignored and `DATA_DIR/mirror` is a
+  derived, deletable cache. One authority per deployment, never two.
 - `DATA_DIR` - app-owned workflow/security state. Never canonical content.
 - Search indexes - fully derived; delete them any time and rebuild.
 
@@ -92,6 +98,8 @@ Full reference: [Configuration](docs/configuration.md) (every key, the three
 - [Configuration](docs/configuration.md) - the full environment-variable reference.
 - [Operating Plainbase](docs/operating-plainbase.md) - search freshness, manual reindex, adopting
   an existing repo, backups, performance + the startup gate, known limitations.
+- [Object-storage backend](docs/deploy/object-storage.md) - serve an S3-compatible bucket (R2-first)
+  as the authority: setup, IAM, migration, platform support.
 - [Connect your agent (MCP)](docs/connect-your-agent.md) - mint a token, point an MCP client at the
   server, a worked search → read → propose session.
 - [Design summary](docs/DESIGN_SUMMARY.md) - architecture & product framing.

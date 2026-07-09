@@ -60,8 +60,11 @@ stale or empty tree (never disable certificate validation to work around a TLS f
 or this host's CA trust). Git history over the object backend IS available: set
 `PLAINBASE_GIT_ENABLED=true` to commit every save into `DATA_DIR/mirror` and ship a bucket-backed
 `history.bundle` (C5's git-over-the-mirror + bundle DR), recovering commit-grained history after a
-`DATA_DIR` loss, not just content. Leave git unset/false to run object mode without history. See
-[operating-plainbase.md](operating-plainbase.md#backups) for the object-mode backup guidance.
+`DATA_DIR` loss, not just content. Leave git unset/false to run object mode without history. See the
+[object-storage deploy guide](deploy/object-storage.md) for a zero-to-serving R2 walkthrough (IAM,
+migration, platform support), [operating-plainbase.md](operating-plainbase.md#backups) for the
+object-mode backup guidance, and [ADR-0010](decisions/0010-object-storage-backend.md) for the design
+record.
 
 ## `auth.mode` - the three modes
 

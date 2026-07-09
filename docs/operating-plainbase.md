@@ -189,7 +189,10 @@ case entirely and is deliberately NOT treated the same way: Plainbase cannot tel
 repo apart from a genuinely broken one, so rather than guess and risk deleting a complete history it
 aborts the boot with an actionable message naming the likely cause (ownership/permissions) and the fix.
 Resolve the underlying ownership/permission issue and restart; nothing about the mirror is touched while
-the boot is refusing to start.
+the boot is refusing to start. Those rename-aside husks are bounded: the newest 3 are kept and older
+ones are reaped automatically on every bundle-restore boot (any boot that recovers an incomplete or
+absent `.git`, so even legacy husks are bounded when the current boot mints none), so repeated
+self-heals never accumulate unbounded debris.
 
 **Strict-hydrate boot-loop escape hatch.** On the restore path specifically (a bundle-restore/reconcile is
 owed), hydrate runs *strict*: any bucket-fetch or mirror-write failure for a SINGLE key aborts the boot
@@ -212,16 +215,36 @@ fresh-init a new local `.git` and proceed normally, same as any first-ever boot 
 itself was never at risk (the bucket's actual pages are untouched); only the pre-existing commit history
 carried in that bundle is lost.
 
-`git.enabled=false` (or unset - the default) keeps object mode's pre-history posture: **no
-commit-grained history at all**, so content point-in-time recovery is entirely your bucket's backup
-schedule (this is exactly what the `object mode with git disabled` startup WARN is pointing you at when
-git is off). Pick one, sized to how much history you want, in that case:
+**Per-backend backup guidance.** Backups are operator-owned by decision (Plainbase ships the mechanisms
+- the dirty-page journal, the git bundle, export - but never a backup schedule). Pick the recipe for
+your store, sized to how much history you want:
 
-- **R2:** enable [object versioning](https://developers.cloudflare.com/r2/buckets/object-versioning/)
-  with a retention lifecycle rule, or run an `rclone sync` on a cron to a second bucket/host.
-- **AWS S3:** enable bucket [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
-  plus a lifecycle policy (and optionally cross-region replication) for point-in-time restore.
-- **Either:** periodic `rclone`/`aws s3 sync` snapshots to cold storage.
+- **Local (`storage.backend=local`):** the existing guidance above -
+  [back up `CONTENT_DIR`](#the-content-tree-is-plain-markdown-on-disk) (and `DATA_DIR/plainbase.db` if
+  users/tokens/proposals matter). Unchanged.
+- **AWS S3 (or any versioning-capable store):** enable bucket
+  [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) plus a
+  **noncurrent-version lifecycle rule** for near-free point-in-time restore. **Same-bucket caveat:**
+  in-bucket versioning survives an accidental object overwrite, but it survives neither a bucket
+  deletion nor an account compromise - real disaster recovery is an **off-bucket** copy (below).
+- **Cloudflare R2:** R2 has **no native object versioning** (lifecycle management is GA, but lifecycle
+  is not versioning; versioning is on Cloudflare's public roadmap, not shipped). So the R2 recipe is a
+  **scheduled external copy**: an `rclone sync` cron to a second bucket or host (or the equivalent with
+  any S3 tool). This is the off-bucket copy, so it doubles as real DR.
+- **Either provider, for real DR:** periodic `rclone` / `aws s3 sync` snapshots to a second
+  bucket/host/cold storage - an off-bucket copy is the only thing that survives bucket deletion or
+  account compromise.
+
+**Git-on covers history everywhere.** With `git.enabled=true` you get commit-grained history regardless
+of backend - a local `.git` worktree in local mode, the bucket-shipped `history.bundle` in object mode -
+on top of whichever content backup you run.
+
+**The three-choices exposure (R17).** Object mode + `git.enabled=false` + no external backup on a
+no-versioning provider (i.e. R2 with no `rclone` cron) = **current-state durability only**. That is not
+a bug; it is the sum of three explicit operator choices, the same posture a backup-less local deploy has
+always had. The git-disabled startup WARN names it exactly: *"object mode with git disabled: no
+commit-grained history; content point-in-time recovery is your backup schedule (see the backup
+guidance)."* Change any one of the three choices to close the exposure.
 
 What actually recovers if you lose `DATA_DIR` without a backup - and what doesn't - is the next
 section.
@@ -273,6 +296,55 @@ which ids survive and that `search.db` repopulates at boot). What those two dril
 `redirect_from` re-derivation and move-alias loss are pinned by the broader `IndexBuilder` suite, not
 by these drills; the whole-database row losses (users, tokens, sessions, roles, audit log, proposals)
 follow directly from nuking `plainbase.db` and are not separately tested.
+
+### Object-mode DR drills (operator recipes)
+
+One truth governs every object-mode restore: **content enters the mirror ONLY via a boot `hydrate()` or
+the background poll** - never via `rescan`. `POST /api/v1/admin/rescan` re-scans the LOCAL mirror only
+(it never LISTs or GETs the bucket), so it does NOT surface content you just restored INTO the bucket.
+There is no on-demand forced-hydrate admin action today. Restore recipes reflect this:
+
+- **Content restore (required drill).** Copy a backed-up tree into the bucket with any S3 tool
+  (`rclone copy backup/ <remote>:<bucket>/<prefix>` or `aws s3 sync backup/ s3://<bucket>/<prefix>/
+  --endpoint-url <endpoint>`), then EITHER **restart the server** (boot `hydrate()` pulls the restored
+  keys) OR **wait up to `PLAINBASE_S3_POLL_SECONDS`** for the background poll to fetch the changed keys.
+  Do NOT expect `rescan` to surface the restored content. _Rehearsed for real: not yet rehearsed_ (an
+  owner-run pre-release gate - see the [pre-release checklist](DEVELOPMENT.md#pre-release-checklist);
+  record the date + provider here once run).
+- **Bundle history restore (required drill, `git.enabled=true` only).** Wipe `DATA_DIR`, boot, and
+  verify `git -C <DATA_DIR>/mirror log` shows history up to the last shipped bundle plus exactly one
+  `reconcile: bucket state at boot` commit for the divergence (the mechanism documented under
+  [Object-storage backend](#object-storage-backend-storagebackendobject) above). _Rehearsed for real:
+  not yet rehearsed._
+- **Versioned-S3 per-object restore (BONUS tier, documented, never drilled).** On a versioning-enabled
+  S3 bucket, `aws s3api list-object-versions` then copy a prior `versionId` over the current key; then
+  restart or wait for the poll (same surfacing rule - not `rescan`). Versioned-S3 deployments only; R2
+  has no versioning (see [Per-backend backup guidance](#backups) above).
+
+## Operator signals (object mode)
+
+What the object-mode diagnostics mean and what you do about each:
+
+- **`durable_but_unmirrored`.** The write IS durable at the bucket; only the local mirror apply failed.
+  The mark is retained and self-heals on the next poll or boot. This is **not** data loss - no action
+  needed beyond noting it if it recurs (a persistently failing mirror apply points at local disk).
+- **`outcome_unknown`.** An ambiguous network outcome (the PUT may or may not have landed). The mark is
+  retained; a boot hydrate-then-reconcile heals it, and a retry is safe (the conditional write makes a
+  double-apply a no-op).
+- **Retry-honesty signature: a 409 Conflict whose `current_content` equals what you sent.** That means
+  your write already landed on a prior attempt - take the returned `current_hash` and move on. (The
+  provider-level precondition code, R2's 412 for both create-conflict and stale-CAS, is absorbed by the
+  adapter; operators only ever see the app-level 409.)
+- **IAM signature: a green boot, then a persistent write 503 (403-mapped) on EVERY save.** The boot LIST
+  proved READ, not WRITE - your credentials are missing PUT. Fix the IAM grant, not the app (see
+  [Least-privilege IAM](deploy/object-storage.md#least-privilege-iam-stated-honestly)).
+- **Q13 outage signature: writes 503 while reads keep serving 200.** The bucket (write authority) is out;
+  the app is fine - reads are local by construction. A boot attempted DURING an outage fails fast by
+  design (the boot LIST self-check).
+- **R16 fail-closed signature: an object-mode boot refusing on a TLS or signature rejection.** That is
+  the guard working, not a failure to route around. Never disable certificate validation to "fix" it -
+  fix the endpoint or install the host CA trust (see
+  [base-image requirements](deploy/object-storage.md#native-binary-base-image-requirements)).
 
 ## Adopting an existing repo
 
@@ -350,6 +422,22 @@ SQLDelight open/migrate + the CIO bind + the first request - *not* corpus indexi
 ~41-page demo corpus instead measures ~1005 ms median - corpus-index-dominated, not startup; that
 time is already budgeted by the render/reindex thresholds above, so it doesn't belong in the
 startup gate.)
+
+**Cloud startup budgets (object mode).** A separate drill covers object-mode boot: warm under 3 s, cold
+under 10 s at the ~1k-page contract (a strict bound - a median exactly at 3 s / 10 s fails, matching the
+local tripwire), checked by `scripts/ops/cloud-startup-budget.sh` against a real, prefix-scoped
+~1k-corpus bucket. Two asymmetries with the local tripwire above matter:
+
+- **It is NOT in CI** (CI has no bucket and no credentials), so unlike the local backend there is **no
+  between-release regression guard** for cloud budgets. The obligation lives in the
+  [pre-release checklist](DEVELOPMENT.md#pre-release-checklist) instead.
+- **The warm number is a rebuild+serve budget, not a cold-JVM-start figure.** Every boot runs a full
+  `IndexBuilder.rebuild()` over the hydrated mirror before `/healthz` serves 200, so the warm number is
+  exec -> first 200 `/healthz` INCLUDING that rebuild. At ~1k pages the rebuild can dominate - which is
+  why the drill is measured at the ~1k contract, not against a trivial corpus.
+
+Measured medians (provider, platform, corpus size, date): _not yet rehearsed_ - an owner-run pre-release
+gate; record them here once the drill runs.
 
 ### Git-write stall bound
 
