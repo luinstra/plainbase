@@ -146,7 +146,10 @@ class WritePipeline(
                 WriteOutcome.InvalidLocation(create.reason)
             }
             is CreateResult.Unreadable -> {
-                dirtyPages.clear(intent.pageId)
+                // A mutated target (the authority may already hold the created bytes, Q8b's create twin)
+                // KEEPS the write-ahead mark set at (1), mirroring write()'s CAS arm, so reconcile commits
+                // a fully-landed create or drift-skips. Only a nothing-landed Unreadable clears.
+                if (!create.targetMutated) dirtyPages.clear(intent.pageId)
                 WriteOutcome.Unreadable(create.cause)
             }
             is CreateResult.Created -> createAndIndex(intent, newHash = create.newHash)

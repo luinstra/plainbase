@@ -117,7 +117,8 @@ dependencies {
     // MCP Kotlin SDK (spike target; full server lands in Phase 5)
     implementation(libs.mcp.kotlin.sdk)
 
-    // Spike needs an HTTP client to round-trip the CIO server
+    // Ktor CIO HTTP client: backs the S3/object-store client (hand-rolled SigV4 over CIO, storage plan C0)
+    // and the spike's TLS + MCP-SSE round-trips. CIO only (native-image constraint), no new dependency.
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
 

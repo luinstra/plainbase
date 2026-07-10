@@ -29,6 +29,14 @@ interface DirtyPageRepository {
     fun all(): List<DirtyPage>
 
     /**
+     * True iff ANY dirty row currently carries [path]. An indexed single-row existence check for the
+     * object-mode poll's live dirty-ahead guard (MINOR-1) - it runs once per poll candidate under the apply
+     * monitor, so it must not materialize the whole journal ([all]) per candidate. Preserves the guard's
+     * correctness property: it observes a mark added at any point before the decision (mark-precedes-CAS).
+     */
+    fun isDirty(path: TreePath): Boolean
+
+    /**
      * The current dirty row for [pageId], or null if none. Captured BEFORE a write-ahead [mark]
      * overwrites it, so a no-write attempt can restore a prior recovery record rather than clobber it
      * (the dirty-row-clobber fix).

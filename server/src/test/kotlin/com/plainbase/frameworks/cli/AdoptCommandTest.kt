@@ -2,6 +2,9 @@ package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.StorageBackend
+import com.plainbase.frameworks.config.StorageConfig
+import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -102,6 +105,75 @@ class AdoptCommandTest : FunSpec({
         }
     }
 
+    test("RECORD and MATERIALIZE refuse with exit 1 when a server holds the lock, touching neither db nor files") {
+        withCliTree { config ->
+            val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
+            DataDirLock.tryAcquire(config.dataDir)!!.use {
+                listOf(emptyList(), listOf("--write-ids")).forEach { args ->
+                    val err = captureStderr { AdoptCommand.run(args, config) shouldBe 1 }
+                    err shouldContain "adopt: a Plainbase server is holding ${config.dataDir}"
+                }
+                // The refusal precedes the driver open AND the adoption pass: no db, no file writes.
+                Files.exists(config.appDatabasePath) shouldBe false
+                Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
+            }
+            // After release, a run succeeds.
+            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 }
+        }
+    }
+
+    test(
+        "storage.backend=object is real (C4): RECORD/MATERIALIZE hydrate the DATA_DIR mirror first and fail fast, " +
+            "actionably, when the bucket is unreachable - under the lock already taken (unlike the old outright refusal, " +
+            "the db IS opened/migrated before the hydrate attempt); PREVIEW never hydrates and stays lock-free",
+    ) {
+        withCliTree { config ->
+            val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
+            val objectConfig = config.copy(
+                storage = StorageConfig(
+                    backend = StorageBackend.OBJECT,
+                    // A well-formed but unreachable endpoint (loopback, nothing listening on port 9 -
+                    // "Connection refused" comes back immediately, not a slow timeout): the FACTORY builds
+                    // cleanly, so the failure is hydrate()'s, exercised exactly like a real outage would be.
+                    endpoint = "https://127.0.0.1:9",
+                    bucket = "docs",
+                    accessKeyId = "k",
+                    secretAccessKey = "s",
+                ),
+            )
+            listOf(emptyList(), listOf("--write-ids")).forEach { args ->
+                val err = captureStderr { AdoptCommand.run(args, objectConfig) shouldBe 1 }
+                err shouldContain "adopt: "
+                err shouldNotContain "storage.backend=object is configured but the object backend is not available"
+            }
+            // C4 behavior change from the old outright refusal: the lock IS taken (and released) and the
+            // app db IS opened/migrated before the hydrate attempt fails - never touched under the OLD refusal.
+            Files.exists(objectConfig.appDatabasePath) shouldBe true
+            Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
+            DataDirLock.tryAcquire(objectConfig.dataDir)!!.use { } // released after the failed attempt
+
+            // PREVIEW's contract (seam c, finding 4): zero writes, lock-free, no hydrate - it reads the
+            // (absent, never hydrated) mirror as an empty tree rather than refusing, and must NOT create
+            // DATA_DIR/mirror (a dry run touches no disk; the factory construction is non-mutating).
+            val mirrorDir = objectConfig.dataDir.resolve("mirror")
+            Files.deleteIfExists(mirrorDir) // in case a prior arm left an empty dir; assert PREVIEW re-creates none
+            val out = captureStdout {
+                AdoptCommand.run(listOf("--write-ids", "--dry-run"), objectConfig) shouldBe 0
+            }
+            out shouldContain "would materialize 0 page(s):"
+            Files.exists(mirrorDir) shouldBe false // PREVIEW created no DATA_DIR/mirror
+        }
+    }
+
+    test("PREVIEW stays lock-free: adopt --write-ids --dry-run runs while a server holds the lock") {
+        withCliTree { config ->
+            DataDirLock.tryAcquire(config.dataDir)!!.use {
+                val out = captureStdout { AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0 }
+                out shouldContain "dry run: nothing was written"
+            }
+        }
+    }
+
     test("plain adopt records identities without touching any file") {
         withCliTree { config ->
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
@@ -132,7 +204,7 @@ private fun withCliTree(block: (PlainbaseConfig) -> Unit) {
     }
 }
 
-/** Captures System.out for the duration of [block] — the CLI's output contract under test. */
+/** Captures System.out for the duration of [block] - the CLI's output contract under test. */
 private fun captureStdout(block: () -> Unit): String {
     val buffer = ByteArrayOutputStream()
     val previous = System.out
@@ -141,6 +213,19 @@ private fun captureStdout(block: () -> Unit): String {
         block()
     } finally {
         System.setOut(previous)
+    }
+    return buffer.toString(Charsets.UTF_8)
+}
+
+/** Captures System.err for the duration of [block]: the lock-held refusal message under test. */
+private fun captureStderr(block: () -> Unit): String {
+    val buffer = ByteArrayOutputStream()
+    val previous = System.err
+    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
+    try {
+        block()
+    } finally {
+        System.setErr(previous)
     }
     return buffer.toString(Charsets.UTF_8)
 }

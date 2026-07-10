@@ -52,12 +52,12 @@ class GuardedMutatingFacade(
     private val contentStore: ContentStore,
     private val indexBuilder: IndexBuilder,
     // The degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
-    // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) — invoked only at
+    // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) - invoked only at
     // request time, never during assembly. Defaulted so the many older test constructors compile unchanged.
     private val proposals: () -> ProposalFacade = { error("ProposalFacade not wired for this GuardedMutatingFacade") },
     // The validated `agentDirectCommit.globs` (config-parsed). Empty (the default) ⇒ every agent write degrades.
     private val agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
-    // The author labeler — resolves an agent's snapshot (issuer, externalId, label) so a DIRECT agent
+    // The author labeler - resolves an agent's snapshot (issuer, externalId, label) so a DIRECT agent
     // commit is git-attributed to the AGENT (author == committer), matching its agent-attributed audit row instead of
     // the server "Plainbase" identity. Defaulted null so the many older test constructors compile unchanged; the agent
     // DirectCommit path requires it (it is only ever reached with globs configured, where the production wiring + the
@@ -82,9 +82,9 @@ class GuardedMutatingFacade(
             return directSave(principal, request)
         }
 
-        // Agent DIRECT_PUT — DECIDE-FIRST (a deliberate, AGENT-ONLY relaxation of the strict audit-first ordering the
+        // Agent DIRECT_PUT - DECIDE-FIRST (a deliberate, AGENT-ONLY relaxation of the strict audit-first ordering the
         // non-agent path keeps): the non-auditing agentModeFor lookup + the in-memory snapshot resolution run BEFORE
-        // the audited checkEdit fires on the chosen branch. It leaks nothing client-visible — a deny still throws from
+        // the audited checkEdit fires on the chosen branch. It leaks nothing client-visible - a deny still throws from
         // checkEdit with NO content returned, and EVERY agent path still audits EXACTLY once (EDIT@pageId on a direct
         // commit, EDIT@"proposal" on a degrade).
         val mode = policy.agentModeFor(principal)
@@ -105,9 +105,9 @@ class GuardedMutatingFacade(
         }
         return when (decision) {
             // DirectCommit: audit EDIT@pageId, then the EXISTING direct write over the SAME `current` object the
-            // decision matched — so decision.targetPath === the WriteIntent's path by construction. The
+            // decision matched - so decision.targetPath === the WriteIntent's path by construction. The
             // agent's resolved identity threads in as BOTH git author AND committer (its commit is agent-attributed,
-            // matching the audit row — never the server "Plainbase" default).
+            // matching the audit row - never the server "Plainbase" default).
             is AgentWriteDecision.DirectCommit -> {
                 val identity = agentCommitIdentity(principal)
                 directWriteResolved(policy.checkEdit(principal, request.pageId.value), request, current, identity, identity)
@@ -118,12 +118,12 @@ class GuardedMutatingFacade(
 
     /** The strict audit-first direct path (Human/Anonymous + the proposal-apply caller): checkEdit → resolve → write. */
     private fun directSave(principal: Principal, request: SaveRequest): SaveResult {
-        // The AUDITED edit-check is the FIRST authorization on the write path — a denied save writes the denied-EDIT
+        // The AUDITED edit-check is the FIRST authorization on the write path - a denied save writes the denied-EDIT
         // audit row (PolicyService.checkEdit) BEFORE any read, so an unauthorized PUT can never escape the audit log
         // via an unaudited read-check. Only after the grant is minted do we resolve the snapshot + id-tamper-check.
         val grant = policy.checkEdit(principal, request.pageId.value)
 
-        // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 — the route never
+        // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route never
         // invents a path. The snapshot resolution lives HERE (post-grant), not in a route read-check. The git
         // attribution is whatever the request carried (the apply path's proposer/approver; null on a plain PUT).
         val current = indexBuilder.current.byId[request.pageId] ?: return SaveResult.PageNotFound
@@ -132,7 +132,7 @@ class GuardedMutatingFacade(
 
     /**
      * The agent's git commit identity for a DIRECT commit (b1): the C4 labeler's snapshot label + the PINNED synthetic
-     * email `<externalId>@<issuer>.plainbase.local` — the SAME attribution the apply path stamps for a proposer. Only
+     * email `<externalId>@<issuer>.plainbase.local` - the SAME attribution the apply path stamps for a proposer. Only
      * reached on the agent DirectCommit branch (globs configured), where [proposalLabeler] is always wired.
      */
     private fun agentCommitIdentity(principal: Principal.Agent): CommitIdentity {
@@ -155,11 +155,11 @@ class GuardedMutatingFacade(
         committer: CommitIdentity?,
     ): SaveResult {
         // (6) id-tamper check (R1, PB-WRITE-1): the submitted buffer's `id:` line must denote the SAME identity as
-        // the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL `PATCHER.readIdValue` — over
+        // the page's CURRENT on-disk `id:` line. BOTH sides read through the IDENTICAL `PATCHER.readIdValue` - over
         // the submitted bytes and over `current.markdown` (the verbatim lenient decode the index captured; the `id:`
-        // line is pure ASCII by the patcher grammar, so the round-trip is faithful) — and the two raw values compare
+        // line is pure ASCII by the patcher grammar, so the round-trip is faithful) - and the two raw values compare
         // via [sameIdentity] (canonical-UUID when both parse, else byte-identical raw). Comparing the file's CURRENT
-        // id — never `current.id`, the assigned pageId — lets a duplicate/adopted page whose on-disk id legitimately
+        // id - never `current.id`, the assigned pageId - lets a duplicate/adopted page whose on-disk id legitimately
         // differs from its pageId take a pure-body edit, matching `WritePipeline.classifyEdit` exactly. Adding/
         // changing/removing the honored id is a rename → 422 before the pipeline runs.
         val submittedRaw = PATCHER.readIdValue(request.bytes)
@@ -177,10 +177,10 @@ class GuardedMutatingFacade(
     /**
      * The out-of-glob / non-COMMIT degrade: file a proposal through the SAME guarded [ProposalFacade.propose] routes
      * use, so the audit is identical to every shipped propose (EDIT@"proposal") and the author resolves via the
-     * labeler — no re-implementing the grant/labeler dance, no `Action.PROPOSE`, NEVER the pageId EditGrant.
+     * labeler - no re-implementing the grant/labeler dance, no `Action.PROPOSE`, NEVER the pageId EditGrant.
      *
      * The id-tamper check is INTENTIONALLY bypassed here (it lives on the DirectCommit/non-agent path only): a COMMIT
-     * agent submitting a mismatched `id:` on an OUT-of-glob page files a PROPOSAL, not a 422 — the rename surfaces to
+     * agent submitting a mismatched `id:` on an OUT-of-glob page files a PROPOSAL, not a 422 - the rename surfaces to
      * a human reviewer who rejects the rename-proposal, rather than being rejected inline. Out-of-glob writes are
      * ALWAYS human-gated, so this is the desired behavior, not a silent divergence from the direct path.
      */
@@ -205,7 +205,7 @@ class GuardedMutatingFacade(
 
     override fun create(principal: Principal, intent: CreateIntent, origin: WriteOrigin): CreateOutcome {
         // C1: the create twin of save()'s agent direct-commit-vs-degrade gate. Human/Anonymous ALWAYS, and the
-        // PROPOSAL_APPLY caller REGARDLESS of principal (an off-mode agent can drive approve — finding #11), take the
+        // PROPOSAL_APPLY caller REGARDLESS of principal (an off-mode agent can drive approve - finding #11), take the
         // strict direct path: the bypass is the WriteOrigin discriminator the apply caller sets, never an assumption
         // about the approver's principal type (the save() invariant). An approved out-of-glob create MUST land here.
         if (principal !is Principal.Agent || origin == WriteOrigin.PROPOSAL_APPLY) {
@@ -213,7 +213,7 @@ class GuardedMutatingFacade(
             return CreateOutcome.DirectCreated(writePipeline.create(grant, intent))
         }
 
-        // Agent DIRECT_PUT — decide-first (the save() AGENT-ONLY relaxation): a null mode (revoked/expired token at
+        // Agent DIRECT_PUT - decide-first (the save() AGENT-ONLY relaxation): a null mode (revoked/expired token at
         // clock.now()) is fail-safe DEGRADE; otherwise the glob decision over the SERVER-COMPOSED intent.path.
         val mode = policy.agentModeFor(principal)
         val decision = if (mode == null) {
@@ -238,7 +238,7 @@ class GuardedMutatingFacade(
      * The out-of-glob / non-COMMIT create degrade (the create twin of [degradeToProposal]): file a create-proposal
      * through the SAME guarded [ProposalFacade.propose] so the audit is identical to a shipped propose and `checkCreate`
      * runs (a READ_ONLY/revoked principal is denied there → AccessDenied → 403). The id is the one the
-     * create route already minted + baked into the bytes — PIN it so the stored row + blob agree, no re-mint.
+     * create route already minted + baked into the bytes - PIN it so the stored row + blob agree, no re-mint.
      */
     private fun degradeCreateToProposal(principal: Principal, intent: CreateIntent): CreateOutcome {
         val outcome = proposals().propose(
@@ -247,7 +247,7 @@ class GuardedMutatingFacade(
                 targetPath = intent.path,
                 proposedContent = intent.bytes, // already composed + id-baked by the create route (degrade arm)
                 rationale = DEGRADE_RATIONALE,
-                pageId = intent.pageId, // PIN the already-minted id — no re-mint
+                pageId = intent.pageId, // PIN the already-minted id - no re-mint
             ),
         )
         return when (outcome) {
@@ -314,7 +314,19 @@ class GuardedMutatingFacade(
             }
             is CreateResult.ParentMissing -> AssetWriteOutcome.PageMissing
             is CreateResult.Rejected -> AssetWriteOutcome.Rejected(result.reason)
-            is CreateResult.Unreadable -> AssetWriteOutcome.Unreadable
+            is CreateResult.Unreadable ->
+                if (result.targetMutated) {
+                    // Q8b durable_but_unmirrored (object mode): the asset PUT is DURABLE at the bucket but the
+                    // mirror apply failed - the authoritative store HOLDS the asset. Report it HONESTLY as
+                    // durable-but-unpublished (the same 503 shape as a Created-but-rebuild-failed asset), NEVER
+                    // "nothing written" - a client must not retry under a false no-write assumption (the asset
+                    // twin of the page-write Q8b retry-honesty). Best-effort rebuild in case the immediate
+                    // reconcile already healed the mirror, so a subsequent read/retry converges.
+                    runCatching { indexBuilder.rebuild() }
+                    AssetWriteOutcome.WrittenButUnindexed(assetPath)
+                } else {
+                    AssetWriteOutcome.Unreadable // nothing landed (a pre-send / atomic failure) - honest "nothing written"
+                }
         }
     }
 
@@ -338,17 +350,17 @@ class GuardedMutatingFacade(
     private companion object {
         val logger = KotlinLogging.logger {}
 
-        /** P5: the deterministic rationale stamped on an auto-degraded proposal (a single-line literal — no `\n`). */
+        /** P5: the deterministic rationale stamped on an auto-degraded proposal (a single-line literal - no `\n`). */
         const val DEGRADE_RATIONALE =
             "Auto-degraded: an agent direct commit fell outside agentDirectCommit.globs and was filed as a proposal for review."
 
-        /** The single frontmatter id-detection grammar (lenient decode — the id-inspection trap is closed in W3a). */
+        /** The single frontmatter id-detection grammar (lenient decode - the id-inspection trap is closed in W3a). */
         val PATCHER = FrontmatterPatcher()
 
         /**
          * Two raw `id:` line values (each from [FrontmatterPatcher.readIdValue], surrounding quotes NOT stripped)
-         * denote the SAME identity iff they parse to the same canonical [PageId], OR — when one or both are not a
-         * bare UUID (`id: "<uuid>"`, garbage, or absent) — they are the byte-identical raw string. The UUID arm makes
+         * denote the SAME identity iff they parse to the same canonical [PageId], OR - when one or both are not a
+         * bare UUID (`id: "<uuid>"`, garbage, or absent) - they are the byte-identical raw string. The UUID arm makes
          * the check quote-TOLERANT across forms; the raw arm keeps a both-null (both-quoted/both-malformed/both-
          * absent) comparison honest instead of collapsing every unparseable id to "equal".
          */

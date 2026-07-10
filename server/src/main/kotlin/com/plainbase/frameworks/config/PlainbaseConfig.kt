@@ -1,24 +1,29 @@
 package com.plainbase.frameworks.config
 
 import com.plainbase.BuildInfo
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.frameworks.ktor.RemoteAddress
 import com.typesafe.config.Config
+import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigResolveOptions
+import java.net.URI
+import java.net.URISyntaxException
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
  * Application configuration.
  *
- * - `CONTENT_DIR` — canonical, user-owned content tree (Markdown + assets). §4 hard rule.
- * - `DATA_DIR`    — app-owned state (SQLite DB, plainbase.conf, caches, search.db).
+ * - `CONTENT_DIR` - canonical, user-owned content tree (Markdown + assets). §4 hard rule.
+ * - `DATA_DIR`    - app-owned state (SQLite DB, plainbase.conf, caches, search.db).
  *
  * Environment variables override defaults; `DATA_DIR/plainbase.conf` (HOCON, ADR-0009) is layered in by
- * [fromEnvAndFile] — **env always wins**, the file only supplies values env omits. Secrets stay in env,
- * never the file. [fromEnv] is the env-only fast path the spike + content-only CLIs (reindex, adopt) use; the
- * server and the `admin` CLI use [fromEnvAndFile] (admin needs the file-configured `auth.mode`).
+ * [fromEnvAndFile] - **env always wins**, the file only supplies values env omits. Secrets stay in env,
+ * never the file. [fromEnv] is the env-only fast path only the credential-free `spike` uses; the server and
+ * every DATA_DIR-sharing CLI (`admin`, `adopt`, `reindex`) use [fromEnvAndFile], so their file-configured
+ * decisions (auth.mode, storage.backend) all match serve for the same DATA_DIR.
  */
 data class PlainbaseConfig(
     val contentDir: Path,
@@ -28,14 +33,14 @@ data class PlainbaseConfig(
     /**
      * PB-WRITE-1 body cap: the maximum `PUT /api/v1/pages/{id}` request-body size in bytes; a body
      * exceeding it is rejected `413 body_too_large` (the response carries this authoritative number,
-     * so clients never hardcode it). Default 1 MiB; raisable per deploy (raising is additive — the
+     * so clients never hardcode it). Default 1 MiB; raisable per deploy (raising is additive - the
      * frozen contract is the cap BEHAVIOR + the code + the `max_bytes` field, never the number).
      */
     val maxWriteBodyBytes: Long = DEFAULT_MAX_WRITE_BODY_BYTES,
     /**
      * W3b asset upload cap: the maximum `POST /api/v1/pages/{id}/assets` request-body size in bytes; a body
      * exceeding it is rejected `413 body_too_large` (the response carries this authoritative number). A
-     * separate, LARGER cap than [maxWriteBodyBytes] — assets are binaries (screenshots, pdfs, fonts), so a
+     * separate, LARGER cap than [maxWriteBodyBytes] - assets are binaries (screenshots, pdfs, fonts), so a
      * 1 MiB document cap is wrong for them. Default 10 MiB; raisable per deploy (raising is additive).
      */
     val maxAssetBytes: Long = DEFAULT_MAX_ASSET_BYTES,
@@ -43,13 +48,20 @@ data class PlainbaseConfig(
     val git: GitConfig = GitConfig(),
     /** Phase-4 auth substrate (ADR-0008): bind-guard + secure-context inputs; restart-only (§0.9). */
     val auth: AuthConfig = AuthConfig(),
+    /** Storage-backend selection (Q9): the local filesystem authority (default) or an S3-compatible bucket. */
+    val storage: StorageConfig = StorageConfig(),
+    /**
+     * Where [contentDir] came from (Q10 source tracking): the env/file/default arms of the build chain,
+     * captured because object mode IGNORES CONTENT_DIR and must warn only when it was EXPLICITLY set.
+     */
+    val contentDirSource: ConfigSource = ConfigSource.DEFAULT,
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
 
     /**
      * Path of the derived-state search database (§B5/ADR-0004): rebuildable from the published
-     * snapshot at any time, deletable with zero data loss — always a separate file from
+     * snapshot at any time, deletable with zero data loss - always a separate file from
      * [appDatabasePath] (§4 hard rule).
      */
     val searchDatabasePath: Path get() = dataDir.resolve("search.db")
@@ -58,37 +70,76 @@ data class PlainbaseConfig(
      * Startup guard: fails fast with an operator-actionable message when the configured
      * CONTENT_DIR is missing or not a directory. Without it the first scan dies on a bare
      * `NoSuchFileException` that names nothing the operator can act on; silently serving an
-     * empty tree would be worse (§4 — the content tree is the product).
+     * empty tree would be worse (§4 - the content tree is the product).
      *
      * Also rejects DATA_DIR == CONTENT_DIR: that config violates §4's user-owned/app-owned
-     * separation, and concretely puts plainbase.db/search.db (plus their -wal/-journal siblings —
+     * separation, and concretely puts plainbase.db/search.db (plus their -wal/-journal siblings -
      * none of them dotfiles) INSIDE the watched content root, where every checkpoint write would
      * re-trigger the watcher: a silent, self-sustaining rebuild loop. Strict nesting either way
-     * stays legal — the watcher excludes a strictly-nested DATA_DIR, and under a strict ancestor
+     * stays legal - the watcher excludes a strictly-nested DATA_DIR, and under a strict ancestor
      * the app's writes land outside the watched tree.
      */
     fun requireContentDir(): Path {
+        // Backend-aware (Q9/Q10): object mode IGNORES CONTENT_DIR (the bucket is the authority; the local
+        // mirror is DATA_DIR-owned derived state), so the startup guard validates the object required-key
+        // matrix instead. fromEnv/fromEnvAndFile already fail fast at load with the same messages; this
+        // re-assert covers directly-constructed configs (tests/embedded) through the one funnel serve() runs.
+        if (storage.backend == StorageBackend.OBJECT) {
+            // Object mode ignores CONTENT_DIR (Q10); the DATA_DIR!=CONTENT_DIR guard is N/A (the mirror is
+            // DATA_DIR-owned derived state). fromEnv/fromEnvAndFile already fail fast at load with the same
+            // messages; this arm re-asserts the Q9 required keys for a directly-constructed object config
+            // (tests/embedded) through the one funnel serve() runs.
+            requireNotNull(storage.endpoint) { "storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)" }
+            requireNotNull(storage.bucket) { "storage.object.bucket is required when storage.backend=object" }
+            require(storage.accessKeyId != null && storage.secretAccessKey != null) { MISSING_S3_CREDENTIALS_MESSAGE }
+            return contentDir
+        }
         require(Files.isDirectory(contentDir)) { "CONTENT_DIR does not exist or is not a directory: $contentDir" }
         require(dataDir.toAbsolutePath().normalize() != contentDir.toAbsolutePath().normalize()) {
             "DATA_DIR and CONTENT_DIR must be different directories (both are $contentDir): app-owned state " +
                 "(plainbase.db, search.db) inside the user-owned content root would re-trigger the watcher " +
-                "after every rebuild — a self-sustaining rebuild loop (§4 separation)"
+                "after every rebuild - a self-sustaining rebuild loop (§4 separation)"
         }
         return contentDir
     }
 
     /**
+     * Operator-facing storage-config warnings (Q9/Q10), logged once by `serve()` (the [bindGuardRefusal]
+     * pure-accessor idiom: no logger here, so it unit-tests like the guards). NEVER fatal:
+     * - local mode names any configured-but-ignored `storage.object.*` keys (a shared plainbase.conf
+     *   across deploys stays legal);
+     * - object mode warns when CONTENT_DIR was EXPLICITLY set (env/file per [contentDirSource]),
+     *   because object mode ignores it entirely.
+     */
+    fun storageWarnings(): List<String> = buildList {
+        if (storage.backend == StorageBackend.LOCAL && storage.ignoredObjectKeys.isNotEmpty()) {
+            add(
+                "storage.backend=local ignores the configured object-storage key(s): " +
+                    "${storage.ignoredObjectKeys.joinToString(", ")} (set storage.backend=object to use them)",
+            )
+        }
+        // live from C4: object mode is real now (the hybrid store hydrates a DATA_DIR mirror), so this
+        // explicitly-set-CONTENT_DIR warning is reachable on a real object boot - not dead pre-C4 code.
+        if (storage.backend == StorageBackend.OBJECT && contentDirSource != ConfigSource.DEFAULT) {
+            add(
+                "storage.backend=object ignores CONTENT_DIR (explicitly set via ${contentDirSource.name.lowercase()}): " +
+                    "the bucket is the authority and the local mirror lives inside DATA_DIR",
+            )
+        }
+    }
+
+    /**
      * ADR-0008 fail-closed bind guard. Returns an operator-actionable refusal MESSAGE when the bind is
-     * non-loopback AND there is no trusted-proxy config AND no explicit insecure override — else null (start
+     * non-loopback AND there is no trusted-proxy config AND no explicit insecure override - else null (start
      * permitted). Pure (no socket, no exit) so it unit-tests like [requireContentDir]; `serve()` prints the
      * message + `exitProcess(1)`.
      *
      * Loopback HTTP is always allowed (dev). The guard runs for EVERY mode, `off` included: `off` is the MOST
      * dangerous mode (fully unauthenticated), so a non-loopback `off` bind without an override is the open
-     * internet serving an open surface — exactly what must be refused, never exempted.
+     * internet serving an open surface - exactly what must be refused, never exempted.
      */
     fun bindGuardRefusal(): String? {
-        // A4b: a PROXY-mode misconfig is refused even on a LOOPBACK bind — a loopback PROXY with no CIDR/secret still
+        // A4b: a PROXY-mode misconfig is refused even on a LOOPBACK bind - a loopback PROXY with no CIDR/secret still
         // trusts any loopback sibling. So this completeness check runs BEFORE the loopback early-return below. The
         // secret is the real trust anchor (CIDR alone trusts a whole subnet), so BOTH are required; the message
         // names both remedies.
@@ -110,17 +161,17 @@ data class PlainbaseConfig(
 
     /**
      * The `Secure` attribute for the `pb_session` cookie (ADR-0008). True whenever the transport is TLS-fronted
-     * — MIRRORING the bind guard's "proxy declared ⇒ TLS upstream" logic: a non-loopback bind is fronted by TLS, AND
+     * - MIRRORING the bind guard's "proxy declared ⇒ TLS upstream" logic: a non-loopback bind is fronted by TLS, AND
      * the canonical production deployment (LOOPBACK bind behind a TLS-terminating proxy, [bindGuardRefusal]) declares
-     * [AuthConfig.trustedProxyCidrs] — that too is TLS-fronted, so the cookie must carry `Secure`. ONLY pure
+     * [AuthConfig.trustedProxyCidrs] - that too is TLS-fronted, so the cookie must carry `Secure`. ONLY pure
      * loopback-dev with NO trusted proxy stays false (a `Secure` cookie would never be sent back over plain
      * http://localhost, breaking dev login).
      *
      * Deliberately NOT relaxed by [AuthConfig.insecureHttp] (`PLAINBASE_INSECURE_HTTP`, review I): that flag is only
-     * the bind-guard escape for loopback-dev / agent-bearer scenarios — it lets the server bind plaintext, it does NOT
+     * the bind-guard escape for loopback-dev / agent-bearer scenarios - it lets the server bind plaintext, it does NOT
      * make credentialed builtin HUMAN auth work over a plaintext network. A non-loopback insecure-http bind still
      * marks the cookie `Secure` (so a browser won't send it over the plaintext), AND [isSecureContext] refuses the
-     * credential per-request regardless — so credentialed human login over insecure-http simply does not function by
+     * credential per-request regardless - so credentialed human login over insecure-http simply does not function by
      * design. Serve human auth over loopback or behind a TLS-terminating reverse proxy; we do NOT make plaintext human
      * auth easy.
      */
@@ -130,7 +181,7 @@ data class PlainbaseConfig(
      * The P3 MCP DNS-rebinding HOST allowlist, fail-closed (the [secureCookie] accessor idiom): the operator value
      * when set, ELSE a conservative default derived from the bind host (NOT empty, NOT a wildcard) plus loopback. The
      * SDK matches the request `Host` header's HOSTNAME (port stripped) against this, so bare hostnames suffice; an
-     * operator behind a reverse proxy adds their external host. The bind host is the natural default — a request whose
+     * operator behind a reverse proxy adds their external host. The bind host is the natural default - a request whose
      * `Host` is the host we bind is the only one we serve by default.
      */
     fun mcpHostAllowlist(): List<String> = auth.mcpAllowedHosts.ifEmpty { (listOf(host) + MCP_LOOPBACK_HOSTS).distinct() }
@@ -172,7 +223,7 @@ data class PlainbaseConfig(
         /** W3b default asset cap: 10 MiB. Raisable via `PLAINBASE_MAX_ASSET_BYTES` (raising is additive). */
         const val DEFAULT_MAX_ASSET_BYTES: Long = 10_485_760
 
-        /** Default Git author/committer identity — Phase 3 has no principal. */
+        /** Default Git author/committer identity - Phase 3 has no principal. */
         const val DEFAULT_GIT_AUTHOR_NAME: String = "Plainbase"
         const val DEFAULT_GIT_AUTHOR_EMAIL: String = "plainbase@localhost"
 
@@ -182,15 +233,41 @@ data class PlainbaseConfig(
         /** The loopback hosts always added to the fail-closed MCP DNS-rebinding default (dev/test always reach these). */
         private val MCP_LOOPBACK_HOSTS: List<String> = listOf("127.0.0.1", "localhost")
 
+        /** Q9 default signing region: `auto` (R2, the primary provider). */
+        const val DEFAULT_S3_REGION: String = "auto"
+
+        /** Q9 default watch/reconcile poll interval (seconds). */
+        const val DEFAULT_S3_POLL_SECONDS: Long = 60
+
+        /** The Q9 combined credentials failure (one message for both halves - they only make sense together). */
+        private const val MISSING_S3_CREDENTIALS_MESSAGE: String =
+            "PLAINBASE_S3_ACCESS_KEY_ID and PLAINBASE_S3_SECRET_ACCESS_KEY are required when storage.backend=object " +
+                "(secrets stay in env, never plainbase.conf)"
+
         /**
-         * Env-only construction (the CLIs/spike fast path). No file is read; this is exactly the
+         * Every non-credential object-storage key as env-name -> HOCON-path (Q9), probed for presence in
+         * local mode so the ignored+warn startup warning can NAME what it is ignoring. Credentials are
+         * deliberately absent: in local mode they are ignored silently (never named, never logged).
+         */
+        private val OBJECT_STORAGE_KEYS: List<Pair<String, String>> = listOf(
+            "PLAINBASE_S3_ENDPOINT" to "storage.object.endpoint",
+            "PLAINBASE_S3_BUCKET" to "storage.object.bucket",
+            "PLAINBASE_S3_REGION" to "storage.object.region",
+            "PLAINBASE_S3_PREFIX" to "storage.object.prefix",
+            "PLAINBASE_S3_PATH_STYLE" to "storage.object.pathStyle",
+            "PLAINBASE_S3_POLL_SECONDS" to "storage.object.pollSeconds",
+        )
+
+        /**
+         * Env-only construction (the credential-free `spike` fast path only; every DATA_DIR-sharing CLI now
+         * uses [fromEnvAndFile]). No file is read; this is exactly the
          * env-and-defaults behavior [fromEnvAndFile] falls back to when no `plainbase.conf` is present.
          */
         fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig =
             build(env, ConfigFactory.empty())
 
         /**
-         * Layered construction (ADR-0009): read `DATA_DIR/plainbase.conf` (HOCON) THEN overlay env —
+         * Layered construction (ADR-0009): read `DATA_DIR/plainbase.conf` (HOCON) THEN overlay env -
          * **env always wins**, the file only supplies values env omits. A missing `plainbase.conf` is a clean
          * no-op (identical to [fromEnv]). [dataDir] locates the file and so is the one field that can never
          * come from it: it is resolved from env/default exactly as [fromEnv] does, never file-derived.
@@ -211,52 +288,173 @@ data class PlainbaseConfig(
         }
 
         /**
+         * Resolves config for a `serve`/CLI entry point, funneling a bad config into a clean `<command>:`
+         * stderr line + null (the caller exits 1) instead of a raw stack trace. TWO failure classes are
+         * caught: an [IllegalArgumentException] from the Q9/auth validation, AND a HOCON [ConfigException]
+         * (malformed `plainbase.conf`, an unresolved `${...}`, a wrong-typed file value). [resolve] and [err]
+         * are injectable so a test drives a bad config without touching real env/stderr - resolving OUTSIDE
+         * any DI graph keeps the thrown error unwrapped (a Koin `single {}` would wrap it and dodge the catch).
+         */
+        fun loadForCommand(
+            command: String,
+            err: (String) -> Unit = System.err::println,
+            resolve: () -> PlainbaseConfig = { fromEnvAndFile() },
+        ): PlainbaseConfig? =
+            try {
+                resolve()
+            } catch (e: IllegalArgumentException) {
+                err("$command: ${e.message}")
+                null
+            } catch (e: ConfigException) {
+                err("$command: ${e.message}")
+                null
+            }
+
+        /**
          * The single env-wins fallback chain shared by [fromEnv] and [fromEnvAndFile]: each field reads
          * `env[KEY] ?: file."path" ?: default`, so the env-always-wins invariant lives in ONE place. Typed
-         * getters only (no `unwrapped()` reflection, no serialized data class) — that is what keeps it
+         * getters only (no `unwrapped()` reflection, no serialized data class) - that is what keeps it
          * native-safe.
          */
-        private fun build(env: Map<String, String>, file: Config): PlainbaseConfig = PlainbaseConfig(
-            contentDir = Path.of(env["CONTENT_DIR"] ?: file.stringOrNull("contentDir") ?: "./content").toAbsolutePath().normalize(),
-            dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
-            host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
-            port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,
-            maxWriteBodyBytes = env.positiveLongStrict("PLAINBASE_MAX_WRITE_BODY_BYTES")
-                ?: file.longOrNull("maxWriteBodyBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
-            maxAssetBytes = env.positiveLongStrict("PLAINBASE_MAX_ASSET_BYTES")
-                ?: file.longOrNull("maxAssetBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
-            git = GitConfig(
-                enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
-                authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: file.stringOrNull("git.authorName") ?: DEFAULT_GIT_AUTHOR_NAME,
-                authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: file.stringOrNull("git.authorEmail") ?: DEFAULT_GIT_AUTHOR_EMAIL,
-            ),
-            auth = AuthConfig(
-                mode = AuthMode.parse(env["PLAINBASE_AUTH_MODE"] ?: file.stringOrNull("auth.mode")),
-                trustedProxyCidrs = requireParseableCidrs(
-                    env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
+        private fun build(env: Map<String, String>, file: Config): PlainbaseConfig {
+            // The one place the env/file/default arms are still distinguishable (Q10 source tracking):
+            // capture the source BEFORE the chain collapses into a normalized Path.
+            val contentDirEnv = env["CONTENT_DIR"]
+            val contentDirFile = file.stringOrNull("contentDir")
+            // Parsed once and shared: the SAME insecure-http override the bind guard uses (auth.insecureHttp)
+            // also relaxes the object-endpoint https gate, so operators never learn a second knob.
+            val insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP") ?: file.boolStrict("auth.insecureHttp") ?: false
+            return PlainbaseConfig(
+                contentDir = Path.of(contentDirEnv ?: contentDirFile ?: "./content").toAbsolutePath().normalize(),
+                contentDirSource = when {
+                    contentDirEnv != null -> ConfigSource.ENV
+                    contentDirFile != null -> ConfigSource.FILE
+                    else -> ConfigSource.DEFAULT
+                },
+                storage = buildStorage(env, file, insecureHttp),
+                dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
+                host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
+                port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,
+                maxWriteBodyBytes = env.positiveLongStrict("PLAINBASE_MAX_WRITE_BODY_BYTES")
+                    ?: file.longOrNull("maxWriteBodyBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
+                maxAssetBytes = env.positiveLongStrict("PLAINBASE_MAX_ASSET_BYTES")
+                    ?: file.longOrNull("maxAssetBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
+                git = GitConfig(
+                    enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
+                    authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: file.stringOrNull("git.authorName") ?: DEFAULT_GIT_AUTHOR_NAME,
+                    authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: file.stringOrNull("git.authorEmail") ?: DEFAULT_GIT_AUTHOR_EMAIL,
                 ),
-                insecureHttp = env.boolStrict("PLAINBASE_INSECURE_HTTP") ?: file.boolStrict("auth.insecureHttp") ?: false,
-                agentDirectCommitGlobs = requireParseableGlobs(
-                    env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
-                        ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
+                auth = AuthConfig(
+                    mode = AuthMode.parse(env["PLAINBASE_AUTH_MODE"] ?: file.stringOrNull("auth.mode")),
+                    trustedProxyCidrs = requireParseableCidrs(
+                        env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
+                    ),
+                    insecureHttp = insecureHttp,
+                    agentDirectCommitGlobs = requireParseableGlobs(
+                        env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
+                            ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
+                    ),
+                    // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
+                    // completeness; the deploy docs steer operators to env.
+                    proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
+                    proxyIdentityHeader = (env["PLAINBASE_PROXY_IDENTITY_HEADER"] ?: file.stringOrNull("auth.proxyIdentityHeader"))
+                        ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
+                    // P3 MCP DNS-rebinding allowlists. Empty here → the fail-closed bind-host default (see mcpHostAllowlist);
+                    // reuse the SAME comma-or-list parser the trustedProxyCidrs path uses (never hand-roll a second one).
+                    mcpAllowedHosts = env["PLAINBASE_MCP_ALLOWED_HOSTS"]?.toCommaList()
+                        ?: file.stringListOrNull("auth.mcpAllowedHosts") ?: emptyList(),
+                    mcpAllowedOrigins = env["PLAINBASE_MCP_ALLOWED_ORIGINS"]?.toCommaList()
+                        ?: file.stringListOrNull("auth.mcpAllowedOrigins") ?: emptyList(),
                 ),
-                // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
-                // completeness; the deploy docs steer operators to env.
-                proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
-                proxyIdentityHeader = (env["PLAINBASE_PROXY_IDENTITY_HEADER"] ?: file.stringOrNull("auth.proxyIdentityHeader"))
-                    ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
-                // P3 MCP DNS-rebinding allowlists. Empty here → the fail-closed bind-host default (see mcpHostAllowlist);
-                // reuse the SAME comma-or-list parser the trustedProxyCidrs path uses (never hand-roll a second one).
-                mcpAllowedHosts = env["PLAINBASE_MCP_ALLOWED_HOSTS"]?.toCommaList()
-                    ?: file.stringListOrNull("auth.mcpAllowedHosts") ?: emptyList(),
-                mcpAllowedOrigins = env["PLAINBASE_MCP_ALLOWED_ORIGINS"]?.toCommaList()
-                    ?: file.stringListOrNull("auth.mcpAllowedOrigins") ?: emptyList(),
-            ),
-        )
+            )
+        }
+
+        /**
+         * The Q9 storage matrix, strict env-wins like every other field. Object mode fail-fasts its
+         * required keys with the tabled operator-actionable messages; local mode only TRACKS which
+         * `storage.object.*` keys are present ([StorageConfig.ignoredObjectKeys], for the one
+         * ignored+warn startup warning) and validates nothing - never fatal, so a shared plainbase.conf
+         * across deploys stays legal. Credentials are ENV-ONLY (secrets stay in env, never the file).
+         */
+        private fun buildStorage(env: Map<String, String>, file: Config, insecureHttp: Boolean): StorageConfig {
+            val backend = StorageBackend.parse(env["PLAINBASE_STORAGE_BACKEND"] ?: file.stringOrNull("storage.backend"))
+            if (backend == StorageBackend.LOCAL) {
+                val ignored = OBJECT_STORAGE_KEYS.mapNotNull { (envKey, filePath) ->
+                    if (env[envKey] != null) envKey else filePath.takeIf { file.hasPath(it) }
+                }
+                return StorageConfig(backend = backend, ignoredObjectKeys = ignored)
+            }
+            val endpoint = env["PLAINBASE_S3_ENDPOINT"] ?: file.stringOrNull("storage.object.endpoint")
+                ?: throw IllegalArgumentException(
+                    "storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)",
+                )
+            require(isAbsoluteHttpUrl(endpoint)) { "storage.object.endpoint is not an absolute http(s) URL: '$endpoint'" }
+            // Cleartext http would put SigV4 credentials on the wire in the clear. Refuse http:// unless the
+            // SAME explicit insecure override the bind guard honors is set (a loopback test proxy, say) - never
+            // a silent downgrade on a typo.
+            require(insecureHttp || isHttpsUrl(endpoint)) {
+                "storage.object.endpoint must be https to protect S3 credentials in transit: '$endpoint' " +
+                    "(set PLAINBASE_INSECURE_HTTP=1 to knowingly send credentials over plaintext)"
+            }
+            val bucket = (env["PLAINBASE_S3_BUCKET"] ?: file.stringOrNull("storage.object.bucket"))?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("storage.object.bucket is required when storage.backend=object")
+            val accessKeyId = env["PLAINBASE_S3_ACCESS_KEY_ID"]?.takeIf { it.isNotBlank() }
+            val secretAccessKey = env["PLAINBASE_S3_SECRET_ACCESS_KEY"]?.takeIf { it.isNotBlank() }
+            if (accessKeyId == null || secretAccessKey == null) throw IllegalArgumentException(MISSING_S3_CREDENTIALS_MESSAGE)
+            val prefix = env["PLAINBASE_S3_PREFIX"] ?: file.stringOrNull("storage.object.prefix") ?: ""
+            if (prefix.isNotEmpty()) requireTreePathPrefix(prefix)
+            return StorageConfig(
+                backend = backend,
+                endpoint = endpoint,
+                bucket = bucket,
+                region = env["PLAINBASE_S3_REGION"] ?: file.stringOrNull("storage.object.region") ?: DEFAULT_S3_REGION,
+                prefix = prefix,
+                pathStyle = env.boolStrict("PLAINBASE_S3_PATH_STYLE") ?: file.boolStrict("storage.object.pathStyle") ?: true,
+                pollSeconds = env.positiveLongStrict("PLAINBASE_S3_POLL_SECONDS")
+                    ?: file.longOrNull("storage.object.pollSeconds")?.takeIf { it > 0 } ?: DEFAULT_S3_POLL_SECONDS,
+                accessKeyId = accessKeyId,
+                secretAccessKey = secretAccessKey,
+            )
+        }
+
+        /**
+         * True iff [value] parses as an absolute http/https URL with a host (the Q9 endpoint gate).
+         * `internal` so the `s3-smoke` CLI reuses the SAME endpoint validation over its own env keys.
+         */
+        internal fun isAbsoluteHttpUrl(value: String): Boolean {
+            val uri = try {
+                URI(value)
+            } catch (_: URISyntaxException) {
+                return false
+            }
+            return (uri.scheme == "http" || uri.scheme == "https") && uri.host != null
+        }
+
+        /**
+         * True iff [value] is an `https` URL (the cleartext-credentials gate; [isAbsoluteHttpUrl] already ran).
+         * `internal` so the `s3-smoke` CLI applies the SAME https-only rule to its endpoint.
+         */
+        internal fun isHttpsUrl(value: String): Boolean =
+            try {
+                URI(value).scheme == "https"
+            } catch (_: URISyntaxException) {
+                false
+            }
+
+        /**
+         * The Q9 prefix funnel: a non-empty `storage.object.prefix` must be a valid [TreePath] (relative,
+         * no `.`/`..`/empty segments) so every bucket key stays inside the content key space. Fail-fast at
+         * load, naming the key (the [requireParseableCidrs] idiom).
+         */
+        private fun requireTreePathPrefix(prefix: String) {
+            requireNotNull(TreePath.of(prefix)) {
+                "storage.object.prefix is not a valid key prefix: '$prefix' (a relative /-joined path, no . or .. segments)"
+            }
+        }
 
         /**
          * Fail-fast on a malformed `trustedProxyCidrs` entry (A1-amber): a present-but-unparseable CIDR (a bare
-         * address with no `/prefix`, or an out-of-range prefix) is rejected at LOAD — not silently dropped (which
+         * address with no `/prefix`, or an out-of-range prefix) is rejected at LOAD - not silently dropped (which
          * would shrink/empty the allowlist and flip the fail-closed bind guard, exposing a plaintext bind). After
          * this, "non-empty `trustedProxyCidrs`" provably means "≥1 PARSEABLE CIDR". CIDR parsing stays in ONE place
          * ([RemoteAddress.isParseableCidr]); the config layer never re-implements it.
@@ -271,7 +469,7 @@ data class PlainbaseConfig(
         }
 
         /**
-         * P5: fail-fast on a malformed `agentDirectCommit.globs` entry at LOAD (the [requireParseableCidrs] idiom) —
+         * P5: fail-fast on a malformed `agentDirectCommit.globs` entry at LOAD (the [requireParseableCidrs] idiom) -
          * a blank/empty pattern, a `.`/`..` segment, or an empty segment. [CommitGlob.parse] throws naming the bad
          * pattern; after this, "an entry survived load" provably means "a parseable glob". The validated strings are
          * returned unchanged (the frozen `AuthConfig.agentDirectCommitGlobs: List<String>` keeps its shape); the parsed
@@ -284,7 +482,7 @@ data class PlainbaseConfig(
 
         /**
          * Strict env-wins numeric read: if [key] is ABSENT returns null (fall through to file/default); if it is
-         * PRESENT it MUST parse, else fail-fast (env-wins means a present env value is authoritative — silently
+         * PRESENT it MUST parse, else fail-fast (env-wins means a present env value is authoritative - silently
          * dropping a typo'd `PLAINBASE_PORT=80x0` back to the file/default is the opposite of env-wins).
          */
         private fun Map<String, String>.longStrict(key: String): Long? {
@@ -306,7 +504,7 @@ data class PlainbaseConfig(
 
         /**
          * Strict env-wins boolean read. Absent → null; present must be one of the documented canonical forms
-         * (`1`/`0`, `true`/`false`, case-insensitive) — the bind-guard remedy tells operators
+         * (`1`/`0`, `true`/`false`, case-insensitive) - the bind-guard remedy tells operators
          * `PLAINBASE_INSECURE_HTTP=1`, so `1`/`0` must actually work, not silently coerce to false.
          */
         private fun Map<String, String>.boolStrict(key: String): Boolean? {
@@ -346,11 +544,74 @@ private fun Config.boolStrict(path: String): Boolean? {
     }
 }
 
+/** Where a collapsed env-wins config value came from (Q10 source tracking): env beats file beats default. */
+enum class ConfigSource {
+    ENV,
+    FILE,
+    DEFAULT,
+}
+
+/**
+ * Which backend holds the authoritative content bytes (Q9). Restart-only (§0.9).
+ * - [LOCAL] - the CONTENT_DIR directory IS the authority (the default; exactly today's behavior).
+ * - [OBJECT] - an S3-compatible bucket is the authority; CONTENT_DIR is ignored (Q10) and the local
+ *   mirror is DATA_DIR-owned derived state served by the `ObjectContentStore` hybrid (C4).
+ */
+enum class StorageBackend {
+    LOCAL,
+    OBJECT,
+    ;
+
+    companion object {
+        /**
+         * Parses [raw] (env or HOCON) case-insensitively (the [AuthMode.parse] idiom). A blank/absent
+         * value defaults to [LOCAL]; a NON-blank unknown value fails fast naming the legal values - a
+         * typo'd backend must never silently serve the wrong authority.
+         */
+        fun parse(raw: String?): StorageBackend {
+            val token = raw?.trim()
+            if (token.isNullOrEmpty()) return LOCAL
+            return entries.firstOrNull { it.name.equals(token, ignoreCase = true) }
+                ?: throw IllegalArgumentException(
+                    "Unknown storage.backend '$token' - legal values: ${entries.joinToString(", ") { it.name.lowercase() }}",
+                )
+        }
+    }
+}
+
+/**
+ * Storage-backend config (Q9), all restart-only (§0.9). Object-mode required keys are validated
+ * fail-fast at load with operator-actionable messages; in local mode every `storage.object.*` key is
+ * ignored, tracked in [ignoredObjectKeys] for the one startup warning (never fatal).
+ *
+ * [accessKeyId]/[secretAccessKey] come ONLY from env (`PLAINBASE_S3_ACCESS_KEY_ID` /
+ * `PLAINBASE_S3_SECRET_ACCESS_KEY` - secrets stay in env, never plainbase.conf) and are never logged.
+ */
+data class StorageConfig(
+    val backend: StorageBackend = StorageBackend.LOCAL,
+    /** Object mode: the R2/S3 endpoint URL. REQUIRED; must be an absolute http(s) URL. */
+    val endpoint: String? = null,
+    /** Object mode: the bucket name. REQUIRED, non-blank. */
+    val bucket: String? = null,
+    /** Object mode: the signing region; default `auto` (R2, the primary provider). */
+    val region: String = PlainbaseConfig.DEFAULT_S3_REGION,
+    /** Object mode: the key prefix all content lives under; default none. Non-empty values pass the [TreePath] funnel. */
+    val prefix: String = "",
+    /** Object mode: path-style addressing; default true (R2 account-endpoint addressing). */
+    val pathStyle: Boolean = true,
+    /** Object mode: the watch/reconcile poll interval in seconds; default 60. */
+    val pollSeconds: Long = PlainbaseConfig.DEFAULT_S3_POLL_SECONDS,
+    val accessKeyId: String? = null,
+    val secretAccessKey: String? = null,
+    /** The `storage.object.*` keys present while backend=local - named by the ignored+warn startup warning. */
+    val ignoredObjectKeys: List<String> = emptyList(),
+)
+
 /**
  * Git-history config (ADR-0006). [enabled] is a tri-state: `null` auto-detects a repo in CONTENT_DIR
  * (the detection lives in `historyModule`, not here); `true`/`false` override either direction.
  * [authorName]/[authorEmail] are the commit identity (Phase 3 default `Plainbase <plainbase@localhost>`;
- * the author/committer split is plumbed for Phase 4). There is no amend/squash knob — one commit per save, always (fix D).
+ * the author/committer split is plumbed for Phase 4). There is no amend/squash knob - one commit per save, always (fix D).
  */
 data class GitConfig(
     val enabled: Boolean? = null,
@@ -361,10 +622,10 @@ data class GitConfig(
 /**
  * How requests authenticate (ADR-0008). Restart-only (§0.9). A1 ships the enum + the bind guard's use of it;
  * A3/A4 add the live extraction/enforcement.
- * - [OFF] — no human auth (loopback dev); the MOST dangerous mode, so a non-loopback bind is still
+ * - [OFF] - no human auth (loopback dev); the MOST dangerous mode, so a non-loopback bind is still
  *   subject to the fail-closed bind guard (refused without proxy/TLS config or `PLAINBASE_INSECURE_HTTP`).
- * - [BUILTIN] — built-in password login (A4a).
- * - [PROXY] — a trusted reverse-proxy asserts identity via a header (A4b).
+ * - [BUILTIN] - built-in password login (A4a).
+ * - [PROXY] - a trusted reverse-proxy asserts identity via a header (A4b).
  */
 enum class AuthMode {
     OFF,
@@ -375,7 +636,7 @@ enum class AuthMode {
     companion object {
         /**
          * Parses [raw] (env or HOCON) case-insensitively. A blank/absent value defaults to [OFF]; a NON-blank
-         * unknown value fails fast naming the legal values — a typo'd `auth.mode` must never silently disable
+         * unknown value fails fast naming the legal values - a typo'd `auth.mode` must never silently disable
          * auth (risk #9).
          */
         fun parse(raw: String?): AuthMode {
@@ -383,7 +644,7 @@ enum class AuthMode {
             if (token.isNullOrEmpty()) return OFF
             return entries.firstOrNull { it.name.equals(token, ignoreCase = true) }
                 ?: throw IllegalArgumentException(
-                    "Unknown auth.mode '$token' — legal values: ${entries.joinToString(", ") { it.name.lowercase() }}",
+                    "Unknown auth.mode '$token' - legal values: ${entries.joinToString(", ") { it.name.lowercase() }}",
                 )
         }
     }
@@ -391,11 +652,11 @@ enum class AuthMode {
 
 /**
  * Phase-4 auth substrate config (ADR-0008), all restart-only (§0.9).
- * - [mode] — the [AuthMode] above; default [AuthMode.OFF].
- * - [trustedProxyCidrs] — proxy source CIDRs whose `X-Forwarded-Proto: https` is trusted (secure-context,
+ * - [mode] - the [AuthMode] above; default [AuthMode.OFF].
+ * - [trustedProxyCidrs] - proxy source CIDRs whose `X-Forwarded-Proto: https` is trusted (secure-context,
  *   WI 5; A4b spoof check). Empty = no trusted proxy.
- * - [insecureHttp] — the explicit, knowing override that lets the bind guard serve credentials over plaintext.
- * - [agentDirectCommitGlobs] — LIVE as of P5 (§0.7): RestModule threads this into the route context and
+ * - [insecureHttp] - the explicit, knowing override that lets the bind guard serve credentials over plaintext.
+ * - [agentDirectCommitGlobs] - LIVE as of P5 (§0.7): RestModule threads this into the route context and
  *   [com.plainbase.frameworks.ktor.GuardedMutatingFacade] consults it on every agent PUT. A COMMIT-mode agent
  *   writing INSIDE a glob direct-commits (200); OUTSIDE it degrades to a proposal (202). The default `[]` degrades
  *   EVERY agent write. Humans and the proposal-apply path are never glob-checked. Default `[]`.
@@ -407,7 +668,7 @@ data class AuthConfig(
     val agentDirectCommitGlobs: List<String> = emptyList(),
     /**
      * A4b PROXY mode: the shared secret the trusted proxy stamps as `X-Plainbase-Proxy-Secret`. REQUIRED in proxy
-     * mode (the [bindGuardRefusal] enforces it) — it is the real trust anchor: a CIDR alone trusts a whole subnet,
+     * mode (the [bindGuardRefusal] enforces it) - it is the real trust anchor: a CIDR alone trusts a whole subnet,
      * so a sibling on a shared net could stamp the identity header. Stays in env, never logged.
      */
     val proxySecret: String? = null,
@@ -415,7 +676,7 @@ data class AuthConfig(
     val proxyIdentityHeader: String = PlainbaseConfig.DEFAULT_PROXY_IDENTITY_HEADER,
     /**
      * P3 MCP DNS-rebinding allowlists. An EMPTY list here means "use the fail-closed bind-host default"
-     * ([PlainbaseConfig.mcpHostAllowlist]/[PlainbaseConfig.mcpOriginAllowlist]) — NEVER "allow none" and NEVER a
+     * ([PlainbaseConfig.mcpHostAllowlist]/[PlainbaseConfig.mcpOriginAllowlist]) - NEVER "allow none" and NEVER a
      * wildcard. An operator behind a reverse proxy adds their external host/origin explicitly (the trustedProxyCidrs
      * idiom). Parsed as a comma-or-list value exactly like trustedProxyCidrs.
      */

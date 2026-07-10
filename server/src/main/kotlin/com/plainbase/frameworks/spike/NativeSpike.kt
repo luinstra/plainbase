@@ -21,6 +21,7 @@ import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.mcp.MCP_PATH
 import com.plainbase.frameworks.mcp.McpTools
+import com.plainbase.frameworks.objectstore.SigV4Signer
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.Argon2PasswordHasher
@@ -37,11 +38,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.serialization.kotlinx.json.json
-import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.response.respond
-import io.ktor.server.routing.get
-import io.ktor.server.routing.routing
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
 import io.modelcontextprotocol.kotlin.sdk.client.mcpSseTransport
@@ -58,24 +55,29 @@ import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
+import java.net.InetAddress
 import java.nio.file.Files
 import java.sql.DriverManager
+import kotlin.concurrent.thread
 import io.ktor.client.engine.cio.CIO as ClientCIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
 import io.ktor.client.plugins.sse.SSE as ClientSSE
 import io.ktor.server.cio.CIO as ServerCIO
-import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 
 /**
  * Full-stack native dependency spike (Phase 0, task 3) — the go/no-go gate for
  * the GraalVM native-image bet. Every load-bearing dependency is exercised with
  * a real assertion, not just "it starts":
  *
- *  1. Ktor CIO HTTP round-trip (server + client) with kotlinx.serialization
+ *  1. Ktor CIO client HTTPS round-trip against a pinned self-signed loopback listener
+ *     (cert validation ON, default trust must refuse) with kotlinx.serialization - the
+ *     standing TLS-under-native-image regression guard (storage plan C0, rev 3.2)
  *  2. Koin constructor-DSL wiring resolution
  *  3. SQLDelight query against SQLite
  *  4. SQLite FTS5 through the PRODUCTION SearchDb + Fts5SearchProvider against a
@@ -89,6 +91,8 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerCon
  *  8. MCP SSE-on-CIO server handshake (P3): the in-binary `plainbaseMcp` mount over a real CIO server +
  *     a real SSE MCP client under ENFORCED auth — initialize + listTools (== the seven) + callTool ×2 over
  *     ONE open stream (proving keep-alive/flush work natively, not a single round-trip)
+ *  9. SigV4 signing vectors (storage plan C0): published AWS S3 signatures reproduced offline,
+ *     proving HMAC-SHA256 / SHA-256 / the canonical-request path in-image (no network, no creds)
  *
  * The Git layer is NOT spiked here — it ships as the system `git` binary (ADR-0006), not a bundled
  * library, so its native proof is the real-round-trip GitNativeSmokeTest (@Tag("native")), not this set.
@@ -110,6 +114,7 @@ object NativeSpike {
         check("argon2-hash-verify") { argon2() },
         check("mcp-stub-handshake") { mcpHandshake() },
         check("mcp-sse-handshake") { mcpSseHandshake() },
+        check("s3-sigv4-vector") { sigV4Vectors() },
     )
 
     fun runAsMain(): Int {
@@ -140,28 +145,65 @@ object NativeSpike {
         CheckResult(name, false, chain + origin)
     }
 
-    // ---- 1. Ktor CIO round-trip ----------------------------------------------------------
+    // ---- 1. Ktor CIO client TLS round-trip (the standing native-HTTPS gate, plan C0) ------
 
     @Serializable
     data class EchoPayload(val message: String, val n: Int)
 
+    /**
+     * A GET over HTTPS against a self-signed loopback listener, trusting EXACTLY that one
+     * runtime-generated certificate ([SpikeTls]: real TrustManagerFactory path validation,
+     * never trust-all). Ktor's CIO client TLS is a hand-rolled pure-Kotlin stack (not JSSE) -
+     * the least battle-tested transport in the tree and the exact risk the object storage
+     * backend rides on (plan Q7/R16) - so it is re-proven on every gate run and on every
+     * GraalVM/Ktor bump. The listener is a JSSE `SSLServerSocket` because the CIO SERVER
+     * engine has no TLS support; the plaintext CIO server+client round-trip this check used
+     * to carry lives on in check #8's SSE handshake. A second client on DEFAULT trust must be
+     * REFUSED: a run that only goes green via trust-all/insecure paths is a FAIL by design.
+     */
     private fun ktorCioRoundTrip(): String = runBlocking {
         val expected = EchoPayload("plainbase", 42)
-        val server = embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) {
-            install(ServerContentNegotiation) { json() }
-            routing { get("/spike/echo") { call.respond(expected) } }
-        }.start(wait = false)
+        val body = Json.encodeToString(expected).toByteArray()
+        val tls = SpikeTls.selfSignedLoopback()
+        val serverSocket = tls.serverContext.serverSocketFactory.createServerSocket(0, 8, InetAddress.getLoopbackAddress())
+        val listener = thread(isDaemon = true, name = "spike-tls-loopback") {
+            while (true) {
+                val connection = runCatching { serverSocket.accept() }.getOrNull() ?: break
+                connection.use { socket ->
+                    // One canned HTTP response per connection; a client that aborts the TLS
+                    // handshake (the default-trust probe below) just falls through here.
+                    runCatching {
+                        val request = socket.getInputStream().bufferedReader()
+                        generateSequence { request.readLine() }.firstOrNull { it.isEmpty() }
+                        socket.getOutputStream().apply {
+                            val head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                                "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n"
+                            write(head.toByteArray())
+                            write(body)
+                            flush()
+                        }
+                    }
+                }
+            }
+        }
         try {
-            val port = server.engine.resolvedConnectors().first().port
+            val url = "https://127.0.0.1:${serverSocket.localPort}/spike/echo"
             HttpClient(ClientCIO) {
+                engine { https { trustManager = tls.clientTrust } }
                 install(ClientContentNegotiation) { json() }
             }.use { client ->
-                val actual: EchoPayload = client.get("http://127.0.0.1:$port/spike/echo").body()
+                val actual: EchoPayload = client.get(url).body()
                 require(actual == expected) { "expected $expected, got $actual" }
             }
-            "CIO server + CIO client + kotlinx.serialization round-trip on port $port"
+            HttpClient(ClientCIO).use { client ->
+                val refused = runCatching { client.get(url) }
+                require(refused.isFailure) { "default-trust client ACCEPTED the self-signed cert - validation is not running" }
+            }
+            "CIO client TLS + kotlinx.serialization round-trip against a pinned self-signed loopback cert " +
+                "on port ${serverSocket.localPort}; default trust refused it"
         } finally {
-            server.stop(gracePeriodMillis = 100, timeoutMillis = 1000)
+            serverSocket.close()
+            listener.join(5_000)
         }
     }
 
@@ -489,5 +531,71 @@ object NativeSpike {
             Files.walk(contentDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             Files.walk(dataDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
+    }
+
+    // ---- 9. SigV4 signing vectors (storage plan C0: crypto is a divergence surface) -------
+
+    /**
+     * Three published AWS S3 SigV4 examples (the S3 API reference's header-based-auth vectors,
+     * independently reproduced against a reference implementation before pinning) signed by the
+     * production [SigV4Signer]: exact-signature goldens proving HMAC-SHA256 / SHA-256 / the
+     * canonical URI + query + header rules inside the native image. Offline and deterministic -
+     * no network, no credentials. The wider suite (canonical-request seams, key
+     * percent-encoding) is SigV4SignerNativeTest.
+     */
+    private fun sigV4Vectors(): String {
+        val signer = SigV4Signer("AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "us-east-1", "s3")
+        val emptyPayload = SigV4Signer.sha256Hex(ByteArray(0))
+        val amzDate = "20130524T000000Z"
+        val host = "examplebucket.s3.amazonaws.com"
+
+        val get = signer.sign(
+            method = "GET",
+            canonicalPath = SigV4Signer.uriEncodePath("test.txt"),
+            query = emptyList(),
+            headers = mapOf("host" to host, "range" to "bytes=0-9", "x-amz-content-sha256" to emptyPayload, "x-amz-date" to amzDate),
+            payloadSha256 = emptyPayload,
+            amzDate = amzDate,
+        )
+        require(get.signature == "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41") {
+            "GET vector drifted: ${get.signature}"
+        }
+
+        val payload = SigV4Signer.sha256Hex("Welcome to Amazon S3.".toByteArray())
+        val put = signer.sign(
+            method = "PUT",
+            canonicalPath = SigV4Signer.uriEncodePath("test\$file.text"),
+            query = emptyList(),
+            headers = mapOf(
+                "host" to host,
+                "date" to "Fri, 24 May 2013 00:00:00 GMT",
+                "x-amz-content-sha256" to payload,
+                "x-amz-date" to amzDate,
+                "x-amz-storage-class" to "REDUCED_REDUNDANCY",
+            ),
+            payloadSha256 = payload,
+            amzDate = amzDate,
+        )
+        require(put.canonicalRequest.lines()[1] == "/test%24file.text") {
+            "canonical-URI encoding drifted: ${put.canonicalRequest.lines()[1]}"
+        }
+        require(put.signature == "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd") {
+            "PUT vector drifted: ${put.signature}"
+        }
+
+        // Query pairs handed over UNSORTED on purpose: the golden only reproduces if the signer sorts.
+        val list = signer.sign(
+            method = "GET",
+            canonicalPath = "/",
+            query = listOf("prefix" to "J", "max-keys" to "2"),
+            headers = mapOf("host" to host, "x-amz-content-sha256" to emptyPayload, "x-amz-date" to amzDate),
+            payloadSha256 = emptyPayload,
+            amzDate = amzDate,
+        )
+        require(list.signature == "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7") {
+            "LIST vector drifted: ${list.signature}"
+        }
+
+        return "3 published S3 vectors reproduced in-image (GET+Range, PUT %24-key + payload hash, LIST query sort)"
     }
 }

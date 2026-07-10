@@ -21,7 +21,9 @@ import java.nio.charset.CodingErrorAction
  *    cannot exist by construction.
  *  - Encoded slash `%2F`/`%2f` is **rejected** — an encoded slash is segment data per
  *    RFC 3986, but `/` is impossible in a filename and letting encoding change path
- *    structure is unsafe. Frozen rejection.
+ *    structure is unsafe. Frozen rejection for the PB-LINK-1 (per-segment) decode. The one
+ *    documented exception is [decodeOnce]'s opt-in `allowEncodedSlash` for decoding a WHOLE
+ *    S3 `encoding-type=url` key, where the wire itself percent-encodes the `/` separators.
  *  - Malformed escape syntax (`%G1`, a trailing `%`, `%A`) is rejected.
  *  - `java.net.URLDecoder` is explicitly NOT used: it maps `+`→space. This decoder
  *    performs **no** `+`→space translation; `+` is a literal byte.
@@ -55,8 +57,13 @@ object PercentCoding {
      * Bytes are accumulated (literal chars as their UTF-8 encoding, `%XX` as the raw
      * byte) then decoded as strict UTF-8 in a single pass — the decoded output is never
      * re-scanned for further escapes.
+     *
+     * [allowEncodedSlash] is the ONE documented relaxation: default false keeps the frozen
+     * per-segment PB-LINK-1 rejection of `%2F`; true decodes `%2F`/`%2f` to `/` for decoding a
+     * WHOLE S3 `encoding-type=url` LIST key (where the wire percent-encodes the separators). Every
+     * other rule (single decode, no `+`→space, strict UTF-8) is unchanged either way.
      */
-    fun decodeOnce(input: String): DecodeResult {
+    fun decodeOnce(input: String, allowEncodedSlash: Boolean = false): DecodeResult {
         val bytes = ByteArrayOutputStream(input.length)
         var i = 0
         while (i < input.length) {
@@ -66,7 +73,7 @@ object PercentCoding {
                 val hi = hexValue(input[i + 1]) ?: return DecodeResult.Failure(DecodeError.MALFORMED_ESCAPE)
                 val lo = hexValue(input[i + 2]) ?: return DecodeResult.Failure(DecodeError.MALFORMED_ESCAPE)
                 val byte = (hi shl 4) or lo
-                if (byte == '/'.code) return DecodeResult.Failure(DecodeError.ENCODED_SLASH)
+                if (byte == '/'.code && !allowEncodedSlash) return DecodeResult.Failure(DecodeError.ENCODED_SLASH)
                 bytes.write(byte)
                 i += 3
             } else {

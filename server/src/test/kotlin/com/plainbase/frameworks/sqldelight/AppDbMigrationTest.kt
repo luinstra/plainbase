@@ -133,7 +133,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 9L
+                    version shouldBe 10L
                 }
             }
         } finally {

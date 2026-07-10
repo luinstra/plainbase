@@ -36,12 +36,15 @@ import kotlin.time.Clock
 object AdminCommand {
 
     /**
-     * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf` config, exit-code result. Uses
-     * `fromEnvAndFile` (not `fromEnv`) so a FILE-configured `auth.mode=builtin` is visible to the setup-token
-     * bootstrap gate (A4a minor) — it only READS the conf file (no DB driver), so it runs before the DataDirLock
-     * with no migration race.
+     * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf` config, exit-code result. Resolves
+     * via [PlainbaseConfig.loadForCommand] (not `fromEnv`) so a FILE-configured `auth.mode=builtin` is visible
+     * to the setup-token bootstrap gate (A4a minor) - it only READS the conf file (no DB driver), so it runs
+     * before the DataDirLock with no migration race. A bad config (IAE or HOCON) surfaces as `admin:` + exit 1.
      */
-    fun runAsMain(args: List<String>): Int = run(args, PlainbaseConfig.fromEnvAndFile())
+    fun runAsMain(args: List<String>): Int {
+        val config = PlainbaseConfig.loadForCommand("admin") ?: return 1
+        return run(args, config)
+    }
 
     fun run(args: List<String>, config: PlainbaseConfig): Int {
         // setup-token mutates DB state on DATA_DIR shared with a live server, so it MUST hold the DataDirLock BEFORE

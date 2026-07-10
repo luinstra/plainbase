@@ -5,8 +5,8 @@
 - **Deciders:** luinstra
 - **Context:** Phase 4 (Principals, auth, roles, audit). Auth introduces many config knobs (`auth.mode`,
   trusted-proxy CIDRs, the insecure-bind override, session TTL, login rate-limit, password-login-disable,
-  the public origin), which makes env-var-only configuration unwieldy. `PlainbaseConfig` is **env-only**
-  today (`fromEnv`, `PlainbaseConfig.kt:85-98`); the docstring (`:12-13`) already anticipates a file layer
+  the public origin), which makes env-var-only configuration unwieldy. `PlainbaseConfig` was **env-only**
+  when this ADR was written (`fromEnv`); its docstring already anticipated a file layer
   ("`plainbase.yaml` in DATA_DIR is layered in by later phases (env always wins)"). Phase 4 is where that
   layer must land. This ADR fixes the **format**, which the master plan named as `plainbase.yaml`.
 
@@ -36,9 +36,12 @@ config parsing, not wire serialization, and involves no reflection on app types.
 
 **The Plainbase config file is HOCON, named `DATA_DIR/plainbase.conf`, read via the already-present
 `com.typesafe:config`.** Precedence is **env-always-wins**: the file supplies values, environment variables
-override them (12-factor). `fromEnv()` remains the env-only fast path for the native spike and the
-content-only CLIs (`reindex`, `adopt`); the `admin` CLI reads `plainbase.conf` via `fromEnvAndFile()` so a
-file-configured `auth.mode=builtin` is visible to the setup-token path it drives.
+override them (12-factor). `fromEnv()` remains the env-only fast path for the native spike only; every
+DATA_DIR-sharing CLI (`admin`, `reindex`, `adopt`) and `serve` read `plainbase.conf` through
+`PlainbaseConfig.loadForCommand` (which wraps `fromEnvAndFile` plus the ConfigException/IAE stderr+exit(1)
+funnel) so their file-configured decisions (`auth.mode`, `storage.backend`) match for the same DATA_DIR -
+e.g. a file-only `storage.backend=object` is never read as `local`, and a file-configured
+`auth.mode=builtin` is visible to the setup-token path `admin` drives.
 **Secrets stay in the environment, never the committed file.** Values are read through Typesafe Config's typed
 getters (no reflection on app types). Because Ktor uses Typesafe Config programmatically today rather than
 loading a `.conf` from disk, A1 must **native-confirm the file-parse path** as part of its native-gate proof

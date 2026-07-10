@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.cli
 
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
@@ -21,9 +23,16 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.GitBundleDr
+import com.plainbase.frameworks.git.GitCliHistoryProvider
+import com.plainbase.frameworks.git.GitExecutor
+import com.plainbase.frameworks.git.GitRepoLocks
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.objectstore.FakeObjectStore
+import com.plainbase.frameworks.objectstore.MirrorState
+import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
@@ -39,6 +48,8 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.nio.file.Files
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /**
  * C3 disaster drill 2 — the ENTIRE `DATA_DIR` gone, `CONTENT_DIR` intact. [BootStack] mirrors the
@@ -124,6 +135,131 @@ class LostDataDirRecoveryTest : FunSpec({
                 // Search fully populated as a side effect of the boot rebuild — no manual reindex step.
                 boot.provider.indexedState().keys shouldBe snapshotB.pages.map { it.id }.toSet()
             }
+        }
+    }
+
+    // C5 review fold: the drill this file names covers LOCAL mode (CONTENT_DIR, and its .git, survive
+    // a DATA_DIR loss by construction). Object mode's DATA_DIR loss is different — DATA_DIR/mirror IS
+    // what's lost — and until now only GitBundleDrNativeTest exercised that recovery, not the drill the
+    // ops docs ("Losing DATA_DIR") point at. This asserts the serve()-order sequence
+    // (restore -> hydrate(strict) -> reconcileBootCommit) recovers commit-grained HISTORY, not just
+    // content, after a total object-mode DATA_DIR-analog wipe.
+    test("object mode + git.enabled: a lost DATA_DIR recovers commit-grained history via the bundle DR restore") {
+        val fake = FakeObjectStore()
+        val identity = CommitIdentity("Plainbase", "plainbase@localhost")
+        val clock = object : Clock {
+            override fun now(): Instant = Instant.fromEpochSeconds(1_780_272_000L)
+        }
+        val page = TreePath.require("deploy-guide.md")
+        val sentinelPath = Files.createTempDirectory("pb-lost-datadir-object-sentinel-parent").resolve("restore-pending")
+        val shippedTip: String
+
+        val mirrorRootA = Files.createTempDirectory("pb-lost-datadir-object-mirror-a")
+        val gitHomeA = Files.createTempDirectory("pb-lost-datadir-object-githome-a")
+        val tmpDirA = Files.createTempDirectory("pb-lost-datadir-object-tmp-a")
+        try {
+            val ignoreRules = IgnoreRules()
+            val mirrorA = LocalContentStore(root = mirrorRootA, ignoreRules = ignoreRules)
+            val storeA = ObjectContentStore(
+                client = fake,
+                mirror = mirrorA,
+                state = MirrorState(tmpDirA.resolve("mirror-state")),
+                keyPrefix = "",
+                pollSeconds = 3600,
+                dirtyPaths = { emptySet() },
+                mirrorRoot = mirrorRootA,
+                ignoreRules = ignoreRules,
+            )
+            val execA = GitExecutor(workTree = mirrorRootA, home = gitHomeA)
+            val providerA = GitCliHistoryProvider(
+                exec = execA,
+                workTree = mirrorRootA,
+                gitHome = gitHomeA,
+                defaultAuthor = identity,
+                defaultCommitter = identity,
+                clock = clock,
+                repoPath = { path2 -> mirrorA.resolveRepoRelativePath(path2) },
+                maintenance = {},
+            )
+            val bundleDrA = GitBundleDr(
+                exec = execA,
+                objectStore = storeA,
+                mirrorRoot = mirrorRootA,
+                tmpDir = tmpDirA,
+                sentinelPath = sentinelPath,
+                identity = identity,
+                clock = clock,
+                repoPath = { path2 -> mirrorA.resolveRepoRelativePath(path2) },
+                gitHome = gitHomeA,
+                locks = GitRepoLocks(),
+            )
+            try {
+                fake.seed("deploy-guide.md", "# Deploy Guide\n\nRolling deploy checklist.\n".toByteArray())
+                storeA.hydrate()
+                providerA.commit(page, requireNotNull(mirrorA.read(page)))
+                bundleDrA.ship()
+                shippedTip = requireNotNull(GitExecutor.parseSha(execA.run(listOf("rev-parse", "HEAD")).stdout))
+            } finally {
+                storeA.close()
+            }
+        } finally {
+            listOf(mirrorRootA, gitHomeA, tmpDirA).forEach { it.toFile().deleteRecursively() }
+        }
+
+        // Disaster: the ENTIRE object-mode DATA_DIR analog (mirror + its .git + git-home) is gone -
+        // the bucket (fake) is all that survives.
+        val mirrorRootB = Files.createTempDirectory("pb-lost-datadir-object-mirror-b")
+        val gitHomeB = Files.createTempDirectory("pb-lost-datadir-object-githome-b")
+        val tmpDirB = Files.createTempDirectory("pb-lost-datadir-object-tmp-b")
+        try {
+            val ignoreRules = IgnoreRules()
+            val mirrorB = LocalContentStore(root = mirrorRootB, ignoreRules = ignoreRules)
+            val storeB = ObjectContentStore(
+                client = fake,
+                mirror = mirrorB,
+                state = MirrorState(tmpDirB.resolve("mirror-state")),
+                keyPrefix = "",
+                pollSeconds = 3600,
+                dirtyPaths = { emptySet() },
+                mirrorRoot = mirrorRootB,
+                ignoreRules = ignoreRules,
+            )
+            val execB = GitExecutor(workTree = mirrorRootB, home = gitHomeB)
+            val bundleDrB = GitBundleDr(
+                exec = execB,
+                objectStore = storeB,
+                mirrorRoot = mirrorRootB,
+                tmpDir = tmpDirB,
+                sentinelPath = sentinelPath,
+                identity = identity,
+                clock = clock,
+                repoPath = { path2 -> mirrorB.resolveRepoRelativePath(path2) },
+                gitHome = gitHomeB,
+                locks = GitRepoLocks(),
+            )
+            try {
+                // The serve()-order sequence (Application.kt): restore() BEFORE hydrate, strictly, then
+                // reconcileBootCommit() AFTER.
+                val restored = bundleDrB.restore()
+                restored.isRestored shouldBe true
+                restored.tip shouldBe shippedTip
+
+                storeB.hydrate(strict = restored.isRestored)
+                bundleDrB.reconcileBootCommit(restored)
+
+                // History recovers, not just content: the pre-wipe commit is at HEAD (nothing diverged
+                // between the shipped tip and the bucket, so the reconcile is a clean no-op).
+                execB.run(listOf("rev-parse", "--verify", "HEAD^{commit}")).ok shouldBe true
+                GitExecutor.parseSha(execB.run(listOf("rev-parse", "HEAD")).stdout) shouldBe shippedTip
+                execB.run(listOf("log", "-1", "--format=%s")).stdoutText.trim() shouldBe "Update deploy-guide.md"
+                String(requireNotNull(mirrorB.read(page))) shouldBe "# Deploy Guide\n\nRolling deploy checklist.\n"
+            } finally {
+                storeB.close()
+            }
+        } finally {
+            listOf(mirrorRootB, gitHomeB, tmpDirB).forEach { it.toFile().deleteRecursively() }
+            Files.deleteIfExists(sentinelPath)
+            sentinelPath.parent?.let { runCatching { Files.deleteIfExists(it) } }
         }
     }
 })

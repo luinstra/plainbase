@@ -7,7 +7,7 @@ extended from a bare MATCH probe to the full search.db surface, run inside the n
 The extended check opens a **temp-file** SQLite database (not `:memory:`) via raw JDBC
 (`java.sql.DriverManager` over the already-allowlisted xerial driver — the ADR-0004 access path,
 zero new dependencies) and proved, both on the JVM and inside the GraalVM native binary
-(`plainbase spike`, 8/8): `PRAGMA journal_mode=WAL` honored and `busy_timeout` set and read back;
+(`plainbase spike`, 9/9): `PRAGMA journal_mode=WAL` honored and `busy_timeout` set and read back;
 FTS5 virtual-table DDL with `tokenize='unicode61 remove_diacritics 1'`; `bm25()` column weights
 **actually flipping the result ordering** (title-weighted query ranks the title-hit document
 first, body-weighted query ranks the repeated-body-hit document first); `snippet()` and

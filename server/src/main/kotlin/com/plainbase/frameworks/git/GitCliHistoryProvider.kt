@@ -33,10 +33,24 @@ class GitCliHistoryProvider(
     private val clock: Clock,
     // The repo-relative path to STAGE in git for a TreePath — raw-on-disk-name-preserving, so a
     // non-NFC on-disk file is committed at its real path, not the NFC phantom `path.value`. Injected as a
-    // function (loose coupling, like `maintenance`) so the provider never depends on the whole ContentStore
-    // port; wired to ContentStore::resolveRepoRelativePath. Defaults to TreePath.value for tests/no-store.
+    // function (loose coupling, like `maintenance`) so the provider never depends on a whole store; wired to
+    // the concrete LocalContentStore::resolveRepoRelativePath (the ContentStore port no longer carries it -
+    // staging git paths is a local-filesystem concern). Defaults to TreePath.value for tests/no-store.
     private val repoPath: (TreePath) -> String = { it.value },
     private val maintenance: (() -> Unit)? = null,
+    // C5 MUST-BIND 3: the object-mode shared write monitor (`GitRepoLocks.repoWrite`), so a concurrent
+    // `GitBundleDr.ship()`'s `bundle create` cannot tear a commit's ref mutation (HOLE B / Cluster-3a).
+    // Null on LOCAL (the historyModule wiring never passes one there) - unwrapped, byte-identical to
+    // pre-C5 behavior.
+    private val repoWriteMonitor: Any? = null,
+    // C5 BLOCKING-1 (review fold): true ONLY for the object-mode wiring, whose `.git` lives at the
+    // mirror root and is expected to be transiently MISSING or INCOMPLETE (a fresh boot, a crash
+    // mid-restore) - `GitBundleDr.restore()` owns diagnosing and repairing that INSIDE the data-dir
+    // lock (delete-and-refetch). When true, `gateCheck()` skips the repo-access probe entirely (never
+    // touches `.git`) so a pre-lock hard-fail can never pre-empt `restore()`'s self-heal. LOCAL mode
+    // (default false) keeps the full access probe — a Docker uid-mismatch/dubious-ownership `.git` there
+    // has no self-heal path and must still fail loud at the gate, byte-identical to pre-C5 behavior.
+    private val objectMode: Boolean = false,
 ) : HistoryProvider {
 
     override val enabled: Boolean = true
@@ -70,96 +84,96 @@ class GitCliHistoryProvider(
         val indexFile = gitHome.resolve("idx-" + java.util.UUID.randomUUID())
         val indexEnv = mapOf("GIT_INDEX_FILE" to indexFile.toString())
         try {
-            // (3) Seed the temp index UNIFORMLY — never "skip read-tree" (a pre-created empty file is not
-            // a valid index → update-index fails `index file smaller than expected`, F2). Seed from the
-            // CAPTURED oldHead, never live `HEAD` (P1): if the user `git checkout`s another branch between
-            // step 2 and here, a `read-tree HEAD` would import THAT branch's tree, then we'd commit it onto
-            // the captured branch — history corruption. Pinning to oldHead keeps the whole op on one snapshot.
-            val seed = if (unborn) listOf("read-tree", "--empty") else listOf("read-tree", oldHead!!)
-            exec.run(seed, indexEnv).orThrow("seed temp index")
+            // C5 MUST-BIND 3: the ref-mutating span (seed -> stage -> write-tree -> commit-tree ->
+            // update-ref) runs under [repoWriteMonitor] so a concurrent `GitBundleDr.ship()`'s
+            // `bundle create --all` (which reads refs) can never observe a torn ref update (HOLE B).
+            // Null on LOCAL — unwrapped, byte-identical to pre-C5 behavior.
+            return underRepoWriteMonitor {
+                // (3) Seed the temp index UNIFORMLY — never "skip read-tree" (a pre-created empty file is not
+                // a valid index → update-index fails `index file smaller than expected`, F2). Seed from the
+                // CAPTURED oldHead, never live `HEAD` (P1): if the user `git checkout`s another branch between
+                // step 2 and here, a `read-tree HEAD` would import THAT branch's tree, then we'd commit it onto
+                // the captured branch — history corruption. Pinning to oldHead keeps the whole op on one snapshot.
+                // (4) Stage the EXACT hook bytes from stdin (filter-free; no --path, so no attribute lookup
+                // fires at all — clean filters, LFS, working-tree-encoding are mooted by construction, P0-2).
+                // Both steps funnel through the ADR-0006 single chokepoint ([GitPlumbing]) that
+                // [GitBundleDr]'s boot reconcile also uses — the Amendment-2 byte-fidelity golden guards
+                // both call sites against drift.
+                GitPlumbing.seedIndex(exec, indexEnv, if (unborn) null else oldHead)
+                val blobSha = GitPlumbing.stageBlob(exec, indexEnv, repoRelativePath, bytes)
 
-            // (4) Stage the EXACT hook bytes from stdin (filter-free; no --path, so no attribute lookup
-            // fires at all — clean filters, LFS, working-tree-encoding are mooted by construction, P0-2).
-            val blobResult = exec.run(listOf("hash-object", "--no-filters", "-w", "--stdin"), indexEnv, stdin = bytes)
-            blobResult.orThrow("hash-object")
-            val blobSha = GitExecutor.parseSha(blobResult.stdout) ?: error("hash-object did not return a SHA: ${blobResult.stderr}")
-
-            exec.run(listOf("update-index", "--add", "--cacheinfo", "100644,$blobSha,$repoRelativePath"), indexEnv).orThrow("update-index")
-
-            // (5) Write the tree; idempotency oracle — if it equals the CAPTURED base's tree (born only),
-            // this save's bytes already are oldHead: no-op, return the existing commit (makes recovery
-            // re-commits free). Compare against `${oldHead}^{tree}`, never live `HEAD^{tree}` (P1) — same
-            // snapshot-pinning as the seed, so a mid-op branch switch cannot skew the compare.
-            val treeResult = exec.run(listOf("write-tree"), indexEnv)
-            treeResult.orThrow("write-tree")
-            val newTree = GitExecutor.parseSha(treeResult.stdout) ?: error("write-tree did not return a SHA: ${treeResult.stderr}")
-            if (!unborn) {
-                val baseTree = exec.run(listOf("rev-parse", "$oldHead^{tree}")).let { if (it.ok) GitExecutor.parseSha(it.stdout) else null }
-                if (baseTree == newTree) {
-                    // A clean no-op only if HEAD is STILL the captured base (mirrors the update-ref
-                    // CAS philosophy): the tree compare is against the STALE oldHead, so if an external actor
-                    // advanced HEAD after the capture (e.g. committed a different version of this path), a
-                    // bare "no-op success" would let the write pipeline clear the dirty row and SILENTLY DROP the user's save
-                    // relative to the new tip. Re-read HEAD; if it moved, raise so the orThrow path leaves the
-                    // page dirty and reconcile retries against the fresh tip (where the bytes are a real diff).
-                    val currentHead = exec.run(listOf("rev-parse", "--verify", "HEAD")).let {
+                // (5) Write the tree; idempotency oracle — if it equals the CAPTURED base's tree (born only),
+                // this save's bytes already are oldHead: no-op, return the existing commit (makes recovery
+                // re-commits free). Compare against `${oldHead}^{tree}`, never live `HEAD^{tree}` (P1) — same
+                // snapshot-pinning as the seed, so a mid-op branch switch cannot skew the compare.
+                val newTree = GitPlumbing.writeTree(exec, indexEnv)
+                if (!unborn) {
+                    val baseTree = exec.run(listOf("rev-parse", "$oldHead^{tree}")).let {
                         if (it.ok) GitExecutor.parseSha(it.stdout) else null
                     }
-                    if (currentHead != oldHead) {
-                        throw GitCommandException(
-                            "no-op race",
-                            -1,
-                            "HEAD advanced from $oldHead to $currentHead during the save; not a clean no-op",
-                        )
+                    if (baseTree == newTree) {
+                        // A clean no-op only if HEAD is STILL the captured base (mirrors the update-ref
+                        // CAS philosophy): the tree compare is against the STALE oldHead, so if an external actor
+                        // advanced HEAD after the capture (e.g. committed a different version of this path), a
+                        // bare "no-op success" would let the write pipeline clear the dirty row and SILENTLY DROP the user's save
+                        // relative to the new tip. Re-read HEAD; if it moved, raise so the orThrow path leaves the
+                        // page dirty and reconcile retries against the fresh tip (where the bytes are a real diff).
+                        val currentHead = exec.run(listOf("rev-parse", "--verify", "HEAD")).let {
+                            if (it.ok) GitExecutor.parseSha(it.stdout) else null
+                        }
+                        if (currentHead != oldHead) {
+                            throw GitCommandException(
+                                "no-op race",
+                                -1,
+                                "HEAD advanced from $oldHead to $currentHead during the save; not a clean no-op",
+                            )
+                        }
+                        logger.debug { "commit of ${path.value} is a no-op (tree unchanged); returning existing HEAD" }
+                        // Repair the live index here too (crash-then-reconcile hits this path: HEAD already has the
+                        // bytes, so no new commit — but the live index still shows the page deleted/modified until
+                        // we stage it). Same guards as the real-commit path; the expected HEAD is the captured base.
+                        syncLiveIndex(branchRef, oldHead, blobSha, repoRelativePath)
+                        return@underRepoWriteMonitor show(oldHead)
                     }
-                    logger.debug { "commit of ${path.value} is a no-op (tree unchanged); returning existing HEAD" }
-                    // Repair the live index here too (crash-then-reconcile hits this path: HEAD already has the
-                    // bytes, so no new commit — but the live index still shows the page deleted/modified until
-                    // we stage it). Same guards as the real-commit path; the expected HEAD is the captured base.
-                    syncLiveIndex(branchRef, oldHead, blobSha, repoRelativePath)
-                    return show(oldHead)
                 }
+
+                // (6) commit-tree with identity env; the new SHA is commit-tree's OWN stdout — never a
+                // post-update-ref rev-parse HEAD (a concurrent external commit would yield the wrong SHA).
+                val now = clock.now()
+                val identityEnv = GitPlumbing.identityEnv(author ?: defaultAuthor, committer ?: defaultCommitter, now)
+                val newCommit = GitPlumbing.commitTree(
+                    exec,
+                    indexEnv,
+                    newTree,
+                    if (unborn) null else oldHead,
+                    identityEnv,
+                    commitMessage(repoRelativePath),
+                )
+
+                // (7) update-ref with an old-value CAS: a HEAD that moved out-of-band since step 2 fails here
+                // (the write pipeline leaves the page dirty) rather than overwriting a concurrent commit (ref-CAS). The
+                // target is the branch ref captured at step 2, not a fresh symbolic-ref read.
+                GitPlumbing.updateRef(exec, branchRef, newCommit, oldHead ?: zeroOid()).orThrow("update-ref")
+
+                // (7b) Porcelain-parity: the staging ran under the per-op temp index, so the LIVE .git/index is
+                // untouched — leaving the saved path stale (absent on a fresh repo) means an external `git status`
+                // shows a phantom deletion. Surgically stage ONLY the just-committed blob into the live index
+                // (NOT `read-tree HEAD`, which would wipe the user's unrelated staged work). The working
+                // tree already matches (ContentStore wrote the bytes), so `git status` for the saved path is then
+                // clean. Best-effort, NON-FATAL (the commit already landed); skipped if HEAD switched branches or
+                // advanced past our commit — the expected HEAD is the commit we just created.
+                syncLiveIndex(branchRef, newCommit, blobSha, repoRelativePath)
+
+                // (8) Hydrate from the SHA we created, keyed on that SHA.
+                val commit = show(newCommit)
+
+                // (9) Best-effort auto-maintenance OFF the write-pipeline monitor, non-fatal: plumbing skips the
+                // auto-GC porcelain runs, so loose objects would grow unbounded without this. Only reached on a
+                // REAL commit (the no-op branch above returns early) — every non-no-op commit arms exactly one
+                // maintenance/ship dispatch (C5 Step 3).
+                dispatchMaintenance()
+                commit
             }
-
-            // (6) commit-tree with identity env; the new SHA is commit-tree's OWN stdout — never a
-            // post-update-ref rev-parse HEAD (a concurrent external commit would yield the wrong SHA).
-            val now = clock.now()
-            val identityEnv = identityEnv(author ?: defaultAuthor, committer ?: defaultCommitter, now)
-            val commitArgs = buildList {
-                add("commit-tree")
-                add(newTree)
-                if (!unborn) {
-                    add("-p")
-                    add(oldHead)
-                }
-                add("-m")
-                add(commitMessage(repoRelativePath))
-            }
-            val commitResult = exec.run(commitArgs, indexEnv + identityEnv)
-            commitResult.orThrow("commit-tree")
-            val newCommit = GitExecutor.parseSha(commitResult.stdout) ?: error("commit-tree did not return a SHA: ${commitResult.stderr}")
-
-            // (7) update-ref with an old-value CAS: a HEAD that moved out-of-band since step 2 fails here
-            // (the write pipeline leaves the page dirty) rather than overwriting a concurrent commit (ref-CAS). The
-            // target is the branch ref captured at step 2, not a fresh symbolic-ref read.
-            updateRef(branchRef, newCommit, oldHead).orThrow("update-ref")
-
-            // (7b) Porcelain-parity: the staging ran under the per-op temp index, so the LIVE .git/index is
-            // untouched — leaving the saved path stale (absent on a fresh repo) means an external `git status`
-            // shows a phantom deletion. Surgically stage ONLY the just-committed blob into the live index
-            // (NOT `read-tree HEAD`, which would wipe the user's unrelated staged work). The working
-            // tree already matches (ContentStore wrote the bytes), so `git status` for the saved path is then
-            // clean. Best-effort, NON-FATAL (the commit already landed); skipped if HEAD switched branches or
-            // advanced past our commit — the expected HEAD is the commit we just created.
-            syncLiveIndex(branchRef, newCommit, blobSha, repoRelativePath)
-
-            // (8) Hydrate from the SHA we created, keyed on that SHA.
-            val commit = show(newCommit)
-
-            // (9) Best-effort auto-maintenance OFF the write-pipeline monitor, non-fatal: plumbing skips the
-            // auto-GC porcelain runs, so loose objects would grow unbounded without this.
-            dispatchMaintenance()
-            return commit
         } finally {
             runCatching { indexFile.deleteRecursively() }
         }
@@ -278,7 +292,9 @@ class GitCliHistoryProvider(
     override fun prepare() = ensureRepo()
 
     override fun gateCheck() {
-        val version = exec.run(listOf("--version"))
+        // Cluster-1 (C5): the `--version` probe never touches `-C workTree`, so this passes even when
+        // the object-mode mirror directory does not exist yet (this runs PRE-LOCK, before hydrate's mkdir).
+        val version = exec.versionProbe()
         if (!version.ok) {
             throw GitUnavailableException(
                 "Git mode is on but the `git` binary is unavailable (${version.stderr.ifBlank { "exit ${version.exitCode}" }}). " +
@@ -308,7 +324,16 @@ class GitCliHistoryProvider(
         // permissions, a corrupt `.git`) aborts at startup — BEFORE any save writes content and then errors
         // in the hook, leaving the page dirty. Skip when `.git` is absent (force-on; the repo is created at
         // the first commit, so there is nothing to validate yet).
-        if (Files.exists(workTree.resolve(".git"))) {
+        //
+        // C5 BLOCKING-1: this probe is SKIPPED ENTIRELY in object mode ([objectMode]). A missing OR
+        // present-but-INCOMPLETE mirror `.git` (a fresh boot, or a killed mid-init/mid-restore) is expected
+        // transient state on this path — `rev-parse --is-inside-work-tree` fails loud on an incomplete
+        // `.git` (empirically verified: exit 128, "fatal: not a git repository"), and running it PRE-LOCK
+        // would hard-fail the gate before `GitBundleDr.restore()` (which runs POST-lock) ever gets the
+        // chance to delete/rebuild it — defeating the whole self-heal path this chunk exists to provide.
+        // Object-mode `.git` completeness + repair is entirely `restore()`'s job now; LOCAL mode (the
+        // `objectMode = false` default) keeps this probe unchanged.
+        if (!objectMode && Files.exists(workTree.resolve(".git"))) {
             val access = exec.run(listOf("rev-parse", "--is-inside-work-tree"))
             if (!(access.ok && access.stdoutText.trim() == "true")) {
                 throw GitUnavailableException(
@@ -334,24 +359,6 @@ class GitCliHistoryProvider(
         Files.createDirectories(gitHome)
         if (!Files.exists(workTree.resolve(".git"))) {
             exec.run(listOf("init")).orThrow("git init")
-        }
-    }
-
-    /**
-     * update-ref CAS: on a branch advance `<ref> <new> <old>`; the unborn create-form uses the zero oid.
-     * [branchRef] is the FULLY-QUALIFIED ref (`refs/heads/<branch>`) captured ATOMICALLY with [oldHead] at
-     * step 2 (r6a) — null for a detached HEAD. Never re-read here.
-     *
-     * For a detached HEAD we target `HEAD` with `--no-deref` (r6c): without it, `update-ref HEAD`
-     * DEREFERENCES HEAD, so if an external checkout re-attached HEAD to a branch (same commit) since step 2,
-     * we would advance THAT branch instead of the detached HEAD. `--no-deref` updates HEAD itself.
-     */
-    private fun updateRef(branchRef: String?, newCommit: String, oldHead: String?): GitResult {
-        val oldValue = oldHead ?: zeroOid()
-        return if (branchRef != null) {
-            exec.run(listOf("update-ref", branchRef, newCommit, oldValue))
-        } else {
-            exec.run(listOf("update-ref", "--no-deref", "HEAD", newCommit, oldValue))
         }
     }
 
@@ -487,16 +494,11 @@ class GitCliHistoryProvider(
         }
     }
 
-    private fun identityEnv(author: CommitIdentity, committer: CommitIdentity, now: Instant): Map<String, String> {
-        val date = "@${now.epochSeconds} +0000"
-        return mapOf(
-            "GIT_AUTHOR_NAME" to author.name,
-            "GIT_AUTHOR_EMAIL" to author.email,
-            "GIT_AUTHOR_DATE" to date,
-            "GIT_COMMITTER_NAME" to committer.name,
-            "GIT_COMMITTER_EMAIL" to committer.email,
-            "GIT_COMMITTER_DATE" to date,
-        )
+    /** C5 MUST-BIND 3: wraps [block] in [repoWriteMonitor] when object-mode wiring supplied one; a null
+     *  monitor (LOCAL, and every pre-C5 caller) runs [block] unwrapped — byte-identical. */
+    private inline fun <T> underRepoWriteMonitor(block: () -> T): T {
+        val monitor = repoWriteMonitor ?: return block()
+        return synchronized(monitor) { block() }
     }
 
     private fun GitResult.orThrow(step: String) {

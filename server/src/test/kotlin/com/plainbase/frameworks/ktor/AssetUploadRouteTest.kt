@@ -12,6 +12,8 @@ import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -34,7 +36,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * W3b behavioral named tests for `POST /api/v1/pages/{id}/assets` — the containment-guarded binary
+ * W3b behavioral named tests for `POST /api/v1/pages/{id}/assets` - the containment-guarded binary
  * upload through the new `writeAssetExclusive` (reuses W2's `rejectionReason` as ONE source of truth,
  * but requires an existing parent + fails closed), the atomic O_EXCL no-clobber, the strict filename
  * pipeline, and the rebuild-failure (written-but-unindexed) semantics. All over [writeRestTest] (a temp
@@ -47,7 +49,7 @@ class AssetUploadRouteTest : FunSpec({
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
     }
-    // A small valid PNG header byte sequence (the bytes are opaque to the route — written verbatim).
+    // A small valid PNG header byte sequence (the bytes are opaque to the route - written verbatim).
     val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5)
 
     suspend fun HttpResponse.obj(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject
@@ -73,7 +75,7 @@ class AssetUploadRouteTest : FunSpec({
     }
 
     // 8b. The `?filename=` query value honors the x-www-form-urlencoded `+`→space convention (codex-review
-    // fix — what URLSearchParams emits): `my+file.png` is stored as `my file.png` (space), NOT the literal
+    // fix - what URLSearchParams emits): `my+file.png` is stored as `my file.png` (space), NOT the literal
     // `my+file.png`; while a correctly-encoded literal plus (`a%2Bb.png`) stays `a+b.png` (decodeOnce
     // restores the %2B that the `+`-replace left untouched). Both round-trip via GET /assets.
     test("a + in the filename query becomes a space; an encoded %2B stays a literal +") {
@@ -177,7 +179,7 @@ class AssetUploadRouteTest : FunSpec({
 
                     val resp = client.post("/api/v1/pages/$linkedPageId/assets?filename=x.png") { setBody(png) }
                     // The page folder vanished/became a symlink: either a containment Rejected (400) or a
-                    // ParentMissing (404) — both refuse, and crucially nothing lands through the link.
+                    // ParentMissing (404) - both refuse, and crucially nothing lands through the link.
                     (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.NotFound) shouldBe true
                     Files.list(outside).use { it.count() } shouldBe 0L
                 }
@@ -189,7 +191,7 @@ class AssetUploadRouteTest : FunSpec({
         }
     }
 
-    // 12. Cannot land under _folder.yaml / ignored / excluded — exercised at the writeAssetExclusive UNIT
+    // 12. Cannot land under _folder.yaml / ignored / excluded - exercised at the writeAssetExclusive UNIT
     // level (the route can't derive such a leaf: a page folder is never _folder.yaml/excluded). Plus the
     // DATA_DIR-strict-ancestor layout does NOT over-reject a normal asset.
     test("writeAssetExclusive rejects a scan-skipped/excluded leaf and allows a normal asset (unit level)") {
@@ -227,7 +229,7 @@ class AssetUploadRouteTest : FunSpec({
         }
     }
 
-    // 13. Filename normalization battery (debate #1) — each → 400, nothing written; plus a valid
+    // 13. Filename normalization battery (debate #1) - each → 400, nothing written; plus a valid
     // international name → 201; plus the headline .md / _folder.yaml page-creation bypass.
     test("the filename gate rejects control/bidi/overlong/malformed/reserved/windows-illegal/.md/_folder.yaml and accepts valid Unicode") {
         writeRestTest(Fixtures.demoDocs, seed) { harness ->
@@ -249,8 +251,8 @@ class AssetUploadRouteTest : FunSpec({
                 "a*.png", // Windows-illegal `*`
                 "a?b.png", // Windows-illegal `?`
                 "a%3Cb.png", // Windows-illegal `<` (encoded so the test client builds the URL)
-                "foo.png.", // trailing dot — Windows silently trims it → collision with foo.png
-                "foo.png%20", // trailing space — Windows silently trims it → collision with foo.png
+                "foo.png.", // trailing dot - Windows silently trims it → collision with foo.png
+                "foo.png%20", // trailing space - Windows silently trims it → collision with foo.png
             )
             for (name in invalidAsset) {
                 val resp = client.post("/api/v1/pages/$deployGuideId/assets?filename=$name") { setBody(png) }
@@ -261,11 +263,11 @@ class AssetUploadRouteTest : FunSpec({
             // one layer earlier than this gate: Ktor's eager query-string decode → 400 invalid_query via
             // KtorServer StatusPages (ktor#2559). The ktor test CLIENT itself refuses to build such a URL,
             // so that path is asserted over a raw socket in SearchGrammarTest (not reproducible through the
-            // testApplication client) — here it suffices that a malformed escape can never reach the asset
+            // testApplication client) - here it suffices that a malformed escape can never reach the asset
             // gate, so the strict-decoder reframe's gate only ever sees WELL-FORMED escapes (above).
             countFiles(harness.root) shouldBe before // nothing written by any rejection
 
-            // The headline page-creation bypass: .md (any case) and _folder.yaml (any case — the gate is
+            // The headline page-creation bypass: .md (any case) and _folder.yaml (any case - the gate is
             // ignoreCase so a case-insensitive FS can't alias the sidecar) are refused, AND no new page
             // appears in the index after the attempt (the post-write rebuild would otherwise index it).
             val pagesBefore = harness.builder.current.pages.size
@@ -370,14 +372,37 @@ class AssetUploadRouteTest : FunSpec({
             val resp = client.post("/api/v1/pages/$deployGuideId/assets?filename=x.png") { setBody(png) }
             resp.status shouldBe HttpStatusCode.ServiceUnavailable
             resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "content_unreadable"
+            resp.errorJson().getValue("message").jsonPrimitive.content shouldContain "nothing was written"
             Files.exists(harness.root.resolve("guides/x.png")) shouldBe false
+        }
+    }
+
+    // 16c. Q8b durable_but_unmirrored asset (object mode makes this REACHABLE): writeAssetExclusive returns
+    // Unreadable(targetMutated=true) - the asset PUT is DURABLE at the bucket but the mirror apply failed. The
+    // route must report it HONESTLY as durable-but-unpublished (503, "will become reachable"), NEVER "nothing
+    // written" - a client must not retry under a false no-write assumption (the asset twin of the page-write Q8b
+    // retry-honesty; the earlier rounds' acceptance covered the store outcome but not this facade->route mapping).
+    test("writeAssetExclusive Unreadable(targetMutated=true) is an HONEST durable-but-unpublished 503, not 'nothing written'") {
+        val durableButUnmirrored: (ContentStore) -> ContentStore = { real ->
+            object : ContentStore by real {
+                override fun writeAssetExclusive(grant: EditGrant, path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String) =
+                    CreateResult.Unreadable("durable_but_unmirrored: simulated mirror-apply failure", targetMutated = true)
+            }
+        }
+        writeRestTest(Fixtures.demoDocs, seed, storeOverride = durableButUnmirrored) { _ ->
+            val resp = client.post("/api/v1/pages/$deployGuideId/assets?filename=x.png") { setBody(png) }
+            resp.status shouldBe HttpStatusCode.ServiceUnavailable
+            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "content_unreadable"
+            val message = resp.errorJson().getValue("message").jsonPrimitive.content
+            message shouldContain "will become reachable" // durable-but-unpublished: honest, retryable
+            message shouldNotContain "nothing was written" // the dishonest phrasing must NOT appear
         }
     }
 
     // 16b. The stale-page re-check (step 4b) READ can THROW, not just return null (codex-review fix): a
     // file locked/unreadable after the last scan is a transient FS fault, not a missing page. The route
     // wraps read() in try/catch and maps a THROW → 503 content_unreadable (NOT a bare 500), nothing
-    // written — distinct from read-returns-null → 404 (test 20b) and writeAssetExclusive-Unreadable → 503.
+    // written - distinct from read-returns-null → 404 (test 20b) and writeAssetExclusive-Unreadable → 503.
     test("the stale-page re-check read THROWING is 503 content_unreadable; nothing written") {
         // Throw on the page's own .md read only while ARMED: the harness's init rebuild() reads the whole
         // tree (incl. this page), so we arm the throw AFTER construction, right before the upload, so ONLY
@@ -414,7 +439,7 @@ class AssetUploadRouteTest : FunSpec({
     }
 
     // 20. writeAssetExclusive does NOT create directories (debate #2): a missing parent → ParentMissing,
-    // no dir created, no file written (createExclusive would create the dir — the test pins the contrast).
+    // no dir created, no file written (createExclusive would create the dir - the test pins the contrast).
     // Route-level: a page whose folder was removed on disk → 404 page_not_found, folder NOT recreated.
     test("an asset write never creates the parent dir; a removed page folder is 404, not recreated") {
         val root = Files.createTempDirectory("plainbase-asset-parentmissing")
@@ -446,7 +471,7 @@ class AssetUploadRouteTest : FunSpec({
     }
 
     // 20b. Snapshot membership ≠ disk reality (codex-review fix): a TOP-LEVEL page whose .md was externally
-    // deleted since the last rebuild — its FOLDER (the content root) survives, so writeAssetExclusive's
+    // deleted since the last rebuild - its FOLDER (the content root) survives, so writeAssetExclusive's
     // parent-exists check would PASS and the asset would write + 201 for a gone page. The disk re-check
     // (services.contentStore.read(page.path) == null → 404) catches it BEFORE the write. Top-level is the
     // sharpest case: the content root always exists, so only the .md re-check can detect the deletion.
@@ -456,7 +481,7 @@ class AssetUploadRouteTest : FunSpec({
             idMap.bind(TreePath.require("index.md"), PageId.require(indexPageId), materialized = false)
         }
         writeRestTest(Fixtures.demoDocs, seedTopLevel) { harness ->
-            // Delete the page's .md on disk WITHOUT a rebuild — the snapshot still lists it under id.
+            // Delete the page's .md on disk WITHOUT a rebuild - the snapshot still lists it under id.
             harness.root.resolve("index.md").toFile().delete()
 
             val resp = client.post("/api/v1/pages/$indexPageId/assets?filename=x.png") { setBody(png) }
@@ -506,7 +531,7 @@ class AssetUploadRouteTest : FunSpec({
     // current.assets (404-unreachable). A RETRY of the same filename hits the Exists branch; because the
     // path is NOT in current.assets it runs a best-effort rebuild FIRST (now disarmed → succeeds) so the
     // orphan becomes reachable, THEN still responds 409 (the existing file wins; the retry's bytes were
-    // NOT written). The asset is reachable via GET /assets AFTER the retry — no admin/watcher rebuild.
+    // NOT written). The asset is reachable via GET /assets AFTER the retry - no admin/watcher rebuild.
     test("a retry after a written-but-unindexed upload self-heals: the Exists branch rebuilds, then 409, and the asset is now served") {
         // scan() throws exactly ONCE while armed: the harness's init rebuild runs disarmed; we arm it
         // right before the first upload so ONLY that upload's post-write rebuild fails, then it disarms
@@ -527,7 +552,7 @@ class AssetUploadRouteTest : FunSpec({
             val first = client.post("/api/v1/pages/$deployGuideId/assets?filename=heal.png") { setBody(png) }
             first.status shouldBe HttpStatusCode.ServiceUnavailable
             harness.diskBytes("guides/heal.png") shouldBe png
-            // The orphan is on disk but NOT yet in the published snapshot — currently 404-unreachable.
+            // The orphan is on disk but NOT yet in the published snapshot - currently 404-unreachable.
             (TreePath.require("guides/heal.png") in harness.builder.current.assets) shouldBe false
             client.get("/assets/guides/heal.png").status shouldBe HttpStatusCode.NotFound
 
@@ -550,7 +575,7 @@ class AssetUploadRouteTest : FunSpec({
 private fun countFiles(root: Path): Int =
     Files.walk(root).use { stream -> stream.filter { Files.isRegularFile(it) }.count().toInt() }
 
-/** A binary body advertising [advertisedLength] but streaming all of [bytes] — the streamed read is the authority. */
+/** A binary body advertising [advertisedLength] but streaming all of [bytes] - the streamed read is the authority. */
 private class LyingLengthBinaryContent(
     private val bytes: ByteArray,
     private val advertisedLength: Long,

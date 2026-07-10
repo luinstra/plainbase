@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
@@ -235,6 +236,37 @@ class WritePipelineTest : FunSpec({
                 Files.write(root.resolve("guides/edit-me.md"), saveBytes)
                 pipeline.reconcileDirtyPages()
                 harness.dirtyPages.all().isEmpty() shouldBe true
+            }
+        }
+    }
+
+    // C2 (Q8b create twin): a create whose target may have been mutated at the authority reports
+    // Unreadable(targetMutated = true); the pipeline RETAINS the write-ahead mark (mirroring write()'s
+    // CAS arm) so reconcile commits a fully-landed create or drift-skips. A nothing-landed create
+    // Unreadable (the default) still clears, as today.
+    test("a mutated-target create Unreadable retains the dirty mark; a nothing-landed one clears it") {
+        withTempTree({}) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val real = realStoreDelegate(root)
+                fun failingCreateStore(mutated: Boolean) = object : ContentStore by real {
+                    override fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String) =
+                        CreateResult.Unreadable("simulated create failure", targetMutated = mutated)
+                }
+                val pageId = PageId.require("01900000-0000-7000-8000-0000000000d1")
+                val bytes = "---\nid: ${pageId.value}\ntitle: Doomed\n---\n\n# Doomed\n\nbody.\n".toByteArray()
+                val intent = CreateIntent(pageId, TreePath.require("doomed.md"), bytes)
+
+                harness.writePipeline(store = failingCreateStore(mutated = true))
+                    .create(createGrantForTests(), intent)
+                    .shouldBeInstanceOf<WriteOutcome.Unreadable>()
+                harness.dirtyPages.all().shouldHaveSize(1) // mark RETAINED (expectedHash = the intended bytes')
+
+                harness.dirtyPages.clear(pageId)
+                harness.writePipeline(store = failingCreateStore(mutated = false))
+                    .create(createGrantForTests(), intent)
+                    .shouldBeInstanceOf<WriteOutcome.Unreadable>()
+                harness.dirtyPages.all().isEmpty() shouldBe true // nothing landed, so the mark clears
             }
         }
     }
