@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.objectstore
 
+import java.nio.file.Path
+
 /**
  * The small object-store SPI the storage hybrid consumes (plan C0/Q7): five S3 ops plus the two
  * conditional PUT forms PB-WRITE-1's CAS mapping needs. Implementations speak S3-compatible HTTP
@@ -14,11 +16,44 @@ interface ObjectStoreClient : AutoCloseable {
     /** Object metadata, or null when the key does not exist (HEAD 404). */
     suspend fun head(key: String): ObjectStat?
 
-    /** Object bytes + etag, or null when the key does not exist (GET 404). */
-    suspend fun get(key: String): FetchedObject?
+    /**
+     * Object bytes + etag, or null when the key does not exist (GET 404). [maxBytes] overrides the client's
+     * default response-body cap for THIS call (the M2 DoS bound); all production callers keep `null` (stay
+     * capped). The app-owned DR-bundle fetch does NOT come through here - it streams via [getToFile] to avoid
+     * buffering a large bundle in heap - so the override exists for completeness / tests, not the bundle path.
+     */
+    suspend fun get(key: String, maxBytes: Long? = null): FetchedObject?
 
-    /** Writes [bytes] under [key], optionally guarded by [condition]. Never partial on refusal. */
-    suspend fun put(key: String, bytes: ByteArray, condition: PutCondition = PutCondition.None, contentType: String? = null): PutOutcome
+    /**
+     * STREAMS [key]'s body straight to the file [target] (never a whole-body in-heap array), returning true
+     * when found or false on a 404 (B-C3). This is the app-owned DR-bundle fetch path: a bundle grows with
+     * FULL history and can exceed available heap on a smaller replacement host, so buffering it (like [get])
+     * would throw `OutOfMemoryError` and defeat the boot-refusal invariant the bundle exists for.
+     * [requestTimeoutMillis] overrides the client's per-op request timeout (page ops are short; a large bundle
+     * transfer needs longer) - null keeps the client default.
+     */
+    suspend fun getToFile(key: String, target: Path, requestTimeoutMillis: Long? = null): Boolean
+
+    /**
+     * Writes [bytes] under [key], optionally guarded by [condition]. Never partial on refusal.
+     * [requestTimeoutMillis] overrides the client's per-op request timeout (the bundle ship PUT needs longer
+     * than a page write) - null keeps the client default.
+     */
+    suspend fun put(
+        key: String,
+        bytes: ByteArray,
+        condition: PutCondition = PutCondition.None,
+        contentType: String? = null,
+        requestTimeoutMillis: Long? = null,
+    ): PutOutcome
+
+    /**
+     * STREAMS [source]'s bytes to an UNCONDITIONAL PUT body (and STREAM-hashes them for SigV4), never a
+     * whole-file in-heap array (B-C3): the DR-bundle ship path, symmetric with [getToFile] on restore, so a
+     * large bundle cannot OOM on a memory-constrained host. [requestTimeoutMillis] overrides the per-op request
+     * timeout (a bundle needs longer than a page write) - null keeps the client default.
+     */
+    suspend fun putFromFile(key: String, source: Path, contentType: String? = null, requestTimeoutMillis: Long? = null): PutOutcome
 
     /** Deletes [key]; deleting a missing key succeeds (S3 DELETE is idempotent). */
     suspend fun delete(key: String)
@@ -76,4 +111,4 @@ sealed interface PutOutcome {
 }
 
 /** A response outside the client's expected surface: wrong status, refused LIST shape, missing etag. */
-class ObjectStoreException(message: String) : RuntimeException(message)
+class ObjectStoreException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

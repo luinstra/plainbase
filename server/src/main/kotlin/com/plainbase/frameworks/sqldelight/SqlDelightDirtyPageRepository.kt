@@ -26,6 +26,8 @@ class SqlDelightDirtyPageRepository(private val db: PlainbaseDb) : DirtyPageRepo
             DirtyPage(pageId = it.id, path = it.path, expectedHash = it.expected_hash, stage = Stage.valueOf(it.stage))
         }
 
+    override fun isDirty(path: TreePath): Boolean = queries.isDirty(path).executeAsOne()
+
     override fun get(pageId: PageId): DirtyPage? =
         queries.selectById(pageId).executeAsOneOrNull()?.let {
             DirtyPage(pageId = it.id, path = it.path, expectedHash = it.expected_hash, stage = Stage.valueOf(it.stage))

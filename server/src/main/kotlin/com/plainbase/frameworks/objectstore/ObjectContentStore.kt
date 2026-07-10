@@ -62,8 +62,14 @@ class ObjectContentStore(
     /** `""`, or the configured `storage.prefix` + `"/"`. */
     private val keyPrefix: String,
     private val pollSeconds: Long,
-    /** The live dirty-journal paths - poll/hydrate deletes and poll applies never touch them (R3). */
+    /** The live dirty-journal paths - the hydrate delete phase snapshots this ONCE per boot (R3). */
     private val dirtyPaths: () -> Set<TreePath>,
+    /**
+     * The per-path live dirty check for the poll hot path (MINOR-1): the guard runs once per poll candidate
+     * under [applyLock], so it queries ONE path (an indexed EXISTS) instead of rebuilding the whole [dirtyPaths]
+     * set per candidate. Defaults to membership in [dirtyPaths] so tests need not wire a separate predicate.
+     */
+    private val isDirty: (TreePath) -> Boolean = { it in dirtyPaths() },
     mirrorRoot: Path,
     private val ignoreRules: IgnoreRules = IgnoreRules(),
     private val atomics: FileAtomics = FileAtomics.Real,
@@ -266,6 +272,10 @@ class ObjectContentStore(
      * entry moved since this cycle's snapshot is skipped (a writer/healer advanced it - R11), and a
      * dirty-journaled key is never overwritten or deleted (R3). A LIST/GET failure mutates NOTHING
      * (Q13): WARN and retry next cycle.
+     *
+     * The change diff is ETAG-ONLY (`before[path] != entry.etag`); unlike [hydrate] it does NOT also check
+     * `!mirrorHasRaw`, so a mirror file deleted at RUNTIME (DATA_DIR/mirror is deletable derived state)
+     * self-heals only on the NEXT boot's hydrate, not mid-poll - a chosen bound, not an oversight.
      */
     internal fun pollOnce(onChange: (TreePath) -> Unit = {}) {
         val before = state.snapshot()
@@ -278,6 +288,9 @@ class ObjectContentStore(
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag }
         val fetched = changed.mapNotNull { (path, entry) ->
             try {
+                // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
+                // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
+                // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
                 runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
             } catch (e: Exception) {
                 logger.warn { "poll GET of '${path.value}' failed (${causeOf(e)}); retrying next cycle" }
@@ -289,8 +302,12 @@ class ObjectContentStore(
         for ((path, entry, body) in fetched) {
             synchronized(applyLock) {
                 if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
-                if (path in dirtyPaths()) return@synchronized // never overwrite a dirty-ahead write (R3)
-                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes) }
+                // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
+                // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
+                // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
+                // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
+                if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
+                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
                 if (failure == null) {
                     state.recordConfirmed(path, body.etag)
                     events.add(path)
@@ -306,7 +323,7 @@ class ObjectContentStore(
         // scan is already ignore-filtered, so `.git`/dotfiles never appear here).
         for (path in (before.keys + mirrorFilePaths()) - listed.keys) {
             synchronized(applyLock) {
-                if (path in dirtyPaths()) return@synchronized // a dirty-ahead write may be mid-flight (R3)
+                if (isDirty(path)) return@synchronized // LIVE R3 check (O1/MINOR-1): a dirty-ahead write may be mid-flight
                 if (state.etagOf(path) != before[path]) return@synchronized // entry moved - skip
                 // Drop state + emit the change ONLY after the file is actually gone (finding 3): a swallowed
                 // delete failure must not invalidate state while the mirror still serves a bucket-absent file.
@@ -405,7 +422,9 @@ class ObjectContentStore(
                     continue
                 }
                 val (entry, body) = fetched
-                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes) }
+                // Boot hydrate does a FULL parent scan (fullNfcSweep): it runs once at boot and must catch even a
+                // non-canonically-ordered stale sibling the targeted poll sweep cannot name (MINOR-2).
+                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = true) }
                 if (failure == null) {
                     state.recordConfirmed(path, body.etag)
                     healed++
@@ -680,6 +699,9 @@ class ObjectContentStore(
     }
 
     /** Q8c: the unconditional PUT is idempotent, so retry once on ANY failure, then throw. */
+    // Stamps `text/markdown` unconditionally: [write] is markdown-only BY CONTRACT today (its sole caller is
+    // the page-write path; assets go through the null-content-type asset path). If a non-markdown caller is
+    // ever added, derive the content-type from the path/caller here rather than widening this constant.
     private fun putUnconditionalWithRetry(key: String, bytes: ByteArray): PutOutcome.Stored {
         lateinit var last: Exception
         repeat(2) { attempt ->
@@ -777,7 +799,7 @@ class ObjectContentStore(
      * next scan applies NFC normalization, B3 collision resolution, and P4 raw-name retention to
      * those files exactly as it does locally (the point of the hybrid composition).
      */
-    private fun writeMirrorRaw(rawRelative: String, bytes: ByteArray) {
+    private fun writeMirrorRaw(rawRelative: String, bytes: ByteArray, fullNfcSweep: Boolean) {
         // SECURITY sandbox guard (write-sink side, belt-and-suspenders behind the funnel): NEVER create a
         // dir or write bytes for a key that resolves outside the mirror root. Throwing here routes through
         // `mirrorWriteFailure` so the apply is treated as NOT applied (the caller invalidates, never
@@ -788,10 +810,6 @@ class ObjectContentStore(
         }
         val target = mirrorRoot.resolve(rawRelative)
         Files.createDirectories(target.parent)
-        // A pre-existing exact-name file means this write REPLACES in place (no new NFC-variant name is
-        // introduced), so no stale sibling can appear - skip the sweep. Only an ADD (fresh exact name)
-        // can leave a prior-generation NFC-variant behind, and only then do we pay the directory scan.
-        val replacingInPlace = Files.exists(target)
         val tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
         try {
             Files.write(tmp, bytes)
@@ -801,13 +819,36 @@ class ObjectContentStore(
                 logger.warn { "ATOMIC_MOVE unsupported for '$rawRelative'; falling back to copy+delete (non-atomic)" }
                 atomics.copyReplace(tmp, target)
             }
-            // The bucket keys by RAW bytes; LocalContentStore keys reads by NFC TreePath. If the bucket's
-            // raw key for this path changed (an NFC-equivalent re-upload / a raw-byte swap), the OLD raw
-            // file would survive and could win B3 collision resolution, serving a stale generation. Sweep
-            // any NFC-equivalent sibling that is NOT this exact raw name so one raw file backs each TreePath.
-            // O(dir) per ADD-write; acceptable for nested doc trees, revisit for flat mega-dirs (a cold
-            // hydrate into one flat directory is the O(N^2) worst case - boot-time only).
-            if (!replacingInPlace) removeStaleNfcSiblings(target)
+            // The bucket keys by RAW bytes; LocalContentStore keys reads by NFC TreePath. If the bucket's raw
+            // key for this path changed (an NFC-equivalent re-upload / a raw-byte swap), the OLD raw file would
+            // survive and could win B3 collision resolution, serving a stale generation. Sweep any NFC-equivalent
+            // sibling that is NOT this exact raw name so one raw file backs each TreePath.
+            //
+            // O2: the sweep runs on EVERY apply-write, NOT only on a fresh ADD. A `replacingInPlace` skip (target
+            // already exists) would let a RETRY after a failed sweep - OR after a failed rollback-delete
+            // (double-fault) - see the target and SKIP the sweep, then `recordConfirmed` over a surviving stale
+            // sibling. Always-sweep makes the double-fault non-stranding: any retry / next poll re-sweeps until it
+            // succeeds, so a confirmed apply NEVER leaves a stale NFC sibling.
+            //
+            // MINOR-2: the warm poll passes fullNfcSweep=false so it names only THIS key's NFC/NFD sibling(s)
+            // instead of scanning the whole parent - a full scan per write is O(N^2) over a flat mega-dir on a
+            // bulk poll. Boot hydrate passes true (one full scan per write, boot-only) to also catch a rare
+            // non-canonically-ordered sibling the targeted names cannot enumerate.
+            try {
+                if (fullNfcSweep) removeStaleNfcSiblings(target) else removeStaleNfcSiblingsTargeted(target)
+            } catch (e: IOException) {
+                // A sweep FAILURE fails the whole apply (a surviving NFC-sibling can serve stale bytes). Roll back
+                // the just-added target; the caller invalidates and the next poll/hydrate re-applies AND re-sweeps.
+                // For a REPLACE this delete leaves the path ABSENT (the atomic move already displaced the old file),
+                // not the pre-apply bytes - a transient read-miss the invalidate + re-fetch self-heals, never stale.
+                runCatching { Files.deleteIfExists(target) }.onFailure { rollbackErr ->
+                    logger.warn {
+                        "rollback delete of '$rawRelative' after a failed NFC sweep ALSO failed " +
+                            "(${causeOf(rollbackErr)}); the next apply always re-sweeps, so this cannot strand the stale sibling"
+                    }
+                }
+                throw ObjectStoreException("mirror NFC-sibling sweep failed for '$rawRelative': ${causeOf(e)}", e)
+            }
         } finally {
             Files.deleteIfExists(tmp)
         }
@@ -816,26 +857,50 @@ class ObjectContentStore(
     /** True iff the mirror already holds the exact raw file [rawRelative] names (the finding-1 self-heal probe). */
     private fun mirrorHasRaw(rawRelative: String): Boolean = Files.exists(mirrorRoot.resolve(rawRelative))
 
-    /** Removes any NFC-equivalent leaf sibling of [target] that is a DIFFERENT file, so one raw file per TreePath. */
+    /**
+     * The TARGETED sibling sweep for the warm poll path (MINOR-2): removes only the NFC- and NFD-encoded
+     * leaf names of [target] that resolve to a DIFFERENT file, without a whole-directory scan (which is
+     * O(N^2) over a flat mega-dir on a bulk poll). A canonically-equivalent re-upload stores at most those
+     * two canonical byte-forms; a rare non-canonically-ordered sibling is left for the boot hydrate's full
+     * [removeStaleNfcSiblings] scan. THROWS on an I/O failure exactly like the full sweep (same fail-the-apply
+     * contract). [Files.isSameFile] skips [target] itself by inode - on a folding filesystem (macOS/Windows)
+     * the NFC and NFD names resolve to the just-written file, so a name compare would delete what we healed.
+     */
+    private fun removeStaleNfcSiblingsTargeted(target: Path) {
+        val parent = target.parent ?: return
+        val name = target.fileName.toString()
+        val candidates = setOf(Nfc.normalize(name), Nfc.decompose(name)) - name
+        for (candidateName in candidates) {
+            val entry = parent.resolve(candidateName)
+            if (!Files.exists(entry, LinkOption.NOFOLLOW_LINKS) || Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
+            if (Files.isSameFile(entry, target)) continue
+            logger.warn { "removing stale NFC-equivalent mirror sibling '$candidateName' superseded by '$name'" }
+            Files.deleteIfExists(entry)
+        }
+    }
+
+    /**
+     * Removes any NFC-equivalent leaf sibling of [target] that is a DIFFERENT file, so one raw file per
+     * TreePath. THROWS on failure (B-C2): the sweep is load-bearing - a surviving NFC-sibling can win a
+     * `LocalContentStore` scan/read and serve a stale generation, so a failed sweep must fail the whole
+     * apply (the caller rolls back and never `recordConfirmed`s), never be swallowed as a WARN. Boot/hydrate
+     * only (fullNfcSweep); the warm poll uses [removeStaleNfcSiblingsTargeted].
+     */
     private fun removeStaleNfcSiblings(target: Path) {
         val parent = target.parent ?: return
         val wantNfc = Nfc.normalize(target.fileName.toString())
-        try {
-            Files.newDirectoryStream(parent).use { stream ->
-                for (entry in stream) {
-                    if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
-                    if (Nfc.normalize(entry.fileName.toString()) != wantNfc) continue
-                    // Skip [target] itself by IDENTITY, never by name string: on a normalization-INSENSITIVE
-                    // filesystem (macOS/Windows) the just-written target and an NFD-named entry are the SAME
-                    // inode whose directory-entry name differs in code units - a name compare would delete the
-                    // file we just healed. On a preserving filesystem (Linux) they are distinct inodes to sweep.
-                    if (Files.isSameFile(entry, target)) continue
-                    logger.warn { "removing stale NFC-equivalent mirror sibling '${entry.fileName}' superseded by '${target.fileName}'" }
-                    Files.deleteIfExists(entry)
-                }
+        Files.newDirectoryStream(parent).use { stream ->
+            for (entry in stream) {
+                if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
+                if (Nfc.normalize(entry.fileName.toString()) != wantNfc) continue
+                // Skip [target] itself by IDENTITY, never by name string: on a normalization-INSENSITIVE
+                // filesystem (macOS/Windows) the just-written target and an NFD-named entry are the SAME
+                // inode whose directory-entry name differs in code units - a name compare would delete the
+                // file we just healed. On a preserving filesystem (Linux) they are distinct inodes to sweep.
+                if (Files.isSameFile(entry, target)) continue
+                logger.warn { "removing stale NFC-equivalent mirror sibling '${entry.fileName}' superseded by '${target.fileName}'" }
+                Files.deleteIfExists(entry)
             }
-        } catch (e: IOException) {
-            logger.warn { "sweeping NFC-equivalent siblings of '${target.fileName}' failed (${causeOf(e)}); the next poll retries" }
         }
     }
 
@@ -864,16 +929,39 @@ class ObjectContentStore(
     internal fun authoritativeMirrorPaths(): Set<TreePath> = mirrorFilePaths()
 
     /**
-     * C5: the bucket-shipped `.git` bundle bytes, or null on a true 404 (no bundle has ever shipped -
-     * a fresh install / an abandoned restore). Any OTHER failure PROPAGATES (HOLE C): [client] throws
-     * on a non-404 status, so a TLS/connect blip is never misread as "no bundle" - that would let
-     * [restore] init a fresh empty repo the next ship would then CLOBBER over real history.
+     * C5: STREAMS the bucket-shipped `.git` bundle to [target], returning true when found or false on a true
+     * 404 (no bundle has ever shipped - a fresh install / an abandoned restore). Any OTHER failure PROPAGATES
+     * (HOLE C): [client] throws on a non-404 status, so a TLS/connect blip is never misread as "no bundle" -
+     * that would let [restore] init a fresh empty repo the next ship would then CLOBBER over real history.
+     *
+     * B-C3: streamed straight to disk (never a whole-body in-heap array), so a bundle exceeding available heap
+     * on a smaller recovery host cannot throw `OutOfMemoryError` and escape the DR boot refusal; and given a
+     * bundle-appropriate request timeout, not the short page-op one, so a large bundle transfer does not time
+     * out (an unbootable restore loop). The restore caller catches `Throwable` and routes it through [bootRefusal].
      */
-    fun getHistoryBundle(): ByteArray? = runBlocking { client.get(bundleKey) }?.bytes
+    fun fetchHistoryBundleTo(target: Path): Boolean =
+        runBlocking { client.getToFile(bundleKey, target, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS) }
 
-    /** C5: ships the DR bundle unconditionally (`PutCondition.None` - see the invariant comment at [GitBundleDr.ship]'s call site). */
+    /**
+     * C5: ships the DR bundle unconditionally (`PutCondition.None` - see the invariant comment at
+     * [GitBundleDr.ship]'s call site), with the bundle-appropriate request timeout (B-C3): a large bundle must
+     * not time out on the short page-op bound and leave the DR artifact permanently stale.
+     */
     fun putHistoryBundle(bytes: ByteArray) {
-        runBlocking { client.put(bundleKey, bytes, PutCondition.None, contentType = null) }
+        runBlocking {
+            client.put(bundleKey, bytes, PutCondition.None, contentType = null, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS)
+        }
+    }
+
+    /**
+     * C5: ships the DR bundle by STREAMING [source] straight to the PUT body (B-C3), never materializing the
+     * whole bundle in heap - so a later cadence ship on a memory-constrained host cannot OOM and strand the
+     * DR artifact. Unconditional, bundle-timeout, symmetric with [fetchHistoryBundleTo].
+     */
+    fun putHistoryBundleFrom(source: Path) {
+        runBlocking {
+            client.putFromFile(bundleKey, source, contentType = null, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS)
+        }
     }
 
     /**
@@ -929,10 +1017,10 @@ class ObjectContentStore(
     /**
      * The R16 fail-closed boot refusal: TLS/signature/connect rejections name their remedy. `internal`
      * (not private) so [com.plainbase.frameworks.git.GitBundleDr.restore] can reuse the SAME
-     * classification for its own pre-hydrate bucket GET (`getHistoryBundle`) - a non-404 transport/
+     * classification for its own pre-hydrate bucket GET (`fetchHistoryBundleTo`) - a non-404 transport/
      * credential failure there must surface this operator-actionable message too, never a raw exception.
      */
-    internal fun bootRefusal(failure: Exception): Exception {
+    internal fun bootRefusal(failure: Throwable): Exception {
         val tls = generateSequence<Throwable>(failure) { it.cause }.any { it is javax.net.ssl.SSLException }
         val message = when {
             tls ->
@@ -948,7 +1036,7 @@ class ObjectContentStore(
                     "Check the endpoint, bucket, credentials, and this host's clock (SigV4); " +
                     "never disable certificate validation to fix this."
         }
-        return ObjectStoreException(message)
+        return ObjectStoreException(message, failure) // chain the original (keep its stack), not just its message
     }
 
     private fun causeOf(failure: Throwable): String = failure.message ?: failure::class.simpleName ?: "failure"
@@ -958,6 +1046,14 @@ class ObjectContentStore(
     companion object {
         /** R9 test hook: LOCAL boot must construct ZERO hybrids - proven by counter, never reasoned. */
         internal val constructions = AtomicInteger()
+
+        /**
+         * B-C3: the request-timeout for the DR-bundle transfer (GET-to-file on restore, ship PUT), well above
+         * the short page-op timeout so a large bundle over a slow link neither aborts a restore nor leaves the
+         * DR artifact permanently stale. Bounded (not infinite) so a genuinely hung endpoint still fails a boot
+         * rather than blocking it forever; the connect timeout guards the initial reach either way.
+         */
+        internal const val BUNDLE_TRANSFER_TIMEOUT_MILLIS: Long = 10 * 60 * 1000
 
         /** The reserved app-owned bucket prefix (dot-ignored by law; C5's history bundle lives here). */
         private const val APP_OWNED_PREFIX = ".plainbase/"

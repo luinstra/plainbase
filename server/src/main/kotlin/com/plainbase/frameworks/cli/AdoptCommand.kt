@@ -33,8 +33,17 @@ import java.nio.file.Path
  */
 object AdoptCommand {
 
-    /** Entry point for the `main` dispatch: real env config, exit-code result. */
-    fun runAsMain(args: List<String>): Int = run(args, PlainbaseConfig.fromEnv())
+    /**
+     * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf`, exit-code result. Resolves via
+     * [PlainbaseConfig.loadForCommand] (NOT the env-only fast path) so the storage-backend decision matches
+     * `serve` for the same DATA_DIR: an operator who sets `storage.backend=object` only in `plainbase.conf`
+     * must not get the LOCAL branch here and silently adopt over an ignored CONTENT_DIR while the bucket is
+     * the real authority. A bad config (IAE or HOCON) surfaces as the actionable `adopt:` stderr + exit 1.
+     */
+    fun runAsMain(args: List<String>): Int {
+        val config = PlainbaseConfig.loadForCommand("adopt") ?: return 1
+        return run(args, config)
+    }
 
     fun run(args: List<String>, config: PlainbaseConfig): Int {
         val mode = parseMode(args)
@@ -74,7 +83,12 @@ object AdoptCommand {
                     // lock-free): it reads the existing mirror as-is, point-in-time, possibly stale.
                     val dirtyPages = SqlDelightDirtyPageRepository(database)
                     // Assign BEFORE hydrate so a hydrate-failure early return still closes the transport.
-                    val hybrid = ObjectContentStoreFactory.build(config, IgnoreRules()) { dirtyPages.all().map { it.path }.toSet() }
+                    val hybrid = ObjectContentStoreFactory.build(
+                        config,
+                        IgnoreRules(),
+                        dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
+                        isDirty = { dirtyPages.isDirty(it) },
+                    )
                     store = hybrid
                     if (mode != AdoptionPass.Mode.PREVIEW) {
                         try {

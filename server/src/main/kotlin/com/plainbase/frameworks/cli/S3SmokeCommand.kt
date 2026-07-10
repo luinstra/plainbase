@@ -29,6 +29,15 @@ import kotlin.time.measureTime
  * the `ListResponseParser` goldens. Run it from the NATIVE binary on each release platform - the
  * JVM run proves nothing about baked trust material.
  *
+ * **AWS space-encoding is an EXPLICIT pre-release gate (ADR-0010 SP1, PENDING AWS column).** Two things
+ * catch a mismatch, both decode-dependent-yet-verifying: the `list-decode-get` probe decodes every LISTED
+ * key through [S3WireKey] and GETs it back (a wrong decode 404s or drifts), and `cleanup` deletes the
+ * decoded keys then RE-LISTS the prefix (raw, decode-independent) and FAILS the run on any survivor. This
+ * matters because [S3WireKey] decodes on the R2-proven assumption that `encoding-type=url` emits `%20` for
+ * a space and never `+`; AWS S3 is UNVERIFIED here and may emit `+`. If a real-AWS run makes either check
+ * fail, `S3WireKey`/its goldens MUST be adjusted for the `+`-for-space case before the AWS column of the
+ * SP1 table can go green (see docs/DEVELOPMENT.md pre-release checklist).
+ *
  * Isolation (rev 3.3): every key lives under a unique per-run prefix (`smoke-<uuid>/`) inside a
  * DEDICATED scratch bucket (never a production/content bucket); every key the run created is
  * deleted on exit, and the scratch bucket should carry a short-expiry lifecycle rule as backstop
@@ -73,9 +82,14 @@ object S3SmokeCommand {
                     .onFailure { println("FAIL  ${it.chain()}") }
                     .isSuccess
                 if (soakGets > 0) soak(client, prefix, soakGets)
-                runCatching { cleanup(client, prefix) }
-                    .onFailure { println("WARN  cleanup left keys under $prefix (${it.chain()}) - the lifecycle rule is the backstop") }
-                if (opsPassed) {
+                // Cleanup can FAIL the run: its re-LIST emptiness assert is a decode-independent survivor check
+                // (a wrong LIST-key decode leaves keys behind), so a non-empty prefix after the delete loop is a
+                // real gate failure, not a best-effort WARN. The lifecycle rule remains the backstop for LEAKED
+                // keys, but a survivor here means the delete path is broken and must be surfaced.
+                val cleanedUp = runCatching { cleanup(client, prefix) }
+                    .onFailure { println("FAIL  cleanup left keys under $prefix (${it.chain()})") }
+                    .isSuccess
+                if (opsPassed && cleanedUp) {
                     println("s3-smoke OK - record the codes above in .crew/plans/sp1-conditional-write-findings.md")
                     0
                 } else {
@@ -133,23 +147,39 @@ object S3SmokeCommand {
         // RAW ListObjectsV2 bodies (the `ListResponseParser` goldens) over `listRaw`, and forces
         // maxKeys=2 to EXERCISE multi-page pagination on a 4-key corpus - a raw-capture concern the
         // parsed-entry helper cannot serve (it neither exposes raw bodies nor forces a small page size).
+        captureDir?.let { Files.createDirectories(it) }
         val pages = buildList {
             var token: String? = null
             do {
                 val raw = client.listRaw(prefix, continuationToken = token, maxKeys = 2)
                 add(raw)
+                // Persist each raw page AS FETCHED, BEFORE parsing it: a parse refusal mid-loop (the exact AWS
+                // `+`-for-space failure this evidence exists to diagnose) must never lose the earlier captures.
+                captureDir?.let { dir -> Files.writeString(dir.resolve("list-page-$size.xml"), raw) }
                 val page = ListResponseParser.parse(raw)
                 token = page.nextContinuationToken
             } while (page.isTruncated)
         }
+        captureDir?.let { pass("captures", "wrote ${pages.size} raw LIST bodies to $it (record as ListResponseParser goldens)") }
         val listedKeys = pages.flatMap { ListResponseParser.parse(it).contents }.map { it.key }
         check(listedKeys.size == 4) { "LIST pagination saw ${listedKeys.size} keys, expected 4: $listedKeys" }
         pass("list-paginated", "LIST v2 max-keys=2 paginated ${pages.size} pages, 4 keys (raw): $listedKeys")
-        captureDir?.let { dir ->
-            Files.createDirectories(dir)
-            pages.forEachIndexed { index, raw -> Files.writeString(dir.resolve("list-page-${index + 1}.xml"), raw) }
-            pass("captures", "wrote ${pages.size} raw LIST bodies to $dir (record as ListResponseParser goldens)")
+
+        // Close the LIST -> decode -> GET loop PER PROVIDER (C4 hydrates every listed key through S3WireKey,
+        // so a wrong decode would hydrate wrong filenames or 404 follow-up GETs). This is the ONLY probe that
+        // exercises the decode of a LISTED key back into a live GET - critical because AWS S3's
+        // `encoding-type=url` MAY emit `+` for space where R2 emits `%20` (see the header note), and only a
+        // real GET-back catches that. `page.md` last held v3 (the unconditional PUT); the rest hold v1.
+        val expected = mapOf(key to v3, hostileKey to v1, "${prefix}b.md" to v1, "${prefix}c.md" to v1)
+        val decoded = listedKeys.map { S3WireKey.decode(it) }
+        check(decoded.toSet() == expected.keys) {
+            "LIST-decoded keys $decoded != the written keys ${expected.keys} (space-encoding mismatch?)"
         }
+        decoded.forEach { rawKey ->
+            val got = client.get(rawKey).orFail("GET of LIST-decoded key '$rawKey'")
+            check(got.bytes.contentEquals(expected.getValue(rawKey))) { "GET of LIST-decoded key '$rawKey' returned drifted bytes" }
+        }
+        pass("list-decode-get", "every LIST-decoded key GET round-tripped (closes LIST->decode->GET for this provider)")
 
         client.delete(key)
         check(client.head(key) == null) { "HEAD still finds the key after DELETE" }
@@ -178,7 +208,7 @@ object S3SmokeCommand {
         )
     }
 
-    /** Deletes every key the run created (everything under [prefix]), pages included. */
+    /** Deletes every key the run created (everything under [prefix]), then RE-LISTS to prove the prefix is empty. */
     private suspend fun cleanup(client: S3ObjectClient, prefix: String) {
         // Keys come back URL-encoded (encoding-type=url) with the WHOLE key - `/` separators included -
         // percent-encoded (`smoke-<uuid>%2Fb.md`); DELETE takes the raw key. Decode via the shared
@@ -186,6 +216,12 @@ object S3SmokeCommand {
         // per-segment decodeOnce refuses %2F and would strand every scratch key. Pagination (token loop
         // + isTruncated termination) lives in [forEachListedObject], the one shared helper.
         client.forEachListedObject(prefix) { entry -> client.delete(S3WireKey.decode(entry.key)) }
+        // Then RE-LIST the prefix: a re-LIST returns RAW keys and so is DECODE-INDEPENDENT - it genuinely
+        // catches a wrong decode (a HEAD of the DECODED key would probe a key that never existed -> null ->
+        // a false "no survivor"). S3ObjectClient.delete also treats a 404 as success, so a wrong decode
+        // deletes nothing yet looks clean; only this raw re-LIST exposes the keys still standing.
+        val survivors = buildList { client.forEachListedObject(prefix) { add(it.key) } }
+        check(survivors.isEmpty()) { "keys survived delete (wrong LIST-key decode, or the provider ignored the delete): $survivors" }
     }
 
     private fun configFrom(env: Map<String, String>): S3ClientConfig? {

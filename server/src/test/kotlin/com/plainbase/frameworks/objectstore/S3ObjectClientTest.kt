@@ -17,10 +17,12 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
 import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.toByteArray
 import kotlinx.coroutines.runBlocking
+import java.nio.file.Files
 import java.time.Instant
 
 /**
@@ -49,7 +51,12 @@ class S3ObjectClientTest : FunSpec({
                     recorded += request
                     val response = respond()
                     response.headers.forEach { (name, value) -> call.response.header(name, value) }
-                    call.respondBytes(response.body, status = response.status)
+                    if (response.omitContentLength) {
+                        // Chunked write -> no Content-Length header (the M5 absent-length case); body stays empty.
+                        call.respondBytesWriter(status = response.status) { }
+                    } else {
+                        call.respondBytes(response.body, status = response.status)
+                    }
                 }
             }
         }
@@ -110,6 +117,19 @@ class S3ObjectClientTest : FunSpec({
         request.verifySignature()
     }
 
+    test("PUT signs the RAW content-type and sends it byte-for-byte (a normalizing ContentType would 403)") {
+        respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e3\"")) }
+        // No space after the ';': ContentType.parse(..).toString() re-inserts one, so the OLD code would have
+        // signed `text/markdown;charset=UTF-8` but put `text/markdown; charset=UTF-8` on the wire - a drift a
+        // real endpoint rejects with 403. Asserting the wire header equals the raw string AND that the
+        // server-side SigV4 recomputation from the received bytes reproduces the Authorization proves signed==wire.
+        val rawContentType = "text/markdown;charset=UTF-8"
+        client.put("a.md", "x".toByteArray(), PutCondition.None, contentType = rawContentType) shouldBe PutOutcome.Stored("\"e3\"")
+        val request = recorded.single()
+        request.headers["content-type"] shouldBe rawContentType
+        request.verifySignature()
+    }
+
     test("PUT If-Match sends the CAS etag; 412 and 409 both surface as PreconditionFailed with the raw code") {
         respond = { FakeResponse(HttpStatusCode.PreconditionFailed) }
         client.put("a.md", "v2".toByteArray(), PutCondition.IfMatch("\"e2\"")) shouldBe PutOutcome.PreconditionFailed(412)
@@ -152,6 +172,116 @@ class S3ObjectClientTest : FunSpec({
         val second = recorded.single()
         second.uri shouldContain "continuation-token=1%2Ftok%2BX%3D"
         second.verifySignature()
+    }
+
+    test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {
+        respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e\""), omitContentLength = true) }
+        shouldThrow<ObjectStoreException> { client.head("a.md") }.message.orEmpty() shouldContain "Content-Length"
+    }
+
+    test("GET and LIST refuse a response body over the configured cap (M2)") {
+        // A tiny cap so a modest body trips it - the DoS bound against a hostile/misconfigured endpoint.
+        val capped = S3ObjectClient(
+            S3ClientConfig(
+                endpoint = "http://127.0.0.1:$port",
+                region = "auto",
+                bucket = "scratch",
+                accessKeyId = "AKIDTEST",
+                secretAccessKey = "SECRETTEST",
+                maxResponseBytes = 8,
+            ),
+            clock = { Instant.parse("2026-07-05T12:00:00Z") },
+        )
+        capped.use {
+            respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e\""), body = ByteArray(64) { 'a'.code.toByte() }) }
+            shouldThrow<ObjectStoreException> { it.get("big.md") }.message.orEmpty() shouldContain "exceeds"
+            respond = { FakeResponse(HttpStatusCode.OK, body = ByteArray(64) { '<'.code.toByte() }) }
+            shouldThrow<ObjectStoreException> { it.list("p/") }.message.orEmpty() shouldContain "exceeds"
+        }
+    }
+
+    test("get with an unbounded maxBytes override bypasses the response cap (the override exists for completeness/tests)") {
+        val capped = S3ObjectClient(
+            S3ClientConfig(
+                endpoint = "http://127.0.0.1:$port",
+                region = "auto",
+                bucket = "scratch",
+                accessKeyId = "AKIDTEST",
+                secretAccessKey = "SECRETTEST",
+                maxResponseBytes = 8, // a tiny asset-derived cap
+            ),
+            clock = { Instant.parse("2026-07-05T12:00:00Z") },
+        )
+        capped.use {
+            val big = ByteArray(4096) { 'b'.code.toByte() }
+            respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e\""), body = big) }
+            // The default (asset-derived) cap refuses; the explicit Long.MAX_VALUE override returns the whole
+            // body. (The DR-bundle path itself streams via getToFile, tested separately - this only exercises
+            // the get() maxBytes override mechanism.)
+            shouldThrow<ObjectStoreException> { it.get("over") }.message.orEmpty() shouldContain "exceeds"
+            checkNotNull(it.get("over", maxBytes = Long.MAX_VALUE)).bytes.size shouldBe 4096
+        }
+    }
+
+    test("getToFile STREAMS the body to a file uncapped (B-C3): a body over the response cap still lands; a 404 returns false") {
+        val capped = S3ObjectClient(
+            S3ClientConfig(
+                endpoint = "http://127.0.0.1:$port",
+                region = "auto",
+                bucket = "scratch",
+                accessKeyId = "AKIDTEST",
+                secretAccessKey = "SECRETTEST",
+                maxResponseBytes = 8, // a tiny asset-derived cap that get() would refuse
+            ),
+            clock = { Instant.parse("2026-07-05T12:00:00Z") },
+        )
+        capped.use {
+            val target = Files.createTempFile("pb-bundle-stream", ".bin")
+            try {
+                // A bundle larger than the response cap: get() would refuse, but getToFile STREAMS it straight
+                // to disk (never a whole-body in-heap array), so a large-history DR bundle still restores.
+                val big = ByteArray(4096) { 'z'.code.toByte() }
+                respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e\""), body = big) }
+                it.getToFile("bundle", target) shouldBe true
+                Files.readAllBytes(target).contentEquals(big).shouldBeTrue()
+
+                respond = { FakeResponse(HttpStatusCode.NotFound) }
+                it.getToFile("absent", target) shouldBe false // a true 404 -> not found (no bundle shipped)
+            } finally {
+                Files.deleteIfExists(target)
+            }
+        }
+    }
+
+    test("putFromFile STREAMS the file body over the wire and stream-hashes it for SigV4 (signed == wire, B-C3)") {
+        respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e4\"")) }
+        val source = Files.createTempFile("pb-put-stream", ".bin")
+        try {
+            // Bigger than READ_CHUNK so the streaming write AND the streaming file-hash both span >1 chunk.
+            val body = ByteArray(200_000) { (it * 31 % 251).toByte() }
+            Files.write(source, body)
+            client.putFromFile("bundle.bin", source) shouldBe PutOutcome.Stored("\"e4\"")
+            val request = recorded.single()
+            request.method shouldBe "PUT"
+            request.body.contentEquals(body).shouldBeTrue() // the streamed body arrived intact
+            // LOAD-BEARING: the `body.contentEquals` + `x-amz-content-sha256 == sha256Hex(body)` assertions
+            // are what prove the STREAMED body equals the STREAM-computed signed hash. Do NOT drop them and
+            // lean on verifySignature() alone - it recomputes from the SENT x-amz-content-sha256 header, so it
+            // would still pass even if the streamed body and the signed hash had drifted apart.
+            request.headers["x-amz-content-sha256"] shouldBe SigV4Signer.sha256Hex(body)
+            request.verifySignature()
+        } finally {
+            Files.deleteIfExists(source)
+        }
+    }
+
+    test("deriveMaxResponseBytes: default floor wins for small assets, a raised asset cap lifts it, overflow saturates (R2-4/R3-1)") {
+        // The default 64 MiB floor dominates the 10 MiB default asset cap.
+        S3ObjectClient.deriveMaxResponseBytes(10L * 1024 * 1024) shouldBe S3ObjectClient.DEFAULT_MAX_RESPONSE_BYTES
+        // A raised PLAINBASE_MAX_ASSET_BYTES (100 MiB) lifts the derived cap above the floor, plus headroom.
+        S3ObjectClient.deriveMaxResponseBytes(100L * 1024 * 1024) shouldBe (100L * 1024 * 1024 + S3ObjectClient.RESPONSE_HEADROOM_BYTES)
+        // A near-Long.MAX asset cap must SATURATE, never wrap negative and collapse back to the default.
+        S3ObjectClient.deriveMaxResponseBytes(Long.MAX_VALUE) shouldBe Long.MAX_VALUE
     }
 
     test("an unexpected status surfaces as ObjectStoreException with the status and body") {
@@ -200,6 +330,8 @@ private class FakeResponse(
     val status: HttpStatusCode,
     val headers: Map<String, String> = emptyMap(),
     val body: ByteArray = ByteArray(0),
+    /** When true the server writes chunked (no Content-Length header) - the M5 absent-length case. */
+    val omitContentLength: Boolean = false,
 )
 
 /**

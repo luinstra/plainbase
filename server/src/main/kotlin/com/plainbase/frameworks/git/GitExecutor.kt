@@ -51,8 +51,16 @@ class GitExecutor(
      * stdout and stderr are drained on separate threads and kept DISTINCT in the result: stdout is parsed
      * as data (SHAs, trees), stderr is diagnostic only.
      */
-    fun run(args: List<String>, env: Map<String, String> = emptyMap(), stdin: ByteArray? = null): GitResult =
-        runInternal(args, env, stdin, includeWorkTree = true)
+    fun run(
+        args: List<String>,
+        env: Map<String, String> = emptyMap(),
+        stdin: ByteArray? = null,
+        // G1: per-call timeout override for the SIZE-DEPENDENT DR bundle ops (`bundle create --all`, the restore
+        // `fetch`) - a full-history bundle can transfer fine under the 10-min HTTP bound yet exceed the default
+        // ~30s git timeout. `null` keeps the default; every hot-path call stays bounded at the default.
+        timeoutSecondsOverride: Long? = null,
+    ): GitResult =
+        runInternal(args, env, stdin, includeWorkTree = true, timeoutSeconds = timeoutSecondsOverride ?: this.timeoutSeconds)
 
     /**
      * Cluster-1 fix (C5): probes `git --version` WITHOUT the `-C <workTree>` prefix every other call
@@ -62,9 +70,16 @@ class GitExecutor(
      * hydrate's mkdir, so a missing `DATA_DIR/mirror` would otherwise make every call (including this
      * probe) fail with git's `cannot change to '<dir>'` and misreport the binary itself as missing.
      */
-    fun versionProbe(): GitResult = runInternal(listOf("--version"), emptyMap(), null, includeWorkTree = false)
+    fun versionProbe(): GitResult =
+        runInternal(listOf("--version"), emptyMap(), null, includeWorkTree = false, timeoutSeconds = this.timeoutSeconds)
 
-    private fun runInternal(args: List<String>, env: Map<String, String>, stdin: ByteArray?, includeWorkTree: Boolean): GitResult {
+    private fun runInternal(
+        args: List<String>,
+        env: Map<String, String>,
+        stdin: ByteArray?,
+        includeWorkTree: Boolean,
+        timeoutSeconds: Long,
+    ): GitResult {
         val command = buildList {
             add(gitBinary)
             if (includeWorkTree) {
@@ -136,14 +151,34 @@ class GitExecutor(
             null
         }
 
-        val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        val finished = try {
+            process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            // G3: the calling thread was interrupted (e.g. the ship executor's shutdownNow() at close()). waitFor
+            // aborts WITHOUT killing the child, so a `git bundle create` would keep running and could later
+            // corrupt the shared bundle path another ship reads. Force-kill the whole tree AND CONFIRM it has
+            // actually exited (R3) before returning - a caller that releases `locks.ship` next must not race a
+            // killed-but-not-yet-dead child still writing the shared bundle path. Restore the interrupt AFTER the
+            // (interrupt-clearing) confirm wait so the caller's own shutdown still sees it, and fail loud.
+            forceKillAndConfirmExit(process, args.firstOrNull())
+            stdinWriter?.join(TIMEOUT_DRAIN_GRACE_MILLIS)
+            stdoutDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
+            stderrDrain.join(TIMEOUT_DRAIN_GRACE_MILLIS)
+            Thread.currentThread().interrupt()
+            logger.warn { "git ${args.firstOrNull()} interrupted; the child process was force-killed" }
+            return GitResult(
+                exitCode = -1,
+                stdout = stdoutBuffer.toByteArray(),
+                stderr = "git ${args.firstOrNull()} interrupted and was force-killed",
+            )
+        }
         if (!finished) {
             // Kill DESCENDANTS too: destroyForcibly() kills only the direct process, so a grandchild
-            // that inherited stdout/stderr would keep the pipes open and block the drains. ProcessHandle
-            // .descendants() is standard JDK / native-safe; guard it anyway.
-            runCatching { process.descendants().forEach { runCatching { it.destroyForcibly() } } }
-            process.destroyForcibly()
-            runCatching { process.descendants().forEach { runCatching { it.destroyForcibly() } } }
+            // that inherited stdout/stderr would keep the pipes open and block the drains. Then CONFIRM the
+            // tree has actually exited (R3): destroyForcibly only DELIVERS SIGKILL - it returns before the OS
+            // reaps - so a caller releasing `locks.ship` next must not race a killed-but-not-yet-dead
+            // `git bundle create` still writing the shared bundle path.
+            forceKillAndConfirmExit(process, args.firstOrNull())
             // BOUNDED joins: even if a stuck child still holds a pipe, the calling thread (the write-pipeline writer) is
             // guaranteed to return within timeoutSeconds + grace — never the unbounded join that would defeat the bounded wait.
             stdinWriter?.join(TIMEOUT_DRAIN_GRACE_MILLIS)
@@ -183,6 +218,45 @@ class GitExecutor(
     }
 
     /**
+     * Force-kills [process] and its descendant tree, then BLOCKS (bounded by [KILL_CONFIRM_GRACE_MILLIS])
+     * until every one has ACTUALLY exited. `destroyForcibly()` only delivers SIGKILL and returns before the
+     * OS reaps the process (R3), so on the interrupt/timeout kill paths a caller that proceeds to release a
+     * shared lock (`GitRepoLocks.ship`) could otherwise let a killed-but-not-yet-dead `git bundle create`
+     * keep writing the shared bundle path a subsequent ship reads (a signing/DR TOCTOU). Snapshots the
+     * descendant handles BEFORE the kill (a reaped parent's `descendants()` would come back empty) and, if
+     * anything refuses to die within the grace, fails LOUD rather than pretend the tree is gone.
+     */
+    private fun forceKillAndConfirmExit(process: Process, arg: String?) {
+        val tree = buildList {
+            add(process.toHandle())
+            addAll(runCatching { process.descendants().toList() }.getOrDefault(emptyList()))
+        }
+        tree.forEach { runCatching { it.destroyForcibly() } }
+        val stillAlive = awaitTreeExit(tree, KILL_CONFIRM_GRACE_MILLIS)
+        if (stillAlive.isNotEmpty()) {
+            logger.error {
+                "git ${arg ?: "?"} force-kill could not confirm exit of ${stillAlive.size} process(es) within " +
+                    "${KILL_CONFIRM_GRACE_MILLIS}ms; a lingering child may still be writing shared paths"
+            }
+        }
+    }
+
+    /** Polls [handles] for liveness up to [graceMillis], returning those still alive when the grace runs out. */
+    private fun awaitTreeExit(handles: List<ProcessHandle>, graceMillis: Long): List<ProcessHandle> {
+        val deadline = System.nanoTime() + graceMillis * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (handles.none { it.isAlive }) return emptyList()
+            try {
+                Thread.sleep(KILL_POLL_MILLIS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        return handles.filter { it.isAlive }
+    }
+
+    /**
      * Drains [stream] into [buffer] up to [cap] bytes; on the first read that would exceed [cap] it
      * force-kills [process] (and descendants) and flags [overflowed], stopping the drain. The kill makes
      * [run]'s bounded `waitFor` observe a finished process promptly; the calling thread then sees the flag
@@ -216,6 +290,12 @@ class GitExecutor(
 
         /** Bounded grace for the post-force-kill drain joins — caps the call at timeout + this. */
         private const val TIMEOUT_DRAIN_GRACE_MILLIS = 2000L
+
+        /** R3: bounded grace to CONFIRM a force-killed process tree has actually exited before returning. */
+        private const val KILL_CONFIRM_GRACE_MILLIS = 2000L
+
+        /** R3: liveness poll interval while confirming a force-killed tree's exit. */
+        private const val KILL_POLL_MILLIS = 10L
 
         /**
          * Default stdout byte ceiling per git invocation: 64 MiB. GENEROUS by design — a normal or

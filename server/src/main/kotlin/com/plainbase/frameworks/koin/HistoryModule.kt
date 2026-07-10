@@ -84,10 +84,11 @@ val historyModule = module {
                 // due, so it never runs under the write-pipeline monitor or `GitRepoLocks.repoWrite`.
                 objectMaintenance = {
                     Thread { runCatching { runAutoMaintenance(maintenanceExec) } }.apply { isDaemon = true }.start()
-                    val bundleDr = get<GitBundleDr>()
-                    if (bundleDr.recordCommit()) {
-                        Thread { runCatching { bundleDr.shipBestEffort() } }.apply { isDaemon = true }.start()
-                    }
+                    // R1/R5: record synchronously (BLOCKING #2) + dispatch the slow ship onto GitBundleDr's OWNED
+                    // single-thread executor - NOT a raw daemon `Thread` (close() cannot join those, so one could
+                    // ship against a closed transport) and NOT wrapped in runCatching (which re-swallowed the fatal
+                    // Errors shipBestEffort deliberately rethrows). onCommitAsync owns both halves.
+                    get<GitBundleDr>().onCommitAsync()
                 },
                 repoWriteMonitor = get<GitRepoLocks>().repoWrite,
             )

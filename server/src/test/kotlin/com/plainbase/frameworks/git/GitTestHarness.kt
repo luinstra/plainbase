@@ -43,6 +43,16 @@ const val FIXED_EPOCH_SECONDS: Long = 1_780_272_000L
 /** The default test identity. */
 fun testIdentity(name: String = "Plainbase", email: String = "plainbase@localhost") = CommitIdentity(name, email)
 
+/** A fresh DATA_DIR trio (git-home + tmp + FORK-2 sentinel path) for one GitBundleDr test, always cleaned up. */
+fun <T> withDataDirHarness(block: (gitHomeDir: Path, tmpDir: Path, sentinelPath: Path) -> T): T {
+    val dataDir = Files.createTempDirectory("plainbase-bundledr-data")
+    return try {
+        block(dataDir.resolve("git-home"), dataDir.resolve("tmp"), dataDir.resolve("restore-pending"))
+    } finally {
+        dataDir.toFile().deleteRecursively()
+    }
+}
+
 /**
  * Builds a [GitCliHistoryProvider] over [exec] with the harness defaults: the repo [workTree] (the same
  * root [exec] was built over), a git-home holding the temp indexes, the fixed clock, and a no-op

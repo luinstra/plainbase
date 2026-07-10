@@ -162,9 +162,8 @@ class GitBundleDrShipTest : FunSpec({
                 shipThreads.forEach { it.join(10_000) }
                 closeThread.join(10_000)
 
-                val shipped = requireNotNull(hybrid.store.getHistoryBundle())
                 val verifyTarget = tmpDir.resolve("verify.bundle")
-                Files.write(verifyTarget, shipped)
+                hybrid.store.fetchHistoryBundleTo(verifyTarget) shouldBe true // streams the shipped bundle to disk (B-C3)
                 exec.run(listOf("bundle", "verify", verifyTarget.toString())).ok shouldBe true
             }
         }

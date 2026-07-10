@@ -291,7 +291,9 @@ private fun hybridOverride(fakeSlot: Array<FakeObjectStore?>? = null): (LocalCon
         keyPrefix = "",
         pollSeconds = 3_600,
         dirtyPaths = { emptySet() },
-        mirrorRoot = Files.createTempDirectory("pb-hybrid-parity-mirrorroot-unused"),
+        // Point mirrorRoot at the REAL mirror's root, not a throwaway temp dir: harmless today (this parity
+        // harness never hydrates/polls), but a divergent mirrorRoot is a latent footgun for anything that would.
+        mirrorRoot = requireNotNull(mirror.onDiskTarget(com.plainbase.domain.content.TreePath.require("pb-root-probe")).parent),
     )
     var seeded = false
     object : ContentStore by real {

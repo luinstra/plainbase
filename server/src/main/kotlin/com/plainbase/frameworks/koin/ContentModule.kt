@@ -39,7 +39,12 @@ val contentModule = module {
     single<ObjectContentStore> {
         val config = get<PlainbaseConfig>()
         val dirtyPages = get<DirtyPageRepository>()
-        ObjectContentStoreFactory.build(config, ignoreRules = get(), dirtyPaths = { dirtyPages.all().map { it.path }.toSet() })
+        ObjectContentStoreFactory.build(
+            config,
+            ignoreRules = get(),
+            dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
+            isDirty = { dirtyPages.isDirty(it) }, // MINOR-1: indexed single-row EXISTS for the poll hot-path guard
+        )
     }
     // Backend selection (Q9): the port ALIASES the selected backend's concrete adapter (one instance,
     // two keys). Consumers depend on the backend-neutral ContentStore; the git-history wiring binds to

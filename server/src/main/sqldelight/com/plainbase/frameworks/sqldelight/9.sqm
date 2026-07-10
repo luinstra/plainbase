@@ -1,0 +1,5 @@
+-- v9 -> v10: object-storage backend (C5, MINOR-1) — index dirty_page(path) so the object-mode poll's
+-- live dirty-ahead guard is an indexed single-row EXISTS (`isDirty`) instead of a full-table scan run once
+-- per poll candidate under applyLock. DirtyPage.sq carries the same index on the current schema;
+-- verifyMigrations cross-checks this against schema/10.db.
+CREATE INDEX dirty_page_path ON dirty_page(path);

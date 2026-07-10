@@ -86,7 +86,8 @@ class FakeObjectStore(
         return synchronized(lock) { objects[key]?.let { ObjectStat(etag = it.etag, size = it.bytes.size.toLong()) } }
     }
 
-    override suspend fun get(key: String): FetchedObject? {
+    override suspend fun get(key: String, maxBytes: Long?): FetchedObject? {
+        // In-memory: no wire body to cap, so [maxBytes] is irrelevant here (the M2/R3-1 cap lives in S3ObjectClient).
         onNetworkOp()
         gets.incrementAndGet()
         if (synchronized(lock) { failNextGetFor.remove(key) }) {
@@ -96,7 +97,21 @@ class FakeObjectStore(
         return synchronized(lock) { objects[key]?.let { FetchedObject(it.bytes.copyOf(), it.etag) } }
     }
 
-    override suspend fun put(key: String, bytes: ByteArray, condition: PutCondition, contentType: String?): PutOutcome {
+    override suspend fun getToFile(key: String, target: java.nio.file.Path, requestTimeoutMillis: Long?): Boolean {
+        // In-memory: reuse [get] then write the bytes to [target] (the streaming vs buffered distinction is
+        // an S3ObjectClient wire concern; the fake only needs to honor the found/not-found + file-write contract).
+        val fetched = get(key) ?: return false
+        java.nio.file.Files.write(target, fetched.bytes)
+        return true
+    }
+
+    override suspend fun put(
+        key: String,
+        bytes: ByteArray,
+        condition: PutCondition,
+        contentType: String?,
+        requestTimeoutMillis: Long?,
+    ): PutOutcome {
         onNetworkOp()
         puts.incrementAndGet()
         failIfInjected()
@@ -123,6 +138,17 @@ class FakeObjectStore(
             throw ObjectStoreException("simulated ambiguous PUT failure (post-apply, op DID land): $key")
         }
         return PutOutcome.Stored(stored.etag)
+    }
+
+    override suspend fun putFromFile(
+        key: String,
+        source: java.nio.file.Path,
+        contentType: String?,
+        requestTimeoutMillis: Long?,
+    ): PutOutcome {
+        // In-memory: buffer the file then delegate to [put] (the streaming-vs-buffered distinction is an
+        // S3ObjectClient wire concern; the fake only needs to honor the unconditional-PUT contract).
+        return put(key, java.nio.file.Files.readAllBytes(source), PutCondition.None, contentType, requestTimeoutMillis)
     }
 
     override suspend fun delete(key: String) {

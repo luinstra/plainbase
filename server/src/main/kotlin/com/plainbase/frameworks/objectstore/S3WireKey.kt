@@ -18,7 +18,11 @@ object S3WireKey {
     fun decode(encoded: String): String =
         when (val result = PercentCoding.decodeOnce(encoded, allowEncodedSlash = true)) {
             is PercentCoding.DecodeResult.Success -> result.value
+            // Truncate the untrusted wire key echoed into the message so a hostile response can't bloat the log (M4).
             is PercentCoding.DecodeResult.Failure ->
-                throw ObjectStoreException("undecodable ListObjectsV2 key '$encoded' (${result.error})")
+                throw ObjectStoreException("undecodable ListObjectsV2 key '${encoded.take(MAX_REFUSAL_CHARS)}' (${result.error})")
         }
+
+    /** The cap on untrusted wire text echoed into a refusal message (M4). */
+    private const val MAX_REFUSAL_CHARS = 80
 }

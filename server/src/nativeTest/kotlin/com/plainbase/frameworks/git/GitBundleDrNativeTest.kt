@@ -369,13 +369,29 @@ private class NativeFakeObjectStore : ObjectStoreClient {
     override suspend fun head(key: String): ObjectStat? =
         objects[key]?.let { ObjectStat(etag = it.second, size = it.first.size.toLong()) }
 
-    override suspend fun get(key: String): FetchedObject? = objects[key]?.let { FetchedObject(it.first.copyOf(), it.second) }
+    override suspend fun get(key: String, maxBytes: Long?): FetchedObject? =
+        objects[key]?.let { FetchedObject(it.first.copyOf(), it.second) }
 
-    override suspend fun put(key: String, bytes: ByteArray, condition: PutCondition, contentType: String?): PutOutcome {
+    override suspend fun getToFile(key: String, target: Path, requestTimeoutMillis: Long?): Boolean {
+        val bytes = objects[key]?.first ?: return false
+        Files.write(target, bytes)
+        return true
+    }
+
+    override suspend fun put(
+        key: String,
+        bytes: ByteArray,
+        condition: PutCondition,
+        contentType: String?,
+        requestTimeoutMillis: Long?,
+    ): PutOutcome {
         val etag = "\"native-fake-${etagSeq++}\""
         objects[key] = bytes.copyOf() to etag
         return PutOutcome.Stored(etag)
     }
+
+    override suspend fun putFromFile(key: String, source: Path, contentType: String?, requestTimeoutMillis: Long?): PutOutcome =
+        put(key, Files.readAllBytes(source), PutCondition.None, contentType, requestTimeoutMillis) // in-memory: buffer + delegate
 
     override suspend fun delete(key: String) {
         objects.remove(key)

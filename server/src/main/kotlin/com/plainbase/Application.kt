@@ -19,7 +19,6 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.checkpointModule
-import com.plainbase.frameworks.koin.configModule
 import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.historyModule
 import com.plainbase.frameworks.koin.indexModule
@@ -33,6 +32,7 @@ import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.spike.NativeSpike
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.koin.core.context.startKoin
+import org.koin.dsl.module
 import kotlin.system.exitProcess
 import kotlin.time.Clock
 
@@ -60,17 +60,28 @@ fun main(args: Array<String>) {
 }
 
 private fun serve() {
+    // Resolve config BEFORE building the Koin graph (R2-2): a bad config (an IllegalArgumentException from the
+    // Q9/auth validation, OR a HOCON ConfigException - malformed plainbase.conf, unresolved ${...}, wrong-typed
+    // value) must unwrap cleanly into a `serve:` stderr line + exit(1), never a raw stack trace. Resolving here
+    // (not via a Koin `single {}`) is what keeps the error unwrapped - Koin would wrap it in an
+    // InstanceCreationException that dodges the funnel. The resolved instance is the graph's single source.
+    val config = PlainbaseConfig.loadForCommand("serve") ?: exitProcess(1)
     val koin = startKoin {
         modules(
-            configModule, contentModule, repositoryModule, securityModule, indexModule, checkpointModule, searchModule,
-            historyModule, restModule,
+            module { single { config } }, contentModule, repositoryModule, securityModule, indexModule,
+            checkpointModule, searchModule, historyModule, restModule,
         )
     }.koin
 
-    val config = koin.get<PlainbaseConfig>()
-    // Fail fast, actionably: a missing CONTENT_DIR must name itself, not surface as the scan's
-    // bare NoSuchFileException - and never silently serve an empty tree.
-    config.requireContentDir()
+    // Fail fast, actionably: a missing CONTENT_DIR (or an incomplete object-mode key matrix) must name
+    // itself as a `serve:` refusal, not raw-stack-trace out of the `require(...)` - the same funnel as the
+    // config load and the gates below, never silently serving an empty tree.
+    try {
+        config.requireContentDir()
+    } catch (e: IllegalArgumentException) {
+        System.err.println("serve: ${e.message}")
+        exitProcess(1)
+    }
     // Q9/Q10 ignored-key warnings (never fatal): local mode names any configured-but-ignored
     // storage.object.* keys; object mode warns when CONTENT_DIR was explicitly set.
     config.storageWarnings().forEach { logger.warn { it } }

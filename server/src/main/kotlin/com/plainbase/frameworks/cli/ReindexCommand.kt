@@ -51,8 +51,17 @@ object ReindexCommand {
 
     private val logger = KotlinLogging.logger {}
 
-    /** Entry point for the `main` dispatch: real env config, exit-code result. */
-    fun runAsMain(args: List<String>): Int = run(args, PlainbaseConfig.fromEnv())
+    /**
+     * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf`, exit-code result. Resolves via
+     * [PlainbaseConfig.loadForCommand] (NOT the env-only fast path) so the storage-backend decision matches
+     * `serve` for the same DATA_DIR: an operator who sets `storage.backend=object` only in `plainbase.conf`
+     * must not get the LOCAL branch here and rebuild search from an ignored CONTENT_DIR instead of the bucket
+     * mirror. A bad config (IAE or HOCON) surfaces as the actionable `reindex:` stderr + exit 1.
+     */
+    fun runAsMain(args: List<String>): Int {
+        val config = PlainbaseConfig.loadForCommand("reindex") ?: return 1
+        return run(args, config)
+    }
 
     /** Exit codes: 0 success / 1 runtime failure (incl. a server holding the lock) / 2 usage error. */
     fun run(args: List<String>, config: PlainbaseConfig): Int {
@@ -112,7 +121,12 @@ object ReindexCommand {
                 val dirtyPages = SqlDelightDirtyPageRepository(database)
                 // Build (transport open) BEFORE hydrate, and close it on a hydrate failure so the ktor
                 // client never leaks when the bucket is unreachable.
-                val hybrid = ObjectContentStoreFactory.build(config, IgnoreRules()) { dirtyPages.all().map { it.path }.toSet() }
+                val hybrid = ObjectContentStoreFactory.build(
+                    config,
+                    IgnoreRules(),
+                    dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
+                    isDirty = { dirtyPages.isDirty(it) },
+                )
                 try {
                     hybrid.hydrate()
                 } catch (e: Exception) {

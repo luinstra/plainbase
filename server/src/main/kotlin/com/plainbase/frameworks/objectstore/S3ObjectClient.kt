@@ -4,20 +4,27 @@ import com.plainbase.domain.content.PercentCoding
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsBytes
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
 import io.ktor.http.content.ByteArrayContent
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.writeFully
+import java.io.ByteArrayOutputStream
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -61,29 +68,84 @@ class S3ObjectClient(
     override suspend fun head(key: String): ObjectStat? {
         val response = execute(HttpMethod.Head, key)
         return when {
+            // Fail-closed on an absent Content-Length (M5): a malformed/short response must refuse, never
+            // be reported as a zero-size object (the rest of the client is fail-closed; size is load-bearing).
             response.status.isSuccess() ->
-                ObjectStat(etag = etagOf(response), size = response.headers[HttpHeaders.ContentLength]?.toLong() ?: 0L)
+                ObjectStat(
+                    etag = etagOf(response),
+                    size = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                        ?: throw ObjectStoreException("HEAD '$key' returned no Content-Length"),
+                )
             response.status == HttpStatusCode.NotFound -> null
             else -> unexpected("HEAD", key, response)
         }
     }
 
-    override suspend fun get(key: String): FetchedObject? {
+    override suspend fun get(key: String, maxBytes: Long?): FetchedObject? {
         val response = execute(HttpMethod.Get, key)
         return when {
-            response.status.isSuccess() -> FetchedObject(bytes = response.bodyAsBytes(), etag = etagOf(response))
+            response.status.isSuccess() ->
+                FetchedObject(bytes = readBody(response, "GET", key, maxBytes ?: config.maxResponseBytes), etag = etagOf(response))
             response.status == HttpStatusCode.NotFound -> null
             else -> unexpected("GET", key, response)
         }
     }
 
-    override suspend fun put(key: String, bytes: ByteArray, condition: PutCondition, contentType: String?): PutOutcome {
+    override suspend fun getToFile(key: String, target: Path, requestTimeoutMillis: Long?): Boolean {
+        val response = execute(HttpMethod.Get, key, requestTimeoutMillis = requestTimeoutMillis)
+        return when {
+            response.status.isSuccess() -> {
+                // Stream the body straight to disk - never a whole-body in-heap array (B-C3). READ_CHUNK at a time.
+                val channel = response.bodyAsChannel()
+                var written = 0L
+                try {
+                    Files.newOutputStream(target).use { out ->
+                        val chunk = ByteArray(READ_CHUNK)
+                        while (true) {
+                            val read = channel.readAvailable(chunk, 0, chunk.size)
+                            if (read == -1) break
+                            out.write(chunk, 0, read)
+                            written += read
+                        }
+                    }
+                } catch (t: Throwable) {
+                    channel.cancel(null) // release the connection on an abnormal mid-stream exit (mirrors readBody)
+                    throw t
+                }
+                // Truncation guard: if a Content-Length was declared, a short body (Ktor may surface a cut
+                // transfer as a clean EOF) is a corrupt download - refuse so the caller's bootRefusal fires,
+                // rather than a downstream `git fsck`/GitCommandException on a truncated bundle.
+                val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+                if (declared != null && written != declared) {
+                    throw ObjectStoreException("GET '$key' truncated: wrote $written bytes of a declared $declared")
+                }
+                true
+            }
+            response.status == HttpStatusCode.NotFound -> false
+            else -> unexpected("GET", key, response)
+        }
+    }
+
+    override suspend fun put(
+        key: String,
+        bytes: ByteArray,
+        condition: PutCondition,
+        contentType: String?,
+        requestTimeoutMillis: Long?,
+    ): PutOutcome {
         val conditionHeaders = when (condition) {
             PutCondition.None -> emptyMap()
             is PutCondition.IfMatch -> mapOf(HttpHeaders.IfMatch to condition.etag)
             PutCondition.IfAbsent -> mapOf(HttpHeaders.IfNoneMatch to "*")
         }
-        val response = execute(HttpMethod.Put, key, extraHeaders = conditionHeaders, body = bytes, contentType = contentType)
+        val response = execute(
+            HttpMethod.Put,
+            key,
+            extraHeaders = conditionHeaders,
+            body = bytes,
+            contentType = contentType,
+            requestTimeoutMillis = requestTimeoutMillis,
+        )
         return when {
             response.status.isSuccess() -> PutOutcome.Stored(etag = etagOf(response))
             response.status == HttpStatusCode.PreconditionFailed || response.status == HttpStatusCode.Conflict ->
@@ -112,7 +174,9 @@ class S3ObjectClient(
         }
         val response = execute(HttpMethod.Get, key = null, query = query)
         if (!response.status.isSuccess()) unexpected("LIST", prefix, response)
-        return response.bodyAsText()
+        // Decode the bounded body as UTF-8 explicitly (was `bodyAsText()`, which honored the response charset):
+        // ListObjectsV2 XML is always UTF-8 for S3/R2, so this is a deliberate, correct fix, not a regression.
+        return String(readBody(response, "LIST", prefix, config.maxResponseBytes), Charsets.UTF_8)
     }
 
     override fun close() = http.close()
@@ -124,25 +188,70 @@ class S3ObjectClient(
         extraHeaders: Map<String, String> = emptyMap(),
         body: ByteArray? = null,
         contentType: String? = null,
+        requestTimeoutMillis: Long? = null,
     ): HttpResponse {
         val request = signedRequest(method, key, query, extraHeaders, body, contentType)
         return http.request {
-            this.method = request.method
-            url {
-                protocol = URLProtocol.createOrDefault(request.protocol)
-                host = request.host
-                port = request.port
-                encodedPath = request.encodedPath
-                request.query.forEach { (name, value) ->
-                    encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
+            applySignedRequest(request, requestTimeoutMillis)
+            request.body?.let { setBody(ByteArrayContent(it)) }
+        }
+    }
+
+    /**
+     * Configures a request builder from a [SignedRequest] (URL, signed header set, Authorization, optional
+     * per-request timeout) WITHOUT setting a body - shared by [execute] (ByteArray body) and [putFromFile]
+     * (streamed file body). Ktor derives Host from url.host:port, so only host is dropped here. Content-Type,
+     * when present, is appended as the RAW signed string (M1): a normalized type would differ from the signed
+     * value and 403; the body carries no content type of its own, so this header is the one on the wire.
+     */
+    private fun HttpRequestBuilder.applySignedRequest(request: SignedRequest, requestTimeoutMillis: Long?) {
+        // Per-request timeout override (B-C3): a large bundle transfer must not share the short page-op request
+        // timeout. Only the whole-call bound is raised; connect/socket-gap bounds stay the default.
+        requestTimeoutMillis?.let { timeout { this.requestTimeoutMillis = it } }
+        this.method = request.method
+        url {
+            protocol = URLProtocol.createOrDefault(request.protocol)
+            host = request.host
+            port = request.port
+            encodedPath = request.encodedPath
+            request.query.forEach { (name, value) ->
+                encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
+            }
+        }
+        request.signedHeaders.forEach { (name, value) -> if (name != "host") headers.append(name, value) }
+        headers.append(HttpHeaders.Authorization, request.authorization)
+    }
+
+    override suspend fun putFromFile(key: String, source: Path, contentType: String?, requestTimeoutMillis: Long?): PutOutcome {
+        // B-C3: STREAM the file to the PUT body, and STREAM-hash it for SigV4 - never a whole-file in-heap array,
+        // so the DR-bundle ship cannot OOM on a memory-constrained host. Symmetric with getToFile on restore.
+        val payloadHash = SigV4Signer.sha256HexOfFile(source)
+        val request = signedRequest(HttpMethod.Put, key, contentType = contentType, payloadHashOverride = payloadHash)
+        val response = http.request {
+            applySignedRequest(request, requestTimeoutMillis)
+            setBody(fileBody(source))
+        }
+        return when {
+            response.status.isSuccess() -> PutOutcome.Stored(etag = etagOf(response))
+            response.status == HttpStatusCode.PreconditionFailed || response.status == HttpStatusCode.Conflict ->
+                PutOutcome.PreconditionFailed(status = response.status.value)
+            else -> unexpected("PUT", key, response)
+        }
+    }
+
+    /** A streaming request body over [source]: [READ_CHUNK] at a time from the file, never buffered whole. */
+    private fun fileBody(source: Path): OutgoingContent = object : OutgoingContent.WriteChannelContent() {
+        override val contentLength: Long = Files.size(source)
+
+        override suspend fun writeTo(channel: ByteWriteChannel) {
+            Files.newInputStream(source).use { input ->
+                val buffer = ByteArray(READ_CHUNK)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    channel.writeFully(buffer, 0, read)
                 }
             }
-            // Ktor derives Host from url.host:port and Content-Type from the body, so only the
-            // remaining signed headers plus Authorization are appended here (host/content-type
-            // would otherwise be sent twice and break the signature).
-            request.signedHeaders.forEach { (name, value) -> if (name != "host" && name != "content-type") headers.append(name, value) }
-            headers.append(HttpHeaders.Authorization, request.authorization)
-            request.body?.let { setBody(ByteArrayContent(it, contentType?.let(ContentType::parse))) }
         }
     }
 
@@ -160,6 +269,8 @@ class S3ObjectClient(
         extraHeaders: Map<String, String> = emptyMap(),
         body: ByteArray? = null,
         contentType: String? = null,
+        /** A pre-computed payload hash (the STREAMED file-hash for [putFromFile]); else hashed from [body]. */
+        payloadHashOverride: String? = null,
     ): SignedRequest {
         val requestHost = when (config.addressing) {
             S3Addressing.PATH_STYLE -> endpoint.host
@@ -171,7 +282,7 @@ class S3ObjectClient(
             if (isEmpty()) append('/')
         }
         val amzDate = AMZ_DATE_FORMAT.format(clock())
-        val payloadHash = SigV4Signer.sha256Hex(body ?: ByteArray(0))
+        val payloadHash = payloadHashOverride ?: SigV4Signer.sha256Hex(body ?: ByteArray(0))
         val signedHeaders = buildMap {
             // Sign the exact host[:port] the engine will send (the port only when non-default).
             put("host", if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
@@ -199,13 +310,102 @@ class S3ObjectClient(
         response.headers[HttpHeaders.ETag] ?: throw ObjectStoreException("${response.call.request.method.value} returned no ETag")
 
     private suspend fun unexpected(op: String, target: String, response: HttpResponse): Nothing {
-        val detail = response.bodyAsText().take(500)
+        val detail = errorDetail(response).take(500)
         throw ObjectStoreException("$op '$target' failed with ${response.status}: $detail")
+    }
+
+    /**
+     * Reads the whole response body into memory, refusing a body over [cap] (M2): `bodyAsBytes()`/
+     * `bodyAsText()` would buffer an arbitrarily large body from a hostile or misconfigured endpoint.
+     * Content correctness matters here (GET/LIST), so an oversize body REFUSES rather than truncates.
+     * [cap] is per-call so the app-owned bundle GET can pass an effectively-unbounded value (R3-1).
+     */
+    private suspend fun readBody(response: HttpResponse, op: String, target: String, cap: Long): ByteArray {
+        val channel = response.bodyAsChannel()
+        val out = ByteArrayOutputStream()
+        val chunk = ByteArray(READ_CHUNK)
+        while (true) {
+            val read = channel.readAvailable(chunk, 0, chunk.size)
+            if (read == -1) break
+            if (out.size().toLong() + read > cap) {
+                channel.cancel(null) // release the rest of the oversize body before refusing (mirrors errorDetail)
+                // Name the offending key AND the operator knob: the cap derivation only guarantees a
+                // Plainbase-PUT-able asset is GET-able; the bucket authority can legally hold larger objects.
+                throw ObjectStoreException(
+                    "$op '$target' response body exceeds the $cap-byte cap - raise PLAINBASE_MAX_ASSET_BYTES if " +
+                        "this is a legitimate large object, else check for a hostile or misconfigured endpoint",
+                )
+            }
+            out.write(chunk, 0, read)
+        }
+        return out.toByteArray()
+    }
+
+    /** The bounded error-body detail for [unexpected]: a hostile error page is TRUNCATED (not refused) so the status still surfaces. */
+    private suspend fun errorDetail(response: HttpResponse): String {
+        val channel = response.bodyAsChannel()
+        val out = ByteArrayOutputStream()
+        val chunk = ByteArray(READ_CHUNK)
+        while (out.size() < ERROR_DETAIL_CAP) {
+            val read = channel.readAvailable(chunk, 0, minOf(chunk.size, ERROR_DETAIL_CAP - out.size()))
+            if (read == -1) break
+            out.write(chunk, 0, read)
+        }
+        channel.cancel(null) // release the rest of a (possibly large) error body instead of leaving it dangling
+        val bytes = out.toByteArray()
+        // If the cap cut mid-codepoint, drop the incomplete trailing UTF-8 sequence so the operator message
+        // is not tailed by a U+FFFD replacement char (a complete trailing char is kept as-is).
+        return String(bytes, 0, completeUtf8End(bytes), Charsets.UTF_8)
+    }
+
+    /** The length of [bytes] with any incomplete trailing UTF-8 multi-byte sequence trimmed. */
+    private fun completeUtf8End(bytes: ByteArray): Int {
+        val end = bytes.size
+        if (end == 0 || bytes[end - 1].toInt() and 0x80 == 0) return end // empty or ends on an ASCII byte
+        var k = 0
+        while (k < 3 && end - 1 - k >= 0 && bytes[end - 1 - k].toInt() and 0xC0 == 0x80) k++ // trailing continuation bytes
+        val leadIdx = end - 1 - k
+        if (leadIdx < 0) return end
+        val lead = bytes[leadIdx].toInt() and 0xFF
+        val need = when {
+            lead and 0xE0 == 0xC0 -> 2
+            lead and 0xF0 == 0xE0 -> 3
+            lead and 0xF8 == 0xF0 -> 4
+            else -> return end // a stray continuation byte with no lead - leave it, String() handles it
+        }
+        return if (k + 1 < need) leadIdx else end // incomplete sequence: trim it; complete: keep
     }
 
     companion object {
         /** R9 test hook (counter-proven boot laziness, never reasoned from `single {}` laziness). */
         internal val constructions = java.util.concurrent.atomic.AtomicInteger()
+
+        /** M2 default response-body cap: 64 MiB. A DoS bound on a hostile endpoint, well above any content/asset size. */
+        internal const val DEFAULT_MAX_RESPONSE_BYTES: Long = 64L * 1024 * 1024
+
+        /**
+         * R2-4 headroom added to `maxAssetBytes` when object mode derives the response cap: a GET body is exactly
+         * the object bytes, but this margin keeps the cap comfortably above the largest PUT-able asset so a
+         * legitimately-large asset (operators can raise `PLAINBASE_MAX_ASSET_BYTES` with no ceiling) is always
+         * GET-able on hydration, never refused by its own transport at boot.
+         */
+        internal const val RESPONSE_HEADROOM_BYTES: Long = 1L * 1024 * 1024
+
+        /**
+         * The object-mode response cap (R2-4): at least [DEFAULT_MAX_RESPONSE_BYTES], else [maxAssetBytes] plus
+         * [RESPONSE_HEADROOM_BYTES] so a PUT-able asset is always GET-able. The `+` is SATURATING (opus): a
+         * near-`Long.MAX_VALUE` `PLAINBASE_MAX_ASSET_BYTES` must not wrap negative and collapse back to the default.
+         */
+        internal fun deriveMaxResponseBytes(maxAssetBytes: Long): Long {
+            val withHeadroom =
+                if (maxAssetBytes > Long.MAX_VALUE - RESPONSE_HEADROOM_BYTES) Long.MAX_VALUE else maxAssetBytes + RESPONSE_HEADROOM_BYTES
+            return maxOf(DEFAULT_MAX_RESPONSE_BYTES, withHeadroom)
+        }
+
+        private const val READ_CHUNK = 64 * 1024
+
+        /** Error bodies are only for the operator message; a few KiB is plenty and bounds a hostile error page. */
+        private const val ERROR_DETAIL_CAP = 8 * 1024
 
         private val AMZ_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC)
     }
@@ -241,4 +441,6 @@ data class S3ClientConfig(
     val connectTimeoutMillis: Long = 10_000,
     /** Whole-call bound (TLS handshake + signed round-trip); also the socket read bound. */
     val requestTimeoutMillis: Long = 30_000,
+    /** M2: the max GET/LIST response body buffered into memory; an oversize body refuses (DoS bound on a hostile endpoint). */
+    val maxResponseBytes: Long = S3ObjectClient.DEFAULT_MAX_RESPONSE_BYTES,
 )

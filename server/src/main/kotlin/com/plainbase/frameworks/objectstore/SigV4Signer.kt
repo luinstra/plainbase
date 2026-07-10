@@ -91,6 +91,23 @@ class SigV4Signer(
 
         fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).toHex()
 
+        /**
+         * The SigV4 payload hash of a FILE, computed by STREAMING it through the digest (never a whole-file
+         * in-heap array) - so the DR-bundle ship can sign an arbitrarily-large bundle without OOM (B-C3).
+         */
+        fun sha256HexOfFile(path: java.nio.file.Path): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            java.nio.file.Files.newInputStream(path).use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            return digest.digest().toHex()
+        }
+
         private fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray =
             Mac.getInstance("HmacSHA256").run {
                 init(SecretKeySpec(key, "HmacSHA256"))

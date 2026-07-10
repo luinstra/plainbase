@@ -16,7 +16,14 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
  */
 object ObjectContentStoreFactory {
 
-    fun build(config: PlainbaseConfig, ignoreRules: IgnoreRules, dirtyPaths: () -> Set<TreePath>): ObjectContentStore {
+    fun build(
+        config: PlainbaseConfig,
+        ignoreRules: IgnoreRules,
+        dirtyPaths: () -> Set<TreePath>,
+        // MINOR-1: an indexed per-path dirty check for the poll hot-path guard; defaults to membership in
+        // [dirtyPaths] so a caller that has no cheaper query (a CLI over a tiny journal) need not wire one.
+        isDirty: (TreePath) -> Boolean = { it in dirtyPaths() },
+    ): ObjectContentStore {
         val storage = config.storage
         val client = S3ObjectClient(
             S3ClientConfig(
@@ -28,6 +35,10 @@ object ObjectContentStoreFactory {
                     "PLAINBASE_S3_SECRET_ACCESS_KEY is required when storage.backend=object"
                 },
                 addressing = if (storage.pathStyle) S3Addressing.PATH_STYLE else S3Addressing.VIRTUAL_HOST,
+                // R2-4: keep the response cap at or above the operator-raisable asset cap so a PUT-able asset is
+                // always GET-able on hydration (a 64 MiB default below a raised PLAINBASE_MAX_ASSET_BYTES would
+                // refuse a legal asset's boot GET and fail the object-mode boot). Saturating add guards overflow.
+                maxResponseBytes = S3ObjectClient.deriveMaxResponseBytes(config.maxAssetBytes),
             ),
         )
         // Construction is NON-mutating: the mirror dir is created by hydrate() (which serve/RECORD/
@@ -41,6 +52,7 @@ object ObjectContentStoreFactory {
             keyPrefix = if (storage.prefix.isEmpty()) "" else "${storage.prefix}/",
             pollSeconds = storage.pollSeconds,
             dirtyPaths = dirtyPaths,
+            isDirty = isDirty,
             mirrorRoot = mirrorRoot,
             ignoreRules = ignoreRules,
         )

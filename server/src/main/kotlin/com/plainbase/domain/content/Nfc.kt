@@ -19,4 +19,12 @@ object Nfc {
 
     /** True when [value] is already in NFC (i.e. normalization would be a no-op). */
     fun isNormalized(value: String): Boolean = Normalizer.isNormalized(value, Normalizer.Form.NFC)
+
+    /**
+     * Returns [value] in Unicode Normalization Form D (canonical DECOMPOSITION). Path code stores + reads
+     * NFC; this exists only so the mirror's targeted stale-sibling sweep can name the ONE NFD-encoded raw
+     * file a canonically-equivalent re-upload can leave behind, without scanning the whole directory. Kept
+     * here so [Normalizer] still has exactly one call site.
+     */
+    fun decompose(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFD)
 }

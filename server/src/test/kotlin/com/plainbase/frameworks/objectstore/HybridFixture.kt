@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicInteger
 class HybridFixture(
     conflictStatus: Int = 412,
     val dirtyPaths: MutableSet<TreePath> = mutableSetOf(),
+    /** The per-path poll guard (MINOR-1); defaults to [dirtyPaths] membership, overridable to assert the
+     *  poll consults THIS predicate per candidate rather than rebuilding the whole dirty set. */
+    isDirty: ((TreePath) -> Boolean)? = null,
     val mirrorAtomics: FailableFileAtomics = FailableFileAtomics(),
     /** A SEPARATE injection point for MirrorState.persist() flushes, so a persist fault can be tested
      *  independently of a mirror-write fault (the BLOCKING poll-survives / Q8b-with-failing-persist tests). */
@@ -37,6 +40,7 @@ class HybridFixture(
         keyPrefix = keyPrefix,
         pollSeconds = pollSeconds,
         dirtyPaths = { dirtyPaths.toSet() },
+        isDirty = isDirty ?: { it in dirtyPaths },
         mirrorRoot = mirrorRoot,
         ignoreRules = ignoreRules,
         atomics = mirrorAtomics, // the SAME injection point as the mirror's own - poll/hydrate route through this one

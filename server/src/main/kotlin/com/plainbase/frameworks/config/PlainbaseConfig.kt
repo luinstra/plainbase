@@ -5,6 +5,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.frameworks.ktor.RemoteAddress
 import com.typesafe.config.Config
+import com.typesafe.config.ConfigException
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigResolveOptions
 import java.net.URI
@@ -20,8 +21,9 @@ import java.nio.file.Path
  *
  * Environment variables override defaults; `DATA_DIR/plainbase.conf` (HOCON, ADR-0009) is layered in by
  * [fromEnvAndFile] - **env always wins**, the file only supplies values env omits. Secrets stay in env,
- * never the file. [fromEnv] is the env-only fast path the spike + content-only CLIs (reindex, adopt) use; the
- * server and the `admin` CLI use [fromEnvAndFile] (admin needs the file-configured `auth.mode`).
+ * never the file. [fromEnv] is the env-only fast path only the credential-free `spike` uses; the server and
+ * every DATA_DIR-sharing CLI (`admin`, `adopt`, `reindex`) use [fromEnvAndFile], so their file-configured
+ * decisions (auth.mode, storage.backend) all match serve for the same DATA_DIR.
  */
 data class PlainbaseConfig(
     val contentDir: Path,
@@ -116,6 +118,8 @@ data class PlainbaseConfig(
                     "${storage.ignoredObjectKeys.joinToString(", ")} (set storage.backend=object to use them)",
             )
         }
+        // live from C4: object mode is real now (the hybrid store hydrates a DATA_DIR mirror), so this
+        // explicitly-set-CONTENT_DIR warning is reachable on a real object boot - not dead pre-C4 code.
         if (storage.backend == StorageBackend.OBJECT && contentDirSource != ConfigSource.DEFAULT) {
             add(
                 "storage.backend=object ignores CONTENT_DIR (explicitly set via ${contentDirSource.name.lowercase()}): " +
@@ -255,7 +259,8 @@ data class PlainbaseConfig(
         )
 
         /**
-         * Env-only construction (the CLIs/spike fast path). No file is read; this is exactly the
+         * Env-only construction (the credential-free `spike` fast path only; every DATA_DIR-sharing CLI now
+         * uses [fromEnvAndFile]). No file is read; this is exactly the
          * env-and-defaults behavior [fromEnvAndFile] falls back to when no `plainbase.conf` is present.
          */
         fun fromEnv(env: Map<String, String> = System.getenv()): PlainbaseConfig =
@@ -281,6 +286,29 @@ data class PlainbaseConfig(
             }
             return build(env, file)
         }
+
+        /**
+         * Resolves config for a `serve`/CLI entry point, funneling a bad config into a clean `<command>:`
+         * stderr line + null (the caller exits 1) instead of a raw stack trace. TWO failure classes are
+         * caught: an [IllegalArgumentException] from the Q9/auth validation, AND a HOCON [ConfigException]
+         * (malformed `plainbase.conf`, an unresolved `${...}`, a wrong-typed file value). [resolve] and [err]
+         * are injectable so a test drives a bad config without touching real env/stderr - resolving OUTSIDE
+         * any DI graph keeps the thrown error unwrapped (a Koin `single {}` would wrap it and dodge the catch).
+         */
+        fun loadForCommand(
+            command: String,
+            err: (String) -> Unit = System.err::println,
+            resolve: () -> PlainbaseConfig = { fromEnvAndFile() },
+        ): PlainbaseConfig? =
+            try {
+                resolve()
+            } catch (e: IllegalArgumentException) {
+                err("$command: ${e.message}")
+                null
+            } catch (e: ConfigException) {
+                err("$command: ${e.message}")
+                null
+            }
 
         /**
          * The single env-wins fallback chain shared by [fromEnv] and [fromEnvAndFile]: each field reads

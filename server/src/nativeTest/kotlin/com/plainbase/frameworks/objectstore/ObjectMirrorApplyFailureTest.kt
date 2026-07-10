@@ -151,9 +151,22 @@ private class MiniFakeObjectStore : ObjectStoreClient {
 
     override suspend fun head(key: String): ObjectStat? = objects[key]?.let { ObjectStat(it.second, it.first.size.toLong()) }
 
-    override suspend fun get(key: String): FetchedObject? = objects[key]?.let { FetchedObject(it.first.copyOf(), it.second) }
+    override suspend fun get(key: String, maxBytes: Long?): FetchedObject? =
+        objects[key]?.let { FetchedObject(it.first.copyOf(), it.second) }
 
-    override suspend fun put(key: String, bytes: ByteArray, condition: PutCondition, contentType: String?): PutOutcome {
+    override suspend fun getToFile(key: String, target: Path, requestTimeoutMillis: Long?): Boolean {
+        val bytes = objects[key]?.first ?: return false
+        Files.write(target, bytes)
+        return true
+    }
+
+    override suspend fun put(
+        key: String,
+        bytes: ByteArray,
+        condition: PutCondition,
+        contentType: String?,
+        requestTimeoutMillis: Long?,
+    ): PutOutcome {
         val current = objects[key]
         val allowed = when (condition) {
             PutCondition.None -> true
@@ -165,6 +178,9 @@ private class MiniFakeObjectStore : ObjectStoreClient {
         objects[key] = bytes.copyOf() to etag
         return PutOutcome.Stored(etag)
     }
+
+    override suspend fun putFromFile(key: String, source: Path, contentType: String?, requestTimeoutMillis: Long?): PutOutcome =
+        put(key, Files.readAllBytes(source), PutCondition.None, contentType, requestTimeoutMillis) // in-memory: buffer + delegate
 
     override suspend fun delete(key: String) {
         objects.remove(key)

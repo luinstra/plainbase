@@ -311,6 +311,32 @@ class PlainbaseConfigTest : FunSpec({
         storage.secretAccessKey shouldBe "shh"
     }
 
+    test(
+        "storage.backend=object set ONLY in plainbase.conf resolves through fromEnvAndFile (the loader the " +
+            "DATA_DIR-sharing CLIs adopt/reindex now share with serve) - the env-only fast path would read it as local (B1)",
+    ) {
+        val conf = """
+            storage {
+              backend = object
+              object {
+                endpoint = "https://acct.r2.cloudflarestorage.com"
+                bucket = "docs"
+              }
+            }
+        """.trimIndent()
+        withDataDir(conf) { env ->
+            // Credentials stay env-only (secrets never in the file); backend/endpoint/bucket come from the file.
+            val creds = env + ("PLAINBASE_S3_ACCESS_KEY_ID" to "k") + ("PLAINBASE_S3_SECRET_ACCESS_KEY" to "s")
+            val fromFile = PlainbaseConfig.fromEnvAndFile(creds)
+            fromFile.storage.backend shouldBe StorageBackend.OBJECT
+            fromFile.storage.endpoint shouldBe "https://acct.r2.cloudflarestorage.com"
+            fromFile.storage.bucket shouldBe "docs"
+            // The old CLI entry point (fromEnv) ignores the file entirely and silently falls back to LOCAL -
+            // exactly the wrong-authority regression B1 fixes by switching adopt/reindex to fromEnvAndFile.
+            PlainbaseConfig.fromEnv(creds).storage.backend shouldBe StorageBackend.LOCAL
+        }
+    }
+
     test("object mode without an endpoint fails with the tabled message (verbatim)") {
         shouldThrow<IllegalArgumentException> {
             PlainbaseConfig.fromEnv(objectEnv() - "PLAINBASE_S3_ENDPOINT")
@@ -361,6 +387,27 @@ class PlainbaseConfigTest : FunSpec({
                 env + ("PLAINBASE_S3_ACCESS_KEY_ID" to "k") + ("PLAINBASE_S3_SECRET_ACCESS_KEY" to "s"),
             )
             loaded.storage.bucket shouldBe "docs"
+        }
+    }
+
+    test("loadForCommand funnels a bad object-mode config (IAE) into a clean <cmd>: message + null, never a stack trace (R2-2)") {
+        val errors = mutableListOf<String>()
+        val result = PlainbaseConfig.loadForCommand("serve", err = errors::add) {
+            // backend=object with no endpoint -> IllegalArgumentException out of build(); the funnel must catch it.
+            PlainbaseConfig.fromEnv(mapOf("PLAINBASE_STORAGE_BACKEND" to "object"))
+        }
+        result shouldBe null
+        errors.single() shouldContain "serve: "
+        errors.single() shouldContain "storage.object.endpoint is required"
+    }
+
+    test("loadForCommand also funnels a malformed plainbase.conf (HOCON ConfigException), not just IAE (R2-2)") {
+        withDataDir("storage { backend = ") { env ->
+            // unclosed brace -> ConfigException.Parse from Typesafe Config
+            val errors = mutableListOf<String>()
+            val result = PlainbaseConfig.loadForCommand("admin", err = errors::add) { PlainbaseConfig.fromEnvAndFile(env) }
+            result shouldBe null
+            errors.single() shouldContain "admin: "
         }
     }
 
