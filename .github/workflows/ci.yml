@@ -136,7 +136,7 @@ jobs:
       - name: Run test suite as native image
         run: ./gradlew :server:nativeTest --console=plain
 
-      - name: Run full-stack dependency spike against the native binary
+      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
 
       - name: Smoke test — native binary serves health endpoint with no JRE
