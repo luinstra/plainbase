@@ -3,7 +3,7 @@
 Full reference for every environment variable Plainbase reads. The README keeps a five-row quick
 table for the everyday knobs (`CONTENT_DIR`, `DATA_DIR`, `PLAINBASE_HOST`, `PLAINBASE_PORT`,
 `PLAINBASE_LOG_LEVEL`); this is the complete surface. Every row below is read directly from
-`PlainbaseConfig.build()` (`server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt:216-252`),
+`PlainbaseConfig.build()` (`server/src/main/kotlin/com/plainbase/frameworks/config/PlainbaseConfig.kt:319-369`),
 with one exception - `PLAINBASE_LOG_LEVEL`, a logback-level env var - noted below.
 
 ## Env-wins-over-file, restart-only
@@ -17,24 +17,24 @@ boot; every key here is restart-only, there is no hot reload.
 
 | Env var | Config path | Default | Source |
 |---|---|---|---|
-| `CONTENT_DIR` | `contentDir` | `./content` | PlainbaseConfig.kt:217 |
-| `DATA_DIR` | (env/default only, never file) | `./data` | PlainbaseConfig.kt:196, :218 |
-| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`, :164) | PlainbaseConfig.kt:219 |
-| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`, :156) | PlainbaseConfig.kt:220 |
+| `CONTENT_DIR` | `contentDir` | `./content` | PlainbaseConfig.kt:328 |
+| `DATA_DIR` | (env/default only, never file) | `./data` | PlainbaseConfig.kt:276, :335 |
+| `PLAINBASE_HOST` | `host` | `127.0.0.1` (`DEFAULT_HOST`, :218) | PlainbaseConfig.kt:336 |
+| `PLAINBASE_PORT` | `port` | `8080` (`DEFAULT_PORT`, :210) | PlainbaseConfig.kt:337 |
 | `PLAINBASE_LOG_LEVEL` | - | `INFO` | `logback.xml:8-9` (`${PLAINBASE_LOG_LEVEL:-INFO}`; **not** a `PlainbaseConfig` field) |
-| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB (:167) | PlainbaseConfig.kt:221-222 |
-| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB (:170) | PlainbaseConfig.kt:223-224 |
-| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`, :380) | PlainbaseConfig.kt:231 |
-| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | PlainbaseConfig.kt:232-234 (comma-list, CIDR-validated at :261) |
-| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | PlainbaseConfig.kt:242 |
-| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` (:177) | PlainbaseConfig.kt:243-244 |
-| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | PlainbaseConfig.kt:235 |
-| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | PlainbaseConfig.kt:236-239 |
-| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | PlainbaseConfig.kt:247-248 |
-| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | PlainbaseConfig.kt:249-250 |
-| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | PlainbaseConfig.kt:226 |
-| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` (:173) | PlainbaseConfig.kt:227 |
-| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` (:174) | PlainbaseConfig.kt:228 |
+| `PLAINBASE_MAX_WRITE_BODY_BYTES` | `maxWriteBodyBytes` | 1 MiB (:221) | PlainbaseConfig.kt:338-339 |
+| `PLAINBASE_MAX_ASSET_BYTES` | `maxAssetBytes` | 10 MiB (:224) | PlainbaseConfig.kt:340-341 |
+| `PLAINBASE_AUTH_MODE` | `auth.mode` | `off` (blank parses to `OFF`, :642) | PlainbaseConfig.kt:348 |
+| `PLAINBASE_TRUSTED_PROXY` | `auth.trustedProxy` | `[]` | PlainbaseConfig.kt:349-351 (comma-list, CIDR-validated at :462) |
+| `PLAINBASE_PROXY_SECRET` | `auth.proxySecret` | none (required in `proxy` mode) | PlainbaseConfig.kt:359 |
+| `PLAINBASE_PROXY_IDENTITY_HEADER` | `auth.proxyIdentityHeader` | `X-Forwarded-User` (:231) | PlainbaseConfig.kt:360-361 |
+| `PLAINBASE_INSECURE_HTTP` | `auth.insecureHttp` | `false` | PlainbaseConfig.kt:352 |
+| `PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS` | `auth.agentDirectCommit.globs` | `[]` | PlainbaseConfig.kt:353-356 |
+| `PLAINBASE_MCP_ALLOWED_HOSTS` | `auth.mcpAllowedHosts` | fail-closed bind-host default | PlainbaseConfig.kt:364-365 |
+| `PLAINBASE_MCP_ALLOWED_ORIGINS` | `auth.mcpAllowedOrigins` | fail-closed bind-host default | PlainbaseConfig.kt:366-367 |
+| `PLAINBASE_GIT_ENABLED` | `git.enabled` | auto-detect (`null`) | PlainbaseConfig.kt:343 |
+| `PLAINBASE_GIT_AUTHOR_NAME` | `git.authorName` | `Plainbase` (:227) | PlainbaseConfig.kt:344 |
+| `PLAINBASE_GIT_AUTHOR_EMAIL` | `git.authorEmail` | `plainbase@localhost` (:228) | PlainbaseConfig.kt:345 |
 | `PLAINBASE_STORAGE_BACKEND` | `storage.backend` | `local` | PlainbaseConfig.kt (`local` \| `object`; `object` serves an S3-compatible bucket as the authority) |
 | `PLAINBASE_S3_ENDPOINT` | `storage.object.endpoint` | none (**required** in `object` mode) | PlainbaseConfig.kt (absolute https URL; `http` refused unless `PLAINBASE_INSECURE_HTTP`) |
 | `PLAINBASE_S3_BUCKET` | `storage.object.bucket` | none (**required** in `object` mode) | PlainbaseConfig.kt |
@@ -52,7 +52,9 @@ warns.
 
 **`object` mode** makes an S3-compatible bucket the authoritative content store; `DATA_DIR/mirror` is a
 local, derived, deletable cache of the bucket (rebuildable at any time - delete it and it self-heals on
-the next boot). At startup `serve` (and offline `adopt --write-ids` / `reindex`) HYDRATE the mirror from
+the next boot). The bucket MUST offer **strong read-after-write and strong LIST consistency** (R2 and AWS
+S3 do); an eventually-consistent-LIST backend can transiently reap a just-saved page from the mirror. See
+[operating-plainbase.md](operating-plainbase.md#object-storage-backend-storagebackendobject). At startup `serve` (and offline `adopt --write-ids` / `reindex`) HYDRATE the mirror from
 the bucket before serving, so a fresh install pulls the whole corpus down first. The first bucket LIST
 doubles as a fail-closed TLS/signature self-check: an unreachable endpoint, a rejected certificate, or a
 bad signature makes startup **refuse with an operator-actionable message and exit** rather than serve a
@@ -69,13 +71,13 @@ record.
 ## `auth.mode` - the three modes
 
 - **`off`** - no login, no auth. Loopback-dev only, and despite being the "no auth" mode it is
-  still subject to the fail-closed bind guard (`PlainbaseConfig.kt:85-87,362`): a non-loopback
+  still subject to the fail-closed bind guard (`PlainbaseConfig.kt:141-159`): a non-loopback
   `off` bind is refused unless a trusted proxy or `PLAINBASE_INSECURE_HTTP` override is present,
   because `off` is the **most dangerous** mode if it ever reached a public interface.
 - **`builtin`** - password login; Plainbase manages its own users and sessions.
 - **`proxy`** - a trusted reverse proxy asserts identity. This mode **requires both** a
   trusted-proxy CIDR (`PLAINBASE_TRUSTED_PROXY`) and `PLAINBASE_PROXY_SECRET`, or the bind guard
-  refuses to start at all (`PlainbaseConfig.kt:94-97,406-410`). See
+  refuses to start at all (`PlainbaseConfig.kt:146-149`). See
   [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) for a worked deployment (Caddy +
   oauth2-proxy).
 

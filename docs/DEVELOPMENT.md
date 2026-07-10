@@ -62,10 +62,18 @@ gate a *release* that ships (or touches) the object-storage backend.
    spike banked in CI; the linux-x64 **real-R2** credentialed smoke is a documented nice-to-have
    (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 / windows-x64 docs-only
    until proven.
+   - **AWS `%20`-vs-`+` space-encoding is an EXPLICIT gate here** (ADR-0010 SP1, PENDING AWS column).
+     `S3WireKey` decodes LIST keys on the R2-proven assumption that `encoding-type=url` emits `%20` for a
+     space and never `+`; AWS S3 is unverified and may emit `+`. The smoke's `list-decode-get` probe
+     (LIST -> `S3WireKey.decode` -> GET-back) plus `cleanup`'s decode-independent re-LIST emptiness assert
+     (delete the decoded keys, then re-LIST the prefix raw and FAIL on any survivor) will FAIL a real-AWS
+     run if the decode is wrong. If it does, adjust `S3WireKey` (and its goldens) for the `+`-for-space
+     case before marking the AWS column of the SP1 table green.
 2. **`scripts/ops/cloud-startup-budget.sh` against a real, seeded ~1k-corpus (prefix-scoped) R2 bucket**
    (warm under 3 s / cold under 10 s, a strict bound; the script's corpus-floor preflight must pass). This is the ONLY check
    on cloud startup budgets anywhere - the CI native-startup tripwire covers the local backend only.
-   Seed the corpus per the recipe in the script header (no ~1k fixture is checked in).
+   Seed the corpus per the recipe in the script header (no ~1k fixture is checked in). `PLAINBASE_BUDGET_OBJECT_COUNT`
+   is the credential-free escape for the corpus-floor preflight (asserts the seeded count without a bucket round-trip).
 3. **The two required DR drills**, if the release touched storage / git / DR code paths: content restore
    and bundle-history restore (recipes in
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse

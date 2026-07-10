@@ -82,6 +82,10 @@ CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
 # reindex: rebuilt the search index for 42 page(s) under /abs/path/to/content
 ```
 
+Like `serve`, the offline CLIs (`reindex`, `adopt`) read `DATA_DIR/plainbase.conf` (env still wins), so a
+file-configured `storage.backend=object` makes them operate on the bucket mirror - not the local
+`CONTENT_DIR` - matching the running server for the same `DATA_DIR`.
+
 **Do not run `plainbase reindex` against a live server** - use the endpoint instead. The CLI and a
 running server are separate processes with separate write monitors; while SQLite WAL +
 `busy_timeout` prevent *corruption*, they do not prevent the CLI silently publishing an *older*
@@ -147,6 +151,12 @@ you'd back up `CONTENT_DIR` locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-stat
 cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
 still holds real state and still wants one.
 
+**Consistency requirement.** Object mode needs a bucket with **strong read-after-write AND strong LIST
+consistency** - R2 and AWS S3 both provide this. On an eventually-consistent-LIST S3-compatible backend a
+just-saved page can be transiently reaped from the mirror/index by a poll that LISTs a stale view (and, with
+`git.enabled=true`, mint a spurious delete then restore commit) before the LIST catches up. Do not point
+object mode at a backend that only offers eventual LIST consistency.
+
 With `storage.backend=object` **and** `git.enabled=true`, commit-grained history over object mode is
 available: every save commits over the `DATA_DIR/mirror` worktree exactly as local mode does, and the
 `.git` history itself ships to the bucket as a bundle (`<prefix>/.plainbase/history.bundle`) on a
@@ -156,7 +166,10 @@ async, so a crash in the brief window before it completes can still lose that hi
 hasn't reached the bucket yet. Losing `DATA_DIR` is then recoverable past
 just content: the next boot fetches the bundle, restores `.git` from it, and reconciles any drift
 between the bundle's tip and the bucket's current state into one commit
-(`reconcile: bucket state at boot`).
+(`reconcile: bucket state at boot`). That reconcile's refreshed bundle is shipped SYNCHRONOUSLY on the boot
+thread (an up-to-10-minute streaming PUT) BEFORE the server starts serving, so on a large-history restore
+the boot can pause for that upload; the log line "shipping the refreshed DR bundle synchronously before
+serving (a slow upload here is not a hang)" marks exactly that window - do not mistake it for a hang.
 
 That reconcile carries one accepted, documented loss class: a proposal **apply** (an approval) that
 lands inside the pre-crash cadence window - after the last shipped bundle, before the next one - has
@@ -166,17 +179,28 @@ only the commit granularity and that window's human attribution are. The gracefu
 20-commit/300-second cadence, and the first-commit-ships-immediately rule all bound how wide that
 window can get.
 
+The graceful-shutdown flush is best-effort within the shutdown budget: on stop, Plainbase drains any
+in-flight cadence ship and then ships one final bundle before closing the object-store transport. A
+full `bundle create` + streaming PUT can take up to the same ~10-minute bound as any other ship, so if
+your orchestrator's termination grace period (e.g. Kubernetes `terminationGracePeriodSeconds`, a Docker
+`stop` timeout) is shorter than the flush needs, the container is killed mid-flush and that final window's
+commits fall into the same reconcile-on-next-boot class above (content is still safe in the bucket). Give
+the process enough grace to flush if you want the tightest DR window on a large history; the next boot
+reconciles cleanly either way.
+
 **The bundle-growth plateau.** Every ship is a FULL `bundle create --all` (never incremental) followed by
-a whole-bundle PUT; every restore is a whole-bundle GET followed by a whole-bundle `fetch`. All four of
-those git/network calls sit behind fixed ~30-second ceilings (the `GitExecutor` default timeout on
-`bundle create` and the restore-side `fetch`; the object-store client's request timeout on the PUT and
-GET). That is fine at the roughly-1k-page contract this design targets, but the bundle only grows
-(history is never pruned), so past *some* corpus/history size every one of those four calls eventually
-starts exceeding its ceiling and every ship or restore fails. A ship failure alone is silent in the sense
-that content keeps serving fine - the only signal is the escalating WARN-then-ERROR log
-(`SHIP_FAILURE_ESCALATION_THRESHOLD` consecutive failures) telling you the DR bundle has gone stale and
-stayed stale. There is no separate metric or alert for this: watch that log line if your corpus/history is
-approaching a size where a full bundle create/fetch could plausibly run past 30 seconds.
+a bundle PUT; every restore is a bundle GET followed by a whole-bundle `fetch`. All FOUR of these
+size-dependent bundle legs now share a DR-sized ~10-minute bound: the two NETWORK transfers stream to/from a
+file (never heap-buffered, so no OOM on a small replacement host) at `BUNDLE_TRANSFER_TIMEOUT_MILLIS`, and
+the two GIT calls (`bundle create`, the restore `fetch`) run under a matching `BUNDLE_GIT_TIMEOUT_SECONDS`
+per-invocation override rather than the default ~30s hot-path git timeout. That is fine at the roughly-1k-page
+contract this design targets, but the bundle only grows (history is never pruned), so past *some*
+corpus/history size one of those four legs eventually starts exceeding the ~10-minute bound and every ship or
+restore fails there. A ship failure alone is silent in the sense that content keeps serving fine - the only
+signal is the escalating WARN-then-ERROR log (`SHIP_FAILURE_ESCALATION_THRESHOLD` consecutive failures)
+telling you the DR bundle has gone stale and stayed stale. There is no separate metric or alert for this:
+watch that log line if your corpus/history is approaching a size where a full `bundle create`/`fetch` or its
+network transfer could plausibly run past ten minutes.
 
 A corrupt or partially-restored local `.git` (a process killed mid-restore, a manually-deleted `.git`
 subpath) self-heals the same way ADR-0004 treats every other piece of `DATA_DIR`: git fails loud in a way

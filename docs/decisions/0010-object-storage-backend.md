@@ -18,10 +18,11 @@ question was how to serve a bucket as the authority WITHOUT breaking the native-
 Netty/Jackson/Gson/Exposed, no AWS SDK reflection graph), without a second content contract, and without
 a data-correctness regression in the write path.
 
-The load-bearing tension: an S3 bucket is remote and eventually-consistent-ish, has no filesystem watch,
-and each provider's conditional-write and LIST-encoding semantics differ subtly. A naive "mount the
-bucket as a directory" approach either pulls in a heavy dependency or silently loses updates under
-concurrency.
+The load-bearing tension: an S3 bucket is remote, has no filesystem watch, and each provider's
+conditional-write and LIST-encoding semantics differ subtly. (Object mode REQUIRES a strongly-consistent
+bucket - see the Decision; the design deliberately does NOT tolerate eventual-LIST consistency, and modern
+R2 and AWS S3 are strongly consistent.) A naive "mount the bucket as a directory" approach either pulls in
+a heavy dependency or silently loses updates under concurrency.
 
 ## Decision
 
@@ -34,6 +35,12 @@ concurrency.
   they self-heal from the bucket on the next boot. This extends ADR-0004's derived-state law to the
   mirror. Reads serve the local mirror; the bucket enters the mirror only via boot `hydrate()` or the
   background poll.
+- **Backend consistency requirement (provider precondition).** Object mode REQUIRES a bucket with strong
+  **read-after-write AND strong LIST consistency** - both **R2 and AWS S3 conform**. The design does NOT
+  tolerate an eventually-consistent-LIST backend: the background poll diffs the bucket LIST against
+  `mirror-state`, so a stale LIST could transiently reap a just-saved page from the mirror/index and (with
+  `git.enabled=true`) mint a spurious delete-then-restore commit before the LIST catches up. Documented for
+  operators in `configuration.md` and `operating-plainbase.md`.
 - **Hand-rolled SigV4 over the allowlisted Ktor CIO engine.** The client
   (`frameworks/objectstore/S3ObjectClient.kt`) is a hand-written SigV4 signer over the already-present
   CIO client - **zero new dependencies**. LIST responses are parsed by a hand-rolled five-element
@@ -43,7 +50,9 @@ concurrency.
 - **Git over the mirror + bundle DR (G2).** With `git.enabled=true`, saves commit over the mirror
   worktree exactly as local mode does, and the `.git` history ships to the bucket as
   `<prefix>/.plainbase/history.bundle` (`frameworks/git/GitBundleDr.kt`), so a lost `DATA_DIR` recovers
-  commit-grained history, not just content.
+  commit-grained history, not just content. The bundle transfer STREAMS to/from a file (`getToFile`/
+  `putFromFile`, stream-hashed for SigV4), so a full-history bundle can never OOM a small replacement host
+  and defeat the boot-refusal invariant that protects the C5 restore sequence.
 - **The `MirrorState` invariant + the M1 choke point.** A `mirror-state` entry asserts "the mirror copy
   of this key equals the bucket generation that produced this etag; an unknown key is treated as absent"
   (`frameworks/objectstore/MirrorState.kt`). It is mutated only through the two-mutator choke point in
@@ -73,13 +82,13 @@ guide). **S3 versioning may never become a dependency**: it is an operator conve
 mechanism. **R2 has no native object versioning** (lifecycle management is GA, but lifecycle is not
 versioning; versioning is on Cloudflare's public roadmap only - re-verified 2026-07-08 against the
 Cloudflare docs), so the R2 backup recipe is a scheduled external copy, never in-bucket versioning. The
-git-disabled startup WARN (`Application.kt:218-230`) names the current-state-only exposure. (The
+git-disabled startup WARN (`Application.kt:235-241`) names the current-state-only exposure. (The
 rev-3.3 snapshot scheduler + manifest writer were dropped; the manifest is deferred, not banned.)
 
 ### R16 fail-closed posture
 
 The object-mode boot's first bucket LIST doubles as the TLS + SigV4 + credential self-check and REFUSES
-actionably on rejection (`ObjectContentStore.kt:349-356,935-943`, "never disable certificate validation
+actionably on rejection (`ObjectContentStore.kt:338-343,990-1004`, "never disable certificate validation
 to fix this"). Honest limit: it proves READ, not WRITE - read-only credentials pass boot, then every PUT
 403s and maps to the frozen retryable 503 forever, so operators must grant PUT. A TLS regression answers
 with config fail-closure plus the escape hatch, never an artifact branch; the standing NativeSpike
@@ -94,7 +103,7 @@ The residual Linux-real-system-CA-trust-against-R2 leg stays a documented nice-t
 
 ### The SP1 conditional-write provider semantics (frozen source of truth)
 
-The Q8 outcome mapping (`PutOutcome.PreconditionFailed.status`, `ObjectStoreClient.kt:70-76`) keys off
+The Q8 outcome mapping (`PutOutcome.PreconditionFailed.status`, `ObjectStoreClient.kt:102-111`) keys off
 this table. It is copied verbatim from the C0/SP1 real-provider findings; this ADR is the durable
 record (the `.crew/` capture log is local/gitignored). **R2 returns 412 for BOTH precondition failures**
 (create-conflict AND stale-CAS) - a single code, not a 409/412 split. **AWS S3 columns are PENDING** (no
@@ -118,7 +127,7 @@ credentialed S3 run yet) - never fabricated.
   both backends - one content contract, one code path above the port.
 - Zero new dependencies for the native bet: SigV4 + LIST parsing are hand-rolled over CIO +
   kotlinx.serialization; the local default stays byte-identical (R9 zero-construction, proven by a
-  counter, `ObjectContentStore.kt:83,959`).
+  counter, `ObjectContentStore.kt:1014-1015`).
 - Conditional writes make content lost-update-safe under a racing writer; the mirror is a deletable
   cache, so recovery is "delete and re-hydrate."
 
@@ -142,7 +151,7 @@ Each item cites real code:
 1. **The backend-neutral `ContentStore` contract** prose and the port surface (minus
    `resolveRepoRelativePath`), plus the defaulted `CasResult.Unreadable.targetMutated`
    (`ContentStore.kt:158-167`) and `CreateResult.Unreadable.targetMutated` (`ContentStore.kt:196-203`).
-2. **The `ObjectStoreClient` SPI** + `PutCondition` / `PutOutcome` (`ObjectStoreClient.kt:12-79`); the
+2. **The `ObjectStoreClient` SPI** + `PutCondition` / `PutOutcome` (`ObjectStoreClient.kt:14-114`); the
    **SP1 conditional-semantics table** copied into this ADR above (the durable frozen source of truth);
    and the **`ListResponseParser` golden set** (`ListResponseParser.kt` + its golden captures under
    `server/src/test`).
@@ -155,7 +164,7 @@ Each item cites real code:
 5. **The rev-3.4 DR responsibility line** - mechanism-in-the-app (journal, bundles, export) /
    schedule-in-ops (backups operator-owned, per-backend guidance in the ops doc), the
    S3-versioning-never-a-dependency rule (R2 has none), and the git-disabled startup WARN
-   (`Application.kt:218-230`). (The rev-3.3 manifest schema + snapshot layout/knobs were removed; the
+   (`Application.kt:235-241`). (The rev-3.3 manifest schema + snapshot layout/knobs were removed; the
    manifest is deferred, not banned.)
 6. **The Q10 canonical-content promise** (one authority per deployment: directory locally, bucket in
    cloud) and the **Q9 config matrix** (the object-mode env keys + defaults,
