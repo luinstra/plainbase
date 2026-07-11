@@ -41,8 +41,8 @@ class IndexBuilderFixtureTest : FunSpec({
             actual shouldContainExactly expected
 
             // The named criterion rows, asserted explicitly so a golden-file edit cannot soften them.
-            actual["notes/release notes 2026.md"] shouldBe "/docs/notes/release-notes-2026"
-            actual["notes/réunion.md"] shouldBe "/docs/notes/r%C3%A9union"
+            actual["notes/release notes 2026.md"] shouldBe "/docs/main/notes/release-notes-2026"
+            actual["notes/réunion.md"] shouldBe "/docs/main/notes/r%C3%A9union"
         }
     }
 
@@ -62,7 +62,7 @@ class IndexBuilderFixtureTest : FunSpec({
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
             val treasure = snapshot.byPath.getValue(rooted("notes/deeply/nested/folder/treasure.md"))
-            treasure.url shouldBe "/docs/notes/deeply/nested/folder/treasure"
+            treasure.url shouldBe "/docs/main/notes/deeply/nested/folder/treasure"
             snapshot.byUrlPath.getValue(rooted("notes/deeply/nested/folder/treasure")) shouldBe treasure
         }
     }

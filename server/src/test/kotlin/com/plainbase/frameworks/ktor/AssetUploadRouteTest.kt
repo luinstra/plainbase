@@ -69,12 +69,12 @@ class AssetUploadRouteTest : FunSpec({
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.obj()
-            body.getValue("url").jsonPrimitive.content shouldBe "/assets/guides/diagram.png"
+            body.getValue("url").jsonPrimitive.content shouldBe "/assets/main/guides/diagram.png"
             body.getValue("path").jsonPrimitive.content shouldBe "guides/diagram.png"
             body.getValue("content_hash").jsonPrimitive.content shouldBe citations.contentHash(png)
 
             harness.diskBytes("guides/diagram.png") shouldBe png
-            val served = client.get("/assets/guides/diagram.png")
+            val served = client.get("/assets/main/guides/diagram.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -90,9 +90,9 @@ class AssetUploadRouteTest : FunSpec({
             plus.status shouldBe HttpStatusCode.Created
             val plusBody = plus.obj()
             plusBody.getValue("path").jsonPrimitive.content shouldBe "guides/my file.png"
-            plusBody.getValue("url").jsonPrimitive.content shouldBe "/assets/guides/my%20file.png"
+            plusBody.getValue("url").jsonPrimitive.content shouldBe "/assets/main/guides/my%20file.png"
             harness.diskBytes("guides/my file.png") shouldBe png
-            val served = client.get("/assets/guides/my%20file.png")
+            val served = client.get("/assets/main/guides/my%20file.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
 
@@ -320,7 +320,7 @@ class AssetUploadRouteTest : FunSpec({
             val post = client.post("/api/v1/pages/$deployGuideId/assets?filename=$name") { setBody(png) }
             post.status shouldBe HttpStatusCode.Created
             harness.diskBytes("guides/$name") shouldBe png
-            val served = client.get("/assets/guides/$name")
+            val served = client.get("/assets/main/guides/$name")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -442,7 +442,7 @@ class AssetUploadRouteTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, seed) { _ ->
             client.post("/api/v1/pages/$deployGuideId/assets?filename=sniff.png") { setBody(png) }
                 .status shouldBe HttpStatusCode.Created
-            val served = client.get("/assets/guides/sniff.png")
+            val served = client.get("/assets/main/guides/sniff.png")
             served.status shouldBe HttpStatusCode.OK
             served.headers["X-Content-Type-Options"] shouldBe "nosniff"
         }
@@ -530,7 +530,7 @@ class AssetUploadRouteTest : FunSpec({
             // A later successful rebuild (scan no longer armed to throw) reconciles it: the asset now serves.
             armed.set(false)
             harness.builder.rebuild()
-            val served = client.get("/assets/guides/deferred.png")
+            val served = client.get("/assets/main/guides/deferred.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -564,7 +564,7 @@ class AssetUploadRouteTest : FunSpec({
             harness.diskBytes("guides/heal.png") shouldBe png
             // The orphan is on disk but NOT yet in the published snapshot - currently 404-unreachable.
             (TreePath.require("guides/heal.png") in harness.builder.current.section(RootName.MAIN).assets) shouldBe false
-            client.get("/assets/guides/heal.png").status shouldBe HttpStatusCode.NotFound
+            client.get("/assets/main/guides/heal.png").status shouldBe HttpStatusCode.NotFound
 
             // Retry the SAME filename: writeAssetExclusive sees the existing file → Exists. The route runs
             // the self-heal rebuild (now disarmed → succeeds) so the orphan enters current.assets, THEN 409.
@@ -574,7 +574,7 @@ class AssetUploadRouteTest : FunSpec({
 
             // Healed: the asset is now reachable WITHOUT any admin/watcher rebuild, serving the original bytes.
             (TreePath.require("guides/heal.png") in harness.builder.current.section(RootName.MAIN).assets) shouldBe true
-            val served = client.get("/assets/guides/heal.png")
+            val served = client.get("/assets/main/guides/heal.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }

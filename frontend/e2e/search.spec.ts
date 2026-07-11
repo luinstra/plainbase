@@ -11,7 +11,7 @@ async function openPalette(page: Page) {
 }
 
 test("Cmd/Ctrl+K opens the palette in Stage 1 (quick-switcher); Esc closes", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await expect(page.locator('[data-pb-search][data-pb-search-stage="jump"]')).toBeVisible();
   await page.keyboard.press("Escape"); // Stage-1 Esc closes
@@ -19,7 +19,7 @@ test("Cmd/Ctrl+K opens the palette in Stage 1 (quick-switcher); Esc closes", asy
 });
 
 test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
 
   let searchRequests = 0;
   let treeRequestsAfterOpen = 0;
@@ -43,7 +43,7 @@ test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", 
   // ArrowDown selects the top match, Enter navigates to its node.url.
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
   expect(searchRequests).toBe(0);
 });
 
@@ -57,10 +57,10 @@ test("a collision-loser quick-switch hit navigates via /p/{id} (when the fixture
     if (node.type === "page" && node.url === null && node.title && !loserTitle) loserTitle = node.title;
     if (node.children) for (const child of node.children) walk(child as never);
   };
-  walk(tree.root);
+  for (const entry of tree.roots) walk(entry.tree); // one entry per root since C3
   test.skip(loserTitle === null, "fixture tree has no collision loser");
 
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill(loserTitle!);
   await expect(page.locator('[data-pb-search-item="jump"]').first()).toContainText(loserTitle!);
@@ -70,7 +70,7 @@ test("a collision-loser quick-switch hit navigates via /p/{id} (when the fixture
 });
 
 test("activating the bridge enters Stage 2 (full-text only) with a stage label", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -82,7 +82,7 @@ test("activating the bridge enters Stage 2 (full-text only) with a stage label",
 });
 
 test("Stage 2 Esc returns to Stage 1; a second Esc closes", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -96,14 +96,14 @@ test("Stage 2 Esc returns to Stage 1; a second Esc closes", async ({ page }) => 
 
 test("full-text Enter deep-links to the section anchor, scrolls, and pulses", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
   await expect(page.locator('[data-pb-search-item="hit"]').first()).toBeVisible();
 
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/docs\/guides\/deploy-guide#.+/);
+  await expect(page).toHaveURL(/\/docs\/main\/guides\/deploy-guide#.+/);
   const headingId = new URL(page.url()).hash.slice(1);
   const heading = page.locator(`#${headingId}`);
   await expect(heading).toBeInViewport();
@@ -114,14 +114,14 @@ test("full-text Enter deep-links to the section anchor, scrolls, and pulses", as
 test("reduced-motion: deep-link still scrolls but does not pulse", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
   await expect(page.locator('[data-pb-search-item="hit"]').first()).toBeVisible();
 
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/docs\/guides\/deploy-guide#.+/);
+  await expect(page).toHaveURL(/\/docs\/main\/guides\/deploy-guide#.+/);
   const heading = page.locator(`#${new URL(page.url()).hash.slice(1)}`);
   await expect(heading).toBeInViewport();
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
@@ -139,14 +139,14 @@ test("a deep link to a missing fragment lands at top with no error", async ({ pa
     errors.push(msg.text());
   });
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/guides/deploy-guide#does-not-exist");
+  await page.goto("/docs/main/guides/deploy-guide#does-not-exist");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   expect(errors).toEqual([]);
 });
 
 test("the page behind does not scroll while the palette is open", async ({ page }) => {
-  await page.goto("/docs/guides/deploy-guide");
+  await page.goto("/docs/main/guides/deploy-guide");
   await openPalette(page);
   // body is scroll-locked while open.
   expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).toBe("hidden");
@@ -157,7 +157,7 @@ test("the page behind does not scroll while the palette is open", async ({ page 
 
 test("dark mode renders the palette via token swap only", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await page.locator("[data-pb-theme-toggle]").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await openPalette(page);

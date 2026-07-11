@@ -1,499 +1,534 @@
 {
-  "root": {
-    "type": "folder",
-    "name": "",
-    "title": null,
-    "description": null,
-    "path": "",
-    "url": "/docs",
-    "page_count": 2,
-    "children": [
-      {
+  "roots": [
+    {
+      "root": "main",
+      "tree": {
         "type": "folder",
-        "name": "api",
-        "title": "API Reference",
-        "description": null,
-        "path": "api",
-        "url": "/docs/api",
-        "page_count": 6,
-        "children": [
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Authentication",
-            "slug": "authentication",
-            "path": "api/authentication.md",
-            "url": "/docs/api/authentication",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Changelog Policy",
-            "slug": "changelog-policy",
-            "path": "api/changelog-policy.md",
-            "url": "/docs/api/changelog-policy",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "API Errors",
-            "slug": "errors",
-            "path": "api/errors.md",
-            "url": "/docs/api/errors",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "MCP Server",
-            "slug": "mcp",
-            "path": "api/mcp.md",
-            "url": "/docs/api/mcp",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "API Overview",
-            "slug": "api-overview",
-            "path": "api/overview.md",
-            "url": "/docs/api/api-overview",
-            "status": "active",
-            "updated": "2026-05-30"
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "REST API",
-            "slug": "rest",
-            "path": "api/rest.md",
-            "url": "/docs/api/rest",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "changelog",
+        "name": "",
         "title": null,
         "description": null,
-        "path": "changelog",
-        "url": "/docs/changelog",
-        "page_count": 3,
-        "children": [
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Changelog 2026-01",
-            "slug": "2026-01",
-            "path": "changelog/2026-01.md",
-            "url": "/docs/changelog/2026-01",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Changelog 2026-02",
-            "slug": "2026-02",
-            "path": "changelog/2026-02.md",
-            "url": "/docs/changelog/2026-02",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Changelog 2026-03",
-            "slug": "2026-03",
-            "path": "changelog/2026-03.md",
-            "url": "/docs/changelog/2026-03",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "guides",
-        "title": "Guides",
-        "description": "Step-by-step guides for deploying and operating Plainbase.",
-        "path": "guides",
-        "url": "/docs/guides",
-        "page_count": 6,
+        "path": "",
+        "url": "/docs/main",
+        "page_count": 2,
         "children": [
           {
             "type": "folder",
-            "name": "advanced",
+            "name": "api",
+            "title": "API Reference",
+            "description": null,
+            "path": "api",
+            "url": "/docs/main/api",
+            "page_count": 6,
+            "children": [
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Authentication",
+                "slug": "authentication",
+                "path": "api/authentication.md",
+                "url": "/docs/main/api/authentication",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Changelog Policy",
+                "slug": "changelog-policy",
+                "path": "api/changelog-policy.md",
+                "url": "/docs/main/api/changelog-policy",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "API Errors",
+                "slug": "errors",
+                "path": "api/errors.md",
+                "url": "/docs/main/api/errors",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "MCP Server",
+                "slug": "mcp",
+                "path": "api/mcp.md",
+                "url": "/docs/main/api/mcp",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "API Overview",
+                "slug": "api-overview",
+                "path": "api/overview.md",
+                "url": "/docs/main/api/api-overview",
+                "status": "active",
+                "updated": "2026-05-30"
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "REST API",
+                "slug": "rest",
+                "path": "api/rest.md",
+                "url": "/docs/main/api/rest",
+                "status": "active",
+                "updated": null
+              }
+            ]
+          },
+          {
+            "type": "folder",
+            "name": "changelog",
             "title": null,
             "description": null,
-            "path": "guides/advanced",
-            "url": "/docs/guides/advanced",
+            "path": "changelog",
+            "url": "/docs/main/changelog",
             "page_count": 3,
             "children": [
               {
                 "type": "page",
                 "id": "{{uuid}}",
-                "title": "Backup and Restore",
-                "slug": "backup-restore",
-                "path": "guides/advanced/backup-restore.md",
-                "url": "/docs/guides/advanced/backup-restore",
+                "title": "Changelog 2026-01",
+                "slug": "2026-01",
+                "path": "changelog/2026-01.md",
+                "url": "/docs/main/changelog/2026-01",
                 "status": "active",
                 "updated": null
               },
               {
                 "type": "page",
                 "id": "{{uuid}}",
-                "title": "Scaling",
-                "slug": "scaling",
-                "path": "guides/advanced/scaling.md",
-                "url": "/docs/guides/advanced/scaling",
+                "title": "Changelog 2026-02",
+                "slug": "2026-02",
+                "path": "changelog/2026-02.md",
+                "url": "/docs/main/changelog/2026-02",
                 "status": "active",
                 "updated": null
               },
               {
                 "type": "page",
                 "id": "{{uuid}}",
-                "title": "Performance Tuning",
-                "slug": "tuning",
-                "path": "guides/advanced/tuning.md",
-                "url": "/docs/guides/advanced/tuning",
-                "status": "draft",
+                "title": "Changelog 2026-03",
+                "slug": "2026-03",
+                "path": "changelog/2026-03.md",
+                "url": "/docs/main/changelog/2026-03",
+                "status": "active",
                 "updated": null
               }
             ]
           },
           {
-            "type": "page",
-            "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
-            "title": "Deploy Guide",
-            "slug": "deploy-guide",
-            "path": "guides/deploy-guide.md",
-            "url": "/docs/guides/deploy-guide",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Using the Editor",
-            "slug": "editor",
-            "path": "guides/editor.md",
-            "url": "/docs/guides/editor",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Getting Started",
-            "slug": "getting-started",
-            "path": "guides/getting-started.md",
-            "url": "/docs/guides/getting-started",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Searching the Docs",
-            "slug": "search",
-            "path": "guides/search.md",
-            "url": "/docs/guides/search",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Setup",
-            "slug": "setup",
-            "path": "guides/setup.md",
-            "url": "/docs/guides/setup",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Writing Style Guide",
-            "slug": "writing-style",
-            "path": "guides/writing-style.md",
-            "url": "/docs/guides/writing-style",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "infra",
-        "title": null,
-        "description": null,
-        "path": "infra",
-        "url": "/docs/infra",
-        "page_count": 6,
-        "children": [
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Incident Runbook",
-            "slug": "incident-runbook",
-            "path": "infra/incident-runbook.md",
-            "url": "/docs/infra/incident-runbook",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Kubernetes",
-            "slug": "kubernetes",
-            "path": "infra/kubernetes.md",
-            "url": "/docs/infra/kubernetes",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Monitoring",
-            "slug": "monitoring",
-            "path": "infra/monitoring.md",
-            "url": "/docs/infra/monitoring",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Networking",
-            "slug": "networking",
-            "path": "infra/networking.md",
-            "url": "/docs/infra/networking",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Setup",
-            "slug": "setup",
-            "path": "infra/setup.md",
-            "url": "/docs/infra/setup",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Terraform",
-            "slug": "terraform",
-            "path": "infra/terraform.md",
-            "url": "/docs/infra/terraform",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "notes",
-        "title": null,
-        "description": null,
-        "path": "notes",
-        "url": "/docs/notes",
-        "page_count": 7,
-        "children": [
-          {
             "type": "folder",
-            "name": "deeply",
-            "title": null,
-            "description": null,
-            "path": "notes/deeply",
-            "url": "/docs/notes/deeply",
-            "page_count": 0,
+            "name": "guides",
+            "title": "Guides",
+            "description": "Step-by-step guides for deploying and operating Plainbase.",
+            "path": "guides",
+            "url": "/docs/main/guides",
+            "page_count": 6,
             "children": [
               {
                 "type": "folder",
-                "name": "nested",
+                "name": "advanced",
                 "title": null,
                 "description": null,
-                "path": "notes/deeply/nested",
-                "url": "/docs/notes/deeply/nested",
+                "path": "guides/advanced",
+                "url": "/docs/main/guides/advanced",
+                "page_count": 3,
+                "children": [
+                  {
+                    "type": "page",
+                    "id": "{{uuid}}",
+                    "title": "Backup and Restore",
+                    "slug": "backup-restore",
+                    "path": "guides/advanced/backup-restore.md",
+                    "url": "/docs/main/guides/advanced/backup-restore",
+                    "status": "active",
+                    "updated": null
+                  },
+                  {
+                    "type": "page",
+                    "id": "{{uuid}}",
+                    "title": "Scaling",
+                    "slug": "scaling",
+                    "path": "guides/advanced/scaling.md",
+                    "url": "/docs/main/guides/advanced/scaling",
+                    "status": "active",
+                    "updated": null
+                  },
+                  {
+                    "type": "page",
+                    "id": "{{uuid}}",
+                    "title": "Performance Tuning",
+                    "slug": "tuning",
+                    "path": "guides/advanced/tuning.md",
+                    "url": "/docs/main/guides/advanced/tuning",
+                    "status": "draft",
+                    "updated": null
+                  }
+                ]
+              },
+              {
+                "type": "page",
+                "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+                "title": "Deploy Guide",
+                "slug": "deploy-guide",
+                "path": "guides/deploy-guide.md",
+                "url": "/docs/main/guides/deploy-guide",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Using the Editor",
+                "slug": "editor",
+                "path": "guides/editor.md",
+                "url": "/docs/main/guides/editor",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Getting Started",
+                "slug": "getting-started",
+                "path": "guides/getting-started.md",
+                "url": "/docs/main/guides/getting-started",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Searching the Docs",
+                "slug": "search",
+                "path": "guides/search.md",
+                "url": "/docs/main/guides/search",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Setup",
+                "slug": "setup",
+                "path": "guides/setup.md",
+                "url": "/docs/main/guides/setup",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Writing Style Guide",
+                "slug": "writing-style",
+                "path": "guides/writing-style.md",
+                "url": "/docs/main/guides/writing-style",
+                "status": "active",
+                "updated": null
+              }
+            ]
+          },
+          {
+            "type": "folder",
+            "name": "infra",
+            "title": null,
+            "description": null,
+            "path": "infra",
+            "url": "/docs/main/infra",
+            "page_count": 6,
+            "children": [
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Incident Runbook",
+                "slug": "incident-runbook",
+                "path": "infra/incident-runbook.md",
+                "url": "/docs/main/infra/incident-runbook",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Kubernetes",
+                "slug": "kubernetes",
+                "path": "infra/kubernetes.md",
+                "url": "/docs/main/infra/kubernetes",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Monitoring",
+                "slug": "monitoring",
+                "path": "infra/monitoring.md",
+                "url": "/docs/main/infra/monitoring",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Networking",
+                "slug": "networking",
+                "path": "infra/networking.md",
+                "url": "/docs/main/infra/networking",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Setup",
+                "slug": "setup",
+                "path": "infra/setup.md",
+                "url": "/docs/main/infra/setup",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Terraform",
+                "slug": "terraform",
+                "path": "infra/terraform.md",
+                "url": "/docs/main/infra/terraform",
+                "status": "active",
+                "updated": null
+              }
+            ]
+          },
+          {
+            "type": "folder",
+            "name": "notes",
+            "title": null,
+            "description": null,
+            "path": "notes",
+            "url": "/docs/main/notes",
+            "page_count": 7,
+            "children": [
+              {
+                "type": "folder",
+                "name": "deeply",
+                "title": null,
+                "description": null,
+                "path": "notes/deeply",
+                "url": "/docs/main/notes/deeply",
                 "page_count": 0,
                 "children": [
                   {
                     "type": "folder",
-                    "name": "folder",
+                    "name": "nested",
                     "title": null,
                     "description": null,
-                    "path": "notes/deeply/nested/folder",
-                    "url": "/docs/notes/deeply/nested/folder",
-                    "page_count": 1,
+                    "path": "notes/deeply/nested",
+                    "url": "/docs/main/notes/deeply/nested",
+                    "page_count": 0,
                     "children": [
                       {
-                        "type": "page",
-                        "id": "{{uuid}}",
-                        "title": "Deeply Nested Page",
-                        "slug": "treasure",
-                        "path": "notes/deeply/nested/folder/treasure.md",
-                        "url": "/docs/notes/deeply/nested/folder/treasure",
-                        "status": "active",
-                        "updated": null
+                        "type": "folder",
+                        "name": "folder",
+                        "title": null,
+                        "description": null,
+                        "path": "notes/deeply/nested/folder",
+                        "url": "/docs/main/notes/deeply/nested/folder",
+                        "page_count": 1,
+                        "children": [
+                          {
+                            "type": "page",
+                            "id": "{{uuid}}",
+                            "title": "Deeply Nested Page",
+                            "slug": "treasure",
+                            "path": "notes/deeply/nested/folder/treasure.md",
+                            "url": "/docs/main/notes/deeply/nested/folder/treasure",
+                            "status": "active",
+                            "updated": null
+                          }
+                        ]
                       }
                     ]
                   }
                 ]
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Broken Links Sample",
+                "slug": "broken-links",
+                "path": "notes/broken-links.md",
+                "url": "/docs/main/notes/broken-links",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Café Notes",
+                "slug": "café-notes",
+                "path": "notes/café-notes.md",
+                "url": "/docs/main/notes/caf%C3%A9-notes",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "just-text",
+                "slug": "just-text",
+                "path": "notes/just-text.md",
+                "url": "/docs/main/notes/just-text",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "A Page With No Frontmatter",
+                "slug": "no-frontmatter",
+                "path": "notes/no-frontmatter.md",
+                "url": "/docs/main/notes/no-frontmatter",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Release Notes 2026",
+                "slug": "release-notes-2026",
+                "path": "notes/release notes 2026.md",
+                "url": "/docs/main/notes/release-notes-2026",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Réunion Notes",
+                "slug": "réunion",
+                "path": "notes/réunion.md",
+                "url": "/docs/main/notes/r%C3%A9union",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "日本語ガイド",
+                "slug": "日本語ガイド",
+                "path": "notes/日本語ガイド.md",
+                "url": "/docs/main/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
+                "status": "active",
+                "updated": null
               }
             ]
           },
           {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Broken Links Sample",
-            "slug": "broken-links",
-            "path": "notes/broken-links.md",
-            "url": "/docs/notes/broken-links",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Café Notes",
-            "slug": "café-notes",
-            "path": "notes/café-notes.md",
-            "url": "/docs/notes/caf%C3%A9-notes",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "just-text",
-            "slug": "just-text",
-            "path": "notes/just-text.md",
-            "url": "/docs/notes/just-text",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "A Page With No Frontmatter",
-            "slug": "no-frontmatter",
-            "path": "notes/no-frontmatter.md",
-            "url": "/docs/notes/no-frontmatter",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Release Notes 2026",
-            "slug": "release-notes-2026",
-            "path": "notes/release notes 2026.md",
-            "url": "/docs/notes/release-notes-2026",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Réunion Notes",
-            "slug": "réunion",
-            "path": "notes/réunion.md",
-            "url": "/docs/notes/r%C3%A9union",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "日本語ガイド",
-            "slug": "日本語ガイド",
-            "path": "notes/日本語ガイド.md",
-            "url": "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "scratch",
-        "title": null,
-        "description": null,
-        "path": "scratch",
-        "url": "/docs/scratch",
-        "page_count": 2,
-        "children": [
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Ideas",
-            "slug": "ideas",
-            "path": "scratch/ideas.md",
-            "url": "/docs/scratch/ideas",
-            "status": "draft",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "TODO",
-            "slug": "todo",
-            "path": "scratch/todo.md",
-            "url": "/docs/scratch/todo",
-            "status": "active",
-            "updated": null
-          }
-        ]
-      },
-      {
-        "type": "folder",
-        "name": "team",
-        "title": null,
-        "description": null,
-        "path": "team",
-        "url": "/docs/team",
-        "page_count": 3,
-        "children": [
-          {
             "type": "folder",
-            "name": "meetings",
+            "name": "scratch",
             "title": null,
             "description": null,
-            "path": "team/meetings",
-            "url": "/docs/team/meetings",
+            "path": "scratch",
+            "url": "/docs/main/scratch",
             "page_count": 2,
             "children": [
               {
                 "type": "page",
                 "id": "{{uuid}}",
-                "title": "January 2026 Retro",
-                "slug": "2026-01-retro",
-                "path": "team/meetings/2026-01-retro.md",
-                "url": "/docs/team/meetings/2026-01-retro",
-                "status": "archived",
+                "title": "Ideas",
+                "slug": "ideas",
+                "path": "scratch/ideas.md",
+                "url": "/docs/main/scratch/ideas",
+                "status": "draft",
                 "updated": null
               },
               {
                 "type": "page",
                 "id": "{{uuid}}",
-                "title": "February 2026 Planning",
-                "slug": "2026-02-planning",
-                "path": "team/meetings/2026-02-planning.md",
-                "url": "/docs/team/meetings/2026-02-planning",
-                "status": "archived",
+                "title": "TODO",
+                "slug": "todo",
+                "path": "scratch/todo.md",
+                "url": "/docs/main/scratch/todo",
+                "status": "active",
+                "updated": null
+              }
+            ]
+          },
+          {
+            "type": "folder",
+            "name": "team",
+            "title": null,
+            "description": null,
+            "path": "team",
+            "url": "/docs/main/team",
+            "page_count": 3,
+            "children": [
+              {
+                "type": "folder",
+                "name": "meetings",
+                "title": null,
+                "description": null,
+                "path": "team/meetings",
+                "url": "/docs/main/team/meetings",
+                "page_count": 2,
+                "children": [
+                  {
+                    "type": "page",
+                    "id": "{{uuid}}",
+                    "title": "January 2026 Retro",
+                    "slug": "2026-01-retro",
+                    "path": "team/meetings/2026-01-retro.md",
+                    "url": "/docs/main/team/meetings/2026-01-retro",
+                    "status": "archived",
+                    "updated": null
+                  },
+                  {
+                    "type": "page",
+                    "id": "{{uuid}}",
+                    "title": "February 2026 Planning",
+                    "slug": "2026-02-planning",
+                    "path": "team/meetings/2026-02-planning.md",
+                    "url": "/docs/main/team/meetings/2026-02-planning",
+                    "status": "archived",
+                    "updated": null
+                  }
+                ]
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Team Handbook",
+                "slug": "handbook",
+                "path": "team/handbook.md",
+                "url": "/docs/main/team/handbook",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Onboarding",
+                "slug": "onboarding",
+                "path": "team/onboarding.md",
+                "url": "/docs/main/team/onboarding",
+                "status": "active",
+                "updated": null
+              },
+              {
+                "type": "page",
+                "id": "{{uuid}}",
+                "title": "Roles and Responsibilities",
+                "slug": "roles",
+                "path": "team/roles.md",
+                "url": "/docs/main/team/roles",
+                "status": "active",
                 "updated": null
               }
             ]
@@ -501,55 +536,25 @@
           {
             "type": "page",
             "id": "{{uuid}}",
-            "title": "Team Handbook",
-            "slug": "handbook",
-            "path": "team/handbook.md",
-            "url": "/docs/team/handbook",
+            "title": "About this tree",
+            "slug": "readme",
+            "path": "README.md",
+            "url": "/docs/main/readme",
             "status": "active",
             "updated": null
           },
           {
             "type": "page",
-            "id": "{{uuid}}",
-            "title": "Onboarding",
-            "slug": "onboarding",
-            "path": "team/onboarding.md",
-            "url": "/docs/team/onboarding",
-            "status": "active",
-            "updated": null
-          },
-          {
-            "type": "page",
-            "id": "{{uuid}}",
-            "title": "Roles and Responsibilities",
-            "slug": "roles",
-            "path": "team/roles.md",
-            "url": "/docs/team/roles",
+            "id": "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01",
+            "title": "Welcome to Demo Docs",
+            "slug": "welcome",
+            "path": "index.md",
+            "url": "/docs/main/welcome",
             "status": "active",
             "updated": null
           }
         ]
-      },
-      {
-        "type": "page",
-        "id": "{{uuid}}",
-        "title": "About this tree",
-        "slug": "readme",
-        "path": "README.md",
-        "url": "/docs/readme",
-        "status": "active",
-        "updated": null
-      },
-      {
-        "type": "page",
-        "id": "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01",
-        "title": "Welcome to Demo Docs",
-        "slug": "welcome",
-        "path": "index.md",
-        "url": "/docs/welcome",
-        "status": "active",
-        "updated": null
       }
-    ]
-  }
+    }
+  ]
 }

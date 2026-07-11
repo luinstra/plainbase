@@ -2,6 +2,8 @@ package com.plainbase
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
@@ -9,9 +11,12 @@ import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.root.DetachedRoots
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.service.CanonicalUrlBuilder
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
@@ -232,6 +237,16 @@ private fun serve() {
             // reconcileDirtyPages may have re-committed a crashed dirty page - it resolves each APPLYING row's
             // CURRENT pageId path and stamps APPLIED (write landed) or PENDING (it didn't). Cannot race a live apply.
             koin.get<ProposalService>().reconcileApplying()
+            // Multi-root C3 boot guard (ADR-0011 D3(a)): a top-level 'main' URL segment in the main
+            // root makes legacy /docs/main/... links indistinguishable from root-qualified URLs.
+            // Deliberately AFTER both reconciles - each can WRITE pages (a crash-recovered save/apply
+            // of a main/... create) and republish, so the guard must judge the LAST pre-serve snapshot.
+            mainRootUrlCollisionRefusal(builder.current)?.let { refusal ->
+                lock.close() // exitProcess skips the outer finally (the hydrate-failure arm's shape)
+                System.err.println("serve: $refusal")
+                exitProcess(1)
+            }
+            deadLegacyAliasWarning(koin.get<UrlAliasRegistry>().all())?.let { logger.warn { it } }
             KtorServer(config, koin.get()).start(wait = true)
         } finally {
             watch.close() // stops the object-mode poll thread BEFORE the transport it uses is closed
@@ -284,6 +299,68 @@ internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName
     }
 
 private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().joinToString(", ")
+
+/**
+ * The C3 boot guard (ADR-0011 D3(a)), pure like [detachedRootsRefusal]: the fatal refusal text when
+ * the MAIN root's built snapshot contains a top-level URL segment literally `main` - a page URL
+ * path, a folder URL (the [CanonicalUrlBuilder.folderUrlPaths] truth `TreeBuilder` consumes, never
+ * re-derived slugification), or an asset path (assets mirror the redirect grammar, so
+ * `/assets/main/...` is equally ambiguous) - or null to serve. Segment-level detection catches the
+ * whole equivalence class the URL grammar cares about (a dir `Main` slugifies to the same colliding
+ * segment, a frontmatter `slug: main` page, an asset dir) and works in object mode where there is
+ * no local FS to list. Main only: an extra root's top-level `main` dir is harmless (its URLs are
+ * `/docs/{extra}/main/...`, root segment first - no legacy form ever pointed there). Boot-only is
+ * sufficient: a `main/` dir created at RUNTIME mints self-consistent `/docs/main/main/...` URLs
+ * with no pre-existing legacy links to break; the guard exists to stop the UPGRADE of a corpus
+ * whose circulating `/docs/main-dir/...` links would otherwise silently re-resolve.
+ */
+internal fun mainRootUrlCollisionRefusal(snapshot: PageIndex): String? {
+    val main = RootName.MAIN.value
+    val section = snapshot.section(RootName.MAIN)
+    val offenders =
+        section.pages.mapNotNull { page -> page.urlPath?.value } +
+            CanonicalUrlBuilder.folderUrlPaths(section.folders).values.mapNotNull { it?.value } +
+            section.assets.map { it.value }
+    val colliding = offenders.filter { it == main || it.startsWith("$main/") }.distinct()
+    if (colliding.isEmpty()) return null
+    return "REFUSING TO SERVE: the main root contains top-level URL segment '$main' - since multi-root " +
+        "(ADR-0011 D1/D3) '$main' is the RESERVED root segment, so an old /docs/$main/... deep link is " +
+        "indistinguishable from a root-qualified URL and would silently re-resolve to the wrong page. " +
+        "Colliding entries: ${boundedPathList(colliding)}. Rename the directory (or the frontmatter `slug:` / " +
+        "_folder.yaml `slug:` source producing the segment) so no top-level URL segment is '$main'. This applies " +
+        "even to a fresh corpus - the reservation is deterministic, not upgrade-conditional. NOTE: renaming " +
+        "permanently forfeits any circulating /docs/$main/... deep links and their recorded aliases; after the " +
+        "rename those old links answer not-found instead of redirecting."
+}
+
+/**
+ * The companion boot WARN (never a refusal - the corpus itself is fine): main-root `url_alias`
+ * rows whose stored URL path starts with the reserved `main` segment. If such a row predates the
+ * multi-root upgrade, its legacy link is PERMANENTLY dead: `/docs/main/x` now resolves as
+ * root `main` + path `x`, so the recorded `(main, main/x)` row is only reachable at
+ * `/docs/main/main/x` - a URL that never circulated pre-upgrade. The wording is deliberately
+ * hedged: a row minted AFTER the upgrade (a runtime-created `main/` dir whose page later moved) is
+ * legitimately reachable at that doubled URL, and the row alone cannot tell the two apart.
+ */
+internal fun deadLegacyAliasWarning(aliases: Map<RootedPath, PageId>): String? {
+    val main = RootName.MAIN.value
+    val dead = aliases.keys
+        .filter { it.root == RootName.MAIN && it.path.segments.first() == main }
+        .map { it.path.value }
+    if (dead.isEmpty()) return null
+    return "url_alias holds ${dead.size} main-root row(s) whose URL path starts with the reserved '$main' " +
+        "segment: ${boundedPathList(dead)}. If these rows predate the multi-root upgrade, their old " +
+        "/docs/<path> links are dead: the reserved root segment routes /docs/$main/x to ($main, x), so such a " +
+        "row is only reachable at /docs/$main/<path> - a URL that never circulated before the upgrade. Rows " +
+        "recorded after the upgrade are unaffected."
+}
+
+/** The deterministic, testable offender bound the two texts above share: first 10, lexicographic, `(+N more)`. */
+private fun boundedPathList(paths: List<String>): String {
+    val sorted = paths.sorted()
+    val overflow = sorted.size - 10
+    return sorted.take(10).joinToString(", ") + if (overflow > 0) " (+$overflow more)" else ""
+}
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [PlainbaseConfig.bindGuardRefusal]

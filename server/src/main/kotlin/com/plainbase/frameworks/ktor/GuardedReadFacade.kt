@@ -44,20 +44,21 @@ class GuardedReadFacade(
     private val history: HistoryProvider,
     private val aliasRegistry: UrlAliasRegistry,
     private val linkChecker: LinkChecker,
-    // The one root this facade serves (main until C3 puts roots in URLs/routes).
+    // The main-wired root, used ONLY by the write-surface companions preview/renderPreview (C4
+    // widens those per-root); every URL-space read takes the route-parsed root per call (C3).
     private val root: RootName,
 ) : ReadFacade {
 
-    private val treeJson = TreeJsonCache(indexBuilder, root)
+    private val treeJson = TreeJsonCache(indexBuilder)
 
     override fun pageById(principal: Principal, id: PageId): PagePayload? {
         policy.checkRead(principal, id.value)
         return pageService.byId(id)
     }
 
-    override fun pageByUrlPath(principal: Principal, path: TreePath): PagePayload? {
+    override fun pageByUrlPath(principal: Principal, root: RootName, path: TreePath): PagePayload? {
         policy.checkRead(principal, path.value)
-        return pageService.byUrlPath(path)
+        return pageService.byUrlPath(root, path)
     }
 
     override fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload? {
@@ -116,8 +117,14 @@ class GuardedReadFacade(
     // checkRead on the same authorized request was redundant.
     override fun gitEnabled(principal: Principal): Boolean = history.enabled
 
-    override fun assetRead(principal: Principal, path: TreePath): AssetReadOutcome {
+    override fun assetRead(principal: Principal, root: RootName, path: TreePath): AssetReadOutcome {
         policy.checkRead(principal, path.value)
+        // Membership before the store: in C3's runtime an extra-root path fails this test before the
+        // main-wired contentStore is ever consulted (the correct D12 miss). C4 SEAM, stated plainly:
+        // the read below is UN-rooted - it always hits the ONE main-wired store, safe only while
+        // main is the sole section with assets. The moment extra roots' assets can reach a snapshot,
+        // this read must go per-root (a bare TreePath here would serve MAIN's bytes for an
+        // extra-root path that happens to share it).
         if (path !in indexBuilder.current.section(root).assets) return AssetReadOutcome.NotContentAsset
         // An indexed asset whose on-disk file vanished is IndexedButMissing (→ 404), NOT NotContentAsset: it must
         // never fall through to bundled static and unmask a shadowed name (disk is source of truth).
@@ -134,7 +141,7 @@ class GuardedReadFacade(
         return indexBuilder.current
     }
 
-    override fun resolveDocsRedirect(principal: Principal, path: TreePath): String? {
+    override fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String? {
         // Deny → null (NOT a throw): the docsRoutes shell-fallback arm is public, so an unauthorized caller must
         // fall through to the shell exactly like any unknown path (a 401 here would leak that an alias exists).
         try {

@@ -18,9 +18,10 @@ import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 
 /**
- * §A4 alias/redirect semantics over HTTP: move aliases (301, one hop), `redirect_from` (301,
- * incl. the collision-loser permalink fallback), and `/browse/{file-path}` (302, decode-once +
- * NFC) — including the encoded-space and unicode filename rows.
+ * §A4 alias/redirect semantics over HTTP: move aliases (301, one hop from a canonical-era alias;
+ * a LEGACY-prefix hit chains two hops since C3, ADR-0011 D3), `redirect_from` (301, incl. the
+ * collision-loser permalink fallback), and `/browse/{file-path}` (302, decode-once + NFC) -
+ * including the encoded-space and unicode filename rows.
  */
 class RestRedirectTest : FunSpec({
 
@@ -33,32 +34,37 @@ class RestRedirectTest : FunSpec({
         }) { root ->
             restTest(root) {
                 val client = restClient()
-                client.get("/docs/guides/movable").status shouldBe HttpStatusCode.OK // canonical: shell
+                client.get("/docs/main/guides/movable").status shouldBe HttpStatusCode.OK // canonical: shell
 
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("guides/movable.md"), root.resolve("archive/movable.md"))
                 client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.OK
 
-                val old = client.get("/docs/guides/movable")
+                val old = client.get("/docs/main/guides/movable")
                 old.status shouldBe HttpStatusCode.MovedPermanently // 301 — aliases are stable
-                old.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable"
+                old.headers[HttpHeaders.Location] shouldBe "/docs/main/archive/movable"
 
                 // A direct hit on an alias edit URL (cold load / refresh / pasted link) carries
                 // ?mode=edit verbatim through the 301, so the SPA lands in the editor, not the
                 // read view — the server-side half of rename-stability.
-                val edit = client.get("/docs/guides/movable?mode=edit")
+                val edit = client.get("/docs/main/guides/movable?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
-                edit.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable?mode=edit"
+                edit.headers[HttpHeaders.Location] shouldBe "/docs/main/archive/movable?mode=edit"
             }
         }
     }
 
-    test("redirect_from: [/old/deployment.md] 301s /docs/old/deployment to the canonical URL") {
+    test("redirect_from: a LEGACY /docs/old/deployment chains two 301 hops to the canonical URL (ADR-0011 D3, accepted)") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            val response = client.get("/docs/old/deployment")
-            response.status shouldBe HttpStatusCode.MovedPermanently
-            response.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            // Hop 1: the legacy-prefix 301 (a non-root first segment is a main-relative path).
+            val legacy = client.get("/docs/old/deployment")
+            legacy.status shouldBe HttpStatusCode.MovedPermanently
+            legacy.headers[HttpHeaders.Location] shouldBe "/docs/main/old/deployment"
+            // Hop 2: the alias 301 under the root, landing on the root-qualified canonical URL.
+            val alias = client.get("/docs/main/old/deployment")
+            alias.status shouldBe HttpStatusCode.MovedPermanently
+            alias.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
         }
     }
 
@@ -74,12 +80,12 @@ class RestRedirectTest : FunSpec({
                 val client = restClient()
                 val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a-b.md")))
 
-                val response = client.get("/docs/old/loser")
+                val response = client.get("/docs/main/old/loser")
                 response.status shouldBe HttpStatusCode.MovedPermanently
                 response.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}"
 
                 // The query rides the permalink fallback redirect too — same class, same hop.
-                val edit = client.get("/docs/old/loser?mode=edit")
+                val edit = client.get("/docs/main/old/loser?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
                 edit.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}?mode=edit"
             }
@@ -122,25 +128,32 @@ class RestRedirectTest : FunSpec({
         restTest(Fixtures.demoDocs) {
             val client = restClient()
 
+            // A LEGACY (rootless) file path resolves under main with NO extra hop (D-C3-3: API
+            // surfaces resolve, never redirect, legacy input) - the 302 target is root-qualified.
             val plain = client.get("/browse/guides/deploy-guide.md")
             plain.status shouldBe HttpStatusCode.Found
-            plain.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            plain.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+
+            // The root-qualified form resolves identically.
+            val rooted = client.get("/browse/main/guides/deploy-guide.md")
+            rooted.status shouldBe HttpStatusCode.Found
+            rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
 
             // A query on the browse redirect is preserved; with no query the Location stays clean
             // (no trailing `?`) — same byte-for-byte value the no-query golden pins.
             val edit = client.get("/browse/guides/deploy-guide.md?mode=edit")
             edit.status shouldBe HttpStatusCode.Found
-            edit.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide?mode=edit"
+            edit.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide?mode=edit"
 
             // Encoded space: decode-once yields the on-disk name `release notes 2026.md`.
             val spaced = client.get("/browse/notes/release%20notes%202026.md")
             spaced.status shouldBe HttpStatusCode.Found
-            spaced.headers[HttpHeaders.Location] shouldBe "/docs/notes/release-notes-2026"
+            spaced.headers[HttpHeaders.Location] shouldBe "/docs/main/notes/release-notes-2026"
 
             // Unicode filename: percent-decoded once to NFC; the Location re-encodes on emit.
             val unicode = client.get("/browse/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89.md")
             unicode.status shouldBe HttpStatusCode.Found
-            unicode.headers[HttpHeaders.Location] shouldBe "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89"
+            unicode.headers[HttpHeaders.Location] shouldBe "/docs/main/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89"
 
             client.get("/browse/no/such/file.md").status shouldBe HttpStatusCode.NotFound
             client.get("/browse/%2e%2e/escape.md").status shouldBe HttpStatusCode.BadRequest

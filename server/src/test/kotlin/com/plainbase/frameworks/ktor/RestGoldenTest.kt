@@ -112,8 +112,8 @@ class RestGoldenTest : FunSpec({
             html.shouldNotBeBlank()
             html shouldContain "id=\"deploy-guide\""
             html shouldContain "id=\"prerequisites\""
-            html shouldContain "href=\"/docs/infra/kubernetes\"" // §A2: hrefs are path URLs
-            html shouldContain "src=\"/assets/infra/assets/diagram.svg\""
+            html shouldContain "href=\"/docs/main/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
+            html shouldContain "src=\"/assets/main/infra/assets/diagram.svg\""
 
             val normalized = JsonObject(body + ("html" to JsonPrimitive("{{html}}")))
             normalized shouldBe RestGolden.load("page-html-deploy-guide.json", mapOf("content_hash" to deployGuideHash))
@@ -140,7 +140,9 @@ class RestGoldenTest : FunSpec({
                 out += "$type:${node.getValue("path").jsonPrimitive.content}"
                 if (type == "folder") (node.getValue("children") as JsonArray).forEach { walk(it.jsonObject, out) }
             }
-            val served = buildList { walk(body.getValue("root").jsonObject, this) }
+            val served = buildList {
+                (body.getValue("roots") as JsonArray).forEach { walk(it.jsonObject.getValue("tree").jsonObject, this) }
+            }
 
             val expected = checkNotNull(javaClass.getResourceAsStream("/golden/rest/tree-order.txt"))
                 .use { it.readBytes().toString(Charsets.UTF_8) }

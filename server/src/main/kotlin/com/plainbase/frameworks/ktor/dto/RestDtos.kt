@@ -198,6 +198,8 @@ data class CitationDto(
 @Serializable
 data class PageResponse(
     val id: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the page's root-name slug. */
+    val root: String,
     val path: String,
     val slug: String,
     val url: String?,
@@ -214,6 +216,8 @@ data class PageResponse(
 @Serializable
 data class PageHtmlResponse(
     val id: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the page's root-name slug. */
+    val root: String,
     val path: String,
     val slug: String,
     val url: String?,
@@ -229,12 +233,22 @@ data class PageHtmlResponse(
 data class HeadingDto(val id: String, val level: Int, val text: String)
 
 /**
- * `GET /api/v1/tree` wire shape (frozen as SHAPE; child ordering is documented-not-frozen).
- * [root] is always a folder node, but it is DECLARED as the sealed interface so the polymorphic
- * serializer emits the `type` discriminator on the root exactly like on every child.
+ * `GET /api/v1/tree` wire shape (frozen as SHAPE; child ordering is documented-not-frozen): one
+ * entry per served root, in registry (D7) order. Reshaped from `{root: <node>}` under the same
+ * ADR-0011 D3 amendment as the url values (multi-root C3; the ForeverApiGoldenSuite ledger records
+ * it). Manual-RestJson DTOs, no reflect-config; C4 appends `available` to [RootTreeDto].
  */
 @Serializable
-data class TreeResponse(val root: TreeNodeDto)
+data class TreeResponse(val roots: List<RootTreeDto>)
+
+/**
+ * One root's tree entry: the validated root-name slug + its synthetic root folder node. [tree] is
+ * always a folder node, but it is DECLARED as the sealed interface so the polymorphic serializer
+ * emits the `type` discriminator on the root exactly like on every child (the pre-C3 TreeResponse
+ * rule, unchanged).
+ */
+@Serializable
+data class RootTreeDto(val root: String, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable
@@ -286,6 +300,7 @@ data class ReindexResponse(val status: String, val pages: Int)
 
 fun PagePayload.toDto(): PageResponse = PageResponse(
     id = page.id.value,
+    root = page.root.value,
     path = page.path.value,
     slug = page.slug,
     url = page.url,
@@ -300,6 +315,7 @@ fun PagePayload.toDto(): PageResponse = PageResponse(
 
 fun PageHtmlPayload.toDto(): PageHtmlResponse = PageHtmlResponse(
     id = page.id.value,
+    root = page.root.value,
     path = page.path.value,
     slug = page.slug,
     url = page.url,

@@ -39,8 +39,12 @@ fun buildRouteContext(
     aliasRegistry: UrlAliasRegistry,
     contentStore: ContentStore,
     writePipeline: WritePipeline,
-    // The one root the facades serve/mutate (main until C3/C4 widen URLs and writes).
+    // The one root the facades serve/mutate (main until C4 widens writes; the read facade takes
+    // the route-parsed root per call since C3).
     root: RootName,
+    // The registry root names the C3 URL grammar scopes by; MAIN is required (the legacy 301 arm
+    // targets /docs/main/..., so a known set without it would 301 its own redirect target forever).
+    knownRoots: Set<RootName> = setOf(root) + RootName.MAIN,
     history: HistoryProvider,
     idProvider: IdProvider,
     proposalService: ProposalService,
@@ -67,6 +71,7 @@ fun buildRouteContext(
     agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
     extract: (ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
+    require(RootName.MAIN in knownRoots) { "knownRoots must contain '${RootName.MAIN}' (the legacy grammar's 301 target)" }
     val read = GuardedReadFacade(
         policy = policy,
         pageService = pageService,
@@ -107,6 +112,7 @@ fun buildRouteContext(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        roots = knownRoots,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

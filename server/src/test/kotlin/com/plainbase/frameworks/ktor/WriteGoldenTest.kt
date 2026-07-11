@@ -90,14 +90,14 @@ class WriteGoldenTest : FunSpec({
             // PB-WRITE-1 revision). The golden pins both; `url` is the published `IndexedPage.url`, NOT a
             // client-/path-derived slug — asserted against the snapshot below so the literal can't drift.
             post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
-            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/golden-create"
+            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/main/guides/golden-create"
         }
     }
 
     test("write-post-ok-unicode.json — a 201 create's url is the slugified urlPath, NOT the raw on-disk path") {
         // The divergence guard (house rule). The slug "Café Ω" slugifies to the NON-ASCII `café-ω`, so the
         // on-disk filename is `café-ω.md` (raw unicode bytes) while the canonical url percent-encodes the
-        // urlPath: `/docs/guides/caf%C3%A9-%CF%89`. A naive re-compose from the file path would give a
+        // urlPath: `/docs/main/guides/caf%C3%A9-%CF%89`. A naive re-compose from the file path would give a
         // DIFFERENT string (raw é/ω, or a title slug) — proving `url` is the published IndexedPage.url.
         val createdId = "01900000-0000-7000-8000-000000000001"
         val composed = "---\nid: $createdId\ntitle: \"Report\"\nslug: \"Café Ω\"\n---\n\n".toByteArray()
@@ -110,7 +110,7 @@ class WriteGoldenTest : FunSpec({
             post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
             // The response url IS the published IndexedPage.url: the PercentCoding.encodePath(urlPath) form,
             // never a percent-encode of the raw on-disk filename nor a slug of the title.
-            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/guides/caf%C3%A9-%CF%89"
+            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/main/guides/caf%C3%A9-%CF%89"
         }
     }
 

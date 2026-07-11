@@ -5,6 +5,7 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.frameworks.ktor.RouteContext
@@ -200,7 +201,8 @@ private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
             PageExistsEnvelope(
                 PageExistsBody(
                     code = ErrorCodes.SLUG_CONFLICT,
-                    message = "Another page already owns the canonical URL /docs/$urlPath",
+                    // Creates are main-wired (D18), so the contested canonical URL is main's (C3 root-qualified).
+                    message = "Another page already owns the canonical URL /docs/${RootName.MAIN}/$urlPath",
                     path = urlPath,
                 ),
             ),

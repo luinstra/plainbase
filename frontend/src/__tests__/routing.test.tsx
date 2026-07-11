@@ -24,6 +24,7 @@ function citation(id: string) {
 function pageResponse(id: string, url: string | null, title: string): PageResponse {
   return {
     id,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -40,6 +41,7 @@ function pageResponse(id: string, url: string | null, title: string): PageRespon
 function htmlResponse(id: string, url: string | null, title: string): PageHtmlResponse {
   return {
     id,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -52,21 +54,26 @@ function htmlResponse(id: string, url: string | null, title: string): PageHtmlRe
   };
 }
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 // A root-level README child — the fixture-backed smoke suite can't isolate readme-only at
 // the root (demo-docs carries an index.md too), so the readme branch is mocked here.
 const rootReadmeTree: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 1,
-    children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/readme", status: "active", updated: null }],
-  },
+  roots: [
+    {
+      root: "main",
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/main",
+        page_count: 1,
+        children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/main/readme", status: "active", updated: null }],
+      },
+    },
+  ],
 };
 
 /** An unauthenticated session — the Shell renders no "Review" link, and serves it from cache (no /session fetch). */
@@ -99,7 +106,7 @@ describe("routing flows", () => {
   it("renders a root README child's content at bare /docs — README-preference applies to the root node too", async () => {
     const { history, view } = renderAt("/docs", (qc) => {
       qc.setQueryData(treeQuery.queryKey, rootReadmeTree);
-      qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, "/docs/readme", "Docs Home"));
+      qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, "/docs/main/readme", "Docs Home"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Docs Home"));
@@ -108,10 +115,10 @@ describe("routing flows", () => {
   });
 
   it("replaceStates an alias path to the canonical url from the by-path response", async () => {
-    const canonical = "/docs/guides/deploy-guide";
-    const { history } = renderAt("/docs/old/deployment", (qc) => {
-      qc.setQueryData(pageByPathQuery("old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+    const canonical = "/docs/main/guides/deploy-guide";
+    const { history } = renderAt("/docs/main/old/deployment", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
       qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
     });
 
@@ -123,9 +130,9 @@ describe("routing flows", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       // Only the ALIAS key is primed; the canonical render must come from the seeded cache.
-      const canonical = "/docs/guides/deploy-guide";
-      const { history, view } = renderAt("/docs/old/deployment", (qc) => {
-        qc.setQueryData(pageByPathQuery("old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+      const canonical = "/docs/main/guides/deploy-guide";
+      const { history, view } = renderAt("/docs/main/old/deployment", (qc) => {
+        qc.setQueryData(pageByPathQuery("main/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
         qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
         // PageContent now also subscribes pageQuery(id) for the metadata Rail — prime it so the
         // new fetch hits cache and the "no refetch" assertion below stays honest.
@@ -162,20 +169,20 @@ describe("routing flows", () => {
   it("does not snap the URL back when navigating away from a resolved page", async () => {
     // Regression: during a click-navigation the OUTGOING DocsPage briefly observes the
     // incoming pathname; its canonical-correction must not replace the URL back.
-    const canonicalA = "/docs/guides/deploy-guide";
+    const canonicalA = "/docs/main/guides/deploy-guide";
     const { history } = renderAt(canonicalA, (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonicalA, "Deploy Guide"));
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonicalA, "Deploy Guide"));
       qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, canonicalA, "Deploy Guide"));
-      qc.setQueryData(pageByPathQuery("welcome").queryKey, pageResponse(LOSER_ID, "/docs/welcome", "Welcome"));
-      qc.setQueryData(pageHtmlQuery(LOSER_ID).queryKey, htmlResponse(LOSER_ID, "/docs/welcome", "Welcome"));
+      qc.setQueryData(pageByPathQuery("main/welcome").queryKey, pageResponse(LOSER_ID, "/docs/main/welcome", "Welcome"));
+      qc.setQueryData(pageHtmlQuery(LOSER_ID).queryKey, htmlResponse(LOSER_ID, "/docs/main/welcome", "Welcome"));
     });
 
     await waitFor(() => expect(history.location.pathname).toBe(canonicalA));
-    history.push("/docs/welcome");
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/welcome"));
+    history.push("/docs/main/welcome");
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/welcome"));
     // Give any stray replace a tick to fire, then confirm the URL held.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(history.location.pathname).toBe("/docs/welcome");
+    expect(history.location.pathname).toBe("/docs/main/welcome");
   });
 
   it("404s an encoded slash in a /docs path without fetching — PB-LINK-1 rejects %2F as a separator", async () => {
@@ -183,8 +190,8 @@ describe("routing flows", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       // The DECODED form exists as a page; the raw URL still names nothing on the server.
-      const { history, view } = renderAt("/docs/guides%2Fdeploy-guide", (qc) => {
-        qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(WINNER_ID, null, "Deploy Guide"));
+      const { history, view } = renderAt("/docs/main/guides%2Fdeploy-guide", (qc) => {
+        qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, null, "Deploy Guide"));
         qc.setQueryData(pageHtmlQuery(WINNER_ID).queryKey, htmlResponse(WINNER_ID, null, "Deploy Guide"));
       });
       await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
@@ -192,7 +199,7 @@ describe("routing flows", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
 
       // Client-side navigation to such a URL (lowercase variant) must 404 the same way.
-      history.push("/docs/welcome%2fintro");
+      history.push("/docs/main/welcome%2fintro");
       await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {

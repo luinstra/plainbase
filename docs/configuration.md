@@ -92,8 +92,13 @@ Per-root keys:
 | `editable` | whether pages in this root can be edited/created - **recorded but not yet enforced in this release** (a startup warning names any non-default value) | `true` | `false` |
 | `history` | `off` \| `auto` \| `native` git history mode - **recorded but not yet enforced in this release**; `git.enabled` remains the live history knob | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
 
-No `roots {}` block means exactly today's single-root behavior: `CONTENT_DIR`/`contentDir` is the
-one root, byte-identical to every release before the block existed.
+No `roots {}` block still means the single-root setup: `CONTENT_DIR`/`contentDir` is the one root,
+synthesized as `main`. Note that since the multi-root URL change (ADR-0011 D3) this is no longer
+byte-identical to pre-multi-root releases even without the block: every content URL now carries the
+root segment (`/docs/main/...`, `/assets/main/...`), old rootless links answer a permanent 301 to
+the `main`-qualified form, `/api/v1/tree` returns one entry per root (e.g.
+`{"roots":[{"root":"main","tree":{...}}]}`), and page/search API responses carry a `root` field.
+`/p/{id}` permalinks are unchanged.
 
 Validation at boot (each failure is an actionable `serve:` refusal naming the offending root):
 
@@ -110,8 +115,10 @@ When a `roots {}` block is present, an explicitly set `CONTENT_DIR`/`contentDir`
 a startup warning: `roots.main.path` is main's directory.
 
 **Current limitation:** this build parses and validates extra roots but serves **only `main`** -
-extras produce a startup warning saying so. Multi-root serving (per-root URLs, search, watchers)
-lands in later releases; declaring extras today is harmless but does nothing yet.
+extras produce a startup warning saying so. The per-root URL grammar is already live (an extra
+root's `/docs/{name}/...` URL space is reserved and answers empty rather than redirecting); serving
+extras' content (per-root stores, search, watchers) lands in later releases. Declaring extras today
+is harmless but serves nothing yet.
 
 ## `auth.mode` - the three modes
 

@@ -194,7 +194,7 @@ function writtenResponse(): Response {
 }
 
 function createdResponse(): Response {
-  return new Response(JSON.stringify({ id: "p1", url: "/docs/p1", content_hash: "sha256:abc", commit: null }), {
+  return new Response(JSON.stringify({ id: "p1", url: "/docs/main/p1", content_hash: "sha256:abc", commit: null }), {
     status: 201,
     headers: { "content-type": "application/json" },
   });

@@ -21,7 +21,8 @@ import kotlinx.serialization.Serializable
  * These shapes froze when P2 landed. They are append-only: a field is never removed or retyped; the
  * `BrokenLinkReason` wire vocabulary only grows (the closed PB-LINK-1 set + `broken_anchor`). The frozen
  * `PageMetadataResponse` fields are `id`/`path`/`url` (nullable)/`permalink` (always non-null, the `/p/{id}` ID
- * permalink)/`content_hash`/`commit` (nullable)/`title`/`headings`. P3 MCP re-exposes
+ * permalink)/`content_hash`/`commit` (nullable)/`title`/`headings`. Additive amendment (ADR-0011 D3, multi-root
+ * C3): `root` (the page's root-name slug) - append-only, so within policy. P3 MCP re-exposes
  * these VERBATIM (its `validate_links`/`get_page_metadata` tools delegate to the SAME `ReadFacade` methods and
  * serialize these SAME DTOs) — a shape change is a contract break across BOTH REST and MCP. The shapes are pinned
  * by the PB-READ-2 forever-goldens (see `ForeverApiGoldenSuite.kt`) + the native round-trip.
@@ -55,6 +56,8 @@ data class BrokenLinkDto(
 @Serializable
 data class PageMetadataResponse(
     val id: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the page's root-name slug - append-only legal under the policy above. */
+    val root: String,
     val path: String,
     val url: String?, // present-null for a path-collision loser (IndexedPage.url)
     @SerialName("permalink") val permalink: String, // always NON-null — the /p/{id} ID permalink (IndexedPage.permalink)
@@ -69,11 +72,14 @@ data class PageMetadataResponse(
 fun LinkReport.toDto(): ValidateLinksResponse = ValidateLinksResponse(broken = broken.map { it.toDto() })
 
 fun BrokenLink.toDto(): BrokenLinkDto =
-    // The bare path string: C2 roots the domain report, never the wire shape (C3 owns URL/DTO rooting).
+    // The bare path string, deliberately UNCHANGED by C3: the response is fetched per page by id,
+    // so its root is implied (the page-level `root` fields carry it); rooting this row would be a
+    // shape change for no information.
     BrokenLinkDto(page = page.path.value, target = target, text = text, reason = reason.wireValue)
 
 fun IndexedPage.toMetadataDto(): PageMetadataResponse = PageMetadataResponse(
     id = id.value,
+    root = root.value,
     path = path.value,
     url = url,
     permalink = permalink,

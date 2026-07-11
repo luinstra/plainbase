@@ -18,7 +18,7 @@ import { Prose } from "../components/Prose";
 
 const serverHtml = [
   '<h1 id="deploy-guide">Deploy Guide</h1>',
-  '<p><a href="/docs/infra/kubernetes">Kubernetes setup</a></p>',
+  '<p><a href="/docs/main/infra/kubernetes">Kubernetes setup</a></p>',
   '<p><a data-pb-link-error="broken_missing">missing page</a></p>',
   '<pre><code class="language-json">{"key": "value"}</code></pre>',
 ].join("\n");

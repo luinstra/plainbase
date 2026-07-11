@@ -30,14 +30,16 @@ interface PageIndexView {
     fun kindOf(path: TreePath): EntryKind?
 
     /**
-     * The page's canonical emitted URL (§A4): a `/docs/...` path URL, or a `/p/{id}` permalink for a
-     * path-space collision loser. [page] MUST be a known PAGE path (caller resolved it first).
+     * The page's canonical emitted URL (§A4): a `/docs/{root}/...` path URL (root-qualified since
+     * C3), or a `/p/{id}` permalink for a path-space collision loser. [page] MUST be a known PAGE
+     * path (caller resolved it first).
      */
     fun pageUrl(page: TreePath): String
 
     /**
-     * The asset's emitted URL: `/assets/{content-root-relative-path}`, NFC, RFC-3986 percent-encoded
-     * (§A2). [asset] MUST be a known ASSET path.
+     * The asset's emitted URL: `/assets/{root}/{content-root-relative-path}`, NFC, RFC-3986
+     * percent-encoded (§A2; the root slug is URL-safe by construction and never encoded). [asset]
+     * MUST be a known ASSET path.
      */
     fun assetUrl(asset: TreePath): String
 

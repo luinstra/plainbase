@@ -21,8 +21,9 @@ import { Shell } from "./components/Shell";
  * Route table (chunk 7 + the chunk-6 amendment):
  *
  *   /          → redirect to /docs
- *   /docs      → the ROOT folder landing (the root node's `url` is /docs): root
- *                index/readme child if present, else the top-level listing
+ *   /docs      → the home view: the MAIN root's folder landing, resolved explicitly (since C3
+ *                the root tree node's `url` is /docs/main, not /docs): root index/readme child
+ *                if present, else the top-level listing
  *   /docs/$    → canonical page route; the splat is the by-path key. `?mode=edit` mounts the
  *                editor, `?mode=history` is the W7 history seam; absent = the clean read view.
  *   /new       → new-page creation (no path exists pre-create — the server mints it)

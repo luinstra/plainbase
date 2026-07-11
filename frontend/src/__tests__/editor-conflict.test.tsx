@@ -7,7 +7,7 @@ import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 conflict UX (D-5 acceptance #2, #3). Core principle: a 409 NEVER discards the user's buffer.
@@ -26,9 +26,10 @@ const BUFFER = "---\nid: 0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a\ntitle: Deploy Gui
 function pageResponse(): PageResponse {
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
-    url: "/docs/guides/deploy-guide",
+    url: "/docs/main/guides/deploy-guide",
     title: "Deploy Guide",
     markdown: BUFFER,
     frontmatter: {},
@@ -56,9 +57,9 @@ function renderEditor(putResponses: Response[], postResponse?: Response, prime: 
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
-  queryClient.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse());
+  queryClient.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse());
   prime(queryClient);
-  const history = createMemoryHistory({ initialEntries: ["/docs/guides/deploy-guide?mode=edit"] });
+  const history = createMemoryHistory({ initialEntries: ["/docs/main/guides/deploy-guide?mode=edit"] });
   const router = createAppRouter(queryClient, history);
   const view = render(
     <QueryClientProvider client={queryClient}>
@@ -142,9 +143,10 @@ describe("W6 conflict UX", () => {
     const NEW_ID = "01900000-0000-7000-8000-000000000099";
     const htmlResponse: PageHtmlResponse = {
       id: ID,
+      root: "main",
       path: "guides/deploy-guide.md",
       slug: "deploy-guide",
-      url: "/docs/guides/deploy-guide",
+      url: "/docs/main/guides/deploy-guide",
       title: "Deploy Guide",
       html: "<h1>Deploy Guide</h1>",
       content_hash: HASH,
@@ -154,7 +156,7 @@ describe("W6 conflict UX", () => {
     };
     const { view, fetchSpy } = renderEditor(
       [jsonResponse({ error: { code: "conflict", reason: "page_deleted", message: "gone", current_content: null, current_hash: null, current_path: null } }, 409)],
-      jsonResponse({ id: NEW_ID, url: "/docs/guides/deploy-guide", content_hash: HASH, commit: null }, 201),
+      jsonResponse({ id: NEW_ID, url: "/docs/main/guides/deploy-guide", content_hash: HASH, commit: null }, 201),
       (qc) => qc.setQueryData(pageHtmlQuery(ID).queryKey, htmlResponse),
     );
     await editAndSave(view);
@@ -186,7 +188,7 @@ describe("W6 conflict UX", () => {
     const NEW_ID = "01900000-0000-7000-8000-000000000099";
     // save-as-new reuses the recovered /docs/... URL; its by-path entry would otherwise still point at the
     // deleted old id, so the read route would render the stale id. The invalidation must precede navigate.
-    const DEST_URL = "/docs/guides/deploy-guide";
+    const DEST_URL = "/docs/main/guides/deploy-guide";
     const { view, queryClient, router } = renderEditor([
       jsonResponse({ error: { code: "conflict", reason: "page_deleted", message: "gone", current_content: null, current_hash: null, current_path: null } }, 409),
     ], jsonResponse({ id: NEW_ID, url: DEST_URL, content_hash: HASH, commit: null }, 201));
@@ -200,7 +202,7 @@ describe("W6 conflict UX", () => {
 
     // Record the call order: the destination by-path key must be invalidated BEFORE router.navigate fires.
     const order: string[] = [];
-    const destKey = JSON.stringify(pageByPathQuery("guides/deploy-guide").queryKey);
+    const destKey = JSON.stringify(pageByPathQuery("main/guides/deploy-guide").queryKey);
     vi.spyOn(queryClient, "invalidateQueries").mockImplementation((filters?: { queryKey?: unknown }) => {
       if (JSON.stringify(filters?.queryKey) === destKey) order.push("invalidate-dest");
       return Promise.resolve();

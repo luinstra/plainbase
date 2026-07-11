@@ -62,13 +62,13 @@ Once connected, `listTools` returns exactly these seven:
 A typical search → read → propose flow:
 
 ```jsonc
-// search the docs
+// search the docs - hits carry the page's root (the /docs/{root}/... URL segment)
 → search            { "q": "kubernetes deploy" }
-← { "query": "...", "hits": [ { "page_id": "0197…", "snippet": "…", "citation": {…} }, … ] }
+← { "query": "...", "hits": [ { "page_id": "0197…", "root": "main", "snippet": "…", "citation": {…} }, … ] }
 
 // read the whole verbatim page (frontmatter header + body) - content_hash is your edit base
 → read_page         { "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a" }
-← { "id": "0197…", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
+← { "id": "0197…", "root": "main", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
 
 // propose an edit - proposed_content is the FULL UTF-8 markdown of the page after your change
 // (frontmatter header included), NOT a diff and NOT base64

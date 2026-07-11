@@ -67,15 +67,15 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val restarted = harness.startProcess()
                 val snapshot = restarted.builder.rebuild()
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start"
+                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")) shouldBe pageId
 
                 // The acceptance criterion's wire half: the OLD canonical URL answers 301 → new.
                 testApplication {
                     application { plainbaseModule(restarted.services()) }
-                    val response = createClient { followRedirects = false }.get("/docs/docs/start")
+                    val response = createClient { followRedirects = false }.get("/docs/main/docs/start")
                     response.status shouldBe HttpStatusCode.MovedPermanently
-                    response.headers[HttpHeaders.Location] shouldBe "/docs/archive/start"
+                    response.headers[HttpHeaders.Location] shouldBe "/docs/main/archive/start"
                 }
             }
         }
@@ -107,7 +107,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start" // index correctness never depends on it
+                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start" // index correctness never depends on it
                 harness.aliases.find(rooted("docs/start")).shouldBeNull() // the missed alias, exactly as Phase 1
             }
         }
@@ -125,7 +125,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start"
+                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")).shouldBeNull()
             }
         }
@@ -210,7 +210,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                 enforced = false,
             ),
             indexBuilder = builder,
-            pageService = PageService(builder, registry, CitationFactory(), RootName.MAIN),
+            pageService = PageService(builder, registry, CitationFactory()),
             searchService = SearchService(mockk(relaxed = true), builder), // 301s never touch search
             aliasRegistry = registry,
             contentStore = store,

@@ -149,7 +149,7 @@ class SearchGoldenTest : FunSpec({
                 response.status shouldBe HttpStatusCode.OK
                 val hits = Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("hits").jsonArray.map { it.jsonObject }
 
-                hits.map { it.getValue("url") } shouldContainExactlyInAnyOrder listOf(JsonPrimitive("/docs/a/clash"), JsonNull)
+                hits.map { it.getValue("url") } shouldContainExactlyInAnyOrder listOf(JsonPrimitive("/docs/main/a/clash"), JsonNull)
                 hits.forEach { hit ->
                     hit.getValue("heading_id") shouldBe JsonNull
                     hit.getValue("heading_text") shouldBe JsonNull

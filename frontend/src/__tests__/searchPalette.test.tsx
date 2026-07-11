@@ -15,22 +15,27 @@ import { createAppRouter } from "../router";
 const LOSER_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99";
 
 const tree: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 4,
-    children: [
-      { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/guides/deploy-guide", status: "active", updated: null },
-      { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/guides/getting-started", status: "active", updated: null },
-      { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/guides/developer-setup", status: "active", updated: null },
-      // A collision loser: url null → navigates via /p/{id}.
-      { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
-    ],
-  },
+  roots: [
+    {
+      root: "main",
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/main",
+        page_count: 4,
+        children: [
+          { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/main/guides/deploy-guide", status: "active", updated: null },
+          { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/main/guides/getting-started", status: "active", updated: null },
+          { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/main/guides/developer-setup", status: "active", updated: null },
+          // A collision loser: url null → navigates via /p/{id}.
+          { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
+        ],
+      },
+    },
+  ],
 };
 
 function searchResponse(query: string): SearchResponse {
@@ -43,8 +48,9 @@ function searchResponse(query: string): SearchResponse {
     hits: [
       {
         page_id: "p-deploy",
+        root: "main",
         path: "guides/deploy-guide.md",
-        url: "/docs/guides/deploy-guide",
+        url: "/docs/main/guides/deploy-guide",
         title: "Deploy Guide",
         heading_id: "rollback",
         heading_text: "Rollback",
@@ -255,7 +261,7 @@ describe("two-stage search palette", () => {
     await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull());
     fireEvent.keyDown(getInput(), { key: "ArrowDown" }); // select the top fuzzy match (row 0)
     fireEvent.keyDown(getInput(), { key: "Enter" });
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/guides/deploy-guide"));
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/guides/deploy-guide"));
 
     // Loser: url null → /p/{id}.
     await openPalette();
@@ -280,7 +286,7 @@ describe("two-stage search palette", () => {
       fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.keyDown(getInput(), { key: "Enter" });
-      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/guides/deploy-guide#rollback"));
+      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/main/guides/deploy-guide#rollback"));
     } finally {
       vi.unstubAllGlobals();
     }

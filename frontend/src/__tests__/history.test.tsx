@@ -7,7 +7,7 @@ import type { CommitDto, PageResponse, TreeResponse } from "../api/types";
 import { MAX_DIFF_RENDER_CHARS } from "../lib/unifiedDiff";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W7 history UI. The AFFORDANCE tests render the READ view and assert ONLY on `PageResponse.commit`,
@@ -17,13 +17,14 @@ const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null,
  */
 
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
-const PATH = "guides/deploy-guide";
-const URL = "/docs/guides/deploy-guide";
+const PATH = "main/guides/deploy-guide"; // the by-path key IS the root-qualified splat (C3)
+const URL = "/docs/main/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 
 function pageResponse(commit: string | null): PageResponse {
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url: URL,
@@ -74,7 +75,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 /** A minimal `PageHtmlResponse` so the READ view (PageContent → Breadcrumbs/Prose) renders without crashing. */
 function htmlResponse() {
-  return jsonResponse({ id: ID, path: "guides/deploy-guide.md", slug: "deploy-guide", url: URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
+  return jsonResponse({ id: ID, root: "main", path: "guides/deploy-guide.md", slug: "deploy-guide", url: URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
 }
 
 function urlOf(input: RequestInfo | URL): string {

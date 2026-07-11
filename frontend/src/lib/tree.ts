@@ -1,4 +1,14 @@
-import type { TreeFolder, TreeNode, TreePage } from "../api/types";
+import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
+
+/**
+ * A cross-root lookup's answer: the matched folder WITH its entry's root. The root is carried,
+ * never re-derived from a url (two roots can hold the same root-relative folder path, so a bare
+ * folder answer would be ambiguous).
+ */
+export interface FolderEntry {
+  root: string;
+  folder: TreeFolder;
+}
 
 /** A page's href: the canonical URL from the tree, or the `/p/{id}` permalink for a collision loser. */
 export function pageHref(page: TreePage): string {
@@ -12,18 +22,31 @@ function* walk(nodes: TreeNode[]): Generator<TreeNode> {
   }
 }
 
-/** Every page node under `root`, depth-first in tree order — the quick-switcher's candidate set. */
-export function pages(root: TreeFolder): TreePage[] {
+/** The named entry's tree, if served. `"main"` is the one legal client-side root literal (D1). */
+export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
+  return roots.find((entry) => entry.root === root)?.tree ?? null;
+}
+
+/** The reserved main root's tree - the `/docs` home view's resolution. */
+export function mainTree(roots: RootTree[]): TreeFolder | null {
+  return treeFor(roots, "main");
+}
+
+/** Every page node across all entries, in wire (D7) order - the quick-switcher's candidate set. */
+export function pages(roots: RootTree[]): TreePage[] {
   const result: TreePage[] = [];
-  for (const node of walk(root.children)) {
-    if (node.type === "page") result.push(node);
+  for (const entry of roots) {
+    for (const node of walk(entry.tree.children)) {
+      if (node.type === "page") result.push(node);
+    }
   }
   return result;
 }
 
 /**
- * Folder nodes keyed by content-relative folder path ("guides/advanced") — breadcrumb
- * titles (null title → callers fall back to the directory name) and landing urls.
+ * ONE tree's folder nodes keyed by content-relative folder path ("guides/advanced") - breadcrumb
+ * titles (null title → callers fall back to the directory name) and landing urls. Root-relative
+ * paths repeat across roots, so callers scope this BY the entry they already hold ([treeFor]).
  */
 export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
   const folders = new Map<string, TreeFolder>();
@@ -34,14 +57,16 @@ export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
 }
 
 /**
- * The folder node owning a `/docs` location, if any — the folder-landing resolution
- * (ADR-0003). The root itself is included (its `url` is bare `/docs`). Matched verbatim
- * against the server-issued `url`: the server is the single URL authority, so nothing is
- * slugified or re-encoded client-side.
+ * The entry whose folder owns a `/docs/{root}` location, if any - the folder-landing resolution
+ * (ADR-0003). Each entry's synthetic root folder is included (its `url` is the bare
+ * `/docs/{root}`). Matched verbatim against the server-issued `url`: the server is the single URL
+ * authority, so nothing is slugified or re-encoded client-side.
  */
-export function folderByUrl(root: TreeFolder, pathname: string): TreeFolder | null {
-  for (const node of walk([root])) {
-    if (node.type === "folder" && node.url !== null && node.url === pathname) return node;
+export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | null {
+  for (const entry of roots) {
+    for (const node of walk([entry.tree])) {
+      if (node.type === "folder" && node.url !== null && node.url === pathname) return { root: entry.root, folder: node };
+    }
   }
   return null;
 }
@@ -87,13 +112,16 @@ export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
 }
 
 /**
- * The folder whose landing page (index/README) is the page `pageId`, if any. A landing page has
- * one canonical home — the folder URL — so its own bare-page URL is redirected there; this is the
- * lookup that recognizes such a URL. The root is included (its landing answers `/docs`).
+ * The entry whose folder's landing page (index/README) is the page `pageId`, if any. A landing
+ * page has one canonical home - the folder URL - so its own bare-page URL is redirected there;
+ * this is the lookup that recognizes such a URL. Each entry's root folder is included (its
+ * landing answers `/docs/{root}`).
  */
-export function folderForLanding(root: TreeFolder, pageId: string): TreeFolder | null {
-  for (const node of walk([root])) {
-    if (node.type === "folder" && landingChild(node.children)?.id === pageId) return node;
+export function folderForLanding(roots: RootTree[], pageId: string): FolderEntry | null {
+  for (const entry of roots) {
+    for (const node of walk([entry.tree])) {
+      if (node.type === "folder" && landingChild(node.children)?.id === pageId) return { root: entry.root, folder: node };
+    }
   }
   return null;
 }

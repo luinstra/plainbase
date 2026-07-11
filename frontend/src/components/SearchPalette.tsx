@@ -114,7 +114,7 @@ function PaletteBody({
   const trimmed = rawQuery.trim();
   const candidates = useMemo<FuzzyCandidate[]>(() => {
     if (!tree.data) return [];
-    return pages(tree.data.root).map((node: TreePage) => ({ node, label: node.title, hint: node.path }));
+    return pages(tree.data.roots).map((node: TreePage) => ({ node, label: node.title, hint: node.path }));
   }, [tree.data]);
 
   const jumpPages = useMemo<TreePage[]>(() => {

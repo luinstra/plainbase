@@ -63,7 +63,7 @@ class RestHarness(
      * A [TreeJsonCache] over the harness's builder for the §C4 memoization test. The route path's own memo lives
      * privately inside [GuardedReadFacade]; this exposes the SAME cache type for the per-snapshot-identity assertion.
      */
-    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder, harness.rootRegistry.main.name) }
+    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder) }
 
     init {
         seed(harness.idMap)
@@ -152,12 +152,14 @@ fun IndexHarness.testRouteContext(
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
-        pageService = PageService(builder, registry, CitationFactory(), rootRegistry.main.name),
+        pageService = PageService(builder, registry, CitationFactory()),
         searchService = SearchService(provider = searchProvider, indexBuilder = builder),
         aliasRegistry = registry,
         contentStore = contentStore,
         writePipeline = writePipeline,
         root = rootRegistry.main.name,
+        // Forward the registry names so multi-root grammar tests (extra-root-not-301) can seat extras.
+        knownRoots = rootRegistry.roots.map { it.name }.toSet(),
         history = history,
         idProvider = idProvider,
         proposalService = proposalService,

@@ -78,7 +78,7 @@ class SearchServiceTest : FunSpec({
                 val assembled = resultsOf(SearchService(provider, harness.builder).search("shared")).hits.single()
 
                 assembled.title shouldBe "Alpha Guide"
-                assembled.url shouldBe "/docs/alpha"
+                assembled.url shouldBe "/docs/main/alpha"
                 assembled.headingId shouldBe "wiring"
                 assembled.headingText shouldBe "Wiring"
                 // Ancestor = nearest preceding heading of a LOWER level: the sibling "Deep Dive"

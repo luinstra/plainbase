@@ -10,7 +10,7 @@ import { splitFrontmatter } from "../lib/frontmatter";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * C3 formatting toolbar + keymap integration (acceptance #2/#3/#4/#5/#6). Mounts the `?mode=edit` editor,
@@ -26,10 +26,11 @@ const SEED = "---\nid: 0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a\ntitle: Deploy Guide
 
 const hashOf = (text: string): string => `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 
-function pageResponse(markdown: string, url: string | null = "/docs/guides/deploy-guide"): PageResponse {
+function pageResponse(markdown: string, url: string | null = "/docs/main/guides/deploy-guide"): PageResponse {
   const contentHash = hashOf(markdown);
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -62,8 +63,8 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 }
 
 function renderSeeded(markdown = SEED) {
-  return renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-    qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(markdown));
+  return renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+    qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(markdown));
   });
 }
 

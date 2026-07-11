@@ -6,9 +6,9 @@ import com.plainbase.domain.root.RootedPath
 /**
  * Persistence port for the URL alias registry (§A4, chunk 4b; (root, path)-keyed since multi-root C2).
  *
- * An alias maps an old canonical URL path — the NFC-slugified, `/docs/`-relative path, carried as a
- * [RootedPath] whose segments are URL slugs rather than filenames — to the [PageId] that used to
- * live there. URL space is per root, so the same old path may alias different pages under different
+ * An alias maps an old canonical URL path - the NFC-slugified, ROOT-relative path (the tail after
+ * `/docs/{root}/` since C3), carried as a [RootedPath] whose segments are URL slugs rather than
+ * filenames - to the [PageId] that used to live there. URL space is per root, so the same old path may alias different pages under different
  * roots. Alias URLs 301 to the page's current canonical URL (chunk 6).
  *
  * **Chains collapse on write, by construction:** [register] accepts only a [PageId], so an alias

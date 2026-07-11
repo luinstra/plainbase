@@ -42,7 +42,16 @@ import io.kotest.core.spec.style.FunSpec
  * error classes are append-only; PB-REST-1 fields are never removed or retyped.
  * Additive amendments on record: tree folder-node `url` added 2026-06-12 (additive, ADR-0003);
  * create-response `id` + `url` added 2026-06 (additive, W6 — `POST /api/v1/pages` 201 now identifies
- * the created resource so the client navigates to the server-authoritative url; owner+debate-approved).
+ * the created resource so the client navigates to the server-authoritative url; owner+debate-approved);
+ * multi-root C3 added 2026-07-11 (ADR-0011 D3, owner-approved + ADR-recorded): every emitted `url`
+ * VALUE reshapes to `/docs/{root}/...` (assets to `/assets/{root}/...`), an approved break of the
+ * pinned url values ("the URL shape changes for every existing link" per the ADR's Consequences);
+ * `/p/{id}` + `permalink` byte-identical; plus additive `root` fields on
+ * PageResponse/PageHtmlResponse/PageMetadataResponse/SearchHitDto and the TreeResponse reshape to
+ * `{roots:[{root, tree}]}` (the one non-additive SHAPE change, revised under the same amendment).
+ * The `golden/rest` snapshots, the PB-LINK-1 `link-resolution.tsv` url column (with its
+ * FixtureIndexStub emitter, kept matching production emission), and the frontend
+ * `wire-golden.json` twin were regenerated once, under diff review, for this amendment.
  *
  * PB-SEARCH-1 freeze-tier notes (phase-2 §A6 — what these goldens do and do NOT freeze):
  *   - `score` VALUES are deliberately NOT frozen (§A4: engine-scaled, never comparable across

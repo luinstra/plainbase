@@ -15,7 +15,7 @@ export interface TreeFolder {
   /** The `_folder.yaml` plaintext summary on the landing card — null when absent/blank (provisional, Chunk-3). */
   description: string | null;
   path: string;
-  /** The folder's `/docs` URL prefix (percent-encoded, ready to use) — the landing-view address (ADR-0003); null for a collision-loser subtree. */
+  /** The folder's `/docs/{root}` URL prefix (percent-encoded, ready to use) - the landing-view address (ADR-0003); null for a collision-loser subtree. */
   url: string | null;
   /** Count of DIRECT child pages only (not recursive) — drives the `path/ · N pages` meta (provisional, Chunk-3). */
   page_count: number;
@@ -29,7 +29,7 @@ export interface TreePage {
   slug: string;
   /** Content-relative file path, e.g. "guides/deploy-guide.md". */
   path: string;
-  /** Canonical `/docs/...` URL (percent-encoded, ready to use) — null for a collision loser. */
+  /** Canonical `/docs/{root}/...` URL (percent-encoded, ready to use) - null for a collision loser. */
   url: string | null;
   status: string;
   /** Editorial frontmatter date, server-validated to `YYYY-MM-DD` — null when absent/invalid (provisional, Chunk-3). */
@@ -38,8 +38,15 @@ export interface TreePage {
 
 export type TreeNode = TreeFolder | TreePage;
 
+/** One root's tree entry (multi-root C3): the root-name slug + its synthetic root folder node. */
+export interface RootTree {
+  root: string;
+  tree: TreeFolder;
+}
+
+/** One entry per served root, in the server's registry (D7) order. */
 export interface TreeResponse {
-  root: TreeFolder;
+  roots: RootTree[];
 }
 
 export interface CitationDto {
@@ -53,6 +60,8 @@ export interface CitationDto {
 
 export interface PageResponse {
   id: string;
+  /** The page's root-name slug (additive, multi-root C3). */
+  root: string;
   path: string;
   slug: string;
   url: string | null;
@@ -73,6 +82,8 @@ export interface HeadingDto {
 
 export interface PageHtmlResponse {
   id: string;
+  /** The page's root-name slug (additive, multi-root C3) - scopes the breadcrumb folder lookup. */
+  root: string;
   path: string;
   slug: string;
   url: string | null;
@@ -96,6 +107,8 @@ export interface ErrorEnvelope {
  */
 export interface SearchHit {
   page_id: string;
+  /** The hit's root-name slug (additive, multi-root C3). */
+  root: string;
   path: string;
   url: string | null;
   title: string;

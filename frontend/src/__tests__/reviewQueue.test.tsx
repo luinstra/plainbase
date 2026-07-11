@@ -12,7 +12,7 @@ import { createAppRouter } from "../router";
  * per-test fetch stub. Each row links to `/review/$id`.
  */
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {

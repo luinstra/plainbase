@@ -17,7 +17,7 @@ async function expectNoReload(page: Page) {
 }
 
 test("sidebar links are /docs URLs from the tree; clicking navigates without reload", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   const sidebar = page.locator(".pb-sidebar");
@@ -28,7 +28,7 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Deploy Guide" }).click();
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   await expectNoReload(page);
 
@@ -39,19 +39,35 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
 });
 
 test("internal links inside server-rendered HTML navigate via the SPA router", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   await plantNoReloadMarker(page);
   await page.locator(".pb-prose").getByRole("link", { name: "Getting Started guide" }).click();
-  await expect(page).toHaveURL("/docs/guides/getting-started");
+  await expect(page).toHaveURL("/docs/main/guides/getting-started");
   await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
   await expectNoReload(page);
 });
 
 test("an alias URL 301s server-side to the canonical /docs URL", async ({ page }) => {
   // guides/deploy-guide.md declares redirect_from: [/old/deployment.md]
-  await page.goto("/docs/old/deployment");
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await page.goto("/docs/main/old/deployment");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
+});
+
+test("a LEGACY rootless /docs URL 301s to /docs/main/... (query preserved); a legacy alias chains two hops", async ({ page, request }) => {
+  // Cold load on the pre-C3 URL shape: the browser lands on the root-qualified canonical.
+  await page.goto("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
+
+  // The raw hop, pinned without following: 301 + Location built from the raw tail + query intact.
+  const hop = await request.get("/docs/guides/deploy-guide?mode=edit", { maxRedirects: 0 });
+  expect(hop.status()).toBe(301);
+  expect(hop.headers()["location"]).toBe("/docs/main/guides/deploy-guide?mode=edit");
+
+  // A LEGACY alias chains two hops (legacy-prefix 301, then the alias 301) to the same terminal.
+  await page.goto("/docs/old/deployment");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
 });
 
 test("a /p/{id} permalink 302s server-side to the canonical path (stale slug tolerated)", async ({ page, request }) => {
@@ -60,37 +76,37 @@ test("a /p/{id} permalink 302s server-side to the canonical path (stale slug tol
   const { id } = (await byPath.json()) as { id: string };
 
   await page.goto(`/p/${id}`);
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 
   await page.goto(`/p/${id}/some-stale-slug`);
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
 });
 
 test("a folder URL renders the generated landing view; breadcrumbs link back to it", async ({ page }) => {
   // fixtures/demo-docs has no README/index children inside folders, so smoke exercises
   // the listing fallback; the README-preference path is covered by the unit suite.
-  await page.goto("/docs/guides");
+  await page.goto("/docs/main/guides");
   const listing = page.locator("[data-pb-folder]");
   await expect(listing).toBeVisible();
   await expect(listing.locator("h1")).toHaveText("Guides"); // _folder.yaml title
-  await expect(listing.locator('a[href="/docs/guides/advanced"]')).toBeVisible(); // subfolder link
+  await expect(listing.locator('a[href="/docs/main/guides/advanced"]')).toBeVisible(); // subfolder link
 
   await plantNoReloadMarker(page);
   await listing.getByRole("link", { name: "Deploy Guide" }).click();
-  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   await expectNoReload(page);
 
   // The breadcrumb ancestor is now a link back to the folder landing (ADR-0003).
   await page.locator(".pb-breadcrumbs").getByRole("link", { name: "Guides" }).click();
-  await expect(page).toHaveURL("/docs/guides");
+  await expect(page).toHaveURL("/docs/main/guides");
   await expect(page.locator("[data-pb-folder]")).toBeVisible();
   await expectNoReload(page);
 });
 
 test("sidebar folder labels navigate to the landing view; the chevron still collapses", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   const sidebar = page.locator(".pb-sidebar");
 
   await sidebar.getByRole("button", { name: "Collapse Guides" }).click();
@@ -100,7 +116,7 @@ test("sidebar folder labels navigate to the landing view; the chevron still coll
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Guides", exact: true }).click();
-  await expect(page).toHaveURL("/docs/guides");
+  await expect(page).toHaveURL("/docs/main/guides");
   await expect(page.locator("[data-pb-folder]")).toBeVisible();
   await expectNoReload(page);
 });
@@ -121,7 +137,7 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   await page.locator("[data-pb-new-create]").click();
 
   // The index page's own url (/docs/<dir>/index) canonicalizes to the folder landing (/docs/<dir>).
-  await expect(page).toHaveURL(`/docs/${dir}`);
+  await expect(page).toHaveURL(`/docs/main/${dir}`);
   // REPLACE semantics: the folder landing IS the index page view (rail present), NOT the generated
   // listing — neither the listing container nor the generated-folder heading appear.
   await expect(page.locator("[data-pb-rail]")).toBeVisible();
@@ -129,11 +145,11 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
   await expect(page.locator(".pb-breadcrumbs")).toContainText(sectionTitle);
   // The sidebar gains the new section as a folder row labelled by the index page's title (folderTitle).
-  await expect(page.locator(`.pb-sidebar a[href="/docs/${dir}"]`)).toHaveText(sectionTitle);
+  await expect(page.locator(`.pb-sidebar a[href="/docs/main/${dir}"]`)).toHaveText(sectionTitle);
 });
 
 test("an unknown path serves the shell and the SPA renders the 404 view", async ({ page }) => {
-  const response = await page.goto("/docs/nope/never-existed");
+  const response = await page.goto("/docs/main/nope/never-existed");
   expect(response?.status()).toBe(200); // shell, per the routing matrix
   await expect(page.locator("[data-pb-not-found]")).toBeVisible();
   await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
@@ -141,7 +157,7 @@ test("an unknown path serves the shell and the SPA renders the 404 view", async 
 
 test("a deep link with #fragment scrolls to the anchor", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/guides/deploy-guide#rollback");
+  await page.goto("/docs/main/guides/deploy-guide#rollback");
   const heading = page.locator("#rollback");
   await expect(heading).toBeInViewport();
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
@@ -149,7 +165,7 @@ test("a deep link with #fragment scrolls to the anchor", async ({ page }) => {
 
 test("dark-mode toggle swaps data-theme, restyles via tokens, and persists", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/docs/welcome");
+  await page.goto("/docs/main/welcome");
   const html = page.locator("html");
   await expect(html).not.toHaveAttribute("data-theme", "dark");
   const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -164,18 +180,18 @@ test("dark-mode toggle swaps data-theme, restyles via tokens, and persists", asy
 });
 
 test("code blocks are highlighted client-side", async ({ page }) => {
-  await page.goto("/docs/infra/terraform");
+  await page.goto("/docs/main/infra/terraform");
   const code = page.locator('.pb-prose pre code[class*="language-"]');
   await expect(code).toHaveClass(/hljs/);
 });
 
 test("broken links carry the server marker and the broken-link token color", async ({ page }) => {
-  await page.goto("/docs/notes/broken-links");
+  await page.goto("/docs/main/notes/broken-links");
   const broken = page.locator('[data-pb-link-error="broken_missing"]').first();
   await expect(broken).toBeVisible();
   const [brokenColor, liveColor] = await page.evaluate(() => {
     const brokenEl = document.querySelector('[data-pb-link-error="broken_missing"]')!;
-    const liveEl = document.querySelector('.pb-prose a[href^="/docs/"]')!;
+    const liveEl = document.querySelector('.pb-prose a[href^="/docs/main/"]')!;
     return [getComputedStyle(brokenEl).color, getComputedStyle(liveEl).color];
   });
   expect(brokenColor).not.toBe(liveColor); // styled via --pb-link-broken, distinct from live links
@@ -191,7 +207,7 @@ test("the root path lands on the root folder landing at /docs", async ({ page })
   // A child link inside the landing content navigates via the SPA router.
   await plantNoReloadMarker(page);
   await page.locator(".pb-prose").getByRole("link", { name: "Getting Started guide" }).click();
-  await expect(page).toHaveURL("/docs/guides/getting-started");
+  await expect(page).toHaveURL("/docs/main/guides/getting-started");
   await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
   await expectNoReload(page);
 });

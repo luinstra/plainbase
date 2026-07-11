@@ -8,6 +8,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.root.RootName
 
 /**
  * The guarded READ surface (A3, the choke point). Every method takes a [Principal], calls
@@ -25,7 +26,8 @@ interface ReadFacade {
 
     fun pageById(principal: Principal, id: PageId): PagePayload?
 
-    fun pageByUrlPath(principal: Principal, path: TreePath): PagePayload?
+    /** The page at [root]'s canonical-or-alias URL [path] (the route-parsed root segment, C3), or null (§A4 by-path rules). */
+    fun pageByUrlPath(principal: Principal, root: RootName, path: TreePath): PagePayload?
 
     fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload?
 
@@ -63,14 +65,15 @@ interface ReadFacade {
     fun gitEnabled(principal: Principal): Boolean
 
     /**
-     * A content-tree asset read (read-gated — the gate fires BEFORE membership, so existence never leaks). The
-     * asset route does an UPFRONT embedded-bundle lookup (bundle-wins) BEFORE calling this, so a request that names
-     * a real `static/assets/` bundle file is served the bundle and never reaches here — `assetRead` only decides the
-     * outcome for NON-bundle paths. The outcome still SEPARATES "not a content asset" from "indexed but the on-disk
-     * file vanished" ([AssetReadOutcome.NotContentAsset] vs [AssetReadOutcome.IndexedButMissing]) — both are genuine
-     * 404 misses for a non-bundle path; the route maps each to a plain 404 (disk is source of truth).
+     * A content-tree asset read under [root] (the route-parsed root segment, C3; read-gated - the gate fires
+     * BEFORE membership, so existence never leaks). The asset route does an UPFRONT embedded-bundle lookup
+     * (bundle-wins) BEFORE calling this, so a request that names a real `static/assets/` bundle file is served the
+     * bundle and never reaches here - `assetRead` only decides the outcome for NON-bundle paths. The outcome still
+     * SEPARATES "not a content asset" from "indexed but the on-disk file vanished"
+     * ([AssetReadOutcome.NotContentAsset] vs [AssetReadOutcome.IndexedButMissing]) - both are genuine 404 misses
+     * for a non-bundle path; the route maps each to a plain 404 (disk is source of truth).
      */
-    fun assetRead(principal: Principal, path: TreePath): AssetReadOutcome
+    fun assetRead(principal: Principal, root: RootName, path: TreePath): AssetReadOutcome
 
     /** The page file's bytes for the asset-route stale recheck (a read), or null when gone / unreadable→throw. */
     fun pageBytes(principal: Principal, path: TreePath): ByteArray?
@@ -83,13 +86,14 @@ interface ReadFacade {
     fun currentSnapshot(principal: Principal, resource: String): PageIndex
 
     /**
-     * The `/docs/{path}` 301 alias-redirect target (the page's current canonical URL, or its permalink for a
-     * collision loser), or null when there is no LIVE alias OR the principal may not read the target. Returning
-     * null on a DENY (rather than throwing) is deliberate: the `docsRoutes` shell-fallback arm is PUBLIC, so an
-     * unauthorized caller must fall through to the shell EXACTLY like any unknown path — a 401 here would itself
-     * leak that an alias exists. A live canonical path shadows an alias (§A4).
+     * The `/docs/{root}/{path}` 301 alias-redirect target under [root] (the route-parsed root segment, C3): the
+     * page's current canonical URL, or its permalink for a collision loser - or null when there is no LIVE alias
+     * OR the principal may not read the target. Returning null on a DENY (rather than throwing) is deliberate:
+     * the `docsRoutes` shell-fallback arm is PUBLIC, so an unauthorized caller must fall through to the shell
+     * EXACTLY like any unknown path - a 401 here would itself leak that an alias exists. A live canonical path
+     * shadows an alias (§A4).
      */
-    fun resolveDocsRedirect(principal: Principal, path: TreePath): String?
+    fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String?
 }
 
 /**

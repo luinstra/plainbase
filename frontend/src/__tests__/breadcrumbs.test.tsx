@@ -12,38 +12,70 @@ import { Breadcrumbs } from "../components/Breadcrumbs";
  */
 
 const tree: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 0,
-    children: [
-      {
+  roots: [
+    {
+      root: "main",
+      tree: {
         type: "folder",
-        name: "runbooks",
+        name: "",
         title: null,
         description: null,
-        path: "runbooks",
-        url: "/docs/runbooks",
-        page_count: 2,
+        path: "",
+        url: "/docs/main",
+        page_count: 0,
         children: [
-          { type: "page", id: "id-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
-          { type: "page", id: "id-deploy", title: "Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/runbooks/deploy", status: "active", updated: null },
+          {
+            type: "folder",
+            name: "runbooks",
+            title: null,
+            description: null,
+            path: "runbooks",
+            url: "/docs/main/runbooks",
+            page_count: 2,
+            children: [
+              { type: "page", id: "id-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/main/runbooks/index", status: "active", updated: null },
+              { type: "page", id: "id-deploy", title: "Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/main/runbooks/deploy", status: "active", updated: null },
+            ],
+          },
         ],
       },
-    ],
-  },
+    },
+    // A second root holding the SAME relative folder path - the lookup must never borrow across roots.
+    {
+      root: "extra",
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/extra",
+        page_count: 0,
+        children: [
+          {
+            type: "folder",
+            name: "runbooks",
+            title: "Extra Runbooks",
+            description: null,
+            path: "runbooks",
+            url: "/docs/extra/runbooks",
+            page_count: 1,
+            children: [
+              { type: "page", id: "id-extra", title: "Extra Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/extra/runbooks/deploy", status: "active", updated: null },
+            ],
+          },
+        ],
+      },
+    },
+  ],
 };
 
-function renderCrumbs(path: string, title: string) {
+function renderCrumbs(path: string, title: string, root = "main") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, tree);
   return render(
     <QueryClientProvider client={queryClient}>
-      <Breadcrumbs path={path} title={title} />
+      <Breadcrumbs root={root} path={path} title={title} />
     </QueryClientProvider>,
   );
 }
@@ -56,7 +88,7 @@ describe("Breadcrumbs", () => {
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks"]);
     // No ancestor crumb links to the page being viewed.
-    expect(container.querySelector('a[href="/docs/runbooks"]')).toBeNull();
+    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
     // The leaf is the non-link current crumb.
     const current = container.querySelector('[aria-current="page"]')!;
     expect(current.textContent).toBe("Runbooks");
@@ -67,6 +99,16 @@ describe("Breadcrumbs", () => {
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks", "Deploy"]);
     // The ancestor links to its folder landing.
-    expect(container.querySelector('a[href="/docs/runbooks"]')?.textContent).toBe("Runbooks");
+    expect(container.querySelector('a[href="/docs/main/runbooks"]')?.textContent).toBe("Runbooks");
+  });
+
+  it("scopes the folder lookup BY root: the same relative path in another root gets ITS titles and urls", () => {
+    // Both roots hold `runbooks/`; the extra-root page must crumb through the EXTRA entry's folder
+    // (title + url), never main's - the root prop is the scope, the path alone is ambiguous.
+    const { container } = renderCrumbs("runbooks/deploy.md", "Extra Deploy", "extra");
+    const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "Extra Runbooks", "Extra Deploy"]);
+    expect(container.querySelector('a[href="/docs/extra/runbooks"]')?.textContent).toBe("Extra Runbooks");
+    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
   });
 });

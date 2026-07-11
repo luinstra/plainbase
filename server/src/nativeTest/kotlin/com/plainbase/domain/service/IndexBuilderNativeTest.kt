@@ -65,14 +65,14 @@ class IndexBuilderNativeTest {
                 val first = builder.rebuild()
                 assertEquals(1, first.pages.size)
                 val page = first.pages.single()
-                assertEquals("/docs/docs/start", page.url)
+                assertEquals("/docs/main/docs/start", page.url)
                 assertEquals(first, builder.current) // the AtomicReference swap published it
 
                 // Move the page; the rescan must re-point the id and record the old canonical path.
                 Files.createDirectories(content.resolve("archive"))
                 Files.move(content.resolve("docs/start.md"), content.resolve("archive/start.md"))
                 val second = builder.rebuild()
-                assertEquals("/docs/archive/start", second.byId.getValue(page.id).url)
+                assertEquals("/docs/main/archive/start", second.byId.getValue(page.id).url)
                 assertNotNull(registry.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
                 assertEquals(page.id, aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
             } finally {

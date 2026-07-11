@@ -59,40 +59,45 @@ const REINDEX_WARNING = {
 };
 
 const treeResponse: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 0,
-    children: [
-      {
+  roots: [
+    {
+      root: "main",
+      tree: {
         type: "folder",
-        name: "guides",
-        title: "Guides",
-        description: "How-to guides",
-        path: "guides",
-        url: "/docs/guides",
-        page_count: 1,
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/main",
+        page_count: 0,
         children: [
           {
-            type: "page",
-            id: PAGE_1,
-            title: "Deploy Guide",
-            slug: "deploy-guide",
-            path: "guides/deploy-guide.md",
-            url: "/docs/guides/deploy-guide",
-            status: "published",
-            updated: "2026-06-01",
+            type: "folder",
+            name: "guides",
+            title: "Guides",
+            description: "How-to guides",
+            path: "guides",
+            url: "/docs/main/guides",
+            page_count: 1,
+            children: [
+              {
+                type: "page",
+                id: PAGE_1,
+                title: "Deploy Guide",
+                slug: "deploy-guide",
+                path: "guides/deploy-guide.md",
+                url: "/docs/main/guides/deploy-guide",
+                status: "published",
+                updated: "2026-06-01",
+              },
+            ],
           },
+          { type: "folder", name: "attic", title: null, description: null, path: "attic", url: null, page_count: 0, children: [] },
+          { type: "page", id: PAGE_2, title: "Shadowed", slug: "shadowed", path: "shadowed.md", url: null, status: "published", updated: null },
         ],
       },
-      { type: "folder", name: "attic", title: null, description: null, path: "attic", url: null, page_count: 0, children: [] },
-      { type: "page", id: PAGE_2, title: "Shadowed", slug: "shadowed", path: "shadowed.md", url: null, status: "published", updated: null },
-    ],
-  },
+    },
+  ],
 };
 
 // url is deliberately null here (the collision-loser branch): every `| null` field must be null in
@@ -100,6 +105,7 @@ const treeResponse: TreeResponse = {
 // stays pinned by treeResponse/createdResponse.
 const pageResponse: PageResponse = {
   id: PAGE_1,
+  root: "main",
   path: "guides/deploy-guide.md",
   slug: "deploy-guide",
   url: null,
@@ -121,6 +127,7 @@ const pageResponse: PageResponse = {
 
 const pageHtmlResponse: PageHtmlResponse = {
   id: PAGE_2,
+  root: "main",
   path: "shadowed.md",
   slug: "shadowed",
   url: null,
@@ -154,6 +161,7 @@ const searchResponse: SearchResponse = {
   hits: [
     {
       page_id: PAGE_2,
+      root: "main",
       path: "shadowed.md",
       url: null,
       title: "Shadowed",
@@ -228,7 +236,7 @@ const createPageRequest: CreatePageRequest = { title: "Deploy Guide" };
 
 const createdResponse: CreatedResponse = {
   id: PAGE_1,
-  url: "/docs/guides/deploy-guide",
+  url: "/docs/main/guides/deploy-guide",
   content_hash: HASH_A,
   commit: null,
 };

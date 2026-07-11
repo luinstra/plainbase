@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
@@ -26,6 +27,13 @@ class RouteContext(
     val mutate: MutatingFacade,
     /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
     val proposals: ProposalFacade,
+    /**
+     * The registry root names the C3 URL grammar scopes by ([splitRootTail]'s known set): config
+     * topology only (operator-declared names, never content existence), so the pre-gate root
+     * decision leaks nothing. Always contains [com.plainbase.domain.root.RootName.MAIN] - the
+     * legacy 301 arm targets `/docs/main/...`, so a set without it would redirect its own target.
+     */
+    val roots: Set<RootName>,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,

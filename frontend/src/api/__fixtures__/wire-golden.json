@@ -1,66 +1,78 @@
 {
   "treeResponse": {
-    "root": {
-      "type": "folder",
-      "name": "",
-      "title": null,
-      "description": null,
-      "path": "",
-      "url": "/docs",
-      "page_count": 0,
-      "children": [
-        {
+    "roots": [
+      {
+        "root": "main",
+        "tree": {
           "type": "folder",
-          "name": "guides",
-          "title": "Guides",
-          "description": "How-to guides",
-          "path": "guides",
-          "url": "/docs/guides",
-          "page_count": 1,
-          "children": [
-            {
-              "type": "page",
-              "id": "01970000-0000-7000-8000-000000000001",
-              "title": "Deploy Guide",
-              "slug": "deploy-guide",
-              "path": "guides/deploy-guide.md",
-              "url": "/docs/guides/deploy-guide",
-              "status": "published",
-              "updated": "2026-06-01"
-            }
-          ]
-        },
-        {
-          "type": "folder",
-          "name": "attic",
+          "name": "",
           "title": null,
           "description": null,
-          "path": "attic",
-          "url": null,
+          "path": "",
+          "url": "/docs/main",
           "page_count": 0,
-          "children": []
-        },
-        {
-          "type": "page",
-          "id": "01970000-0000-7000-8000-000000000002",
-          "title": "Shadowed",
-          "slug": "shadowed",
-          "path": "shadowed.md",
-          "url": null,
-          "status": "published",
-          "updated": null
+          "children": [
+            {
+              "type": "folder",
+              "name": "guides",
+              "title": "Guides",
+              "description": "How-to guides",
+              "path": "guides",
+              "url": "/docs/main/guides",
+              "page_count": 1,
+              "children": [
+                {
+                  "type": "page",
+                  "id": "01970000-0000-7000-8000-000000000001",
+                  "title": "Deploy Guide",
+                  "slug": "deploy-guide",
+                  "path": "guides/deploy-guide.md",
+                  "url": "/docs/main/guides/deploy-guide",
+                  "status": "published",
+                  "updated": "2026-06-01"
+                }
+              ]
+            },
+            {
+              "type": "folder",
+              "name": "attic",
+              "title": null,
+              "description": null,
+              "path": "attic",
+              "url": null,
+              "page_count": 0,
+              "children": []
+            },
+            {
+              "type": "page",
+              "id": "01970000-0000-7000-8000-000000000002",
+              "title": "Shadowed",
+              "slug": "shadowed",
+              "path": "shadowed.md",
+              "url": null,
+              "status": "published",
+              "updated": null
+            }
+          ]
         }
-      ]
-    }
+      }
+    ]
   },
   "pageResponse": {
     "id": "01970000-0000-7000-8000-000000000001",
+    "root": "main",
     "path": "guides/deploy-guide.md",
     "slug": "deploy-guide",
     "url": null,
     "title": "Deploy Guide",
     "markdown": "# Deploy Guide\n\nShip it.\n",
-    "frontmatter": { "title": "Deploy Guide", "tags": ["ops", "deploy"] },
+    "frontmatter": {
+      "title": "Deploy Guide",
+      "tags": [
+        "ops",
+        "deploy"
+      ]
+    },
     "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "id_materialized": true,
     "commit": null,
@@ -75,6 +87,7 @@
   },
   "pageHtmlResponse": {
     "id": "01970000-0000-7000-8000-000000000002",
+    "root": "main",
     "path": "shadowed.md",
     "slug": "shadowed",
     "url": null,
@@ -82,7 +95,13 @@
     "html": "<h1 id=\"shadowed\">Shadowed</h1>",
     "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "commit": null,
-    "headings": [{ "id": "shadowed", "level": 1, "text": "Shadowed" }],
+    "headings": [
+      {
+        "id": "shadowed",
+        "level": 1,
+        "text": "Shadowed"
+      }
+    ],
     "citation": {
       "page_id": "01970000-0000-7000-8000-000000000002",
       "heading_id": "shadowed",
@@ -93,7 +112,10 @@
     }
   },
   "errorEnvelope": {
-    "error": { "code": "page_not_found", "message": "No page with that id" }
+    "error": {
+      "code": "page_not_found",
+      "message": "No page with that id"
+    }
   },
   "searchResponse": {
     "query": "deploy",
@@ -104,6 +126,7 @@
     "hits": [
       {
         "page_id": "01970000-0000-7000-8000-000000000002",
+        "root": "main",
         "path": "shadowed.md",
         "url": null,
         "title": "Shadowed",
@@ -111,7 +134,12 @@
         "heading_text": null,
         "heading_path": [],
         "snippet": "Deploy targets are listed here.",
-        "highlights": [{ "start": 0, "end": 6 }],
+        "highlights": [
+          {
+            "start": 0,
+            "end": 6
+          }
+        ],
         "score": 1.25,
         "citation": {
           "page_id": "01970000-0000-7000-8000-000000000002",
@@ -188,7 +216,7 @@
   },
   "createdResponse": {
     "id": "01970000-0000-7000-8000-000000000001",
-    "url": "/docs/guides/deploy-guide",
+    "url": "/docs/main/guides/deploy-guide",
     "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "commit": null
   },
@@ -204,7 +232,13 @@
   },
   "previewResponse": {
     "html": "<h1 id=\"deploy-guide\">Deploy Guide</h1>",
-    "headings": [{ "id": "deploy-guide", "level": 1, "text": "Deploy Guide" }]
+    "headings": [
+      {
+        "id": "deploy-guide",
+        "level": 1,
+        "text": "Deploy Guide"
+      }
+    ]
   },
   "historyResponse": {
     "git_enabled": true,

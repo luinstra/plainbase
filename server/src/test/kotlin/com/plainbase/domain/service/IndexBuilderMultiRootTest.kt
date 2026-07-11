@@ -203,7 +203,7 @@ class IndexBuilderMultiRootTest : FunSpec({
         }
     }
 
-    test("per-root URL space: identical slugs in two roots BOTH keep their urlPath and emit identical url strings (C2 documented state)") {
+    test("per-root URL space: identical slugs in two roots BOTH keep their urlPath and emit DISTINCT root-qualified urls (C3)") {
         withTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/setup.md", "# Setup\n\nmain body\n")
             writePage(extraDir, "guides/setup.md", "# Setup\n\nextra body\n")
@@ -216,7 +216,10 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val extraSetup = snapshot.byPath.getValue(RootedPath(EXTRA, TreePath.require("guides/setup.md")))
                 mainSetup.urlPath.shouldNotBeNull()
                 extraSetup.urlPath.shouldNotBeNull()
-                mainSetup.url shouldBe extraSetup.url // no root segment until C3, deliberately
+                // Same relative urlPath, distinct wire urls: the root segment disambiguates (C3, ADR-0011 D3).
+                mainSetup.urlPath shouldBe extraSetup.urlPath
+                mainSetup.url shouldBe "/docs/main/guides/setup"
+                extraSetup.url shouldBe "/docs/extra/guides/setup"
 
                 val mainClash = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/zz-clash.md")))
                 mainClash.urlPath.shouldBeNull() // the within-root loser (raw-byte-order winner keeps it)

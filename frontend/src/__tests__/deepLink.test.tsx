@@ -21,6 +21,7 @@ function citation(id: string) {
 function pageResponse(url: string): PageResponse {
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -36,6 +37,7 @@ function pageResponse(url: string): PageResponse {
 function htmlResponse(url: string): PageHtmlResponse {
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -51,13 +53,13 @@ function htmlResponse(url: string): PageHtmlResponse {
   };
 }
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 function renderAt(initialPath: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
-  const canonical = "/docs/guides/deploy-guide";
-  queryClient.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(canonical));
+  const canonical = "/docs/main/guides/deploy-guide";
+  queryClient.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(canonical));
   queryClient.setQueryData(pageHtmlQuery(ID).queryKey, htmlResponse(canonical));
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
@@ -92,7 +94,7 @@ describe("useDeepLinkHighlight (via Prose)", () => {
     mockMatchMedia(false);
     const scrollSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollSpy;
-    const { view } = renderAt("/docs/guides/deploy-guide#rollback");
+    const { view } = renderAt("/docs/main/guides/deploy-guide#rollback");
 
     await waitFor(() => expect(view.container.querySelector("#rollback")).not.toBeNull());
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
@@ -104,7 +106,7 @@ describe("useDeepLinkHighlight (via Prose)", () => {
     mockMatchMedia(true);
     const scrollSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollSpy;
-    const { view } = renderAt("/docs/guides/deploy-guide#rollback");
+    const { view } = renderAt("/docs/main/guides/deploy-guide#rollback");
 
     await waitFor(() => expect(view.container.querySelector("#rollback")).not.toBeNull());
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
@@ -116,7 +118,7 @@ describe("useDeepLinkHighlight (via Prose)", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const scrollSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollSpy;
-    const { view } = renderAt("/docs/guides/deploy-guide#does-not-exist");
+    const { view } = renderAt("/docs/main/guides/deploy-guide#does-not-exist");
 
     await waitFor(() => expect(view.container.querySelector("#deploy-guide")).not.toBeNull());
     expect(scrollSpy).not.toHaveBeenCalled();

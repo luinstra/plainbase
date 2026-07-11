@@ -5,6 +5,7 @@ import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchHit
 import com.plainbase.domain.search.SearchProvider
@@ -78,6 +79,7 @@ class SearchService(
         val headingId = breadcrumb?.let { hit.headingId }
         return SearchHitPayload(
             pageId = page.id,
+            root = page.root,
             path = page.path,
             url = page.url,
             title = page.title,
@@ -145,9 +147,10 @@ data class SearchPayload(
     val hits: List<SearchHitPayload>,
 )
 
-/** One §A2 hit: engine fields ([snippet]/[highlights]/[score]) + snapshot fields (everything else, §B7). */
+/** One §A2 hit: engine fields ([snippet]/[highlights]/[score]) + snapshot fields (everything else, §B7 - [root] included: display fields join against the published snapshot, never engine-stored copies). */
 data class SearchHitPayload(
     val pageId: PageId,
+    val root: RootName,
     val path: TreePath,
     val url: String?,
     val title: String,

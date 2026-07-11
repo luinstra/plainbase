@@ -4,6 +4,7 @@ import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
@@ -438,6 +439,20 @@ internal fun ApplicationCall.rawPathAfter(prefix: String): String? =
 internal fun decodedTreePath(raw: String): TreePath? {
     val decoded = PercentCoding.decodeOnce(raw) as? PercentCoding.DecodeResult.Success ?: return null
     return TreePath.of(decoded.value)
+}
+
+/**
+ * The ONE first-segment rule every root-scoped route grammar shares (C3, ADR-0011 D3): if the
+ * decoded tail's first segment names a [known] registry root, that root scopes the remainder
+ * (null remainder = a bare-root tail); otherwise null - the WHOLE tail is a legacy main-relative
+ * path. One implementation so the docs/assets/by-path/browse grammars can never drift; how a
+ * non-root answer responds (301 on browser surfaces, resolve-under-main on API surfaces) is the
+ * caller's decision, never encoded here.
+ */
+internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName, TreePath?>? {
+    val root = RootName.of(path.segments.first())?.takeIf { it in known } ?: return null
+    val remainder = path.segments.drop(1).takeIf { it.isNotEmpty() }?.let { TreePath.require(it.joinToString("/")) }
+    return root to remainder
 }
 
 /**

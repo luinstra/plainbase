@@ -4,8 +4,8 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, TreeFolder, TreePage } from "../api/types";
-import { folderByUrl, folderForLanding, folderTitle, landingPage, pageHref } from "../lib/tree";
+import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
+import { folderByUrl, folderForLanding, folderTitle, landingPage, mainTree, pageHref, type FolderEntry } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -32,12 +32,12 @@ export function DocsPage({ path }: { path: string }) {
   // A folder's landing page (index/README) has ONE canonical home: the folder URL. Reaching it at
   // its own bare-page URL redirects to the folder (the lookup needs the tree, kept warm by the
   // Sidebar). Otherwise the canonical target is the page's own `url` (alias → canonical).
-  const landingFolder = resolved && tree.data ? folderForLanding(tree.data.root, resolved.id) : null;
+  const landingEntry = resolved && tree.data ? folderForLanding(tree.data.roots, resolved.id) : null;
   useEffect(() => {
     if (!resolved || pathname !== resolvedFor) return;
-    if (landingFolder) {
-      if (landingFolder.url && landingFolder.url !== resolvedFor) {
-        router.history.replace(landingFolder.url + window.location.search + window.location.hash);
+    if (landingEntry) {
+      if (landingEntry.folder.url && landingEntry.folder.url !== resolvedFor) {
+        router.history.replace(landingEntry.folder.url + window.location.search + window.location.hash);
       }
       return;
     }
@@ -51,7 +51,7 @@ export function DocsPage({ path }: { path: string }) {
       }
       router.history.replace(canonicalUrl + window.location.search + window.location.hash);
     }
-  }, [resolved, landingFolder, pathname, resolvedFor, router, queryClient]);
+  }, [resolved, landingEntry, pathname, resolvedFor, router, queryClient]);
 
   if (page.isPending) return <PagePending />;
   if (page.isError) {
@@ -60,7 +60,7 @@ export function DocsPage({ path }: { path: string }) {
     return <PageError error={page.error} />;
   }
   // A landing page renders AS its folder (the index content replaces the generated listing); the effect canonicalizes the URL.
-  if (landingFolder?.url) return <FolderLanding url={landingFolder.url} />;
+  if (landingEntry?.folder.url) return <FolderLanding url={landingEntry.folder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
   return <PageContent id={page.data.id} page={page.data} />;
@@ -68,31 +68,73 @@ export function DocsPage({ path }: { path: string }) {
 
 /**
  * The `/docs/$` 404 fallthrough (ADR-0003) AND the bare `/docs` route body: by-path said
- * no page owns this location — but a folder might (bare `/docs` is always the root
- * folder; no page can own it, so that route skips by-path entirely and passes `url`
- * explicitly). The location is matched VERBATIM against the tree's folder `url`s (the
- * server stays the single URL authority; nothing is slugified here). A README-preference
- * child renders at the folder URL; otherwise the generated listing. On the splat route
- * by-path ran FIRST, so a page owning the URL always shadows the folder view (the
- * page-shadows-folder ordering, consistent with ADR-0002).
+ * no page owns this location - but a folder might (bare `/docs` resolves to the MAIN
+ * entry's root folder; no page can own it, so that route skips by-path entirely and
+ * passes `url` explicitly). The location is matched VERBATIM against the tree entries'
+ * folder `url`s (the server stays the single URL authority; nothing is slugified here),
+ * with ONE legacy retry: an intercepted in-content legacy href (`/docs/guides`) whose
+ * first segment names no served entry retries under main and, on a hit, replaces the URL
+ * to the folder's canonical `url` - preserving the reload-free SPA invariant a native
+ * navigation (letting the server 301 fire) would break. A README-preference child renders
+ * at the folder URL; otherwise the generated listing. On the splat route by-path ran
+ * FIRST, so a page owning the URL always shadows the folder view (the page-shadows-folder
+ * ordering, consistent with ADR-0002).
  */
 export function FolderLanding({ url }: { url?: string }) {
+  const router = useRouter();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tree = useQuery(treeQuery);
 
+  const target = url ?? pathname;
+  const resolved = tree.data ? resolveLanding(tree.data.roots, target) : null;
+  useEffect(() => {
+    // The retry-hit canonicalization (the DocsPage replace idiom): only while the address bar
+    // still shows the legacy target it was resolved for.
+    if (resolved?.replaceTo && pathname === target) {
+      router.history.replace(resolved.replaceTo + window.location.search + window.location.hash);
+    }
+  }, [resolved?.replaceTo, pathname, target, router]);
+
   if (tree.isPending) return <PagePending />;
   if (tree.isError) return <PageError error={tree.error} />;
-
-  const folder = folderByUrl(tree.data.root, url ?? pathname);
-  if (!folder) return <NotFoundView />;
+  if (!resolved) return <NotFoundView />;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
   // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
   // WHOLE landing (prose + rail), REPLACING the generated child listing — the children stay reachable
   // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
   // column stays reserved so the content width matches a page (see FolderListing).
-  const landing = landingPage(folder);
-  return landing ? <PageContent id={landing.id} /> : <FolderListing folder={folder} />;
+  const landing = landingPage(resolved.folder);
+  return landing ? <PageContent id={landing.id} /> : <FolderListing root={resolved.root} folder={resolved.folder} />;
+}
+
+/**
+ * The ONE folder-landing resolver: bare `/docs` is the MAIN entry ("main" is the reserved D1
+ * literal, the one legal client-side root name); everything else matches entries' folder `url`s
+ * verbatim, then retries a legacy tail under main. The retry's known-root set is the tree entries
+ * themselves - the SERVED set, the only authority that can render a folder. One known divergence
+ * window (panel-adjudicated, documented-benign): a configured-but-UNSERVED extra root whose name
+ * matches a main top-level folder has no entry here, so the retry resurrects `/docs/{extra}/x` as
+ * main's folder while the server treats the same URL as the extra root's (empty) space - the SPA
+ * render and a fresh server request for the SAME initial URL therefore disagree inside the window
+ * (a refresh before the replace lands shows the server's miss). Closed structurally in C4:
+ * registry-backed tree entries (with the `available` flag) list unserved roots too, so the
+ * client's known-root set matches the server's and the first-segment exclusion becomes complete.
+ * `replaceTo` carries the canonical url for the caller's history.replace. `/docs/nope` misses the
+ * retry too - no loop.
+ */
+function resolveLanding(roots: RootTree[], target: string): (FolderEntry & { replaceTo?: string }) | null {
+  if (target === "/docs") {
+    const main = mainTree(roots);
+    return main ? { root: "main", folder: main } : null;
+  }
+  const entry = folderByUrl(roots, target);
+  if (entry) return entry;
+  const tail = target.startsWith("/docs/") ? target.slice("/docs/".length) : null;
+  const first = tail?.split("/")[0];
+  if (!tail || !first || roots.some((e) => e.root === first)) return null;
+  const retried = folderByUrl(roots, `/docs/main/${tail}`);
+  return retried?.folder.url ? { ...retried, replaceTo: retried.folder.url } : null;
 }
 
 /**
@@ -103,7 +145,7 @@ export function FolderLanding({ url }: { url?: string }) {
  * an (empty) rail column held open beside it — so the content lands at the same width as a page.
  * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
-function FolderListing({ folder }: { folder: TreeFolder }) {
+function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
   const title = folderTitle(folder) || "docs";
   useEffect(() => {
@@ -114,7 +156,7 @@ function FolderListing({ folder }: { folder: TreeFolder }) {
     <div className="pb-folder flex gap-12" data-pb-folder>
       <div className="min-w-0 flex-1">
         <div className="mx-auto max-w-[72ch]">
-          <Breadcrumbs path={folder.path} title={title} />
+          <Breadcrumbs root={root} path={folder.path} title={title} />
           <h1 className="text-3xl font-bold text-ink">{title}</h1>
           <FolderListingGroups folder={folder} />
         </div>
@@ -269,7 +311,7 @@ function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) 
           (sidebar + this rail) grow/shrink with the window up to their clamp caps. */}
       <div className="min-w-0 flex-1">
         <div className="mx-auto max-w-[72ch]">
-          <Breadcrumbs path={html.data.path} title={html.data.title} />
+          <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
           <Prose html={html.data.html} />
           <DocFooter frontmatter={frontmatter} url={page?.url ?? null} hasHistory={(page?.commit ?? null) !== null} />
         </div>

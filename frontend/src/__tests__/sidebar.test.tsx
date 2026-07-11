@@ -1,7 +1,11 @@
-import { fireEvent, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { sessionQuery, treeQuery } from "../api/queries";
 import type { TreeFolder } from "../api/types";
 import { SidebarNav } from "../components/Sidebar";
+import { createAppRouter } from "../router";
 
 /**
  * Stable-selector guard (§5.9): `.pb-sidebar` + `data-pb-*` are a public customization
@@ -14,7 +18,7 @@ const tree: TreeFolder = {
   title: null,
   description: null,
   path: "",
-  url: "/docs",
+  url: "/docs/main",
   page_count: 0,
   children: [
     {
@@ -23,7 +27,7 @@ const tree: TreeFolder = {
       title: "Guides",
       description: null,
       path: "guides",
-      url: "/docs/guides",
+      url: "/docs/main/guides",
       page_count: 1,
       children: [
         {
@@ -32,7 +36,7 @@ const tree: TreeFolder = {
           title: "Deploy Guide",
           slug: "deploy-guide",
           path: "guides/deploy-guide.md",
-          url: "/docs/guides/deploy-guide",
+          url: "/docs/main/guides/deploy-guide",
           status: "active",
           updated: null,
         },
@@ -66,7 +70,7 @@ const tree: TreeFolder = {
 
 describe("SidebarNav", () => {
   it("emits the stable selectors and links from node urls", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
 
     const sidebar = container.querySelector(".pb-sidebar");
     expect(sidebar).not.toBeNull();
@@ -74,7 +78,7 @@ describe("SidebarNav", () => {
     expect(container.querySelectorAll('[data-pb-nav-item="folder"]')).toHaveLength(2);
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(2);
 
-    const canonical = container.querySelector('a[href="/docs/guides/deploy-guide"]');
+    const canonical = container.querySelector('a[href="/docs/main/guides/deploy-guide"]');
     expect(canonical).not.toBeNull();
     expect(canonical!.getAttribute("aria-current")).toBe("page");
 
@@ -85,9 +89,9 @@ describe("SidebarNav", () => {
   });
 
   it("links folder labels to their landing url; a loser folder keeps an inert label", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides" />);
 
-    const folderLink = container.querySelector('a[href="/docs/guides"]');
+    const folderLink = container.querySelector('a[href="/docs/main/guides"]');
     expect(folderLink).not.toBeNull();
     expect(folderLink!.textContent).toBe("Guides");
     expect(folderLink!.getAttribute("aria-current")).toBe("page"); // the landing view is active
@@ -100,31 +104,31 @@ describe("SidebarNav", () => {
   });
 
   it("toggles a folder's children via the disclosure button, independent of the label link", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
 
     const toggle = container.querySelector('[data-pb-nav-item="folder"] [data-pb-folder-toggle]')!;
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/docs/main/guides/deploy-guide"]')).not.toBeNull();
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).toBeNull(); // collapsed
-    expect(container.querySelector('a[href="/docs/guides"]')).not.toBeNull(); // the label link survives
+    expect(container.querySelector('a[href="/docs/main/guides/deploy-guide"]')).toBeNull(); // collapsed
+    expect(container.querySelector('a[href="/docs/main/guides"]')).not.toBeNull(); // the label link survives
 
     fireEvent.click(toggle);
-    expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/docs/main/guides/deploy-guide"]')).not.toBeNull();
   });
 
   it("marks exactly the active row with aria-current (the slash-bar/tint hook)", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
     const active = container.querySelectorAll('[aria-current="page"]');
     expect(active).toHaveLength(1);
-    expect(active[0].getAttribute("href")).toBe("/docs/guides/deploy-guide");
+    expect(active[0].getAttribute("href")).toBe("/docs/main/guides/deploy-guide");
     expect(active[0].className).not.toContain("bg-active"); // tint now comes from the .pb-* rule
   });
 
   it("renders the caret as an empty host, with no text glyph", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
     expect(container.textContent).not.toMatch(/[▾▸]/);
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
   });
@@ -136,25 +140,25 @@ describe("SidebarNav", () => {
       title: null,
       description: null,
       path: "",
-      url: "/docs",
+      url: "/docs/main",
       page_count: 0,
       children: [
-        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
-        { type: "page", id: "id-zeta", title: "Zeta", slug: "zeta", path: "zeta.md", url: "/docs/zeta", status: "active", updated: null },
+        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/main/guides", page_count: 0, children: [] },
+        { type: "page", id: "id-zeta", title: "Zeta", slug: "zeta", path: "zeta.md", url: "/docs/main/zeta", status: "active", updated: null },
         // index.md is LAST in tree order but is the root's landing — it surfaces first, as the home link.
-        { type: "page", id: "id-home", title: "Home", slug: "index", path: "index.md", url: "/docs/index", status: "active", updated: null },
+        { type: "page", id: "id-home", title: "Home", slug: "index", path: "index.md", url: "/docs/main/index", status: "active", updated: null },
       ],
     };
-    const { container } = render(<SidebarNav root={withIndex} currentPathname="/docs" />);
+    const { container } = render(<SidebarNav root={withIndex} currentPathname="/docs/main" />);
     const first = container.querySelector("nav [data-pb-nav-item]")!;
     expect(first.getAttribute("data-pb-nav-item")).toBe("page");
     expect(first.textContent).toContain("Home");
-    // It points at the FOLDER url (one canonical path), is active on the root landing…
+    // It points at the FOLDER url (one canonical path - /docs/main since C3), active on the bare-root landing…
     const home = first.querySelector("a")!;
-    expect(home.getAttribute("href")).toBe("/docs");
+    expect(home.getAttribute("href")).toBe("/docs/main");
     expect(home.getAttribute("aria-current")).toBe("page");
     // …and the index page is never ALSO listed at its own bare url.
-    expect(container.querySelector('a[href="/docs/index"]')).toBeNull();
+    expect(container.querySelector('a[href="/docs/main/index"]')).toBeNull();
   });
 
   it("labels a _folder.yaml-less folder with its index child's frontmatter title, not the raw dir name", () => {
@@ -165,7 +169,7 @@ describe("SidebarNav", () => {
       title: null,
       description: null,
       path: "",
-      url: "/docs",
+      url: "/docs/main",
       page_count: 0,
       children: [
         {
@@ -174,21 +178,21 @@ describe("SidebarNav", () => {
           title: null,
           description: null,
           path: "runbooks",
-          url: "/docs/runbooks",
+          url: "/docs/main/runbooks",
           page_count: 1,
           children: [
-            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
+            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/main/runbooks/index", status: "active", updated: null },
           ],
         },
       ],
     };
     const { container } = render(<SidebarNav root={indexTitled} currentPathname="/docs" />);
-    const folderLink = container.querySelector('a[href="/docs/runbooks"]')!;
+    const folderLink = container.querySelector('a[href="/docs/main/runbooks"]')!;
     expect(folderLink).not.toBeNull();
     expect(folderLink.textContent).toBe("Runbooks"); // the index title, NOT "runbooks"
     // The folder's index child is surfaced ONLY by the folder row (its one canonical path) — it is
     // NOT also listed as a child page row at its own bare url.
-    expect(container.querySelector('a[href="/docs/runbooks/index"]')).toBeNull();
+    expect(container.querySelector('a[href="/docs/main/runbooks/index"]')).toBeNull();
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(0);
   });
 
@@ -202,7 +206,7 @@ describe("SidebarNav", () => {
       title: null,
       description: null,
       path: "",
-      url: "/docs",
+      url: "/docs/main",
       page_count: 0,
       children: [
         {
@@ -211,10 +215,10 @@ describe("SidebarNav", () => {
           title: null,
           description: null,
           path: "runbooks",
-          url: "/docs/runbooks",
+          url: "/docs/main/runbooks",
           page_count: 1,
           children: [
-            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
+            { type: "page", id: "id-rb-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/main/runbooks/index", status: "active", updated: null },
           ],
         },
       ],
@@ -237,7 +241,7 @@ describe("SidebarNav", () => {
       title: null,
       description: null,
       path: "",
-      url: "/docs",
+      url: "/docs/main",
       page_count: 0,
       children: [
         {
@@ -261,7 +265,43 @@ describe("SidebarNav", () => {
   });
 
   it("matches the stable-markup snapshot", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
     expect(container.firstChild).toMatchSnapshot();
+  });
+});
+
+describe("Sidebar (the tree-fed parent)", () => {
+  it("renders one SidebarNav PER root entry, in wire order (the C3 map-per-entry shape)", async () => {
+    const entryTree = (root: string, pageId: string, title: string): TreeFolder => ({
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: `/docs/${root}`,
+      page_count: 1,
+      children: [
+        { type: "page", id: pageId, title, slug: "intro", path: "intro.md", url: `/docs/${root}/intro`, status: "active", updated: null },
+      ],
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(treeQuery.queryKey, {
+      roots: [
+        { root: "main", tree: entryTree("main", "id-main-intro", "Main Intro") },
+        { root: "extra", tree: entryTree("extra", "id-extra-intro", "Extra Intro") },
+      ],
+    });
+    queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
+    const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ["/docs"] }));
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(container.querySelectorAll(".pb-sidebar")).toHaveLength(2));
+    const [main, extra] = [...container.querySelectorAll(".pb-sidebar")];
+    expect(main.querySelector('a[href="/docs/main/intro"]')).not.toBeNull();
+    expect(extra.querySelector('a[href="/docs/extra/intro"]')).not.toBeNull();
   });
 });

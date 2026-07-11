@@ -104,7 +104,7 @@ class SearchInvariantTest : FunSpec({
                         else -> node.getValue("children").jsonArray.forEach { walk(it.jsonObject) }
                     }
                 }
-                walk(tree.getValue("root").jsonObject)
+                tree.getValue("roots").jsonArray.forEach { walk(it.jsonObject.getValue("tree").jsonObject) }
             }
 
             val (_, hits) = client.searchHits("deploy")

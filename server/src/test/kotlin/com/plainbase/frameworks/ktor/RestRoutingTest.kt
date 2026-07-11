@@ -47,11 +47,11 @@ class RestRoutingTest : FunSpec({
 
             val bare = client.get("/p/$deployGuideId")
             bare.status shouldBe HttpStatusCode.Found // 302 — the target moves with the page
-            bare.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            bare.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
 
             val withStaleSlug = client.get("/p/$deployGuideId/stale-slug")
             withStaleSlug.status shouldBe HttpStatusCode.Found
-            withStaleSlug.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            withStaleSlug.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
         }
     }
 
@@ -60,17 +60,18 @@ class RestRoutingTest : FunSpec({
             val client = restClient()
             client.get("/p/1-1-1-1-1").status shouldBe HttpStatusCode.BadRequest
             client.get("/p/a3bb189e-8bf9-4888-9912-ace4e6543002").status shouldBe HttpStatusCode.NotFound
-            client.get("/p/${deployGuideId.uppercase()}").headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            client.get("/p/${deployGuideId.uppercase()}").headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
         }
     }
 
-    test("GET /docs/guides/deploy-guide serves the SPA shell with 200 (the SPA fetches via by-path)") {
+    test("GET /docs/main/guides/deploy-guide serves the SPA shell with 200 (the SPA fetches via by-path)") {
         restTest(Fixtures.demoDocs, seed) {
-            val response = client.get("/docs/guides/deploy-guide")
+            val response = client.get("/docs/main/guides/deploy-guide")
             response.status shouldBe HttpStatusCode.OK
             response.bodyAsText() shouldContain "<div id=\"root\">"
-            // Unknown paths serve the shell too — in-app not-found is the SPA's job (§A4 matrix).
-            client.get("/docs/no/such/page").status shouldBe HttpStatusCode.OK
+            // Unknown paths under a known root serve the shell too - in-app not-found is the SPA's
+            // job (§A4 matrix); a rootless unknown path 301s first (RootUrlGrammarTest owns that).
+            client.get("/docs/main/no/such/page").status shouldBe HttpStatusCode.OK
         }
     }
 
@@ -81,8 +82,10 @@ class RestRoutingTest : FunSpec({
             aliased.status shouldBe HttpStatusCode.OK
             val body = Json.parseToJsonElement(aliased.bodyAsText()).jsonObject
             body.getValue("id").jsonPrimitive.content shouldBe deployGuideId
-            body.getValue("url").jsonPrimitive.content shouldBe "/docs/guides/deploy-guide"
+            body.getValue("url").jsonPrimitive.content shouldBe "/docs/main/guides/deploy-guide"
 
+            // Both the root-qualified and the legacy rootless tail resolve (D-C3-3).
+            client.get("/api/v1/pages/by-path/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
             client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.OK
             client.get("/api/v1/pages/by-path/no/such/page").status shouldBe HttpStatusCode.NotFound
         }
@@ -90,11 +93,11 @@ class RestRoutingTest : FunSpec({
 
     test("a folder's URL prefix stays out of by-path space (ADR-0003: landing views are client-rendered)") {
         restTest(Fixtures.demoDocs, seed) {
-            // `guides` is a folder with a tree-node url of /docs/guides — but by-path semantics are
-            // unchanged: only PAGES resolve; the SPA's folder landing kicks in on this very 404.
-            client.get("/api/v1/pages/by-path/guides").status shouldBe HttpStatusCode.NotFound
+            // `guides` is a folder with a tree-node url of /docs/main/guides - but by-path semantics
+            // are unchanged: only PAGES resolve; the SPA's folder landing kicks in on this very 404.
+            client.get("/api/v1/pages/by-path/main/guides").status shouldBe HttpStatusCode.NotFound
             // The routing matrix still serves the shell at the folder URL, like every /docs path.
-            client.get("/docs/guides").status shouldBe HttpStatusCode.OK
+            client.get("/docs/main/guides").status shouldBe HttpStatusCode.OK
         }
     }
 

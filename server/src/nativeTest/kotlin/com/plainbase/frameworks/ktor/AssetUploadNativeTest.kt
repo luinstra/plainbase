@@ -45,9 +45,9 @@ class AssetUploadNativeTest {
                 assertEquals(HttpStatusCode.Created, post.status)
                 val body = Json.parseToJsonElement(post.bodyAsText()).jsonObject
                 assertTrue(body["url"]!!.jsonPrimitive.content.isNotEmpty())
-                assertEquals("/assets/guides/n.png", body["url"]!!.jsonPrimitive.content)
+                assertEquals("/assets/main/guides/n.png", body["url"]!!.jsonPrimitive.content)
 
-                val served = client.get("/assets/guides/n.png")
+                val served = client.get("/assets/main/guides/n.png")
                 assertEquals(HttpStatusCode.OK, served.status)
                 assertContentEquals(bytes, served.bodyAsBytes())
             }

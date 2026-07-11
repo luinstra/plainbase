@@ -23,6 +23,7 @@ function htmlResponse(id: string, headings: PageHtmlResponse["headings"]): PageH
   const title = "Kubernetes";
   return {
     id,
+    root: "main",
     path: "infra/kubernetes.md",
     slug: "kubernetes",
     url: null,
@@ -38,6 +39,7 @@ function htmlResponse(id: string, headings: PageHtmlResponse["headings"]): PageH
 function pageResponse(id: string, frontmatter: Record<string, unknown>): PageResponse {
   return {
     id,
+    root: "main",
     path: "infra/kubernetes.md",
     slug: "kubernetes",
     url: null,
@@ -177,9 +179,9 @@ describe("doc reading metadata rail (chunk-4)", () => {
       return new Response(JSON.stringify(emptyRoot), { status: 200, headers: { "content-type": "application/json" } });
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-    queryClient.setQueryData(pageByPathQuery("infra/kubernetes").queryKey, pageResponse(PAGE_ID, { owner: "ops", status: "active" }));
+    queryClient.setQueryData(pageByPathQuery("main/infra/kubernetes").queryKey, pageResponse(PAGE_ID, { owner: "ops", status: "active" }));
     queryClient.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, htmlResponse(PAGE_ID, []));
-    const history = createMemoryHistory({ initialEntries: ["/docs/infra/kubernetes"] });
+    const history = createMemoryHistory({ initialEntries: ["/docs/main/infra/kubernetes"] });
     const router = createAppRouter(queryClient, history);
     const { container } = render(
       <QueryClientProvider client={queryClient}>
@@ -204,9 +206,9 @@ describe("doc reading metadata rail (chunk-4)", () => {
       { id: "a", level: 2, text: "Alpha" },
       { id: "b", level: 2, text: "Beta" },
     ];
-    queryClient.setQueryData(pageByPathQuery("infra/kubernetes").queryKey, pageResponse(PAGE_ID, {}));
+    queryClient.setQueryData(pageByPathQuery("main/infra/kubernetes").queryKey, pageResponse(PAGE_ID, {}));
     queryClient.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, htmlResponse(PAGE_ID, headings));
-    const history = createMemoryHistory({ initialEntries: ["/docs/infra/kubernetes"] });
+    const history = createMemoryHistory({ initialEntries: ["/docs/main/infra/kubernetes"] });
     const router = createAppRouter(queryClient, history);
     const { container } = render(
       <QueryClientProvider client={queryClient}>

@@ -2,23 +2,26 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
 import { treeQuery } from "../api/queries";
 import type { TreeFolder } from "../api/types";
-import { folderTitle, foldersByPath, landingPage } from "../lib/tree";
+import { folderTitle, foldersByPath, landingPage, treeFor } from "../lib/tree";
 
 /**
  * Breadcrumb trail derived from the page's content-relative `path` (the API's value,
- * verbatim); folder display titles and landing urls come from the tree. An ancestor crumb
- * links to its folder landing view (ADR-0003) — server-issued `url`s consumed verbatim; a
- * folder without one (collision-loser subtree, or tree not loaded yet) stays inert text.
- * Every trail opens with the root crumb linking to `/docs`; on the root landing itself
- * (path "") the trail collapses to just the non-link current crumb.
+ * verbatim); folder display titles and landing urls come from `root`'s tree entry - the
+ * lookup is root-SCOPED (multi-root C3): identical relative paths in two roots must never
+ * borrow each other's titles/urls. An ancestor crumb links to its folder landing view
+ * (ADR-0003) - server-issued `url`s consumed verbatim; a folder without one
+ * (collision-loser subtree, or tree not loaded yet) stays inert text. Every trail opens
+ * with the root crumb linking to `/docs`; on the root landing itself (path "") the trail
+ * collapses to just the non-link current crumb.
  */
-export function Breadcrumbs({ path, title }: { path: string; title: string }) {
+export function Breadcrumbs({ root, path, title }: { root: string; path: string; title: string }) {
   const { data } = useQuery(treeQuery);
-  const folders = data ? foldersByPath(data.root) : new Map<string, TreeFolder>();
+  const entryTree = data ? treeFor(data.roots, root) : null;
+  const folders = entryTree ? foldersByPath(entryTree) : new Map<string, TreeFolder>();
 
   const segments = path.split("/").slice(0, -1);
   // The root label is deliberately the literal "docs" (URL-truthful); a site-title override is a future plainbase.yaml concern.
-  const root = { key: "/docs", label: "docs", url: "/docs" };
+  const rootCrumb = { key: "/docs", label: "docs", url: "/docs" };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
     const folder = folders.get(folderPath);
@@ -30,7 +33,7 @@ export function Breadcrumbs({ path, title }: { path: string; title: string }) {
   // `docs / <Title> / <Title>` with the ancestor self-linking to the page being viewed (Phase 5.5).
   const parent = folders.get(segments.join("/"));
   const pageIsLanding = parent ? landingPage(parent)?.path === path : false;
-  const crumbs = path === "" ? [] : [root, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];
+  const crumbs = path === "" ? [] : [rootCrumb, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];
 
   return (
     <nav className="pb-breadcrumbs mb-4 text-sm text-muted" data-pb-breadcrumbs aria-label="Breadcrumb">

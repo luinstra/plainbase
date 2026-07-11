@@ -38,7 +38,7 @@ class ShellSecurityHeadersTest : FunSpec({
 
     test("the shell CSP is stamped on BOTH shell-serving paths with the full directive set + companion headers") {
         restTest(Fixtures.demoDocs) {
-            for (path in listOf("/", "/docs/anything")) {
+            for (path in listOf("/", "/docs/main/anything")) {
                 val response = client.get(path)
                 response.status shouldBe HttpStatusCode.OK
                 assertFullShellCsp(response.headers["Content-Security-Policy"])
@@ -52,7 +52,7 @@ class ShellSecurityHeadersTest : FunSpec({
 
     test("the script-src hash equals a fresh sha256 of the served shell's inline block (not a constant)") {
         restTest(Fixtures.demoDocs) {
-            val csp = client.get("/docs/anything").headers["Content-Security-Policy"]
+            val csp = client.get("/docs/main/anything").headers["Content-Security-Policy"]
             csp.shouldNotBeNull()
             expectedHash shouldStartWith "sha256-"
             csp shouldContain "'$expectedHash'"
@@ -74,7 +74,7 @@ class ShellSecurityHeadersTest : FunSpec({
 
             // A real bundle asset is not text/html → no shell document CSP (and bundle-wins sets none). Pin BOTH
             // shell trust slots: the js bundle (text/javascript) AND the css bundle (text/css).
-            val shell = client.get("/docs/anything").bodyAsText()
+            val shell = client.get("/docs/main/anything").bodyAsText()
             val jsRef = Regex("src=\"(/assets/[^\"]+\\.js)\"").find(shell)?.groupValues?.get(1)
             val cssRef = Regex("href=\"(/assets/[^\"]+\\.css)\"").find(shell)?.groupValues?.get(1)
             jsRef.shouldNotBeNull()

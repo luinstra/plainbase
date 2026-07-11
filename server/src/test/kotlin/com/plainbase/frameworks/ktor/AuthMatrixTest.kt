@@ -68,7 +68,7 @@ class AuthMatrixTest : FunSpec({
             app.client.get("/api/v1/tree").status shouldBe HttpStatusCode.Unauthorized
             app.client.get("/api/v1/search?q=body").status shouldBe HttpStatusCode.Unauthorized
             app.client.get("/browse/doc.md").status shouldBe HttpStatusCode.Unauthorized
-            app.client.get("/assets/x.bin").status shouldBe HttpStatusCode.Unauthorized
+            app.client.get("/assets/main/x.bin").status shouldBe HttpStatusCode.Unauthorized
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.Unauthorized
         }
     }

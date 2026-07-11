@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
@@ -18,8 +19,9 @@ import io.ktor.server.routing.route
  *  - `GET /api/v1/pages/{id}` — full page payload; the `{id}` parameter accepts any case under the
  *    canonical-shape rule, responses always carry lowercase.
  *  - `GET /api/v1/pages/by-path/{path}` — identical shape; `{path}` is the URL-slugified
- *    `/docs/`-relative form, percent-decoded ONCE (PB-LINK-1), matched case-sensitively against
- *    canonical paths first, then the alias registry.
+ *    `/docs/`-relative form INCLUDING the root segment (`main/guides/deploy-guide`), percent-decoded
+ *    ONCE (PB-LINK-1), matched case-sensitively against canonical paths first, then the alias
+ *    registry. A legacy rootless tail resolves under main (C3, D-C3-3).
  *  - `GET /api/v1/pages/{id}/html` — sanitized HTML + the document-order `headings` array.
  *  - `GET /api/v1/pages/{id}/validate-links` — the page's broken links + anchors (PB-READ-2, frozen).
  *  - `GET /api/v1/pages/{id}/metadata` — the server-derived metadata projection (PB-READ-2, frozen).
@@ -36,6 +38,13 @@ fun Route.pageRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
         // The constant `by-path` segment outranks the `{id}` parameter in Ktor's resolution, so
         // this never shadows a real id (no canonical-shape UUID equals "by-path" anyway).
+        // C3 root grammar, API style (D-C3-3): a known-root first segment scopes the remainder; any
+        // other tail RESOLVES under main directly - never a 301 (a REST hop would tax every legacy
+        // agent client for zero canonicalization benefit; the body's `url` field is canonical). The
+        // SPA's intercepted-click surface (lib/links.ts routes in-app /docs/... anchors through the
+        // router, so they land here, never on the server's /docs handler) works across legacy URLs
+        // precisely BECAUSE of this resolve - do not later "simplify" by-path to a redirect without
+        // re-deciding that surface.
         get("/by-path/{path...}") {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
@@ -45,10 +54,17 @@ fun Route.pageRoutes(ctx: RouteContext) {
                         ErrorCodes.INVALID_PATH,
                         "Expected a page path: /api/v1/pages/by-path/{path}",
                     )
-                val path = decodedTreePath(raw)
+                val decoded = decodedTreePath(raw)
                     ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid page path: '$raw'")
-                val payload = ctx.read.pageByUrlPath(principal, path)
-                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page at path ${path.value}")
+                val (root, path) = splitRootTail(decoded, ctx.roots) ?: (RootName.MAIN to decoded)
+                // A bare known root is a well-formed MISS (the SPA's folder-landing fallthrough
+                // branches on 404 only), never a malformed path.
+                val payload = path?.let { ctx.read.pageByUrlPath(principal, root, it) }
+                    ?: return@guarded call.respondError(
+                        HttpStatusCode.NotFound,
+                        ErrorCodes.PAGE_NOT_FOUND,
+                        "No page at path ${decoded.value}",
+                    )
                 val dto = payload.toDto()
                 call.setContentHashETag(dto.contentHash)
                 call.respondRest(PageResponse.serializer(), dto)

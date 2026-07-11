@@ -20,8 +20,9 @@ redirect). Owner review during the revamp changed both:
   stays a pure generated listing.
 - **One canonical path.** A landing page no longer has a second life at its own bare-page URL —
   that URL now redirects to the folder URL (`DocsPage` → `folderForLanding`). The sidebar surfaces
-  a folder's index through the folder link (the root through a home link to `/docs`), never as a
-  duplicate bare-page row. The §A4 server contract is unchanged; this is SPA-only routing.
+  a folder's index through the folder link (the root through a home link to the root folder URL —
+  `/docs/main` since the multi-root C3 URL change, ADR-0011 D3), never as a duplicate bare-page
+  row. The §A4 server contract is unchanged; this is SPA-only routing.
 
 The bullets below are kept as originally written; where they say "no redirect / independently
 reachable," read the Amendment as governing.
@@ -81,6 +82,9 @@ expand/collapse), and breadcrumb ancestor crumbs link likewise.
 
 - A folder URL is a *client* construct: a raw `curl /docs/guides` returns the shell, and
   `by-path/guides` still 404s — tools must use the tree's `url` field, not guess.
+  *(Amended by multi-root C3, ADR-0011 D3: folder URLs are root-qualified now, so the canonical
+  examples read `curl /docs/main/guides` (a rootless `/docs/guides` first 301s there) and
+  `by-path/main/guides` 404s. The trade-off itself is unchanged.)*
 - The README renders at two URLs (folder prefix + its own canonical). Citations are id-based, so
   identity is unaffected; the duplication is deliberate (no redirect keeps the folder address
   stable for sharing).

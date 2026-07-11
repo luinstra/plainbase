@@ -40,7 +40,7 @@ internal const val SEARCH_DESCRIPTION =
 internal const val READ_PAGE_DESCRIPTION =
     "Read a page's verbatim on-disk markdown source (frontmatter header + body), same as GET /api/v1/pages/{id}."
 internal const val GET_PAGE_METADATA_DESCRIPTION =
-    "A page's server-derived metadata projection (id/path/url/permalink/content_hash/commit/title/headings)."
+    "A page's server-derived metadata projection (id/root/path/url/permalink/content_hash/commit/title/headings)."
 internal const val VALIDATE_LINKS_DESCRIPTION =
     "The broken links + anchors on a page (same contract as GET /api/v1/pages/{id}/validate-links)."
 internal const val PROPOSE_CHANGE_DESCRIPTION =

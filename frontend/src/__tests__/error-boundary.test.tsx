@@ -26,7 +26,7 @@ vi.mock("../components/PageView", async (importOriginal) => {
   };
 });
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const ANON_SESSION = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
 
 function renderAt(initialPath: string) {
@@ -62,7 +62,7 @@ describe("error boundary", () => {
     // React logs the caught render error; expected here, silenced for this test only.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const { view } = renderAt("/docs/guides/deploy-guide");
+      const { view } = renderAt("/docs/main/guides/deploy-guide");
 
       await waitFor(() => expect(view.container.querySelector("[data-pb-error-boundary]")).not.toBeNull());
       expect(view.container.querySelector("[data-pb-shell]")).not.toBeNull();

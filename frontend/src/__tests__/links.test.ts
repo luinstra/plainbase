@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe("interceptableHref", () => {
   it("intercepts internal /docs links (path + hash preserved)", () => {
-    expect(clickOn('<a href="/docs/guides/deploy-guide#rollback">x</a>')).toBe("/docs/guides/deploy-guide#rollback");
+    expect(clickOn('<a href="/docs/main/guides/deploy-guide#rollback">x</a>')).toBe("/docs/main/guides/deploy-guide#rollback");
   });
 
   it("intercepts permalink /p links", () => {
@@ -34,15 +34,15 @@ describe("interceptableHref", () => {
   });
 
   it("intercepts the bare / link (header logo → first-page redirect route)", () => {
-    window.history.replaceState(null, "", "/docs/welcome");
+    window.history.replaceState(null, "", "/docs/main/welcome");
     expect(clickOn('<a href="/">Plainbase</a>')).toBe("/");
     window.history.replaceState(null, "", "/");
   });
 
   it("intercepts clicks on elements nested inside an anchor", () => {
-    expect(clickOn('<a href="/docs/welcome"><strong>x</strong></a>')).toBe("/docs/welcome");
+    expect(clickOn('<a href="/docs/main/welcome"><strong>x</strong></a>')).toBe("/docs/main/welcome");
     // jsdom dispatches from the anchor; re-dispatch from the nested element explicitly
-    document.body.innerHTML = '<a href="/docs/welcome"><strong>x</strong></a>';
+    document.body.innerHTML = '<a href="/docs/main/welcome"><strong>x</strong></a>';
     const strong = document.querySelector("strong")!;
     let captured: string | null = null;
     document.addEventListener(
@@ -54,7 +54,7 @@ describe("interceptableHref", () => {
       { once: true },
     );
     strong.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(captured).toBe("/docs/welcome");
+    expect(captured).toBe("/docs/main/welcome");
   });
 
   it("lets external links through", () => {
@@ -62,23 +62,23 @@ describe("interceptableHref", () => {
   });
 
   it("lets /assets links through (server-served resources)", () => {
-    expect(clickOn('<a href="/assets/infra/assets/diagram.svg">x</a>')).toBeNull();
+    expect(clickOn('<a href="/assets/main/infra/assets/diagram.svg">x</a>')).toBeNull();
   });
 
   it("lets modified clicks through (new tab etc.)", () => {
-    expect(clickOn('<a href="/docs/welcome">x</a>', { metaKey: true })).toBeNull();
-    expect(clickOn('<a href="/docs/welcome">x</a>', { ctrlKey: true })).toBeNull();
-    expect(clickOn('<a href="/docs/welcome">x</a>', { button: 1 })).toBeNull();
+    expect(clickOn('<a href="/docs/main/welcome">x</a>', { metaKey: true })).toBeNull();
+    expect(clickOn('<a href="/docs/main/welcome">x</a>', { ctrlKey: true })).toBeNull();
+    expect(clickOn('<a href="/docs/main/welcome">x</a>', { button: 1 })).toBeNull();
   });
 
   it("lets target=_blank and download links through", () => {
-    expect(clickOn('<a href="/docs/welcome" target="_blank">x</a>')).toBeNull();
-    expect(clickOn('<a href="/docs/welcome" download>x</a>')).toBeNull();
+    expect(clickOn('<a href="/docs/main/welcome" target="_blank">x</a>')).toBeNull();
+    expect(clickOn('<a href="/docs/main/welcome" download>x</a>')).toBeNull();
   });
 
   it("lets same-page fragment jumps stay native", () => {
-    window.history.replaceState(null, "", "/docs/guides/deploy-guide");
-    expect(clickOn('<a href="/docs/guides/deploy-guide#rollback">x</a>')).toBeNull();
+    window.history.replaceState(null, "", "/docs/main/guides/deploy-guide");
+    expect(clickOn('<a href="/docs/main/guides/deploy-guide#rollback">x</a>')).toBeNull();
     window.history.replaceState(null, "", "/");
   });
 });

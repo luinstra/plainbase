@@ -32,6 +32,7 @@ import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.RoleListResponse
 import com.plainbase.frameworks.ktor.dto.RoleResponse
+import com.plainbase.frameworks.ktor.dto.RootTreeDto
 import com.plainbase.frameworks.ktor.dto.SearchHitDto
 import com.plainbase.frameworks.ktor.dto.SearchResponse
 import com.plainbase.frameworks.ktor.dto.SessionResponse
@@ -78,50 +79,55 @@ class WireTypeGoldenTest : FunSpec({
         "treeResponse" to encoded(
             TreeResponse.serializer(),
             TreeResponse(
-                root = TreeNodeDto.Folder(
-                    name = "",
-                    title = null,
-                    description = null,
-                    path = "",
-                    url = "/docs",
-                    pageCount = 0,
-                    children = listOf(
-                        TreeNodeDto.Folder(
-                            name = "guides",
-                            title = "Guides",
-                            description = "How-to guides",
-                            path = "guides",
-                            url = "/docs/guides",
-                            pageCount = 1,
-                            children = listOf(
-                                TreeNodeDto.Page(
-                                    id = PAGE_1,
-                                    title = "Deploy Guide",
-                                    slug = "deploy-guide",
-                                    path = "guides/deploy-guide.md",
-                                    url = "/docs/guides/deploy-guide",
-                                    status = "published",
-                                    updated = "2026-06-01",
-                                ),
-                            ),
-                        ),
-                        TreeNodeDto.Folder(
-                            name = "attic",
+                roots = listOf(
+                    RootTreeDto(
+                        root = "main",
+                        tree = TreeNodeDto.Folder(
+                            name = "",
                             title = null,
                             description = null,
-                            path = "attic",
-                            url = null,
+                            path = "",
+                            url = "/docs/main",
                             pageCount = 0,
-                            children = emptyList(),
-                        ),
-                        TreeNodeDto.Page(
-                            id = PAGE_2,
-                            title = "Shadowed",
-                            slug = "shadowed",
-                            path = "shadowed.md",
-                            url = null,
-                            status = "published",
-                            updated = null,
+                            children = listOf(
+                                TreeNodeDto.Folder(
+                                    name = "guides",
+                                    title = "Guides",
+                                    description = "How-to guides",
+                                    path = "guides",
+                                    url = "/docs/main/guides",
+                                    pageCount = 1,
+                                    children = listOf(
+                                        TreeNodeDto.Page(
+                                            id = PAGE_1,
+                                            title = "Deploy Guide",
+                                            slug = "deploy-guide",
+                                            path = "guides/deploy-guide.md",
+                                            url = "/docs/main/guides/deploy-guide",
+                                            status = "published",
+                                            updated = "2026-06-01",
+                                        ),
+                                    ),
+                                ),
+                                TreeNodeDto.Folder(
+                                    name = "attic",
+                                    title = null,
+                                    description = null,
+                                    path = "attic",
+                                    url = null,
+                                    pageCount = 0,
+                                    children = emptyList(),
+                                ),
+                                TreeNodeDto.Page(
+                                    id = PAGE_2,
+                                    title = "Shadowed",
+                                    slug = "shadowed",
+                                    path = "shadowed.md",
+                                    url = null,
+                                    status = "published",
+                                    updated = null,
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -134,6 +140,7 @@ class WireTypeGoldenTest : FunSpec({
             PageResponse.serializer(),
             PageResponse(
                 id = PAGE_1,
+                root = "main",
                 path = "guides/deploy-guide.md",
                 slug = "deploy-guide",
                 url = null,
@@ -163,6 +170,7 @@ class WireTypeGoldenTest : FunSpec({
             PageHtmlResponse.serializer(),
             PageHtmlResponse(
                 id = PAGE_2,
+                root = "main",
                 path = "shadowed.md",
                 slug = "shadowed",
                 url = null,
@@ -196,7 +204,7 @@ class WireTypeGoldenTest : FunSpec({
                 total = 1,
                 hits = listOf(
                     SearchHitDto(
-                        pageId = PAGE_2, path = "shadowed.md", url = null, title = "Shadowed",
+                        pageId = PAGE_2, root = "main", path = "shadowed.md", url = null, title = "Shadowed",
                         headingId = null, headingText = null, headingPath = emptyList(),
                         snippet = "Deploy targets are listed here.",
                         highlights = listOf(HighlightDto(start = 0, end = 6)),
@@ -287,7 +295,7 @@ class WireTypeGoldenTest : FunSpec({
         ),
         "createdResponse" to encoded(
             CreatedResponse.serializer(),
-            CreatedResponse(id = PAGE_1, url = "/docs/guides/deploy-guide", contentHash = HASH_A, commit = null),
+            CreatedResponse(id = PAGE_1, url = "/docs/main/guides/deploy-guide", contentHash = HASH_A, commit = null),
         ),
         "createdButUnindexedResponse" to encoded(
             CreatedButUnindexedResponse.serializer(),

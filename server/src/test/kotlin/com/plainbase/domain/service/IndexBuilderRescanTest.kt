@@ -39,7 +39,7 @@ class IndexBuilderRescanTest : FunSpec({
 
                 val winner = snapshot.byPath.getValue(rooted("a b.md"))
                 val loser = snapshot.byPath.getValue(rooted("a-b.md"))
-                winner.url shouldBe "/docs/a-b" // 'a b.md' (0x20 at index 1) sorts before 'a-b.md' (0x2D)
+                winner.url shouldBe "/docs/main/a-b" // 'a b.md' (0x20 at index 1) sorts before 'a-b.md' (0x2D)
                 loser.url.shouldBeNull()
                 loser.slug shouldBe "a-b" // the slug itself is uncontested; only the path is
 
@@ -62,8 +62,8 @@ class IndexBuilderRescanTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 val snapshot = harness.builder.rebuild()
-                snapshot.byPath.getValue(rooted("docs/setup.md")).url shouldBe "/docs/docs/setup"
-                snapshot.byPath.getValue(rooted("docs/setup/intro.md")).url shouldBe "/docs/docs/setup/intro"
+                snapshot.byPath.getValue(rooted("docs/setup.md")).url shouldBe "/docs/main/docs/setup"
+                snapshot.byPath.getValue(rooted("docs/setup/intro.md")).url shouldBe "/docs/main/docs/setup/intro"
                 harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldBe emptyList()
             }
         }
@@ -74,19 +74,19 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "docs/start.md", pageWithId("Start"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/docs/start"
+                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/docs/start"
 
                 // Move 1: docs/start.md -> archive/start.md (the id travels in the frontmatter).
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
                 val afterFirst = harness.builder.rebuild()
-                afterFirst.byId.getValue(pageId).url shouldBe "/docs/archive/start"
+                afterFirst.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
                 harness.registry.all() shouldContainExactly mapOf(rooted("docs/start") to pageId)
 
                 // Move 2: the chain collapses — BOTH old paths map straight to the id, one hop each.
                 Files.createDirectories(root.resolve("attic"))
                 Files.move(root.resolve("archive/start.md"), root.resolve("attic/start.md"))
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/attic/start"
+                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/attic/start"
                 harness.registry.all() shouldContainExactly mapOf(
                     rooted("docs/start") to pageId,
                     rooted("archive/start") to pageId,
@@ -103,9 +103,9 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "guide.md", pageWithId("Guide"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/guide"
+                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/guide"
                 writePage(root, "guide.md", "---\nid: ${pageId.value}\ntitle: Guide\nslug: handbook\n---\n\n# Guide\n")
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/handbook"
+                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/handbook"
                 harness.registry.find(rooted("guide")) shouldBe pageId
             }
         }

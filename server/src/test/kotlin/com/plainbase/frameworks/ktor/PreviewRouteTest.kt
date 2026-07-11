@@ -109,7 +109,7 @@ class PreviewRouteTest : FunSpec({
             }
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
-            html shouldContain "/docs/guides/deploy-guide"
+            html shouldContain "/docs/main/guides/deploy-guide"
             html shouldContain "data-pb-link-error"
         }
     }
@@ -128,7 +128,7 @@ class PreviewRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
             // Resolved against guides/ (the buffer's folder), NOT the content root.
-            html shouldContain "\"/docs/guides/getting-started\""
+            html shouldContain "\"/docs/main/guides/getting-started\""
             html shouldNotContain "data-pb-link-error"
         }
     }

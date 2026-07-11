@@ -18,7 +18,8 @@ import com.plainbase.domain.root.RootedPath
  *
  * Lookup semantics (frozen):
  *  - [byId] — index `byId`; a shape-valid unknown id is the caller's `page_not_found`.
- *  - [byUrlPath] — the *decoded, NFC* `/docs/`-relative slug path, matched case-sensitively
+ *  - [byUrlPath] - the *decoded, NFC* ROOT-relative slug path (the tail after `/docs/{root}/`,
+ *    C3; the route parses the root segment off first), matched case-sensitively
  *    against canonical paths first, then the alias registry; an alias hit returns the page whose
  *    payload carries the CURRENT canonical `url`, so clients self-correct (§A4).
  */
@@ -26,8 +27,6 @@ class PageService(
     private val indexBuilder: IndexBuilder,
     private val aliasRegistry: UrlAliasRegistry,
     private val citations: CitationFactory,
-    // The one root this service resolves URL paths against (main until C3 puts roots in URLs).
-    private val root: RootName,
 ) {
 
     /** The published index snapshot the routing layer reads from. */
@@ -36,8 +35,8 @@ class PageService(
     /** The full page payload for [id], or null when unknown. */
     fun byId(id: PageId): PagePayload? = index.byId[id]?.let(::payload)
 
-    /** The full page payload at the canonical-or-alias URL [path], or null (§A4 by-path rules). */
-    fun byUrlPath(path: TreePath): PagePayload? {
+    /** The full page payload at [root]'s canonical-or-alias URL [path], or null (§A4 by-path rules). */
+    fun byUrlPath(root: RootName, path: TreePath): PagePayload? {
         val snapshot = index
         val rooted = RootedPath(root, path)
         val page = snapshot.byUrlPath[rooted]

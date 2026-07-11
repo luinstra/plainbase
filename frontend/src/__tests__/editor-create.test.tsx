@@ -9,7 +9,7 @@ import { createAppRouter } from "../router";
 
 const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 new-page creation (D-2 acceptance #4). `POST /api/v1/pages` returns the minted id + the
@@ -18,7 +18,7 @@ const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null,
  */
 
 const NEW_ID = "01900000-0000-7000-8000-000000000001";
-const NEW_URL = "/docs/guides/my-new-page";
+const NEW_URL = "/docs/main/guides/my-new-page";
 const HASH = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -28,6 +28,7 @@ function jsonResponse(body: unknown, status = 200) {
 function pageResponse(): PageResponse {
   return {
     id: NEW_ID,
+    root: "main",
     path: "guides/my-new-page.md",
     slug: "my-new-page",
     url: NEW_URL,
@@ -44,6 +45,7 @@ function pageResponse(): PageResponse {
 function htmlResponse(): PageHtmlResponse {
   return {
     id: NEW_ID,
+    root: "main",
     path: "guides/my-new-page.md",
     slug: "my-new-page",
     url: NEW_URL,
@@ -99,7 +101,7 @@ describe("W6 new-page creation", () => {
   it("creating a page POSTs /api/v1/pages and navigates directly to the server-returned url", async () => {
     const { view, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       // Prime the destination so the post-navigation read renders without a live fetch.
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 
@@ -183,13 +185,13 @@ describe("W6 new-page creation", () => {
   });
 
   it("the new-section checkbox POSTs slug:index with the folder field as the section path", async () => {
-    const SECTION_URL = "/docs/runbooks/index";
+    const SECTION_URL = "/docs/main/runbooks/index";
     const { view, fetchSpy } = renderNew(
       jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201),
       (qc) => {
         // Prime the destination (the index page's own url canonicalizes to /docs/runbooks) so the
         // post-create navigation renders without a live fetch.
-        qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
+        qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
         qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
       },
     );
@@ -241,7 +243,7 @@ describe("W6 new-page creation", () => {
 
   it("forwards the typed slug VERBATIM (case-preserving) — the server is the slug authority", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 
@@ -263,7 +265,7 @@ describe("W6 new-page creation", () => {
 
   it("a trailing-slash folder is normalized once — preview shows a single slash AND the POST strips it (regression)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 
@@ -302,7 +304,7 @@ describe("W6 new-page creation", () => {
 
   it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 
@@ -319,7 +321,7 @@ describe("W6 new-page creation", () => {
 
   it("selecting a template fills the body textarea and POSTs that scaffold", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 
@@ -340,9 +342,9 @@ describe("W6 new-page creation", () => {
   });
 
   it("a template body flows to the POST even in section mode (no special-casing)", async () => {
-    const SECTION_URL = "/docs/runbooks/index";
+    const SECTION_URL = "/docs/main/runbooks/index";
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
+      qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
     });
 

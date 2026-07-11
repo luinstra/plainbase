@@ -33,7 +33,7 @@ import kotlin.time.Clock
  * only — no reflection (native-image gate).
  */
 val restModule = module {
-    single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get(), root = get<RootRegistry>().main.name) }
+    single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get()) }
     single { SearchService(provider = get(), indexBuilder = get()) }
     single {
         WritePipeline(
@@ -131,6 +131,7 @@ val restModule = module {
             contentStore = get(),
             writePipeline = get(),
             root = get<RootRegistry>().main.name,
+            knownRoots = get<RootRegistry>().roots.map { it.name }.toSet(),
             history = get(),
             idProvider = get(),
             proposalService = get(),

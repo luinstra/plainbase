@@ -5,12 +5,16 @@ import { treeQuery } from "../api/queries";
 import type { TreeFolder, TreeNode, TreePage } from "../api/types";
 import { folderTitle, landingPage, nonLandingChildren, pageHref } from "../lib/tree";
 
-/** Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. */
+/**
+ * Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. One
+ * [SidebarNav] per root entry (multi-root C3) - visually identical to pre-C3 with the one
+ * runtime root; per-root section headers are C5 cosmetics.
+ */
 export function Sidebar() {
   const { data } = useQuery(treeQuery);
   const currentPathname = useRouterState({ select: (s) => s.location.pathname });
   if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
-  return <SidebarNav root={data.root} currentPathname={currentPathname} />;
+  return data.roots.map((entry) => <SidebarNav key={entry.root} root={entry.tree} currentPathname={currentPathname} />);
 }
 
 /**
@@ -19,7 +23,7 @@ export function Sidebar() {
  */
 export function SidebarNav({ root, currentPathname }: { root: TreeFolder; currentPathname: string }) {
   // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
-  // home link AT THE TOP — pointing at the folder URL (`/docs`), never the page's bare URL.
+  // home link AT THE TOP — pointing at the folder URL (`/docs/{root}` since C3), never the page's bare URL.
   const home = landingPage(root);
   return (
     <aside

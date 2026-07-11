@@ -78,9 +78,13 @@ object RestGolden {
                             .sortedBy { node -> sortKey(node as JsonObject) },
                     )
                     "id" -> normalizeId(value, seededIds)
-                    // Descend through every other object value too — the response wraps the
-                    // first folder under "root", which must be normalized like any node.
-                    else -> if (value is JsonObject) normalizeTree(value, seededIds) else value
+                    // Descend through every other object AND array value too - the response wraps
+                    // per-root entries under the "roots" array (C3), each holding its folder "tree".
+                    else -> when (value) {
+                        is JsonObject -> normalizeTree(value, seededIds)
+                        is JsonArray -> JsonArray(value.map { normalizeTree(it, seededIds) })
+                        else -> value
+                    }
                 }
             },
         )

@@ -37,8 +37,9 @@ class ReadDtoNativeTest {
 
         val metadata = PageMetadataResponse(
             id = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+            root = "main",
             path = "guides/a.md",
-            url = "/docs/guides/a",
+            url = "/docs/main/guides/a",
             permalink = "/p/0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
             contentHash = "sha256:${"0".repeat(64)}",
             commit = null,

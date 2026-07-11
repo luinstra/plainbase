@@ -201,7 +201,7 @@ fun withRestServices(
                 val services = buildRouteContext(
                     policy = policy,
                     indexBuilder = builder,
-                    pageService = PageService(builder, registry, CitationFactory(), rootRegistry.main.name),
+                    pageService = PageService(builder, registry, CitationFactory()),
                     searchService = SearchService(provider = searchProvider, indexBuilder = builder),
                     aliasRegistry = registry,
                     contentStore = store,
@@ -216,6 +216,7 @@ fun withRestServices(
                         root = rootRegistry.main.name,
                     ),
                     root = rootRegistry.main.name,
+                    knownRoots = rootRegistry.roots.map { it.name }.toSet(),
                     history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
                     proposalService = proposalService,

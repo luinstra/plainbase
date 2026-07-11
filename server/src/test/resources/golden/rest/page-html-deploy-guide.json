@@ -1,8 +1,9 @@
 {
   "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+  "root": "main",
   "path": "guides/deploy-guide.md",
   "slug": "deploy-guide",
-  "url": "/docs/guides/deploy-guide",
+  "url": "/docs/main/guides/deploy-guide",
   "title": "Deploy Guide",
   "html": "{{html}}",
   "content_hash": "{{content_hash}}",

@@ -33,10 +33,10 @@ data class RootSection(
  * consumer goes through [section] or [view], both total (an unknown root yields the empty
  * section/view, so `EMPTY`-snapshot readers stay total from startup).
  *
- * **URL emission is root-blind in C2:** `IndexedPage.url` stays `/docs/{path}` with no root
- * segment (the URL shape changes in C3, together with routes and the wire DTO), so two roots
- * holding the same relative URL path emit IDENTICAL `url` strings. That is deliberate: [byUrlPath]
- * is keyed (root, urlPath) and only main's URLs are reachable through the wired serving layer.
+ * **URL emission is root-qualified (C3):** `IndexedPage.url` is `/docs/{root}/{path}` and asset
+ * URLs are `/assets/{root}/{path}`, so two roots holding the same relative URL path can no longer
+ * emit identical `url` strings. [byUrlPath] stays keyed (root, urlPath) - the root segment on the
+ * wire and the composite key agree by construction.
  *
  * The class no longer implements [PageIndexView]; it vends per-root views instead - [view] is the
  * render/link seam, one [PageIndexView] per root, so `LinkResolver`, the renderer factory, and the
@@ -61,10 +61,10 @@ class PageIndex(sections: List<RootSection>) {
     val byPath: Map<RootedPath, IndexedPage> = pages.associateBy { RootedPath(it.root, it.path) }
 
     /**
-     * Page by rooted canonical URL path (the `/docs/`-relative slug segments, decoded) — the
-     * `by-path` lookup. Collision losers have no URL path and are absent (§A4): reachable by id
-     * only. URL uniqueness is per root (the composite key); see the class doc for the C2
-     * identical-url-across-roots note.
+     * Page by rooted canonical URL path (the ROOT-relative slug segments, decoded - the tail after
+     * `/docs/{root}/` since C3) - the `by-path` lookup. Collision losers have no URL path and are
+     * absent (§A4): reachable by id only. URL uniqueness is per root (the composite key); see the
+     * class doc's root-qualified emission note.
      */
     val byUrlPath: Map<RootedPath, IndexedPage> =
         pages.mapNotNull { page -> page.urlPath?.let { RootedPath(page.root, it) to page } }.toMap()
@@ -97,6 +97,8 @@ class PageIndex(sections: List<RootSection>) {
     /** One root's [PageIndexView]: every lookup (and the §A2 lowercase rescue) scoped to that section. */
     private class SectionView(section: RootSection) : PageIndexView {
 
+        private val root: RootName = section.root
+
         private val byPath: Map<TreePath, IndexedPage> = section.pages.associateBy { it.path }
 
         private val assets: Set<TreePath> = section.assets
@@ -120,7 +122,7 @@ class PageIndex(sections: List<RootSection>) {
             return indexed.url ?: indexed.permalink
         }
 
-        override fun assetUrl(asset: TreePath): String = "/assets/" + PercentCoding.encodePath(asset.value)
+        override fun assetUrl(asset: TreePath): String = "/assets/" + root.value + "/" + PercentCoding.encodePath(asset.value)
 
         override fun caseInsensitiveMatches(path: TreePath): List<TreePath> =
             byLowercaseValue[path.value.lowercase()].orEmpty().filterNot { it == path }
@@ -141,10 +143,11 @@ class PageIndex(sections: List<RootSection>) {
  * bytes the render saw.
  *
  * [urlPath] is the canonical URL as a [TreePath] of DECODED slug segments (e.g.
- * `notes/release-notes-2026`) — the form the alias registry stores; null marks a same-parent
- * slug-collision loser, excluded from path space but fully reachable via its [permalink]. [url] is
- * the wire form: `/docs/` + the RFC 3986 percent-encoded segments (unicode slugs are legal and
- * encoded on emit). Both are root-relative; the URL carries no root segment until C3.
+ * `notes/release-notes-2026`) - the form the alias registry stores, root-relative; null marks a
+ * same-parent slug-collision loser, excluded from path space but fully reachable via its
+ * [permalink]. [url] is the wire form: `/docs/{root}/` + the RFC 3986 percent-encoded segments
+ * (unicode slugs are legal and encoded on emit; the root slug is URL-safe by construction and
+ * never encoded - C3, ADR-0011 D3).
  *
  * Carrying [markdown] and [contentHash] here is what makes every page response internally
  * coherent: markdown, html, hash, and citation all come from ONE published snapshot, so an
@@ -195,7 +198,7 @@ data class IndexedPage(
 ) {
 
     /** The canonical path URL on the wire (§A4), or null for a collision loser (REST `url` field). */
-    val url: String? = urlPath?.let { "/docs/" + PercentCoding.encodePath(it.value) }
+    val url: String? = urlPath?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) }
 
     /** The permanent ID permalink — the §A4 durability layer, unaffected by any path change. */
     val permalink: String get() = "/p/${id.value}"
