@@ -75,7 +75,7 @@ object AdoptCommand {
         try {
             val database = DatabaseFactory.createDatabase(driver)
             when (config.storage.backend) {
-                StorageBackend.LOCAL -> store = LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules())
+                StorageBackend.LOCAL -> store = LocalContentStore(root = config.mainContentRoot(), ignoreRules = IgnoreRules())
                 StorageBackend.OBJECT -> {
                     // Object mode adopts over the DATA_DIR mirror (the bucket is the authority).
                     // RECORD/MATERIALIZE hydrate first - under the lock already held, race-free (the
@@ -115,9 +115,9 @@ object AdoptCommand {
         return 0
     }
 
-    /** The tree the pass actually walked: CONTENT_DIR locally, the DATA_DIR mirror in object mode. */
+    /** The tree the pass actually walked: main's content root locally, the DATA_DIR mirror in object mode. */
     private fun adoptedRoot(config: PlainbaseConfig) = when (config.storage.backend) {
-        StorageBackend.LOCAL -> config.contentDir
+        StorageBackend.LOCAL -> config.mainContentRoot()
         StorageBackend.OBJECT -> config.dataDir.resolve("mirror")
     }
 

@@ -20,7 +20,7 @@ import java.nio.file.Path
  */
 class HistoryModuleDetectionTest : FunSpec({
 
-    fun resolve(config: PlainbaseConfig): HistoryProvider = selectHistoryProvider(config)
+    fun resolve(config: PlainbaseConfig): HistoryProvider = selectHistoryProvider(config, config.mainContentRoot())
 
     fun config(content: Path, data: Path, enabled: Boolean?) =
         PlainbaseConfig(contentDir = content, dataDir = data, host = "0.0.0.0", port = 8080, git = GitConfig(enabled = enabled))
@@ -77,7 +77,7 @@ class HistoryModuleDetectionTest : FunSpec({
         withDirs { content, data ->
             initRepo(content) // a real .git exists in CONTENT_DIR
             val absentGit = GitExecutor(workTree = content, home = data.resolve("git-home"), gitBinary = "/nonexistent/git")
-            gitEnabled(config(content, data, enabled = null), absentGit) shouldBe true
+            gitEnabled(config(content, data, enabled = null), content, absentGit) shouldBe true
         }
     }
 
@@ -90,7 +90,7 @@ class HistoryModuleDetectionTest : FunSpec({
             val fakeGit = fakeGitDir("#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n")
             try {
                 val exec = GitExecutor(workTree = content, home = data.resolve("git-home"), gitBinary = fakeGit.toString())
-                gitEnabled(config(content, data, enabled = null), exec) shouldBe true
+                gitEnabled(config(content, data, enabled = null), content, exec) shouldBe true
             } finally {
                 fakeGit.toFile().delete()
             }
@@ -105,7 +105,7 @@ class HistoryModuleDetectionTest : FunSpec({
             val fakeGit = fakeGitDir("#!/bin/sh\necho false\nexit 0\n")
             try {
                 val exec = GitExecutor(workTree = content, home = data.resolve("git-home"), gitBinary = fakeGit.toString())
-                gitEnabled(config(content, data, enabled = null), exec) shouldBe false
+                gitEnabled(config(content, data, enabled = null), content, exec) shouldBe false
             } finally {
                 fakeGit.toFile().delete()
             }

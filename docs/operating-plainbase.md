@@ -27,7 +27,8 @@ have.
 
 ## Search freshness: editing files outside Plainbase
 
-Plainbase watches `CONTENT_DIR` and re-indexes when files change, so an edit made outside Plainbase
+Plainbase watches the main content root (`CONTENT_DIR`, or `roots.main.path` when a `roots {}`
+block is configured) and re-indexes when files change, so an edit made outside Plainbase
 (in your editor, via `git checkout`, etc.) becomes searchable automatically. The end-to-end latency
 is **debounce (0.5 s) + a full index rebuild + the search sync**.
 
@@ -38,7 +39,7 @@ is **debounce (0.5 s) + a full index rebuild + the search sync**.
 - **macOS** dev boxes use the JDK's `PollingWatchService` (multi-second poll interval; the
   `com.sun.nio.file` sensitivity modifiers are not reliably effective on JDK 21+). So **the 5-second
   promise does not bind macOS.** The practical answer on a Mac is a manual **rescan**
-  (`POST /api/v1/admin/rescan`): it re-scans `CONTENT_DIR`, picks up the just-edited file, and
+  (`POST /api/v1/admin/rescan`): it re-scans the main content root, picks up the just-edited file, and
   diff-syncs search. **Reindex (below) will NOT surface a fresh disk edit** - it rebuilds the search
   engine from the *already-published* page snapshot, so a file the watcher hasn't picked up yet isn't
   in that snapshot. From Phase 3, Plainbase-initiated saves are immediate on every platform.
@@ -84,7 +85,8 @@ CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
 
 Like `serve`, the offline CLIs (`reindex`, `adopt`) read `DATA_DIR/plainbase.conf` (env still wins), so a
 file-configured `storage.backend=object` makes them operate on the bucket mirror - not the local
-`CONTENT_DIR` - matching the running server for the same `DATA_DIR`.
+content root - matching the running server for the same `DATA_DIR`. A file-configured `roots {}`
+block likewise makes them operate on `roots.main.path`, not an ignored `CONTENT_DIR`.
 
 **Do not run `plainbase reindex` against a live server** - use the endpoint instead. The CLI and a
 running server are separate processes with separate write monitors; while SQLite WAL +
@@ -135,7 +137,8 @@ which a corpus perf test enforces on every build.
 ## Backups
 
 **Back up whatever holds the authoritative content.** Which store that is depends on `storage.backend`:
-in the default **local** mode it is `CONTENT_DIR` (see
+in the default **local** mode it is the main content root - `CONTENT_DIR`, or `roots.main.path` when a
+`roots {}` block is configured (see
 [the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above); in
 **object** mode it is the S3-compatible **bucket**, and `CONTENT_DIR` is ignored entirely (the
 Object-storage subsection below covers that case). Back up `DATA_DIR/plainbase.db` too in EITHER mode
@@ -147,7 +150,7 @@ if users, agent tokens, proposals, roles, or the audit log matter to you - it's 
 ### Object-storage backend (`storage.backend=object`)
 
 In object mode the S3-compatible **bucket** is the canonical content store - back IT up, the same way
-you'd back up `CONTENT_DIR` locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
+you'd back up the content root locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
 cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
 still holds real state and still wants one.
 
@@ -244,8 +247,9 @@ carried in that bundle is lost.
 your store, sized to how much history you want:
 
 - **Local (`storage.backend=local`):** the existing guidance above -
-  [back up `CONTENT_DIR`](#the-content-tree-is-plain-markdown-on-disk) (and `DATA_DIR/plainbase.db` if
-  users/tokens/proposals matter). Unchanged.
+  [back up the main content root](#the-content-tree-is-plain-markdown-on-disk) (`CONTENT_DIR`, or
+  `roots.main.path` when configured; plus `DATA_DIR/plainbase.db` if users/tokens/proposals matter).
+  Unchanged otherwise.
 - **AWS S3 (or any versioning-capable store):** enable bucket
   [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) plus a
   **noncurrent-version lifecycle rule** for near-free point-in-time restore. **Same-bucket caveat:**
@@ -276,9 +280,9 @@ section.
 ## Losing `DATA_DIR`: what recovers and what doesn't
 
 `DATA_DIR` can vanish entirely - a lost volume, a wiped container - and Plainbase boots clean against
-the surviving authoritative content: in **local** mode that is `CONTENT_DIR`, and in **object** mode it
-is the bucket (`CONTENT_DIR` is ignored; `DATA_DIR/mirror` re-hydrates from the bucket on the next
-boot). The authoritative content is the source of truth, so most state re-derives; the app database
+the surviving authoritative content: in **local** mode that is the main content root (`CONTENT_DIR`,
+or `roots.main.path` when configured), and in **object** mode it is the bucket (`CONTENT_DIR` is
+ignored; `DATA_DIR/mirror` re-hydrates from the bucket on the next boot). The authoritative content is the source of truth, so most state re-derives; the app database
 `DATA_DIR/plainbase.db` also holds *real* state that does not.
 
 **Recovers on the next boot, automatically:**
@@ -310,8 +314,8 @@ boot). The authoritative content is the source of truth, so most state re-derive
 
 - run `plainbase adopt --write-ids` so every page's identity lives in the tree itself and survives
   any `DATA_DIR` loss,
-- back up `CONTENT_DIR` always; back up `DATA_DIR/plainbase.db` too if users, tokens, or proposals
-  matter.
+- back up the main content root (`CONTENT_DIR`, or `roots.main.path` when configured) always; back up
+  `DATA_DIR/plainbase.db` too if users, tokens, or proposals matter.
 
 Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
 `search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and

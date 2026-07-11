@@ -16,13 +16,15 @@ import com.plainbase.frameworks.git.runAutoMaintenance
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import org.koin.dsl.module
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
  * Wires the optional Git-history layer (ADR-0006, extended by C5's git-over-the-mirror). The impl is
  * selected by `git.enabled` (explicit override) falling back, in LOCAL mode, to detection of a repo in
- * CONTENT_DIR. The [WriteHistoryHook] single adapts the chosen [HistoryProvider] to the write-pipeline
- * seam - `RestModule` passes it into the `WritePipeline`.
+ * main's content root (`mainContentRoot()` - contentDir for every legacy config). The
+ * [WriteHistoryHook] single adapts the chosen [HistoryProvider] to the write-pipeline seam -
+ * `RestModule` passes it into the `WritePipeline`.
  *
  * [GitRepoLocks] and [GitBundleDr] are declared UNCONDITIONALLY-but-LAZY singles (the R9 exemplar,
  * `ContentModule.kt`'s `contentDirStoreConstructions`): resolved ONLY on the object+`git.enabled=true`
@@ -66,6 +68,12 @@ val historyModule = module {
         }
         // OBJECT + git.enabled==true is the ONLY combination that touches GitRepoLocks/GitBundleDr - every
         // other combination (LOCAL, OBJECT git-off/null) leaves both singles UNRESOLVED (R9).
+        //
+        // Multi-root C1 seam: main's content root flows through mainContentRoot() below - equal to
+        // contentDir for every legacy config, non-null in both storage modes (a synthesized object
+        // main has no local path; the accessor falls back to the ignored contentDir). C1 changes NO
+        // history behavior: Root.history is stored on the registry but nothing consumes it yet - the
+        // git.enabled tri-state stays the only live knob until C4 cuts per-root selection in here.
         if (config.storage.backend == StorageBackend.OBJECT && config.git.enabled == true) {
             // A throwaway GitExecutor for the maintenance daemon (GitExecutor is stateless - hermetic per
             // call - so a second instance over the same workTree/home is equivalent to the one
@@ -73,6 +81,8 @@ val historyModule = module {
             val maintenanceExec = GitExecutor(workTree = config.dataDir.resolve("mirror"), home = config.dataDir.resolve("git-home"))
             selectHistoryProvider(
                 config = config,
+                // Inert in object mode: the OBJECT arm roots at dataDir/mirror, never at contentRoot.
+                contentRoot = config.mainContentRoot(),
                 repoPath = repoPath,
                 // BLOCKING #2 fix: the C5 per-save ship OBLIGATION is decided SYNCHRONOUSLY here
                 // (`recordCommit()` is in-memory-only - no git call, no network call) so a crash right
@@ -93,7 +103,7 @@ val historyModule = module {
                 repoWriteMonitor = get<GitRepoLocks>().repoWrite,
             )
         } else {
-            selectHistoryProvider(config, repoPath)
+            selectHistoryProvider(config, config.mainContentRoot(), repoPath)
         }
     }
     single<WriteHistoryHook> {
@@ -107,13 +117,16 @@ val historyModule = module {
  * real [GitCliHistoryProvider] over `DATA_DIR/mirror` when `git.enabled=true` (C5), or [NoOpHistoryProvider]
  * otherwise (`false`/`null` - auto-detection against the now-ignored CONTENT_DIR would be meaningless
  * against a fresh mirror and must not run). LOCAL mode keeps [gitEnabled] (the `git.enabled` override or
- * CONTENT_DIR repo auto-detection). [repoPath] resolves the raw on-disk repo-relative path to stage in
- * git; [objectMaintenance]/[repoWriteMonitor] are the OBJECT-only collaborators the module lambda passes
- * (both null on LOCAL, so LOCAL stays byte-identical to pre-C5 behavior). The git-home is NOT created
- * here - the provider creates it lazily at the first commit.
+ * repo auto-detection in [contentRoot], main's content root - `config.mainContentRoot()` at the module
+ * seam, deliberately not defaulted so no call site silently falls back to the legacy field). [repoPath]
+ * resolves the raw on-disk repo-relative path to stage in git; [objectMaintenance]/[repoWriteMonitor]
+ * are the OBJECT-only collaborators the module lambda passes (both null on LOCAL, so LOCAL stays
+ * byte-identical to pre-C5 behavior). The git-home is NOT created here - the provider creates it lazily
+ * at the first commit.
  */
 internal fun selectHistoryProvider(
     config: PlainbaseConfig,
+    contentRoot: Path,
     repoPath: (TreePath) -> String = { it.value },
     objectMaintenance: (() -> Unit)? = null,
     repoWriteMonitor: Any? = null,
@@ -139,11 +152,11 @@ internal fun selectHistoryProvider(
             objectMode = true,
         )
     }
-    val exec = GitExecutor(workTree = config.contentDir, home = config.dataDir.resolve("git-home"))
-    return if (gitEnabled(config, exec)) {
+    val exec = GitExecutor(workTree = contentRoot, home = config.dataDir.resolve("git-home"))
+    return if (gitEnabled(config, contentRoot, exec)) {
         GitCliHistoryProvider(
             exec = exec,
-            workTree = config.contentDir,
+            workTree = contentRoot,
             gitHome = config.dataDir.resolve("git-home"),
             defaultAuthor = CommitIdentity(config.git.authorName, config.git.authorEmail),
             defaultCommitter = CommitIdentity(config.git.authorName, config.git.authorEmail),
@@ -160,10 +173,10 @@ internal fun selectHistoryProvider(
 
 /**
  * Whether to run the Git provider: the explicit [PlainbaseConfig.GitConfig.enabled] override wins either
- * direction; `null` auto-detects a repo in CONTENT_DIR. Detection must catch `.git`-as-a-FILE (linked
- * worktree / submodule, P1-2): `Files.exists` (dir OR file) then a hermetic `rev-parse
- * --is-inside-work-tree` confirmation - `Files.isDirectory` alone would miss a worktree and silently
- * pick NoOp.
+ * direction; `null` auto-detects a repo in [contentRoot] (main's content root). Detection must catch
+ * `.git`-as-a-FILE (linked worktree / submodule, P1-2): `Files.exists` (dir OR file) then a hermetic
+ * `rev-parse --is-inside-work-tree` confirmation - `Files.isDirectory` alone would miss a worktree and
+ * silently pick NoOp.
  *
  * Crucially, the presence of `.git` means Git mode is INTENDED, so ANY failure to confirm it is NOT a
  * reason to drop history (P1, refining P2-2): a missing binary (exitCode -1), `fatal: detected dubious
@@ -172,9 +185,9 @@ internal fun selectHistoryProvider(
  * of silently recording NO history in a real repo. ONLY a DEFINITIVE run (git ran successfully and
  * explicitly reported "false" - a bare repo or inside `.git`) drops to NoOp.
  */
-internal fun gitEnabled(config: PlainbaseConfig, exec: GitExecutor): Boolean {
+internal fun gitEnabled(config: PlainbaseConfig, contentRoot: Path, exec: GitExecutor): Boolean {
     config.git.enabled?.let { return it }
-    if (!Files.exists(config.contentDir.resolve(".git"))) return false
+    if (!Files.exists(contentRoot.resolve(".git"))) return false
     val insideWorkTree = exec.run(listOf("rev-parse", "--is-inside-work-tree"))
     if (insideWorkTree.ok && insideWorkTree.stdoutText.trim() == "false") return false // definitively not a work tree
     return true // any failure (missing/dubious-ownership/permission) → keep Git on; the startup gate fails loud

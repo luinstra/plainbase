@@ -85,6 +85,9 @@ private fun serve() {
     // Q9/Q10 ignored-key warnings (never fatal): local mode names any configured-but-ignored
     // storage.object.* keys; object mode warns when CONTENT_DIR was explicitly set.
     config.storageWarnings().forEach { logger.warn { it } }
+    // Multi-root C1 warnings (never fatal): an ignored explicit CONTENT_DIR, extras a single-root
+    // build cannot serve yet, and unavailable extra-root paths (ADR-0011 D11-D13).
+    config.rootsWarnings().forEach { logger.warn { it } }
     // ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild work.
     // Same idiom as the gates that follow (System.err + exitProcess(1), never a thrown stack trace) - a bind
     // misconfiguration is an operator-actionable startup refusal, not an argument-precondition bug.

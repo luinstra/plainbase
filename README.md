@@ -21,7 +21,8 @@ files.
   rationale; nothing lands without a human approving it in the review UI.
 - **No lock-in, structurally.** Your docs are a plain tree you can always walk
   away with, and there is exactly one authority per deployment. Local deploy:
-  the `CONTENT_DIR` directory IS the authority. Cloud deploy: an S3-compatible
+  the `CONTENT_DIR` directory (or `roots.main.path` when a `roots {}` block is
+  configured) IS the authority. Cloud deploy: an S3-compatible
   bucket IS the authority (a plain tree of objects any S3 tool can read).
   Git is an optional layer, every index is derived and rebuildable. Leaving
   Plainbase is copying a directory or syncing a bucket.

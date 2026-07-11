@@ -2,6 +2,7 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -28,13 +29,18 @@ internal val contentDirStoreConstructions = AtomicInteger()
  */
 val contentModule = module {
     single { IgnoreRules() }
+    single<RootRegistry> { RootRegistry.of(get<PlainbaseConfig>().roots.list) }
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
-        // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside CONTENT_DIR, the
-        // app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
+        // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
+        // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
         // and its writes would re-trigger every rebuild.
-        LocalContentStore(root = config.contentDir, ignoreRules = get(), exclusions = listOf(config.dataDir))
+        LocalContentStore(
+            root = requireNotNull(get<RootRegistry>().main.localPath),
+            ignoreRules = get(),
+            exclusions = listOf(config.dataDir),
+        )
     }
     single<ObjectContentStore> {
         val config = get<PlainbaseConfig>()

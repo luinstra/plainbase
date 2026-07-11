@@ -15,8 +15,9 @@ import kotlin.io.path.readLines
  * The hexagonal floor, checked structurally (§5.8 / S1 acceptance): `domain/` imports NO framework
  * — no flexmark (the single-renderer rule; the `SectionSplitter` MUST stay a pure consumer of
  * snapshot data), no ktor, no SQL, no DI, no wire serializer — and never reaches into
- * `frameworks/`. The kotlin-logging facade and the JDK (minus its filesystem handle types:
- * `java.nio.file`, `java.io.File*`; charset/util stay legal) are the only sanctioned non-domain imports.
+ * `frameworks/`. The kotlin-logging facade and the JDK (minus its filesystem types: `java.nio.file`
+ * except the exact `Path` exemption below, `java.io.File*`; charset/util stay legal) are the only
+ * sanctioned non-domain imports.
  *
  * Source-scanning on purpose: a bytecode/classpath check cannot fail on an import the compiler
  * optimized away, and the rule we enforce is about SOURCE dependencies.
@@ -38,6 +39,12 @@ class DomainPurityTest : FunSpec({
         "com.plainbase.frameworks.", // domain depends on nothing above it
     )
 
+    // The ONE sanctioned java.nio.file import: Path as a HELD VALUE in a topology descriptor
+    // (domain/root's RootBackend.Local, ADR-0011 D8 - the domain records where a root lives, it
+    // never touches it). Files and the stream/walk APIs stay banned; Path itself still exposes
+    // toRealPath/register, so this is a discipline line the exemption trusts, not a hard seal.
+    val allowedExact = setOf("java.nio.file.Path")
+
     val domainSources = domainSourceRoot()
     val files = Files.walk(domainSources).use { stream ->
         stream.filter { it.isRegularFile() && it.extension == "kt" }.toList()
@@ -54,7 +61,10 @@ class DomainPurityTest : FunSpec({
     test("no domain source imports a framework") {
         val violations = files.flatMap { file ->
             file.readLines()
-                .filter { line -> line.startsWith("import ") && forbidden.any { line.removePrefix("import ").startsWith(it) } }
+                .filter { line ->
+                    val target = line.removePrefix("import ")
+                    line.startsWith("import ") && target !in allowedExact && forbidden.any { target.startsWith(it) }
+                }
                 .map { "${domainSources.relativize(file)}: $it" }
         }
         violations.shouldBeEmpty()

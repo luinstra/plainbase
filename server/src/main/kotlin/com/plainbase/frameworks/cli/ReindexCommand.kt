@@ -114,7 +114,7 @@ object ReindexCommand {
     private fun rebuildSearchIndex(config: PlainbaseConfig, driver: SqlDriver, searchDb: SearchDb): Int {
         val database = DatabaseFactory.createDatabase(driver)
         val store: ContentStore = when (config.storage.backend) {
-            StorageBackend.LOCAL -> LocalContentStore(root = config.contentDir, ignoreRules = IgnoreRules())
+            StorageBackend.LOCAL -> LocalContentStore(root = config.mainContentRoot(), ignoreRules = IgnoreRules())
             StorageBackend.OBJECT -> {
                 // Object mode reindexes the DATA_DIR mirror (the bucket is the authority), hydrating it
                 // first - under the DataDirLock already held above, race-free (the server is down).
@@ -165,9 +165,9 @@ object ReindexCommand {
         }
     }
 
-    /** The tree the rebuild actually indexed: CONTENT_DIR locally, the DATA_DIR mirror in object mode. */
+    /** The tree the rebuild actually indexed: main's content root locally, the DATA_DIR mirror in object mode. */
     private fun indexedRoot(config: PlainbaseConfig) = when (config.storage.backend) {
-        StorageBackend.LOCAL -> config.contentDir
+        StorageBackend.LOCAL -> config.mainContentRoot()
         StorageBackend.OBJECT -> config.dataDir.resolve("mirror")
     }
 
