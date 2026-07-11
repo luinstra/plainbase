@@ -167,12 +167,12 @@ class Fts5GenerationTest : FunSpec({
                         }
                     val orphan = active + 1
                     statement.executeUpdate(
-                        "INSERT INTO search_page(generation, page_id, content_hash, path) " +
-                            "SELECT $orphan, page_id, content_hash, path FROM search_page WHERE generation = $active",
+                        "INSERT INTO search_page(generation, page_id, content_hash, root, path) " +
+                            "SELECT $orphan, page_id, content_hash, root, path FROM search_page WHERE generation = $active",
                     )
                     statement.executeUpdate(
-                        "INSERT INTO section_doc(generation, page_id, heading_id, status) " +
-                            "SELECT $orphan, page_id, heading_id, status FROM section_doc WHERE generation = $active",
+                        "INSERT INTO section_doc(generation, page_id, root, heading_id, status) " +
+                            "SELECT $orphan, page_id, root, heading_id, status FROM section_doc WHERE generation = $active",
                     )
                 }
             }

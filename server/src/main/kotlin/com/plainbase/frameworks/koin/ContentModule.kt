@@ -2,7 +2,9 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -48,8 +50,11 @@ val contentModule = module {
         ObjectContentStoreFactory.build(
             config,
             ignoreRules = get(),
-            dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
-            isDirty = { dirtyPages.isDirty(it) }, // MINOR-1: indexed single-row EXISTS for the poll hot-path guard
+            // Object mode is always a synthesized main, so every dirty row IS main's; the factory
+            // wants bare TreePaths of the main mirror.
+            dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
+            // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
+            isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
         )
     }
     // Backend selection (Q9): the port ALIASES the selected backend's concrete adapter (one instance,

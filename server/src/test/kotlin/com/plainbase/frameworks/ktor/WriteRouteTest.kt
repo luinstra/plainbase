@@ -5,6 +5,8 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -43,8 +45,12 @@ class WriteRouteTest : FunSpec({
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val welcomeId = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
-        idMap.bind(TreePath.require("index.md"), PageId.require(welcomeId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
+        idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
     }
 
     fun markdown(): ContentType = ContentType.parse("text/markdown")
@@ -85,8 +91,8 @@ class WriteRouteTest : FunSpec({
         val badBytes = "---\nid: $badId\ntitle: Bad\ndesc: ".toByteArray() +
             byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "\n---\n\n# Bad\n\nbody.\n".toByteArray()
         val adversarialSeed: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(TreePath.require("bom.md"), PageId.require(bomId), materialized = true)
-            idMap.bind(TreePath.require("bad.md"), PageId.require(badId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bom.md")), PageId.require(bomId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bad.md")), PageId.require(badId), materialized = true)
         }
         writeWithFiles(adversarialSeed, "bom.md" to bomBytes, "bad.md" to badBytes) { harness ->
             for ((id, bytes, name) in listOf(Triple(bomId, bomBytes, "bom.md"), Triple(badId, badBytes, "bad.md"))) {
@@ -189,7 +195,9 @@ class WriteRouteTest : FunSpec({
     test("a buffer whose frontmatter id differs from (or removes) the path-param id is 422 id_change_unsupported") {
         val pageId = "0190aaaa-bbbb-7ccc-8ddd-000000000010"
         val original = "---\nid: $pageId\ntitle: Stable\n---\n\n# Stable\n\nbody.\n".toByteArray()
-        val seedMat: (IdMapRepository) -> Unit = { it.bind(TreePath.require("stable.md"), PageId.require(pageId), materialized = true) }
+        val seedMat: (
+            IdMapRepository,
+        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("stable.md")), PageId.require(pageId), materialized = true) }
         writeWithFiles(seedMat, "stable.md" to original) { harness ->
             val hBase = citations.contentHash(original)
 
@@ -237,7 +245,9 @@ class WriteRouteTest : FunSpec({
     test("a byte-identical PUT of a page whose on-disk id is QUOTED is 200, not a false 422") {
         val pageId = "0190aaaa-bbbb-7ccc-8ddd-000000000030"
         val original = "---\nid: \"$pageId\"\ntitle: Quoted\n---\n\n# Quoted\n\nbody.\n".toByteArray()
-        val seedQuoted: (IdMapRepository) -> Unit = { it.bind(TreePath.require("quoted.md"), PageId.require(pageId), materialized = false) }
+        val seedQuoted: (
+            IdMapRepository,
+        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("quoted.md")), PageId.require(pageId), materialized = false) }
         writeWithFiles(seedQuoted, "quoted.md" to original) { harness ->
             val hBase = citations.contentHash(original)
 
@@ -277,7 +287,7 @@ class WriteRouteTest : FunSpec({
         // `z-dup.md` sorts AFTER `a-owner.md`, so the owner wins the id and the dup is minted a fresh one.
         val dup = "---\nid: $claimedId\ntitle: Dup\n---\n\n# Dup\n\nbody.\n".toByteArray()
         writeWithFiles({}, "a-owner.md" to owner, "z-dup.md" to dup) { harness ->
-            val dupPage = harness.builder.current.byPath.getValue(TreePath.require("z-dup.md"))
+            val dupPage = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("z-dup.md")))
             dupPage.materialized shouldBe false // the rejected claim → non-materialized, fresh id
             val dupId = dupPage.id.value
             val hBase = citations.contentHash(dup)
@@ -310,7 +320,9 @@ class WriteRouteTest : FunSpec({
         val pageId = "0190aaaa-bbbb-7ccc-8ddd-000000000020"
         val original = "---\nid: $pageId\ntitle: Slugged\nslug: original-slug\nredirect_from:\n  - old/path\n---\n\n# Slugged\n\nbody.\n"
         val bytes = original.toByteArray()
-        val seedMat: (IdMapRepository) -> Unit = { it.bind(TreePath.require("slugged.md"), PageId.require(pageId), materialized = true) }
+        val seedMat: (
+            IdMapRepository,
+        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("slugged.md")), PageId.require(pageId), materialized = true) }
         writeWithFiles(seedMat, "slugged.md" to bytes) { _ ->
             val hBase = citations.contentHash(bytes)
             val reslug = original.replace("slug: original-slug", "slug: new-slug").toByteArray()

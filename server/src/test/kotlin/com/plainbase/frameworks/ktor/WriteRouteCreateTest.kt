@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.domain.service.WriteHistoryHook
@@ -852,7 +854,10 @@ class WriteRouteCreateTest : FunSpec({
     test("a create whose URL matches a DANGLING alias (target page absent) is 201, not blocked") {
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             // A stale alias `dangling` → a page id NOT in the index (no such page was ever created).
-            harness.registry.register(TreePath.require("dangling"), PageId.require("0190dead-beef-7000-8000-000000000001"))
+            harness.registry.register(
+                RootedPath(RootName.MAIN, TreePath.require("dangling")),
+                PageId.require("0190dead-beef-7000-8000-000000000001"),
+            )
 
             val post = client.post("/api/v1/pages") {
                 contentType(json())

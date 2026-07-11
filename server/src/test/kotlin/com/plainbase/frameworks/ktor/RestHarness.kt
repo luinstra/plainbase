@@ -63,7 +63,7 @@ class RestHarness(
      * A [TreeJsonCache] over the harness's builder for the §C4 memoization test. The route path's own memo lives
      * privately inside [GuardedReadFacade]; this exposes the SAME cache type for the per-snapshot-identity assertion.
      */
-    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder) }
+    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder, harness.rootRegistry.main.name) }
 
     init {
         seed(harness.idMap)
@@ -137,7 +137,11 @@ fun IndexHarness.testRouteContext(
         clock = Clock.System,
         enforced = enforced,
     )
-    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, contentStore = contentStore)
+    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(
+        indexBuilder = builder,
+        contentStore = contentStore,
+        root = rootRegistry.main.name,
+    )
     val proposalService = com.plainbase.domain.service.ProposalService(
         repository = proposalRepository,
         citations = CitationFactory(),
@@ -148,11 +152,12 @@ fun IndexHarness.testRouteContext(
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
-        pageService = PageService(builder, registry, CitationFactory()),
+        pageService = PageService(builder, registry, CitationFactory(), rootRegistry.main.name),
         searchService = SearchService(provider = searchProvider, indexBuilder = builder),
         aliasRegistry = registry,
         contentStore = contentStore,
         writePipeline = writePipeline,
+        root = rootRegistry.main.name,
         history = history,
         idProvider = idProvider,
         proposalService = proposalService,

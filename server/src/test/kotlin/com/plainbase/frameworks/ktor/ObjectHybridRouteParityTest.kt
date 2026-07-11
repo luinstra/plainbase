@@ -4,6 +4,8 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -48,7 +50,11 @@ class ObjectHybridRouteParityTest : FunSpec({
     val citations = CitationFactory()
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
 
     fun markdown(): ContentType = ContentType.parse("text/markdown")

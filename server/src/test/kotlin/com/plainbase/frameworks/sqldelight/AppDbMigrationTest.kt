@@ -1,9 +1,13 @@
 package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
+import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -38,14 +42,16 @@ class AppDbMigrationTest : FunSpec({
                 // The tables are live, not just present: rows round-trip through the typed layer.
                 val db = DatabaseFactory.createDatabase(driver)
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-                db.pageCheckpointQueries.insertRow(id, TreePath.require("docs/start"))
+                db.pageCheckpointQueries.insertRow(id, RootName.MAIN, TreePath.require("docs/start"))
                 val row = db.pageCheckpointQueries.selectAll().executeAsOne()
                 row.id shouldBe id
+                row.root shouldBe RootName.MAIN
                 row.url_path?.value shouldBe "docs/start"
 
-                db.dirtyPageQueries.upsert(id, TreePath.require("docs/start"), "sha256:abc", "WRITING")
+                db.dirtyPageQueries.upsert(id, RootName.MAIN, TreePath.require("docs/start"), "sha256:abc", "WRITING")
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
                 dirty.id shouldBe id
+                dirty.root shouldBe RootName.MAIN
                 dirty.path.value shouldBe "docs/start"
                 dirty.stage shouldBe "WRITING"
 
@@ -133,8 +139,187 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 10L
+                    version shouldBe 11L
                 }
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    test("v10 baseline migrates to v11 preserving EVERY affected table's data, all rows stamped root='main'") {
+        // The frozen one-way C2 migration: seed one or two rows into each of the six root-gaining
+        // tables on a real committed v10 baseline through raw JDBC (the pre-C2 shapes), migrate via
+        // the production factory, and read everything back through the typed layer.
+        val dir = Files.createTempDirectory("plainbase-migration-test")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("10.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            val idX = ByteArray(16) { 1 }
+            val proposalId = ByteArray(16) { 3 }
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 10") }
+                raw.prepareStatement("INSERT INTO id_map(path, id, materialized) VALUES ('guides/a.md', ?, 1)").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement("INSERT INTO url_alias(path, id) VALUES ('guides/old', ?)").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.createStatement().use {
+                    it.execute(
+                        "INSERT INTO identity_issue(kind, path, other_path, page_id, message) VALUES ('PATCH_REFUSED', 'guides/a.md', '', x'', 'reason')",
+                    )
+                }
+                raw.prepareStatement("INSERT INTO page_checkpoint(id, url_path) VALUES (?, 'guides/a')").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement(
+                    "INSERT INTO dirty_page(id, path, expected_hash, stage) VALUES (?, 'guides/a.md', 'sha256:abc', 'WRITING')",
+                ).use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement(
+                    "INSERT INTO proposals(id, operation, target_path, proposed_content, rationale, diff_artifact, status, " +
+                        "author_issuer, author_external_id, author_label, created_at) " +
+                        "VALUES (?, 'EDIT', 'guides/a.md', x'01', 'r', '', 'PENDING', 'agent', '00ff', 'ci', 0)",
+                ).use {
+                    it.setBytes(1, proposalId)
+                    it.executeUpdate()
+                }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val pageId = PageId.require("01010101-0101-0101-0101-010101010101")
+
+                val binding = db.idMapQueries.selectAllBindings().executeAsOne()
+                binding.root shouldBe RootName.MAIN
+                binding.path.value shouldBe "guides/a.md"
+                binding.id shouldBe pageId
+
+                val alias = db.idMapQueries.selectAllAliases().executeAsOne()
+                alias.root shouldBe RootName.MAIN
+                alias.path.value shouldBe "guides/old"
+
+                // Decodes through the repository's per-kind mapping: root stamped, other_root the sentinel.
+                SqlDelightIdMapRepository(db).issues() shouldContainExactly
+                    listOf(IdentityIssue.PatchRefused(RootName.MAIN, TreePath.require("guides/a.md"), "reason"))
+                driver.queryLong("SELECT count(*) FROM identity_issue WHERE other_root = ''") shouldBe 1L
+
+                val checkpoint = db.pageCheckpointQueries.selectAll().executeAsOne()
+                checkpoint.root shouldBe RootName.MAIN
+                checkpoint.url_path?.value shouldBe "guides/a"
+
+                val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
+                dirty.root shouldBe RootName.MAIN
+                dirty.path.value shouldBe "guides/a.md"
+
+                db.proposalsQueries.selectById(
+                    com.plainbase.domain.page.ProposalId.require("03030303-0303-0303-0303-030303030303"),
+                ) { _, _, _, _, _, _, _, _, status, _, _, _, _, _, _, _, _, _, _, root -> status to root }
+                    .executeAsOne() shouldBe ("PENDING" to "main")
+
+                // The composite PK is live (same relative path under another root inserts cleanly)...
+                db.idMapQueries.upsertBinding(
+                    root = RootName.require("extra"),
+                    path = TreePath.require("guides/b.md"),
+                    id = PageId.require("02020202-0202-0202-0202-020202020202"),
+                    materialized = false,
+                )
+                // ...and UNIQUE(id) still holds across roots: re-claiming a bound id under a new key throws.
+                shouldThrowAny {
+                    db.idMapQueries.upsertBinding(
+                        root = RootName.require("extra"),
+                        path = TreePath.require("guides/copy.md"),
+                        id = pageId,
+                        materialized = false,
+                    )
+                }
+            }
+
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { statement ->
+                    val indexes = statement.executeQuery("SELECT name FROM sqlite_master WHERE type='index'").use { rows ->
+                        buildList { while (rows.next()) add(rows.getString(1)) }
+                    }
+                    indexes shouldContain "dirty_page_root_path"
+                    indexes shouldNotContain "dirty_page_path"
+                }
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    test("an interrupted migration rolls back whole: the DB stays intact at v10 and a retry after fixing succeeds") {
+        // The generated Schema.migrate issues bare per-statement executes; DatabaseFactory wraps the
+        // chain + the user_version bump in ONE transaction. Inject a failure MID-sequence: dirty_page
+        // is rebuilt AFTER id_map/identity_issue/url_alias/page_checkpoint in 10.sqm, so a corrupt
+        // dirty_page row (NULL stage smuggled past a constraint-stripped rebuild) fails the fifth
+        // rebuild - without the transaction, the first four would already be committed in v11 shape
+        // under a v10 stamp: unable to retry, unable to boot.
+        val dir = Files.createTempDirectory("plainbase-migration-test")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("10.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            val idX = ByteArray(16) { 1 }
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { statement ->
+                    statement.execute("PRAGMA user_version = 10")
+                    statement.execute(
+                        "INSERT INTO id_map(path, id, materialized) VALUES ('guides/a.md', x'01010101010101010101010101010101', 1)",
+                    )
+                    // Strip dirty_page's NOT NULLs so a NULL stage can exist (the corrupted-source shape).
+                    statement.execute("CREATE TABLE dirty_page_corrupt (id BLOB PRIMARY KEY, path TEXT, expected_hash TEXT, stage TEXT)")
+                    statement.execute("INSERT INTO dirty_page_corrupt SELECT * FROM dirty_page")
+                    statement.execute("DROP TABLE dirty_page")
+                    statement.execute("ALTER TABLE dirty_page_corrupt RENAME TO dirty_page")
+                }
+                raw.prepareStatement(
+                    "INSERT INTO dirty_page(id, path, expected_hash, stage) VALUES (?, 'guides/a.md', 'sha256:abc', NULL)",
+                ).use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+            }
+
+            shouldThrowAny { DatabaseFactory.createDriver(dbPath) } // NOT NULL violation mid-chain
+
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { statement ->
+                    // All-or-nothing: still v10, no half-rebuilt tables, the pre-C2 shapes and data intact.
+                    statement.executeQuery("PRAGMA user_version").use { rows ->
+                        rows.next()
+                        rows.getLong(1) shouldBe 10L
+                    }
+                    val tables = statement.executeQuery(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_v11'",
+                    ).use { rows ->
+                        buildList { while (rows.next()) add(rows.getString(1)) }
+                    }
+                    tables shouldBe emptyList()
+                    statement.executeQuery("SELECT count(*) FROM pragma_table_info('id_map') WHERE name = 'root'").use { rows ->
+                        rows.next()
+                        rows.getLong(1) shouldBe 0L
+                    }
+                    statement.executeQuery("SELECT count(*) FROM id_map").use { rows ->
+                        rows.next()
+                        rows.getLong(1) shouldBe 1L
+                    }
+                    // Fix the corrupt row; the retry must then migrate cleanly.
+                    statement.execute("UPDATE dirty_page SET stage = 'WRITING' WHERE stage IS NULL")
+                }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                driver.queryLong("PRAGMA user_version") shouldBe 11L
+                db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
+                db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }
         } finally {
             dir.toFile().deleteRecursively()

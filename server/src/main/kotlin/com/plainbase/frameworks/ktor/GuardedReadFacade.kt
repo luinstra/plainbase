@@ -12,6 +12,8 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.domain.service.IndexBuilder
@@ -42,9 +44,11 @@ class GuardedReadFacade(
     private val history: HistoryProvider,
     private val aliasRegistry: UrlAliasRegistry,
     private val linkChecker: LinkChecker,
+    // The one root this facade serves (main until C3 puts roots in URLs/routes).
+    private val root: RootName,
 ) : ReadFacade {
 
-    private val treeJson = TreeJsonCache(indexBuilder)
+    private val treeJson = TreeJsonCache(indexBuilder, root)
 
     override fun pageById(principal: Principal, id: PageId): PagePayload? {
         policy.checkRead(principal, id.value)
@@ -73,7 +77,8 @@ class GuardedReadFacade(
         // corpora, and the cost is an impl detail BEHIND the frozen `ValidateLinksResponse`. A future per-page or
         // memoized-per-snapshot optimization is transparent — no contract change, no LinkChecker change (the addendum
         // forbids touching it here).
-        return LinkReport(linkChecker.check(snapshot).broken.filter { it.page == page.path })
+        // Rooted filter: identical relative paths in two roots must never merge their failures.
+        return LinkReport(linkChecker.check(snapshot).broken.filter { it.page == RootedPath(page.root, page.path) })
     }
 
     override fun pageMetadata(principal: Principal, id: PageId): IndexedPage? {
@@ -93,7 +98,7 @@ class GuardedReadFacade(
 
     override fun preview(principal: Principal, sourcePath: TreePath, bytes: ByteArray): RenderedPage {
         policy.checkRead(principal, "preview")
-        return indexBuilder.renderPreview(sourcePath, bytes)
+        return indexBuilder.renderPreview(root, sourcePath, bytes)
     }
 
     override fun history(principal: Principal, path: TreePath, limit: Int): List<Commit> {
@@ -113,7 +118,7 @@ class GuardedReadFacade(
 
     override fun assetRead(principal: Principal, path: TreePath): AssetReadOutcome {
         policy.checkRead(principal, path.value)
-        if (path !in indexBuilder.current.assets) return AssetReadOutcome.NotContentAsset
+        if (path !in indexBuilder.current.section(root).assets) return AssetReadOutcome.NotContentAsset
         // An indexed asset whose on-disk file vanished is IndexedButMissing (→ 404), NOT NotContentAsset: it must
         // never fall through to bundled static and unmask a shadowed name (disk is source of truth).
         return contentStore.read(path)?.let(AssetReadOutcome::Found) ?: AssetReadOutcome.IndexedButMissing
@@ -138,8 +143,9 @@ class GuardedReadFacade(
             return null
         }
         val snapshot = indexBuilder.current
-        val target = aliasRegistry.find(path)
-            .takeIf { path !in snapshot.byUrlPath } // live canonical wins (§A4)
+        val rooted = RootedPath(root, path)
+        val target = aliasRegistry.find(rooted)
+            .takeIf { rooted !in snapshot.byUrlPath } // live canonical wins (§A4)
             ?.let { snapshot.byId[it] }
             ?: return null
         return target.url ?: target.permalink

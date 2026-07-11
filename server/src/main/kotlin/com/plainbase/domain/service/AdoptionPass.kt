@@ -5,6 +5,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
@@ -12,6 +14,14 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * the 4a precedence/duplicate logic ([PageIdentityService]), persist the resulting id_map bindings
  * and issues, and — in [Mode.MATERIALIZE] only — write `id:` lines into accepted pages through the
  * surgical patcher and the ContentStore's atomic write.
+ *
+ * **One tree, rooted keys (C2):** the pass adopts ONE root ([root] - its [ContentStore] is one tree
+ * by construction), but identity is global: a binding under another root is classified by the
+ * shared [BindingVisibility] rule over [registeredRoots] (ADR-0011 D16), so a single-root adopt
+ * never silently steals a configured-but-unscanned root's id - the D17 rank contest decides, and a
+ * win over an unscanned owner records the loser-behalf [IdentityIssue.CrossRootDuplicateId]
+ * in-pass. [Report]/[PageReport] keep bare [TreePath]s: the report is per-tree by construction and
+ * the `adopt` output contract is pinned.
  *
  * **Read-only first index (frozen policy):** [Mode.RECORD] performs ZERO ContentStore writes —
  * unidentified pages get id_map rows only. [Mode.PREVIEW] (`adopt --write-ids --dry-run`) writes
@@ -44,7 +54,12 @@ class AdoptionPass(
     private val idMap: IdMapRepository,
     private val identity: PageIdentityService,
     private val patcher: FrontmatterPatcher,
+    private val root: RootName,
+    private val registeredRoots: Set<RootName>,
 ) {
+
+    /** The one root this pass can see (D16: everything else is unscanned or detached). */
+    private val scannedRoots = setOf(root)
 
     /** The three `adopt` modes — see the class header for the frozen write policy of each. */
     enum class Mode {
@@ -102,20 +117,24 @@ class AdoptionPass(
             .map { it.path }
             .filter { it.name.endsWith(".md") }
             .sortedBy { it.value }
-        val livePaths = pages.toSet()
-        val claimed = HashMap<PageId, TreePath>()
+        val livePaths = pages.mapTo(mutableSetOf()) { RootedPath(root, it) }
+        val claimed = HashMap<PageId, RootedPath>()
 
         val reports = pages.map { path ->
             val bytes = checkNotNull(contentStore.read(path)) { "scanned page vanished before read: ${path.value}" }
+            val rooted = RootedPath(root, path)
             val assignment = identity.resolve(
-                path = path,
+                path = rooted,
                 rawFrontmatterId = patcher.readIdValue(bytes),
-                mappedId = idMap.find(path)?.id,
-                // Duplicate-detection seam: within-run claims first, then live id_map bindings. A
-                // binding whose path is gone from the tree is a moved file, not a duplicate owner.
-                ownerOf = { id -> claimed[id] ?: idMap.pathOf(id)?.takeIf(livePaths::contains) },
+                mappedId = idMap.find(rooted)?.id,
+                // Duplicate-detection seam: within-run claims first, then id_map bindings classified
+                // by the shared D16 rule (scanned root live-iff-on-disk, configured-but-unscanned
+                // untouchable, detached supersedable).
+                ownerOf = { id ->
+                    claimed[id] ?: idMap.pathOf(id)?.takeIf { BindingVisibility.isLive(it, livePaths, scannedRoots, registeredRoots) }
+                },
             )
-            claimed[assignment.id] = path
+            claimed[assignment.id] = rooted
             adopt(mode, path, bytes, assignment, logIntent)
         }
 
@@ -139,7 +158,17 @@ class AdoptionPass(
         val idInFile = assignment.source == PageIdentityService.Source.FRONTMATTER
 
         if (mode != Mode.PREVIEW) {
-            idMap.bind(path, assignment.id, materialized = idInFile)
+            // D16 outcome two, adopt side: winning the rank contest against a registered-but-
+            // unscanned owner deletes its row via the key-complete bind, so the loser-behalf issue
+            // rides the bind's OWN transaction (the port's D16 atomicity contract; same natural key
+            // the loser itself would record at its next rebuild - the UNIQUE upsert dedups) and
+            // surfaces in this page's report. PREVIEW binds nothing, so nothing is superseded or
+            // recorded.
+            val superseded = assignment.supersededOwner
+                ?.takeIf { it.root in registeredRoots && it.root !in scannedRoots }
+                ?.let { IdentityIssue.CrossRootDuplicateId(id = assignment.id, kept = RootedPath(root, path), reassigned = it) }
+            idMap.bind(RootedPath(root, path), assignment.id, materialized = idInFile, supersededOwnerIssue = superseded)
+            superseded?.let(issues::add)
         }
 
         val disposition = when {
@@ -153,13 +182,13 @@ class AdoptionPass(
                         // Intent BEFORE write (durability policy), write, THEN mark materialized.
                         logIntent(path, assignment.id)
                         contentStore.write(path, result.bytes)
-                        idMap.markMaterialized(path)
+                        idMap.markMaterialized(RootedPath(root, path))
                         Disposition.MATERIALIZED
                     }
                 // A column-0 `id` key whose value is not this page's assigned id — never overwritten.
                 FrontmatterPatcher.PatchResult.AlreadyPresent -> Disposition.MAPPED
                 is FrontmatterPatcher.PatchResult.Refused -> {
-                    issues += IdentityIssue.PatchRefused(path, result.message)
+                    issues += IdentityIssue.PatchRefused(root, path, result.message)
                     Disposition.REFUSED
                 }
             }

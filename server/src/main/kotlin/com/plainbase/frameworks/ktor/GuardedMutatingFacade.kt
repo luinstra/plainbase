@@ -11,6 +11,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AgentWriteDecision
 import com.plainbase.domain.service.AssetWriteOutcome
 import com.plainbase.domain.service.CommitGlob
@@ -51,6 +52,8 @@ class GuardedMutatingFacade(
     private val writePipeline: WritePipeline,
     private val contentStore: ContentStore,
     private val indexBuilder: IndexBuilder,
+    // The one root this facade mutates (main until C4): scopes the asset-section reads below.
+    private val root: RootName,
     // The degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
     // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) - invoked only at
     // request time, never during assembly. Defaulted so the many older test constructors compile unchanged.
@@ -299,7 +302,7 @@ class GuardedMutatingFacade(
                 }
                 AssetWriteOutcome.Created(
                     path = assetPath,
-                    url = indexBuilder.current.assetUrl(assetPath),
+                    url = indexBuilder.current.view(root).assetUrl(assetPath),
                     contentHash = result.newHash,
                 )
             }
@@ -307,7 +310,7 @@ class GuardedMutatingFacade(
                 // Self-heal a prior written-but-unindexed orphan: if the bytes are on disk but the asset is NOT in
                 // current.assets, best-effort rebuild FIRST so it becomes reachable on this retry. A failing
                 // rebuild here must NOT turn the 409 into a 500 (runCatching). A genuine duplicate skips it.
-                if (result.path !in indexBuilder.current.assets) {
+                if (result.path !in indexBuilder.current.section(root).assets) {
                     runCatching { indexBuilder.rebuild() }
                 }
                 AssetWriteOutcome.Exists(result.path)

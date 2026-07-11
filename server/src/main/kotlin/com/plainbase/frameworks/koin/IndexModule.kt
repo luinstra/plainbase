@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.page.FrontmatterParser
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
@@ -27,13 +28,18 @@ val indexModule = module {
     single<IdProvider> { UuidV7IdProvider() }
     // The proposal-id mint — a SEPARATE port (IdProvider is typed to PageId, can't mint a ProposalId).
     single<ProposalIdProvider> { UuidV7ProposalIdProvider() }
-    single { PageIdentityService(get()) }
+    // The D17 rank source is the registry's ONE rank definition, wired to the identity service and
+    // the builder alike - never two lambdas.
+    single { PageIdentityService(get(), get<RootRegistry>()::rank) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }
     single { CitationFactory() }
     single {
+        val registry = get<RootRegistry>()
         IndexBuilder(
-            contentStore = get(),
+            // Extras stay unserved in C2 (D12): the runtime builder scans main only; C4 widens
+            // this list to every registered root.
+            sources = listOf(IndexBuilder.Source(root = registry.main, store = get(), history = get())),
             frontmatterParser = get(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
             identity = get(),
@@ -42,7 +48,10 @@ val indexModule = module {
             aliasRegistry = get(),
             checkpoint = get(),
             citations = get(),
-            history = get(),
+            rootRank = registry::rank,
+            // The D16 input: the FULL registry, never derived from the sources - configured extras
+            // must classify as unscanned-but-registered, not detached.
+            registeredRoots = registry.roots.map { it.name }.toSet(),
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),

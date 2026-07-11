@@ -7,6 +7,8 @@ import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.providerOver
 import io.kotest.core.spec.style.FunSpec
@@ -35,7 +37,9 @@ class HistoryCitationTest : FunSpec({
     val sha = Regex("[0-9a-f]{40}([0-9a-f]{24})?$")
     val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val pagePath = "notes/page.md"
-    val seed: (IdMapRepository) -> Unit = { it.bind(TreePath.require(pagePath), PageId.require(pageId), materialized = false) }
+    val seed: (
+        IdMapRepository,
+    ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
 
     fun withTree(block: (Path) -> Unit) {
         val root = Files.createTempDirectory("plainbase-history-citation")

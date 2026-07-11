@@ -1,5 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -30,7 +32,10 @@ fun Route.browseRedirectRoute(ctx: RouteContext) {
                 )
             val path = decodedTreePath(raw)
                 ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
-            val page = ctx.read.currentSnapshot(principal, path.value).byPath[path]
+            // The literal MAIN qualifier: the route reads the snapshot straight off the read facade
+            // (no root accessor to borrow) and the C2 runtime serves main only; C3 replaces this
+            // with the parsed root segment when routes gain one.
+            val page = ctx.read.currentSnapshot(principal, path.value).byPath[RootedPath(RootName.MAIN, path)]
                 ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such page file: ${path.value}")
             call.respondRedirectPreservingQuery(page.url ?: page.permalink, permanent = false)
         }

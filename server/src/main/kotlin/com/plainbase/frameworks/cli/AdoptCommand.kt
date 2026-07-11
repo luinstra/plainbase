@@ -3,6 +3,9 @@ package com.plainbase.frameworks.cli
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.model.IdentityIssue
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.PageIdentityService
@@ -86,8 +89,8 @@ object AdoptCommand {
                     val hybrid = ObjectContentStoreFactory.build(
                         config,
                         IgnoreRules(),
-                        dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
-                        isDirty = { dirtyPages.isDirty(it) },
+                        dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
+                        isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
                     )
                     store = hybrid
                     if (mode != AdoptionPass.Mode.PREVIEW) {
@@ -100,11 +103,16 @@ object AdoptCommand {
                     }
                 }
             }
+            // Adopt walks main's tree only, but the registry still seats every configured root:
+            // the D16/D17 machinery must see extras as registered, never detached.
+            val registry = RootRegistry.of(config.roots.list)
             val pass = AdoptionPass(
                 contentStore = store,
                 idMap = SqlDelightIdMapRepository(database),
-                identity = PageIdentityService(UuidV7IdProvider()),
+                identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
                 patcher = FrontmatterPatcher(),
+                root = registry.main.name,
+                registeredRoots = registry.roots.map { it.name }.toSet(),
             )
             val report = pass.run(mode) { path, id -> println("intent: write id $id -> ${path.value}") }
             print(render(report, adoptedRoot(config)))
@@ -189,6 +197,12 @@ object AdoptCommand {
             "path_collision: ${issue.keptPath.value} kept; on-disk sibling '${issue.loserRawName}' excluded"
         is IdentityIssue.PathSlugCollision ->
             "path_slug_collision: ${issue.keptPath.value} owns the URL; ${issue.loserPath.value} reachable by id only"
+        // Reachable from a single-root adopt on BOTH sides of the rank contest (a configured,
+        // unscanned foreign owner - the loser-behalf record - or main losing to it); root-qualified
+        // because the two paths live in different roots.
+        is IdentityIssue.CrossRootDuplicateId ->
+            "cross_root_duplicate_id ${issue.id}: kept by ${issue.kept.root}:${issue.kept.path.value}; " +
+                "${issue.reassigned.root}:${issue.reassigned.path.value} reassigned a fresh id"
     }
 
     private const val USAGE = "usage: plainbase adopt [--write-ids [--dry-run]]"

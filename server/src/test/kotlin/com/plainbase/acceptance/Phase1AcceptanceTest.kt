@@ -47,7 +47,7 @@ class Phase1AcceptanceTest : FunSpec({
             // an extra broken link ANYWHERE, a missing expected one, or any drift in
             // page/text/target/class fails the gate.
             val actual = report.broken.map {
-                KnownBrokenLink(page = it.page.value, text = it.text, target = it.target, errorClass = it.reason.wireValue)
+                KnownBrokenLink(page = it.page.path.value, text = it.text, target = it.target, errorClass = it.reason.wireValue)
             }
             actual shouldContainExactly KnownBrokenLink.manifest()
         }

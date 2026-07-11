@@ -5,7 +5,9 @@ import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.page.RootSection
 import com.plainbase.domain.render.RenderedSection
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -35,6 +37,7 @@ class SearchIndexerTest : FunSpec({
 
     fun page(id: PageId, path: String, contentHash: String) = IndexedPage(
         id = id,
+        root = RootName.MAIN,
         path = TreePath.require(path),
         slug = "p",
         urlPath = TreePath.require(path.removeSuffix(".md")),
@@ -50,9 +53,9 @@ class SearchIndexerTest : FunSpec({
         sections = listOf(RenderedSection(null, "body")),
     )
 
-    fun snapshot(vararg pages: IndexedPage) = PageIndex(pages.toList(), emptyList(), emptySet())
+    fun snapshot(vararg pages: IndexedPage) = PageIndex(listOf(RootSection(RootName.MAIN, pages.toList(), emptyList(), emptySet())))
 
-    fun state(page: IndexedPage) = PageSearchState(contentHash = page.contentHash, path = page.path)
+    fun state(page: IndexedPage) = PageSearchState(contentHash = page.contentHash, root = page.root, path = page.path)
 
     fun harness(engineState: Map<PageId, PageSearchState>): Pair<SearchProvider, SearchIndexer> {
         val provider = mockk<SearchProvider>()
@@ -103,6 +106,29 @@ class SearchIndexerTest : FunSpec({
         indexed.captured.single().path shouldBe TreePath.require("new/a.md")
     }
 
+    test("root-only change: same hash, same relative path, different root still re-upserts (the engine's root column must not go stale)") {
+        val current = page(idA, "a.md", hash('a'))
+        val engineThinks = PageSearchState(contentHash = current.contentHash, root = RootName.require("extra"), path = current.path)
+        val (provider, indexer) = harness(mapOf(idA to engineThinks))
+
+        indexer.sync(snapshot(current))
+
+        val indexed = slot<List<PageDocuments>>()
+        verify(exactly = 1) { provider.index(capture(indexed)) }
+        indexed.captured.single().root shouldBe RootName.MAIN
+    }
+
+    test("root rides the split documents: every PageDocuments carries its page's root") {
+        val a = page(idA, "a.md", hash('a'))
+        val (provider, indexer) = harness(emptyMap())
+
+        indexer.sync(snapshot(a))
+
+        val indexed = slot<List<PageDocuments>>()
+        verify(exactly = 1) { provider.index(capture(indexed)) }
+        indexed.captured.single().root shouldBe a.root
+    }
+
     test("delete: a page gone from the snapshot is deleted; nothing is indexed") {
         val kept = page(idA, "a.md", hash('a'))
         val gone = page(idB, "b.md", hash('b'))
@@ -133,8 +159,8 @@ class SearchIndexerTest : FunSpec({
         val added = page(idC, "c.md", hash('c'))
         val engineState = mapOf(
             idA to state(unchanged),
-            idB to PageSearchState(hash('b'), TreePath.require("b.md")),
-            PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03") to PageSearchState(hash('d'), TreePath.require("d.md")),
+            idB to PageSearchState(hash('b'), RootName.MAIN, TreePath.require("b.md")),
+            PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03") to PageSearchState(hash('d'), RootName.MAIN, TreePath.require("d.md")),
         )
         val (provider, indexer) = harness(engineState)
 

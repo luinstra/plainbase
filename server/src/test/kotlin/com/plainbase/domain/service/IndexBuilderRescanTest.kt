@@ -3,6 +3,8 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.maps.shouldContainExactly
@@ -25,6 +27,8 @@ class IndexBuilderRescanTest : FunSpec({
 
     fun pageWithId(title: String) = "---\nid: ${pageId.value}\ntitle: $title\n---\n\n# $title\n"
 
+    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+
     test("slug collision: raw-byte-order winner owns the path; loser is id-only with a persisted issue") {
         withTempTree(seed = { root ->
             writePage(root, "a b.md", "---\ntitle: Spaced\n---\n\n# Spaced\n")
@@ -33,19 +37,19 @@ class IndexBuilderRescanTest : FunSpec({
             IndexHarness(root).use { harness ->
                 val snapshot = harness.builder.rebuild()
 
-                val winner = snapshot.byPath.getValue(TreePath.require("a b.md"))
-                val loser = snapshot.byPath.getValue(TreePath.require("a-b.md"))
+                val winner = snapshot.byPath.getValue(rooted("a b.md"))
+                val loser = snapshot.byPath.getValue(rooted("a-b.md"))
                 winner.url shouldBe "/docs/a-b" // 'a b.md' (0x20 at index 1) sorts before 'a-b.md' (0x2D)
                 loser.url.shouldBeNull()
                 loser.slug shouldBe "a-b" // the slug itself is uncontested; only the path is
 
                 // The loser remains fully resolvable by id; emitted links go to its permalink (§A4).
                 snapshot.byId.getValue(loser.id) shouldBe loser
-                snapshot.byUrlPath[TreePath.require("a-b")] shouldBe winner
-                snapshot.pageUrl(loser.path) shouldBe "/p/${loser.id.value}"
+                snapshot.byUrlPath[rooted("a-b")] shouldBe winner
+                snapshot.view(RootName.MAIN).pageUrl(loser.path) shouldBe "/p/${loser.id.value}"
 
                 harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldContainExactly listOf(
-                    IdentityIssue.PathSlugCollision(keptPath = winner.path, loserPath = loser.path),
+                    IdentityIssue.PathSlugCollision(root = RootName.MAIN, keptPath = winner.path, loserPath = loser.path),
                 )
             }
         }
@@ -58,8 +62,8 @@ class IndexBuilderRescanTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 val snapshot = harness.builder.rebuild()
-                snapshot.byPath.getValue(TreePath.require("docs/setup.md")).url shouldBe "/docs/docs/setup"
-                snapshot.byPath.getValue(TreePath.require("docs/setup/intro.md")).url shouldBe "/docs/docs/setup/intro"
+                snapshot.byPath.getValue(rooted("docs/setup.md")).url shouldBe "/docs/docs/setup"
+                snapshot.byPath.getValue(rooted("docs/setup/intro.md")).url shouldBe "/docs/docs/setup/intro"
                 harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldBe emptyList()
             }
         }
@@ -77,19 +81,19 @@ class IndexBuilderRescanTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
                 val afterFirst = harness.builder.rebuild()
                 afterFirst.byId.getValue(pageId).url shouldBe "/docs/archive/start"
-                harness.registry.all() shouldContainExactly mapOf(TreePath.require("docs/start") to pageId)
+                harness.registry.all() shouldContainExactly mapOf(rooted("docs/start") to pageId)
 
                 // Move 2: the chain collapses — BOTH old paths map straight to the id, one hop each.
                 Files.createDirectories(root.resolve("attic"))
                 Files.move(root.resolve("archive/start.md"), root.resolve("attic/start.md"))
                 harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/attic/start"
                 harness.registry.all() shouldContainExactly mapOf(
-                    TreePath.require("docs/start") to pageId,
-                    TreePath.require("archive/start") to pageId,
+                    rooted("docs/start") to pageId,
+                    rooted("archive/start") to pageId,
                 )
                 // Persisted, not just in-memory (the registry is write-through to url_alias).
-                harness.aliases.find(TreePath.require("docs/start")) shouldBe pageId
-                harness.aliases.find(TreePath.require("archive/start")) shouldBe pageId
+                harness.aliases.find(rooted("docs/start")) shouldBe pageId
+                harness.aliases.find(rooted("archive/start")) shouldBe pageId
             }
         }
     }
@@ -102,7 +106,7 @@ class IndexBuilderRescanTest : FunSpec({
                 harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/guide"
                 writePage(root, "guide.md", "---\nid: ${pageId.value}\ntitle: Guide\nslug: handbook\n---\n\n# Guide\n")
                 harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/handbook"
-                harness.registry.find(TreePath.require("guide")) shouldBe pageId
+                harness.registry.find(rooted("guide")) shouldBe pageId
             }
         }
     }
@@ -116,16 +120,16 @@ class IndexBuilderRescanTest : FunSpec({
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
                 harness.builder.rebuild()
-                harness.registry.find(TreePath.require("docs/start")) shouldBe pageId
+                harness.registry.find(rooted("docs/start")) shouldBe pageId
 
                 // A NEW page (fresh identity) now claims the vacated canonical path: live wins.
                 writePage(root, "docs/start.md", "---\ntitle: New Start\n---\n\n# New Start\n")
                 val snapshot = harness.builder.rebuild()
-                val newcomer = snapshot.byUrlPath.getValue(TreePath.require("docs/start"))
+                val newcomer = snapshot.byUrlPath.getValue(rooted("docs/start"))
                 newcomer.id shouldNotBe pageId
 
-                harness.registry.find(TreePath.require("docs/start")).shouldBeNull()
-                harness.aliases.find(TreePath.require("docs/start")).shouldBeNull()
+                harness.registry.find(rooted("docs/start")).shouldBeNull()
+                harness.aliases.find(rooted("docs/start")).shouldBeNull()
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
                     .single { it.path == TreePath.require("docs/start") }
                     .message shouldBe "alias to page $pageId dropped: shadowed by a live canonical path"
@@ -140,7 +144,7 @@ class IndexBuilderRescanTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
-                harness.registry.find(TreePath.require("real")).shouldBeNull() // never registered
+                harness.registry.find(rooted("real")).shouldBeNull() // never registered
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
                     .single().path shouldBe TreePath.require("real")
             }
@@ -153,10 +157,10 @@ class IndexBuilderRescanTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 val first = harness.builder.rebuild()
-                val id = first.byPath.getValue(TreePath.require("guide.md")).id
-                harness.registry.find(TreePath.require("old/guide")) shouldBe id
+                val id = first.byPath.getValue(rooted("guide.md")).id
+                harness.registry.find(rooted("old/guide")) shouldBe id
                 harness.builder.rebuild() // idempotent across rescans
-                harness.registry.find(TreePath.require("old/guide")) shouldBe id
+                harness.registry.find(rooted("old/guide")) shouldBe id
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>() shouldBe emptyList()
             }
         }
@@ -183,7 +187,7 @@ class IndexBuilderRescanTest : FunSpec({
                 } else {
                     issues shouldBe emptyList()
                 }
-                snapshot.byPath.getValue(TreePath.require("r\u00e9union.md")).shouldNotBeNull()
+                snapshot.byPath.getValue(rooted("r\u00e9union.md")).shouldNotBeNull()
             }
         }
     }

@@ -5,6 +5,8 @@ import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The read service behind PB-REST-1's page endpoints (§A4) — and, unchanged, behind Phase 5's
@@ -24,6 +26,8 @@ class PageService(
     private val indexBuilder: IndexBuilder,
     private val aliasRegistry: UrlAliasRegistry,
     private val citations: CitationFactory,
+    // The one root this service resolves URL paths against (main until C3 puts roots in URLs).
+    private val root: RootName,
 ) {
 
     /** The published index snapshot the routing layer reads from. */
@@ -35,8 +39,9 @@ class PageService(
     /** The full page payload at the canonical-or-alias URL [path], or null (§A4 by-path rules). */
     fun byUrlPath(path: TreePath): PagePayload? {
         val snapshot = index
-        val page = snapshot.byUrlPath[path]
-            ?: aliasRegistry.find(path)?.let { snapshot.byId[it] }
+        val rooted = RootedPath(root, path)
+        val page = snapshot.byUrlPath[rooted]
+            ?: aliasRegistry.find(rooted)?.let { snapshot.byId[it] }
             ?: return null
         return payload(page)
     }

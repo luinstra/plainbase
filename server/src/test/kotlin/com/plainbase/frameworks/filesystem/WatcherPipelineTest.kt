@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.withTempTree
@@ -61,7 +63,8 @@ class WatcherPipelineTest : FunSpec({
                         val start = System.nanoTime()
                         writePage(root, "docs/note.md", "---\ntitle: New Title\n---\n\nbody\n")
                         awaitUntil(90_000, "the external edit never reached the published index") {
-                            harness.builder.current.byPath[TreePath.require("docs/note.md")]?.title == "New Title"
+                            harness.builder.current.byPath[RootedPath(RootName.MAIN, TreePath.require("docs/note.md"))]?.title ==
+                                "New Title"
                         }
                         val elapsedMillis = (System.nanoTime() - start) / 1_000_000
                         if (System.getProperty("os.name").lowercase().startsWith("linux")) {

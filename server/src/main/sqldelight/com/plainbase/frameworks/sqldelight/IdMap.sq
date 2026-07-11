@@ -1,55 +1,69 @@
--- Identity persistence (chunk 4b): id_map (path -> id binding + materialization state),
--- identity_issue (the admin issues list), url_alias (old canonical URL path -> page id).
+-- Identity persistence (chunk 4b; composite (root, path) keys since multi-root C2, ADR-0011):
+-- id_map ((root, path) -> id binding + materialization state), identity_issue (the admin issues
+-- list), url_alias (old canonical URL path -> page id, per root).
 --
 -- ID storage policy (master plan decision log #6): binary at rest, text at the boundary.
 -- Every id column is BLOB NOT NULL holding the UUID's 16 raw bytes, msb||lsb big-endian;
 -- the conversion lives in exactly one place — PageIdColumnAdapter. Operator note: ad-hoc
 -- inspection uses hex(id) / x'…' literals in the sqlite3 CLI (known, accepted cost).
+-- root columns hold the validated RootName slug (ADR-0011 D14: TEXT names, human-inspectable
+-- alongside hex(id); 'main' is reserved so migration stamps are safe forever).
 
 import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
+import com.plainbase.domain.root.RootName;
 import kotlin.Boolean;
 
--- One binding per path AND per id: the §5.2 duplicate policy guarantees an id is never
--- claimed by two live paths, and bind() supersedes a stale row when an id moves with its
--- file, so UNIQUE(id) is an invariant the schema can enforce.
+-- One binding per (root, path) AND per id: the within-root §5.2 duplicate policy plus the
+-- cross-root registry-order winner policy (ADR-0011 D2/D17) guarantee an id is never claimed by
+-- two live keys, and bind() supersedes a stale row when an id moves with its file, so UNIQUE(id)
+-- is an invariant the schema can enforce across all roots.
 CREATE TABLE id_map (
-  path TEXT AS TreePath NOT NULL PRIMARY KEY,
+  root TEXT AS RootName NOT NULL,
+  path TEXT AS TreePath NOT NULL,
   id BLOB AS PageId NOT NULL UNIQUE,
-  materialized INTEGER AS Boolean NOT NULL
+  materialized INTEGER AS Boolean NOT NULL,
+  PRIMARY KEY (root, path)
 );
 
 -- A flattened IdentityIssue: kind discriminates the sealed variant; the remaining columns carry
 -- whichever context that variant defines (the per-kind mapping is documented in ONE place —
--- SqlDelightIdMapRepository.IssueRow). The natural key is (kind, path, other_path, page_id) and
--- the UNIQUE constraint makes record() idempotence schema-enforced, not application-level.
--- Variants without a second path / an id store sentinels ('' / zero-length BLOB) instead of NULL:
--- SQLite treats NULLs as DISTINCT inside a UNIQUE index, which would silently defeat the dedup.
+-- SqlDelightIdMapRepository.IssueRow). The natural key is (kind, root, path, other_root,
+-- other_path, page_id) and the UNIQUE constraint makes record() idempotence schema-enforced, not
+-- application-level. Variants without a second root/path or an id store sentinels ('' /
+-- zero-length BLOB) instead of NULL: SQLite treats NULLs as DISTINCT inside a UNIQUE index, which
+-- would silently defeat the dedup. other_root is non-sentinel ONLY for the cross-root duplicate-id
+-- kind (D2); every same-root two-path kind keeps its second path under the row's root.
 CREATE TABLE identity_issue (
   kind TEXT NOT NULL,
+  root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
+  other_root TEXT NOT NULL,
   other_path TEXT NOT NULL,
   page_id BLOB NOT NULL,
   message TEXT,
-  UNIQUE(kind, path, other_path, page_id)
+  UNIQUE(kind, root, path, other_root, other_path, page_id)
 );
 
--- An old canonical URL path -> the page's id (§A4). The value is always the PAGE id, never
--- another alias, so chains collapse by construction (one hop). Rows are written by chunk 5's
+-- An old canonical URL path -> the page's id (§A4), keyed per root: URL space is per-root, so the
+-- same old path may alias different pages under different roots. The value is always the PAGE id,
+-- never another alias, so chains collapse by construction (one hop). Rows are written by chunk 5's
 -- IndexBuilder (move detection) and redirect_from registration. Documented derived-state
 -- exception: NOT rebuildable from the tree alone — losing DATA_DIR loses old-URL continuity.
 CREATE TABLE url_alias (
-  path TEXT AS TreePath NOT NULL PRIMARY KEY,
-  id BLOB AS PageId NOT NULL
+  root TEXT AS RootName NOT NULL,
+  path TEXT AS TreePath NOT NULL,
+  id BLOB AS PageId NOT NULL,
+  PRIMARY KEY (root, path)
 );
 
 selectBinding:
 SELECT *
 FROM id_map
-WHERE path = :path;
+WHERE root = :root AND path = :path;
 
 selectPathById:
-SELECT path
+SELECT root, path
 FROM id_map
 WHERE id = :id;
 
@@ -57,31 +71,39 @@ selectAllBindings:
 SELECT *
 FROM id_map;
 
--- bind() = unbindStale + upsertBinding in one repository transaction: an id moving to a new
--- live path (a moved file) supersedes its stale row, keeping the UNIQUE(id) invariant. The
--- domain duplicate policy guarantees a LIVE owner is never superseded this way.
+selectDistinctRoots:
+SELECT DISTINCT root
+FROM id_map;
+
+-- bind() = unbindStale + upsertBinding in one repository transaction. The SQL is deliberately
+-- key-complete: it deletes ANY other (root, path) holding the id - which is what lets a live bind
+-- supersede a detached or moved row, keeping UNIQUE(id) honest. The within-root-only supersede is
+-- POLICY, enforced above this layer by the PageIdentityService duplicate rules (ADR-0011 D2/D17):
+-- a live owner is only ever superseded as the deterministic cross-root rank-contest outcome.
+-- (The De Morgan form of `NOT (root = :root AND path = :path)`: plain SQL92, and the one shape
+-- the SQLDelight 2.3 grammar accepts here.)
 unbindStale:
 DELETE FROM id_map
-WHERE id = :id AND path != :path;
+WHERE id = :id AND (root != :root OR path != :path);
 
 upsertBinding:
-INSERT INTO id_map(path, id, materialized)
-VALUES (:path, :id, :materialized)
-ON CONFLICT(path) DO UPDATE SET id = excluded.id, materialized = excluded.materialized;
+INSERT INTO id_map(root, path, id, materialized)
+VALUES (:root, :path, :id, :materialized)
+ON CONFLICT(root, path) DO UPDATE SET id = excluded.id, materialized = excluded.materialized;
 
 markMaterialized:
 UPDATE id_map
 SET materialized = :materialized
-WHERE path = :path;
+WHERE root = :root AND path = :path;
 
 -- Upsert against the UNIQUE natural key (no read-then-insert window): re-recording an issue
 -- never grows the list, but DOES refresh message — a refusal whose reason changed between
 -- adopt runs must surface the current guidance, not the first one recorded. The WHERE guard
 -- keeps the byte-identical re-record a true no-op (no row rewrite).
 insertIssue:
-INSERT INTO identity_issue(kind, path, other_path, page_id, message)
-VALUES (:kind, :path, :otherPath, :pageId, :message)
-ON CONFLICT(kind, path, other_path, page_id)
+INSERT INTO identity_issue(kind, root, path, other_root, other_path, page_id, message)
+VALUES (:kind, :root, :path, :otherRoot, :otherPath, :pageId, :message)
+ON CONFLICT(kind, root, path, other_root, other_path, page_id)
 DO UPDATE SET message = excluded.message WHERE message IS NOT excluded.message;
 
 selectAllIssues:
@@ -89,14 +111,14 @@ SELECT *
 FROM identity_issue;
 
 upsertAlias:
-INSERT INTO url_alias(path, id)
-VALUES (:path, :id)
-ON CONFLICT(path) DO UPDATE SET id = excluded.id;
+INSERT INTO url_alias(root, path, id)
+VALUES (:root, :path, :id)
+ON CONFLICT(root, path) DO UPDATE SET id = excluded.id;
 
 selectAliasId:
 SELECT id
 FROM url_alias
-WHERE path = :path;
+WHERE root = :root AND path = :path;
 
 selectAllAliases:
 SELECT *
@@ -104,4 +126,4 @@ FROM url_alias;
 
 deleteAlias:
 DELETE FROM url_alias
-WHERE path = :path;
+WHERE root = :root AND path = :path;

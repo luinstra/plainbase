@@ -146,6 +146,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         decidedAt: Long?,
         appliedCommit: String?,
         statusReason: String?,
+        @Suppress("UNUSED_PARAMETER") root: String, // D18: schema stamp only; the domain row stays root-blind until C4
     ) = ProposalRow(
         id = id,
         operation = ProposalOperation.valueOf(operation),

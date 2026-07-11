@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -48,7 +50,11 @@ class WriteGoldenTest : FunSpec({
     val citations = CitationFactory()
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
 
     fun markdown(): ContentType = ContentType.parse("text/markdown")
@@ -116,8 +122,8 @@ class WriteGoldenTest : FunSpec({
         val winnerId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d1"
         val loserId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d2"
         val seedCollision: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(TreePath.require("a b.md"), PageId.require(winnerId), materialized = true)
-            idMap.bind(TreePath.require("a-b.md"), PageId.require(loserId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("a b.md")), PageId.require(winnerId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("a-b.md")), PageId.require(loserId), materialized = true)
         }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-loser")
         try {
@@ -196,7 +202,7 @@ class WriteGoldenTest : FunSpec({
         val original = "---\nid: $pageId\ntitle: Special\n---\n\n# Special\n\nplain body.\n".toByteArray()
         val seedSpecial: (
             IdMapRepository,
-        ) -> Unit = { it.bind(TreePath.require("special.md"), PageId.require(pageId), materialized = true) }
+        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("special.md")), PageId.require(pageId), materialized = true) }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-special")
         try {
             java.nio.file.Files.write(tree.resolve("special.md"), original)
@@ -247,7 +253,9 @@ class WriteGoldenTest : FunSpec({
     test("write-unsupported-slug.json — a 422 slug change is code+field, NO reason key") {
         val pageId = "0190aaaa-bbbb-7ccc-8ddd-000000000099"
         val original = "---\nid: $pageId\ntitle: Slugged\nslug: original-slug\n---\n\n# Slugged\n\nbody.\n".toByteArray()
-        val seedMat: (IdMapRepository) -> Unit = { it.bind(TreePath.require("slugged.md"), PageId.require(pageId), materialized = true) }
+        val seedMat: (
+            IdMapRepository,
+        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("slugged.md")), PageId.require(pageId), materialized = true) }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-golden")
         try {
             java.nio.file.Files.write(tree.resolve("slugged.md"), original)
@@ -307,8 +315,8 @@ class WriteGoldenTest : FunSpec({
         val badBytes = "---\nid: $badId\ntitle: Bad\ndesc: ".toByteArray() +
             byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "\n---\n\n# Bad\n\nbody.\n".toByteArray()
         val seedAdv: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(TreePath.require("bom.md"), PageId.require(bomId), materialized = true)
-            idMap.bind(TreePath.require("bad.md"), PageId.require(badId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bom.md")), PageId.require(bomId), materialized = true)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bad.md")), PageId.require(badId), materialized = true)
         }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-adversarial")
         try {

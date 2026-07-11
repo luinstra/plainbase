@@ -2,6 +2,8 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.render.GoldenTsv
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -27,7 +29,7 @@ class SectionSplitterGoldenTest : FunSpec({
         val splitter = SectionSplitter()
 
         golden.forEach { (path, rows) ->
-            val page = snapshot.byPath.getValue(TreePath.require(path))
+            val page = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require(path)))
             val documents = splitter.split(page)
 
             test("$path: the exact section set matches the golden") {
@@ -50,7 +52,7 @@ class SectionSplitterGoldenTest : FunSpec({
         }
 
         test("deploy-guide metadata: §C2 flow-list tags, owner, no status key -> active default") {
-            val page = snapshot.byPath.getValue(TreePath.require("guides/deploy-guide.md"))
+            val page = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")))
             val pageDoc = splitter.split(page).sections.first()
             pageDoc.headingId shouldBe null
             pageDoc.heading shouldBe null
@@ -63,7 +65,7 @@ class SectionSplitterGoldenTest : FunSpec({
         }
 
         test("index.md metadata: explicit status passes through; heading field is the OWN text only") {
-            val page = snapshot.byPath.getValue(TreePath.require("index.md"))
+            val page = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("index.md")))
             val sections = splitter.split(page).sections
             sections.first().status shouldBe "active" // explicit `status: active`
             val welcome = sections.single { it.headingId == "welcome-to-demo-docs" }

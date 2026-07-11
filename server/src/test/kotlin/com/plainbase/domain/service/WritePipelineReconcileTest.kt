@@ -4,6 +4,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.Stage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -96,12 +98,39 @@ class WritePipelineReconcileTest : FunSpec({
                 harness.builder.rebuild()
                 val page = harness.builder.current.pages.single()
                 // Simulate a crash between mark and write: mark with a hash the on-disk bytes do NOT have.
-                harness.dirtyPages.mark(page.id, page.path, expectedHash = "sha256:neverwritten", stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = "sha256:neverwritten",
+                    stage = Stage.WRITING,
+                )
 
                 harness.writePipeline().reconcileDirtyPages()
 
                 // Drift-skip: the mark is LEFT (the on-disk old bytes do not match the recorded hash).
                 harness.dirtyPages.all().single().pageId shouldBe page.id
+            }
+        }
+    }
+
+    // D16 belt: a dirty row under a FOREIGN root cannot exist in C2 (every writer is main-wired),
+    // but C4's multi-root writers could journal one - the main pipeline must skip it with a WARN,
+    // never resolve (or clear) it against its own root's tree.
+    test("reconcile skips a dirty row whose root differs from the pipeline's, leaving it marked") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(RootName.require("extra"), page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+
+                harness.writePipeline().reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().path.root shouldBe RootName.require("extra")
             }
         }
     }
@@ -114,14 +143,24 @@ class WritePipelineReconcileTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
-                val match = harness.builder.current.byPath.getValue(TreePath.require("match.md"))
-                val drift = harness.builder.current.byPath.getValue(TreePath.require("drift.md"))
+                val match = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("match.md")))
+                val drift = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("drift.md")))
 
                 // match.md: the on-disk bytes match the recorded hash (a write that completed but did not clear).
                 val matchOnDisk = Files.readAllBytes(root.resolve("match.md"))
-                harness.dirtyPages.mark(match.id, match.path, expectedHash = citations.contentHash(matchOnDisk), stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    match.id,
+                    RootedPath(match.root, match.path),
+                    expectedHash = citations.contentHash(matchOnDisk),
+                    stage = Stage.WRITING,
+                )
                 // drift.md: the recorded hash is for bytes that never landed.
-                harness.dirtyPages.mark(drift.id, drift.path, expectedHash = "sha256:neverwritten", stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    drift.id,
+                    RootedPath(drift.root, drift.path),
+                    expectedHash = "sha256:neverwritten",
+                    stage = Stage.WRITING,
+                )
 
                 harness.writePipeline().reconcileDirtyPages()
 

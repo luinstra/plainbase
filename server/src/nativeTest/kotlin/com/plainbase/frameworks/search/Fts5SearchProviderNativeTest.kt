@@ -2,6 +2,7 @@ package com.plainbase.frameworks.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
@@ -48,7 +49,10 @@ class Fts5SearchProviderNativeTest {
                     assertEquals("cluster", cluster.snippet.substring(h.start, h.end).lowercase())
                 }
 
-                assertEquals(2, provider.indexedState().size)
+                val state = provider.indexedState()
+                assertEquals(2, state.size)
+                // C2: the root column round-trips through the engine's own state (the same JDBC surface).
+                assertTrue(state.values.all { it.root == RootName.MAIN }, "root did not round-trip")
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -71,6 +75,6 @@ class Fts5SearchProviderNativeTest {
             path = treePath,
             status = "active",
         )
-        return PageDocuments(pageId = pageId, contentHash = "sha256:$title", path = treePath, sections = listOf(doc))
+        return PageDocuments(pageId = pageId, contentHash = "sha256:$title", root = RootName.MAIN, path = treePath, sections = listOf(doc))
     }
 }

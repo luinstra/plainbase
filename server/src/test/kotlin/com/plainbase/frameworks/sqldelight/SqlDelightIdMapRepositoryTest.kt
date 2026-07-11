@@ -1,11 +1,17 @@
 package com.plainbase.frameworks.sqldelight
 
+import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlPreparedStatement
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdBinding
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
@@ -14,9 +20,10 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 
 /**
- * SqlDelightIdMapRepository over an in-memory SQLite db: binding round-trips, the move-supersede
- * rule behind UNIQUE(id), idempotent issue recording for every [IdentityIssue] variant, and the
- * direct-SQL binary-at-rest assertion (`length(id) = 16` over the seeded table).
+ * SqlDelightIdMapRepository over an in-memory SQLite db: composite (root, path) binding round-trips,
+ * the key-complete move/cross-root supersede behind UNIQUE(id), idempotent issue recording for every
+ * [IdentityIssue] variant (natural key with the C2 root dimensions), and the direct-SQL
+ * binary-at-rest assertion (`length(id) = 16` over the seeded table).
  */
 class SqlDelightIdMapRepositoryTest : FunSpec({
 
@@ -25,8 +32,10 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             block(SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)), driver)
         }
 
-    val pathA = TreePath.require("guides/a.md")
-    val pathB = TreePath.require("notes/réunion.md")
+    val main = RootName.MAIN
+    val extra = RootName.require("extra")
+    val pathA = RootedPath(main, TreePath.require("guides/a.md"))
+    val pathB = RootedPath(main, TreePath.require("notes/réunion.md"))
     val idX = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val idY = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")
 
@@ -47,6 +56,26 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
+    test("the composite key is per root: the same relative path binds independently under two roots") {
+        withRepo { repo, _ ->
+            val mirrored = RootedPath(extra, pathA.path)
+            repo.bind(pathA, idX, materialized = false)
+            repo.bind(mirrored, idY, materialized = true)
+            repo.find(pathA) shouldBe IdBinding(pathA, idX, false)
+            repo.find(mirrored) shouldBe IdBinding(mirrored, idY, true)
+            repo.roots() shouldBe setOf(main, extra)
+        }
+    }
+
+    test("roots() is empty on a fresh db and distinct over bindings") {
+        withRepo { repo, _ ->
+            repo.roots() shouldBe emptySet()
+            repo.bind(pathA, idX, materialized = false)
+            repo.bind(pathB, idY, materialized = false)
+            repo.roots() shouldBe setOf(main)
+        }
+    }
+
     test("markMaterialized flips only the flag") {
         withRepo { repo, _ ->
             repo.bind(pathA, idX, materialized = false)
@@ -55,7 +84,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
-    test("rebinding a path to a new id replaces the binding (duplicate reassignment)") {
+    test("rebinding a key to a new id replaces the binding (duplicate reassignment)") {
         withRepo { repo, _ ->
             repo.bind(pathA, idX, materialized = false)
             repo.bind(pathA, idY, materialized = false)
@@ -74,14 +103,81 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
+    test("unbindStale is key-complete: binding the same relative path under another root supersedes, never a UNIQUE(id) crash") {
+        // The SQL-level pin of the round-1 panel crash case (the policy-level pin lives in
+        // IndexBuilderMultiRootTest): (main, p) holds X, then (extra, p) binds X.
+        withRepo { repo, _ ->
+            val mirrored = RootedPath(extra, pathA.path)
+            repo.bind(pathA, idX, materialized = true)
+            repo.bind(mirrored, idX, materialized = true)
+            repo.pathOf(idX) shouldBe mirrored
+            repo.find(pathA).shouldBeNull()
+            repo.bindings() shouldHaveSize 1
+        }
+    }
+
+    test("bind commits the loser-behalf issue together with the key-complete supersede (the D16 combined op)") {
+        withRepo { repo, driver ->
+            val foreign = RootedPath(extra, TreePath.require("mirror/page.md"))
+            repo.bind(foreign, idX, materialized = true)
+            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = pathA, reassigned = foreign)
+
+            repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue)
+
+            repo.pathOf(idX) shouldBe pathA
+            repo.issues() shouldContainExactly listOf(issue)
+            driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe 1L
+        }
+    }
+
+    test("the supersede and its loser-behalf issue are atomic: a failed issue write rolls the delete back (D16)") {
+        // Crash-shaped fault injection below the repository: the issue INSERT throws inside bind's
+        // transaction, so the key-complete delete it rides with must roll back too - a committed
+        // delete with no audit row would be the permanently silent supersession the combined op exists
+        // to prevent (the winner's next resolve sees itself as owner and never re-detects).
+        DatabaseFactory.createInMemoryDriver().use { real ->
+            var failIssueInsert = false
+            val driver = object : SqlDriver by real {
+                override fun execute(
+                    identifier: Int?,
+                    sql: String,
+                    parameters: Int,
+                    binders: (SqlPreparedStatement.() -> Unit)?,
+                ): QueryResult<Long> {
+                    if (failIssueInsert && "INSERT INTO identity_issue" in sql) error("injected crash before the issue write")
+                    return real.execute(identifier, sql, parameters, binders)
+                }
+            }
+            val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
+            val foreign = RootedPath(extra, TreePath.require("mirror/page.md"))
+            repo.bind(foreign, idX, materialized = true)
+            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = pathA, reassigned = foreign)
+
+            failIssueInsert = true
+            shouldThrowAny { repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue) }
+
+            // All-or-nothing: the foreign owner's row survived and no orphaned state exists.
+            repo.pathOf(idX) shouldBe foreign
+            repo.find(pathA).shouldBeNull()
+            repo.issues().shouldBeEmpty()
+
+            // The retry (next pass re-detects the contest) then commits both together.
+            failIssueInsert = false
+            repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue)
+            repo.pathOf(idX) shouldBe pathA
+            repo.issues() shouldContainExactly listOf(issue)
+        }
+    }
+
     test("every IdentityIssue variant survives the record/issues round-trip") {
         withRepo { repo, _ ->
             val all = listOf(
-                IdentityIssue.DuplicateId(idX, keptPath = pathA, reassignedPath = pathB),
-                IdentityIssue.PatchRefused(pathA, "frontmatter keys must be plain unquoted scalars"),
-                IdentityIssue.RedirectConflict(pathB, "alias shadowed by live canonical path"),
-                IdentityIssue.PathCollision(keptPath = pathB, loserRawName = "re\u0301union.md"),
-                IdentityIssue.PathSlugCollision(keptPath = pathA, loserPath = pathB),
+                IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path),
+                IdentityIssue.PatchRefused(main, pathA.path, "frontmatter keys must be plain unquoted scalars"),
+                IdentityIssue.RedirectConflict(main, pathB.path, "alias shadowed by live canonical path"),
+                IdentityIssue.PathCollision(root = main, keptPath = pathB.path, loserRawName = "re\u0301union.md"),
+                IdentityIssue.PathSlugCollision(root = main, keptPath = pathA.path, loserPath = pathB.path),
+                IdentityIssue.CrossRootDuplicateId(idY, kept = RootedPath(extra, pathA.path), reassigned = pathA),
             )
             all.forEach(repo::record)
             repo.issues() shouldContainExactly all
@@ -94,10 +190,10 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             // construction; the loser's raw NFD name must survive persistence un-normalized,
             // otherwise the issue degenerates to keptPath == loser and stops being actionable.
             val loserRawName = "re\u0301union.md" // e + combining acute — raw on-disk NFD bytes
-            repo.record(IdentityIssue.PathCollision(keptPath = pathB, loserRawName = loserRawName))
+            repo.record(IdentityIssue.PathCollision(root = main, keptPath = pathB.path, loserRawName = loserRawName))
 
             val issue = repo.issues().filterIsInstance<IdentityIssue.PathCollision>().single()
-            issue.keptPath shouldBe pathB
+            issue.keptPath shouldBe pathB.path
             issue.loserRawName shouldBe loserRawName
             issue.loserRawName shouldNotBe issue.keptPath.name
         }
@@ -105,21 +201,41 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
 
     test("recording the same issue twice keeps one row (re-running adopt never grows the list)") {
         withRepo { repo, _ ->
-            val issue = IdentityIssue.DuplicateId(idX, keptPath = pathA, reassignedPath = pathB)
+            val issue = IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path)
             repo.record(issue)
             repo.record(issue)
             repo.issues() shouldContainExactly listOf(issue)
         }
     }
 
+    test("the natural key distinguishes roots: the same paths under different roots are two issue rows") {
+        withRepo { repo, _ ->
+            val underMain = IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path)
+            val underExtra = IdentityIssue.DuplicateId(idX, root = extra, keptPath = pathA.path, reassignedPath = pathB.path)
+            repo.record(underMain)
+            repo.record(underExtra)
+            repo.issues() shouldContainExactlyInAnyOrder listOf(underMain, underExtra)
+        }
+    }
+
+    test("a cross-root issue dedups on its full (kept, reassigned) rooted key") {
+        withRepo { repo, driver ->
+            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = RootedPath(extra, pathA.path), reassigned = pathA)
+            repo.record(issue)
+            repo.record(issue)
+            repo.issues() shouldContainExactly listOf(issue)
+            driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe 1L
+        }
+    }
+
     test("re-recording an issue whose message changed refreshes it: one row, current guidance") {
         withRepo { repo, driver ->
-            repo.record(IdentityIssue.PatchRefused(pathA, "frontmatter keys must be plain unquoted scalars"))
-            repo.record(IdentityIssue.PatchRefused(pathA, "frontmatter block has no terminating delimiter"))
+            repo.record(IdentityIssue.PatchRefused(main, pathA.path, "frontmatter keys must be plain unquoted scalars"))
+            repo.record(IdentityIssue.PatchRefused(main, pathA.path, "frontmatter block has no terminating delimiter"))
             // Same natural key, so no second row — but issues() must surface the CURRENT reason,
             // not the one a stale OR IGNORE would have pinned forever.
             repo.issues() shouldContainExactly
-                listOf(IdentityIssue.PatchRefused(pathA, "frontmatter block has no terminating delimiter"))
+                listOf(IdentityIssue.PatchRefused(main, pathA.path, "frontmatter block has no terminating delimiter"))
             driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe 1L
         }
     }
@@ -128,17 +244,31 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         withRepo { repo, driver ->
             // PathCollision has no page_id and PatchRefused additionally has no other_path: if those
             // persisted as NULL, SQLite's UNIQUE index would treat every row as distinct and the
-            // schema-enforced dedup would silently pass duplicates through.
-            val collision = IdentityIssue.PathCollision(keptPath = pathB, loserRawName = "re\u0301union.md")
-            val refusal = IdentityIssue.PatchRefused(pathB, "frontmatter keys must be plain unquoted scalars")
+            // schema-enforced dedup would silently pass duplicates through. other_root joins the key
+            // in C2 with the same sentinel rule.
+            val collision = IdentityIssue.PathCollision(root = main, keptPath = pathB.path, loserRawName = "re\u0301union.md")
+            val refusal = IdentityIssue.PatchRefused(main, pathB.path, "frontmatter keys must be plain unquoted scalars")
             repeat(2) {
                 repo.record(collision)
                 repo.record(refusal)
             }
             repo.issues() shouldContainExactlyInAnyOrder listOf(collision, refusal)
             // Direct SQL: absent key fields are the sentinels ('' / zero-length BLOB), never NULL.
-            driver.queryLong("SELECT count(*) FROM identity_issue WHERE other_path IS NULL OR page_id IS NULL") shouldBe 0L
+            driver.queryLong(
+                "SELECT count(*) FROM identity_issue WHERE other_root IS NULL OR other_path IS NULL OR page_id IS NULL",
+            ) shouldBe
+                0L
             driver.queryLong("SELECT count(*) FROM identity_issue WHERE length(page_id) NOT IN (0, 16)") shouldBe 0L
+        }
+    }
+
+    test("other_root is the sentinel for every same-root kind and the real root for the cross-root kind (direct SQL)") {
+        withRepo { repo, driver ->
+            repo.record(IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path))
+            repo.record(IdentityIssue.CrossRootDuplicateId(idY, kept = RootedPath(extra, pathA.path), reassigned = pathA))
+            driver.queryLong("SELECT count(*) FROM identity_issue WHERE kind != 'CROSS_ROOT_DUPLICATE_ID' AND other_root != ''") shouldBe 0L
+            driver.queryLong("SELECT count(*) FROM identity_issue WHERE kind = 'CROSS_ROOT_DUPLICATE_ID' AND other_root = 'main'") shouldBe
+                1L
         }
     }
 

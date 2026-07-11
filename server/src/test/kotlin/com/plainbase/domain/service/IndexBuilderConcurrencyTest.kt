@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -59,7 +60,9 @@ class IndexBuilderConcurrencyTest : FunSpec({
                             if (snapshot.byId.size != snapshot.pages.size) failures += "byId size mismatch"
                             if (snapshot.byPath.size != snapshot.pages.size) failures += "byPath size mismatch"
                             if (snapshot.byUrlPath.size != snapshot.pages.size) failures += "byUrlPath size mismatch"
-                            if (snapshot.pages.any { snapshot.byPath[it.path] !== it }) failures += "byPath identity mismatch"
+                            if (snapshot.pages.any { snapshot.byPath[RootedPath(it.root, it.path)] !== it }) {
+                                failures += "byPath identity mismatch"
+                            }
                             reads.incrementAndGet()
                         }
                     }

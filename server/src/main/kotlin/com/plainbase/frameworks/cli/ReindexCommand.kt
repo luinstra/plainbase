@@ -3,6 +3,9 @@ package com.plainbase.frameworks.cli
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
@@ -124,8 +127,8 @@ object ReindexCommand {
                 val hybrid = ObjectContentStoreFactory.build(
                     config,
                     IgnoreRules(),
-                    dirtyPaths = { dirtyPages.all().map { it.path }.toSet() },
-                    isDirty = { dirtyPages.isDirty(it) },
+                    dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
+                    isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
                 )
                 try {
                     hybrid.hydrate()
@@ -136,22 +139,26 @@ object ReindexCommand {
                 hybrid
             }
         }
-        val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
+        val aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
         val checkpoint = SqlDelightPageCheckpointRepository(database)
         val searchIndexer = SearchIndexer(Fts5SearchProvider(searchDb), SectionSplitter())
+        // The CLI indexes main's tree only, but the registry still seats every configured root:
+        // the D16/D17 machinery must see extras as registered, never detached.
+        val rootRegistry = RootRegistry.of(config.roots.list)
         val builder = IndexBuilder(
-            contentStore = store,
-            frontmatterParser = FrontmatterReader(),
-            rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider()),
-            patcher = FrontmatterPatcher(),
-            idMap = SqlDelightIdMapRepository(database),
-            aliasRegistry = registry,
-            checkpoint = checkpoint,
-            citations = CitationFactory(),
             // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
             // process is spawned here (the snapshot's commit fields stay null - harmless for this path).
-            history = NoOpHistoryProvider,
+            sources = listOf(IndexBuilder.Source(root = rootRegistry.main, store = store, history = NoOpHistoryProvider)),
+            frontmatterParser = FrontmatterReader(),
+            rendererFactory = { view -> FlexmarkRenderer(view) },
+            identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+            patcher = FrontmatterPatcher(),
+            idMap = SqlDelightIdMapRepository(database),
+            aliasRegistry = aliasRegistry,
+            checkpoint = checkpoint,
+            citations = CitationFactory(),
+            rootRank = rootRegistry::rank,
+            registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
             // No search sync listener - only the §B3 checkpoint replace. The search engine is
             // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
             listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),

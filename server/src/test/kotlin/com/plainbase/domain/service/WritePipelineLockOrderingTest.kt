@@ -2,8 +2,11 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -26,6 +29,8 @@ import kotlin.concurrent.thread
  * agrees with the saved bytes) and never calls back into [WritePipeline] (no such edge exists).
  */
 class WritePipelineLockOrderingTest : FunSpec({
+
+    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
 
     test("a watcher rebuild racing a save cannot deadlock, and the save re-syncs search") {
         val dir = Files.createTempDirectory("pb-write-lock")
@@ -59,7 +64,7 @@ class WritePipelineLockOrderingTest : FunSpec({
                 ).use { harness ->
                     val builder = harness.builder
                     builder.rebuild() // initial publish + sync
-                    val page = builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("doc.md"))
+                    val page = builder.current.byPath.getValue(mainPath("doc.md"))
                     val pipeline = harness.writePipeline()
                     val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nfreshterm only now.\n".toByteArray()
 

@@ -6,6 +6,11 @@ import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -48,6 +53,11 @@ class IndexHarness(
     history: HistoryProvider = NoOpHistoryProvider,
     listeners: List<IndexBuilder.PublicationListener> = emptyList(),
     searchIndexer: SearchIndexer? = null,
+    // C2 multi-root knobs (the defaults keep every single-root test on the main-only shape): the
+    // registry seats every configured root in D7 order - the rank source and the D16 registeredRoots
+    // both derive from it - and [sources] is the subset this builder actually scans.
+    val rootRegistry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
+    sources: List<IndexBuilder.Source>? = null,
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -82,16 +92,17 @@ class IndexHarness(
     private val frontmatter = frontmatterParser
     private val patcher = FrontmatterPatcher()
     val builder = IndexBuilder(
-        contentStore = contentStore,
+        sources = sources ?: listOf(IndexBuilder.Source(rootRegistry.main, contentStore, history)),
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
-        identity = PageIdentityService(UuidV7IdProvider()),
+        identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
         patcher = patcher,
         idMap = idMap,
         aliasRegistry = registry,
         checkpoint = checkpoints,
         citations = citations,
-        history = history,
+        rootRank = rootRegistry::rank,
+        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         // The §B3 checkpoint-replace listener is part of the production graph (checkpointModule),
         // so the harness always registers it first — callers' listeners follow, as in `getAll()`.
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)) + listeners,
@@ -115,11 +126,16 @@ class IndexHarness(
             dirtyPages = dirtyPages,
             idMap = idMap,
             aliasRegistry = registry,
+            root = rootRegistry.main.name,
             historyHook = historyHook,
         )
 
     override fun close() = driver.close()
 }
+
+/** A local test root: [name] over [path]. Histories ride the per-[IndexBuilder.Source] provider, so the mode is inert. */
+fun localRoot(name: String, path: Path, editable: Boolean = true): Root =
+    Root(RootName.require(name), RootBackend.Local(path), editable = editable, history = HistoryMode.OFF)
 
 /** Runs [block] with a fresh temp content tree seeded by [seed]; always cleans up. */
 fun <T> withTempTree(seed: (Path) -> Unit, block: (Path) -> T): T {

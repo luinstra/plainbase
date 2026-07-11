@@ -8,6 +8,8 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.GoldenTsv
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -27,6 +29,8 @@ import io.kotest.matchers.shouldBe
  * assertions at all three seams).
  */
 class IndexBuilderFixtureTest : FunSpec({
+
+    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
 
     test("golden URL set: the complete fixture page->url map matches §A4 construction") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
@@ -57,18 +61,18 @@ class IndexBuilderFixtureTest : FunSpec({
     test("notes/deeply/nested/folder/treasure.md is nested correctly with the full slugified URL") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            val treasure = snapshot.byPath.getValue(TreePath.require("notes/deeply/nested/folder/treasure.md"))
+            val treasure = snapshot.byPath.getValue(rooted("notes/deeply/nested/folder/treasure.md"))
             treasure.url shouldBe "/docs/notes/deeply/nested/folder/treasure"
-            snapshot.byUrlPath.getValue(TreePath.require("notes/deeply/nested/folder/treasure")) shouldBe treasure
+            snapshot.byUrlPath.getValue(rooted("notes/deeply/nested/folder/treasure")) shouldBe treasure
         }
     }
 
     test("redirect_from on deploy-guide registers an alias through the same URL construction") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            val deployGuide = snapshot.byPath.getValue(TreePath.require("guides/deploy-guide.md"))
-            harness.registry.find(TreePath.require("old/deployment")) shouldBe deployGuide.id
-            harness.aliases.find(TreePath.require("old/deployment")) shouldBe deployGuide.id // persisted, not just in-memory
+            val deployGuide = snapshot.byPath.getValue(rooted("guides/deploy-guide.md"))
+            harness.registry.find(rooted("old/deployment")) shouldBe deployGuide.id
+            harness.aliases.find(rooted("old/deployment")) shouldBe deployGuide.id // persisted, not just in-memory
         }
     }
 

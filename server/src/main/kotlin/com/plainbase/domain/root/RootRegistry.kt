@@ -19,6 +19,13 @@ class RootRegistry private constructor(val roots: List<Root>) {
 
     fun byName(name: RootName): Root? = rootsByName[name]
 
+    /**
+     * [name]'s D7 rank in [roots] (-1 when unregistered): the deterministic order the C2 cross-root
+     * duplicate-id winner inherits (ADR-0011 D17). ONE definition, consumed by both the identity
+     * service and the index builder - two inlined copies could drift and split the winner contract.
+     */
+    fun rank(name: RootName): Int = roots.indexOfFirst { it.name == name }
+
     companion object {
 
         /**

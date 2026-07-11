@@ -1,6 +1,6 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Proposed (draft; freezes at C2 merge)
+- **Status:** Accepted (frozen at C2 merge)
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -143,6 +143,55 @@ ACLs are explicitly out of v1. (Synthesis #7; C4 implements.)
   plain normalized form) still escapes the matrix - intentional, and C4's availability work
   inherits the limit.
 
+### v1 boundaries (C2 operationalizations, bound to the code as built)
+
+- **D14 - root columns are TEXT root names, never surrogate integers.** The value is the validated
+  `RootName` slug, typed `TEXT AS RootName` in the id_map/dirty_page/page_checkpoint families
+  (decode fails loudly on a corrupt row, the TreePath adapter posture) and plain TEXT where a
+  sentinel or deferral demands it (`identity_issue.other_root`, `proposals.root`). Why: no join
+  table for C4's per-root operations (`DELETE ... WHERE root = ?` works on all six tables),
+  human-inspectable in the sqlite3 CLI alongside the hex(id) convention, and names are stable
+  identifiers because `main` is reserved (D1) and rename is a recorded scope cut whose mechanism
+  is the transactional UPDATE noted there. Availability seams shipped with the schema:
+  `id_map.selectDistinctRoots` (the boot guard now, C4's health surface later) and
+  `section_doc.root` on every search hit row.
+- **D15 - the 100%-detached boot guard is FATAL; partial detachment WARNs.** A nonempty id_map
+  whose roots are entirely disjoint from the configured names means every permalink in the
+  DATA_DIR is orphaned - almost certainly a wrong DATA_DIR or a wholesale-rewritten roots block -
+  so serve() refuses (fail-closed) with remediation that is config-first and then TARGETED and
+  backup-first: per-root DELETEs on the five identity tables, NEVER "delete plainbase.db" (the
+  app DB is also the security and review truth: users, sessions, API tokens, roles, proposals,
+  the audit log). Partial detachment logs the dormant-permalink WARN and serves.
+- **D16 - a partial-visibility pass never lets a LOSING page steal across roots.** Ownership
+  classification (the shared `BindingVisibility` rule): a binding under a SCANNED root is live iff
+  its path was scanned; a binding under an UNSCANNED-but-CONFIGURED root is ALWAYS a live owner,
+  so the D17 rank contest still happens; a binding under a root absent from the registry is
+  detached and supersedable (D2). Two outcomes exist (UNIQUE(id) admits no both-survive state):
+  the pass's page LOSES to the unscanned owner (reassigned, issue recorded in-pass, foreign row
+  untouched - the protection), or it OUTRANKS the owner and legitimately WINS - its key-complete
+  bind necessarily deletes the foreign row, and the PASS records the loser-behalf issue AT
+  SUPERSESSION TIME with the loser's exact natural key (the next full rebuild's own record dedups
+  via the UNIQUE upsert), so the delete is never a silent, time-shifted supersede. NO rank-0-main
+  assumption anywhere: registry order can seat an extra ahead of main, so both outcomes are
+  reachable from the main-only CLIs.
+- **D17 - cross-root winner mechanics: registry rank beats previously-bound; within-root §5.2 is
+  untouched.** When two LIVE paths in different roots carry the same frontmatter id, the root
+  earlier in D7 order wins regardless of which path held the id_map binding ("previously-bound
+  keeps it" remains the rule only WITHIN a root). The loser keeps its own prior binding or mints
+  fresh, with one GUARD: it reuses its mapped id ONLY when that differs from the contested id,
+  else it MINTS FRESH - a loser that was itself the prior owner (two checkouts of one repo) would
+  otherwise read its own stale binding back and either key-complete the winner's row away or
+  crash the snapshot's byId uniqueness check. The mint is rescan-stable from the next pass on.
+  Two execution invariants keep the scheme sound: binds land INLINE per draft during resolution
+  (never batched afterward), and ALL sources are scanned before the FIRST resolve.
+- **D18 - proposals root lands as schema + DEFAULT stamp only; domain threading is C4's.** The
+  `proposals` table gains `root TEXT NOT NULL DEFAULT 'main'`; queries, port, and domain types
+  stay root-blind (every C2/C3 proposal IS main-scoped - proposals ride the main-wired write
+  surface). The DEFAULT is the semantic stamp; C4 threads real roots when write targets gain
+  them. dirty_page and page_checkpoint are, by contrast, threaded now: the N-root IndexBuilder
+  consumes the checkpoint directly and the write pipeline binds identity, so their ports cannot
+  stay root-blind without hardcoding.
+
 Per-root `editable` and `history` are parsed, validated, and recorded but deliberately DORMANT in
 this release (intentional C1 state; a startup warning names any non-default value) - C4 wires
 their enforcement together with multi-root serving.
@@ -157,7 +206,9 @@ watcher-exclusion work.
 - Object-backend EXTRA roots: schema/config shaped for it; validation rejects it (and D10 rejects
   whole-block object combos).
 - No root RENAME verb (safe: main is reserved, extras are disposable; rename = remove+add). A
-  later verb is a transactional UPDATE across all root-stamped tables.
+  later verb is ONE transactional UPDATE across the six root-stamped tables (id_map, url_alias,
+  identity_issue - root AND other_root - page_checkpoint, dirty_page, proposals) plus a search.db
+  schema-version bump; D14's TEXT-name columns are what keep it that simple.
 - No detached-row GC; the boot WARN is the visibility.
 - Per-root partition rebuild: follow-up gated on C5's N-root perf measurement (full-corpus rebuild
   has measured headroom to 30-40k pages against a 1k contract).

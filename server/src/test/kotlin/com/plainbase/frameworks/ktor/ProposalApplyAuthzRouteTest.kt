@@ -170,7 +170,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val proposalService = ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store),
+                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -180,6 +180,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     writePipeline = pipeline,
                     contentStore = store,
                     indexBuilder = harness.builder,
+                    root = harness.rootRegistry.main.name,
                     proposals = { proposalsFacade },
                     agentDirectCommitGlobs = globs,
                     proposalLabeler = labeler,
@@ -387,12 +388,12 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Clock.System,
                     enforced = true,
                 )
-            val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder)
+            val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder, harness.rootRegistry.main.name)
             val proposalService =
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store),
+                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -430,7 +431,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store),
+                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -788,13 +789,13 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     )
                 val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val pipeline = harness.writePipeline(pipelineHook, store)
-                val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder)
+                val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder, harness.rootRegistry.main.name)
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
                 val proposalService =
                     ProposalService(
                         harness.proposalRepository,
                         citations,
-                        IndexProposalBaseReader(harness.builder, store),
+                        IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
                         UuidV7ProposalIdProvider(),
                         Clock.System,
                     )

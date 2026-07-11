@@ -5,6 +5,7 @@ import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.render.HeadingSlugger
+import com.plainbase.domain.root.RootName
 
 /**
  * §A4 canonical-URL construction (frozen — owner decision log #7).
@@ -57,15 +58,17 @@ object CanonicalUrlBuilder {
         val issues: List<IdentityIssue.PathSlugCollision>,
     )
 
-    fun build(pages: List<PageInput>, folders: List<ContentFolder>): Result {
+    fun build(root: RootName, pages: List<PageInput>, folders: List<ContentFolder>): Result {
         val folderSegments = folders.associate { it.path to folderSegment(it) }
         val pageSlugs = pages.associate { it.path to pageSlug(it) }
 
         // Two independent same-role buckets (ADR-0002): pages contest slugs among sibling pages,
         // folders among sibling folders — a page-folder segment share is two distinct URLs, not a fight.
-        val issues = collisions(pages.map { Sibling(it.path, it.rawName, pageSlugs.getValue(it.path)) }) +
+        // Collisions are per-tree by construction; [root] only stamps the recorded issues (C2).
+        val collisions = collisions(pages.map { Sibling(it.path, it.rawName, pageSlugs.getValue(it.path)) }) +
             collisions(folders.map { Sibling(it.path, it.rawName, folderSegments.getValue(it.path)) })
-        val losers = issues.map { it.loserPath }.toSet()
+        val issues = collisions.map { IdentityIssue.PathSlugCollision(root = root, keptPath = it.keptPath, loserPath = it.loserPath) }
+        val losers = collisions.map { it.loserPath }.toSet()
 
         val byPage = pages.associate { page ->
             page.path to Assignment(
@@ -77,14 +80,14 @@ object CanonicalUrlBuilder {
     }
 
     /** One role's collisions: within each (parent, segment) group the [RawByteOrder] winner keeps it, the rest lose. */
-    private fun collisions(siblings: List<Sibling>): List<IdentityIssue.PathSlugCollision> =
+    private fun collisions(siblings: List<Sibling>): List<Collision> =
         siblings
             .groupBy { it.path.parent?.value to it.segment }
             .values
             .filter { it.size > 1 }
             .flatMap { group ->
                 val ordered = group.sortedWith(compareBy(RawByteOrder) { it.rawName })
-                ordered.drop(1).map { IdentityIssue.PathSlugCollision(keptPath = ordered.first().path, loserPath = it.path) }
+                ordered.drop(1).map { Collision(keptPath = ordered.first().path, loserPath = it.path) }
             }
 
     /**
@@ -131,6 +134,12 @@ object CanonicalUrlBuilder {
         val path: TreePath,
         val rawName: String,
         val segment: String,
+    )
+
+    /** One same-role collision, rootless: [build] stamps the caller's root onto the recorded issue. */
+    private data class Collision(
+        val keptPath: TreePath,
+        val loserPath: TreePath,
     )
 
     /** §A4 directory segment: the `_folder.yaml` override (itself slugified) else the slugified name. */

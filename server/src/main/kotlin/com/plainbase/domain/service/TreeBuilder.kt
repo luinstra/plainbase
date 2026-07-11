@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
 import kotlinx.datetime.LocalDate
 
 /**
@@ -63,10 +64,13 @@ sealed interface TreeNode {
  */
 object TreeBuilder {
 
-    fun build(index: PageIndex): TreeNode.Folder {
-        val pagesByParent = index.pages.groupBy { it.path.parent }
-        val foldersByParent = index.folders.groupBy { it.path.parent }
-        val folderUrls = CanonicalUrlBuilder.folderUrlPaths(index.folders)
+    fun build(index: PageIndex, root: RootName): TreeNode.Folder {
+        // One root's tree (the section accessor is total, so an unknown root yields the empty
+        // tree); the one-node-per-root shape is C3's.
+        val section = index.section(root)
+        val pagesByParent = section.pages.groupBy { it.path.parent }
+        val foldersByParent = section.folders.groupBy { it.path.parent }
+        val folderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
         // The synthetic root's URL prefix is bare `/docs` (its own route in the SPA, not a landing view).
         val children = childrenOf(null, pagesByParent, foldersByParent, folderUrls)
         return TreeNode.Folder(

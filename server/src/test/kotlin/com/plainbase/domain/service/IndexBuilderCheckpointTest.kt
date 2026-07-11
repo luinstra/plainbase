@@ -2,7 +2,11 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -49,11 +53,13 @@ class IndexBuilderCheckpointTest : FunSpec({
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val materializedPage = "---\nid: ${pageId.value}\ntitle: Start\n---\n\n# Start\n"
 
+    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+
     test("a MATERIALIZED page moved while the server was down records its alias from the checkpoint; the old URL 301s") {
         withTempTree(seed = { root -> writePage(root, "docs/start.md", materializedPage) }) { root ->
             RestartableHarness(root).use { harness ->
                 harness.startProcess().builder.rebuild()
-                harness.checkpoints.load() shouldContainExactly mapOf(pageId to TreePath.require("docs/start"))
+                harness.checkpoints.load() shouldContainExactly mapOf(pageId to PreviousUrl(RootName.MAIN, TreePath.require("docs/start")))
 
                 // Server down: the page moves on disk before the next process's first rebuild.
                 Files.createDirectories(root.resolve("archive"))
@@ -62,7 +68,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 val restarted = harness.startProcess()
                 val snapshot = restarted.builder.rebuild()
                 snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start"
-                harness.aliases.find(TreePath.require("docs/start")) shouldBe pageId
+                harness.aliases.find(rooted("docs/start")) shouldBe pageId
 
                 // The acceptance criterion's wire half: the OLD canonical URL answers 301 → new.
                 testApplication {
@@ -78,15 +84,15 @@ class IndexBuilderCheckpointTest : FunSpec({
     test("companion (§5.2 trade-off pinned): an UNMATERIALIZED page moved while down gets a fresh id and no alias") {
         withTempTree(seed = { root -> writePage(root, "docs/loose.md", "---\ntitle: Loose\n---\n\n# Loose\n") }) { root ->
             RestartableHarness(root).use { harness ->
-                val firstId = harness.startProcess().builder.rebuild().byUrlPath.getValue(TreePath.require("docs/loose")).id
+                val firstId = harness.startProcess().builder.rebuild().byUrlPath.getValue(rooted("docs/loose")).id
 
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("docs/loose.md"), root.resolve("archive/loose.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild()
                 // Path-keyed identity pre-materialization: the moved file is a NEW page to the index.
-                snapshot.byUrlPath.getValue(TreePath.require("archive/loose")).id shouldNotBe firstId
-                harness.aliases.find(TreePath.require("docs/loose")).shouldBeNull()
+                snapshot.byUrlPath.getValue(rooted("archive/loose")).id shouldNotBe firstId
+                harness.aliases.find(rooted("docs/loose")).shouldBeNull()
             }
         }
     }
@@ -102,7 +108,7 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
                 snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start" // index correctness never depends on it
-                harness.aliases.find(TreePath.require("docs/start")).shouldBeNull() // the missed alias, exactly as Phase 1
+                harness.aliases.find(rooted("docs/start")).shouldBeNull() // the missed alias, exactly as Phase 1
             }
         }
     }
@@ -120,7 +126,7 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
                 snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start"
-                harness.aliases.find(TreePath.require("docs/start")).shouldBeNull()
+                harness.aliases.find(rooted("docs/start")).shouldBeNull()
             }
         }
     }
@@ -132,15 +138,16 @@ class IndexBuilderCheckpointTest : FunSpec({
         }) { root ->
             RestartableHarness(root).use { harness ->
                 val snapshot = harness.startProcess().builder.rebuild()
-                val winner = snapshot.byPath.getValue(TreePath.require("a b.md"))
-                val loser = snapshot.byPath.getValue(TreePath.require("a-b.md"))
+                val winner = snapshot.byPath.getValue(rooted("a b.md"))
+                val loser = snapshot.byPath.getValue(rooted("a-b.md"))
 
-                harness.checkpoints.load() shouldContainExactly mapOf(winner.id to TreePath.require("a-b"), loser.id to null)
+                harness.checkpoints.load() shouldContainExactly
+                    mapOf(winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")), loser.id to PreviousUrl(RootName.MAIN, null))
 
                 // A second publish REPLACES (not appends): the loser's file disappears, so does its row.
                 Files.delete(root.resolve("a-b.md"))
                 harness.startProcess().builder.rebuild()
-                harness.checkpoints.load() shouldContainExactly mapOf(winner.id to TreePath.require("a-b"))
+                harness.checkpoints.load() shouldContainExactly mapOf(winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")))
             }
         }
     }
@@ -158,28 +165,30 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
 
     val aliases = SqlDelightUrlAliasRepository(database)
     val checkpoints = SqlDelightPageCheckpointRepository(database)
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
 
     fun startProcess(): Process {
         val store = LocalContentStore(root)
         val registry = UrlAliasRegistry(aliases)
         val builder = IndexBuilder(
-            contentStore = store,
+            sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider()),
+            identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = registry,
             checkpoint = checkpoints,
             citations = CitationFactory(),
-            history = NoOpHistoryProvider,
+            rootRank = rootRegistry::rank,
+            registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
             listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
         )
         return Process(store, registry, builder)
     }
 
     fun seedGarbageCheckpointRow() {
-        driver.execute(null, "INSERT INTO page_checkpoint(id, url_path) VALUES (x'BADBAD', 'docs/start')", 0)
+        driver.execute(null, "INSERT INTO page_checkpoint(id, root, url_path) VALUES (x'BADBAD', 'main', 'docs/start')", 0)
     }
 
     override fun close() = driver.close()
@@ -201,11 +210,12 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
                 enforced = false,
             ),
             indexBuilder = builder,
-            pageService = PageService(builder, registry, CitationFactory()),
+            pageService = PageService(builder, registry, CitationFactory(), RootName.MAIN),
             searchService = SearchService(mockk(relaxed = true), builder), // 301s never touch search
             aliasRegistry = registry,
             contentStore = store,
             writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
+            root = RootName.MAIN,
             history = NoOpHistoryProvider,
             idProvider = UuidV7IdProvider(),
             // 301 alias-redirects never touch the proposal surface; relaxed mocks satisfy the wiring.

@@ -2,9 +2,13 @@ package com.plainbase
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.UserRepository
+import com.plainbase.domain.root.DetachedRoots
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.RebuildScheduler
@@ -135,6 +139,24 @@ private fun serve() {
     // that also leaks the lock. Startup ORDER is unchanged: gateCheck (pre-lock) → lock → prepare() →
     // watcher → rebuild.
     try {
+        // Multi-root C2 boot guard (ADR-0011 D1/D15): bindings under roots absent from the config
+        // WARN; a nonempty id_map ENTIRELY disjoint from the config refuses to serve. ORDERING
+        // CONSTRAINT: this repository get is the process's FIRST app-DB open, which runs the
+        // migration - it must stay AFTER DataDirLock.tryAcquire (a concurrent second instance
+        // racing that first-open migration is exactly what the lock prevents) and satisfies the
+        // fix-D never-open-before-the-lock rule below the OBJECT branch. C4 RE-VERIFY: the guard
+        // runs BEFORE the object-mode hydrate/git-DR branch; when C4 wires multi-root object
+        // storage, confirm the guard still reads post-restore id_map state.
+        detachedRootsRefusal(
+            koin.get<IdMapRepository>().roots(),
+            // The REGISTRY, not config.roots.list: one runtime topology snapshot for the guard to
+            // agree with (identical names by construction).
+            koin.get<RootRegistry>().roots.map { it.name }.toSet(),
+        )?.let { refusal ->
+            lock.close() // exitProcess skips the outer finally (the hydrate-failure arm's shape)
+            System.err.println("serve: $refusal")
+            exitProcess(1)
+        }
         // Object mode: hydrate the DATA_DIR mirror from the bucket FIRST in the lock region, strictly
         // BEFORE the first rebuild() and reconcileDirtyPages() below - both read the post-hydrate
         // mirror through the port, which is what makes a retained-mark recovery commit-or-drift-skip
@@ -228,6 +250,40 @@ private fun serve() {
         lock.close()
     }
 }
+
+/**
+ * The C2 boot guard's serve() shape (ADR-0011 D15): evaluates the pure [DetachedRoots] verdict,
+ * logs the partial-detachment WARN itself, and returns the fatal refusal text (or null to serve).
+ * A synthesized legacy config runs it with configured = {main}, and every pre-C2 DB migrates to
+ * all-'main' rows, so it is trivially Clean there. The remediation is config-first, then TARGETED
+ * and backup-first - it must never advise deleting plainbase.db, which also holds the security and
+ * review truth (users, sessions, API tokens, roles, proposals, the audit log).
+ */
+internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName>): String? =
+    when (val verdict = DetachedRoots.evaluate(bound, configured)) {
+        DetachedRoots.Verdict.Clean -> null
+        is DetachedRoots.Verdict.Detached -> {
+            logger.warn {
+                "id_map holds page bindings under root(s) absent from roots{}: ${verdict.roots.sortedNames()}. " +
+                    "Their pages are not served and their permalinks stay dormant until a root with the same name is " +
+                    "restored (root names are permanent; re-adding restores bindings subject to the ADR-0011 D2 supersede rules)."
+            }
+            null
+        }
+        is DetachedRoots.Verdict.AllDetached ->
+            "REFUSING TO SERVE: every page binding in this DATA_DIR belongs to root(s) absent from the " +
+                "configuration (bound: ${bound.sortedNames()}; configured: ${configured.sortedNames()}). This DATA_DIR likely " +
+                "belongs to a different deployment, or the roots{} block was rewritten wholesale. Remedies, in order: " +
+                "(1) fix roots{} so the bound name(s) above are declared again (root names are permanent identifiers), " +
+                "or point DATA_DIR at the right directory; (2) if the removal is intentional and losing those roots' " +
+                "permalinks and old-URL redirects is accepted: back up DATA_DIR first, then delete only the detached " +
+                "rows, per root name, from the five identity tables - e.g. " +
+                "sqlite3 DATA_DIR/plainbase.db \"DELETE FROM id_map WHERE root='<name>'\" " +
+                "(repeat for url_alias, identity_issue, page_checkpoint, dirty_page). Do NOT delete plainbase.db " +
+                "itself: it also holds users, sessions, API tokens, roles, proposals, and the audit log."
+    }
+
+private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().joinToString(", ")
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [PlainbaseConfig.bindGuardRefusal]

@@ -1,6 +1,8 @@
 package com.plainbase.acceptance
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
@@ -8,6 +10,7 @@ import com.plainbase.domain.service.LinkChecker
 import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -47,7 +50,7 @@ class Phase1AcceptanceNativeTest {
             val snapshot = builderFor(LocalContentStore(fixturesRoot()), driver).rebuild()
             val report = LinkChecker().check(snapshot)
 
-            val actual = report.broken.map { listOf(it.page.value, it.text, it.target, it.reason.wireValue) }
+            val actual = report.broken.map { listOf(it.page.path.value, it.text, it.target, it.reason.wireValue) }
             // The manifest is non-empty (3 pinned entries), so an empty/missing index can never pass.
             assertEquals(loadManifest(), actual)
         }
@@ -63,12 +66,12 @@ class Phase1AcceptanceNativeTest {
 
             // Warm-vs-fresh (the chunk-3 criterion's shape): one renderer accumulates the whole
             // tree while a fresh instance renders each page cold — byte-identical HTML required.
-            val warm = FlexmarkRenderer(snapshot)
+            val warm = FlexmarkRenderer(snapshot.view(RootName.MAIN))
             for (page in snapshot.pages) {
                 val bytes = assertNotNull(store.read(page.path), "fixture page vanished: ${page.path.value}")
                 assertEquals(
                     warm.render(page.path, bytes).html,
-                    FlexmarkRenderer(snapshot).render(page.path, bytes).html,
+                    FlexmarkRenderer(snapshot.view(RootName.MAIN)).render(page.path, bytes).html,
                     "non-deterministic render for ${page.path.value}",
                 )
             }
@@ -77,17 +80,19 @@ class Phase1AcceptanceNativeTest {
 
     private fun builderFor(store: LocalContentStore, driver: SqlDriver): IndexBuilder {
         val database = DatabaseFactory.createDatabase(driver)
+        val registry = RootRegistry.of(listOf(localRoot("main", fixturesRoot())))
         return IndexBuilder(
-            contentStore = store,
+            sources = listOf(IndexBuilder.Source(registry.main, store, NoOpHistoryProvider)),
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider()),
+            identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
             checkpoint = SqlDelightPageCheckpointRepository(database),
             citations = CitationFactory(),
-            history = NoOpHistoryProvider,
+            rootRank = registry::rank,
+            registeredRoots = registry.roots.map { it.name }.toSet(),
         )
     }
 

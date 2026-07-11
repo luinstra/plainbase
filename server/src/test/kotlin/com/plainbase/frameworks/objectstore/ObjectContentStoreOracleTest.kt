@@ -6,6 +6,7 @@ import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
@@ -249,15 +250,19 @@ class ObjectContentStoreOracleTest : FunSpec({
                         val hybridReport = AdoptionPass(
                             hybrid.store,
                             hybridIdMap,
-                            PageIdentityService(TestIdProvider()),
+                            PageIdentityService(TestIdProvider()) { 0 },
                             FrontmatterPatcher(),
+                            root = RootName.MAIN,
+                            registeredRoots = setOf(RootName.MAIN),
                         )
                             .run(AdoptionPass.Mode.MATERIALIZE)
                         val localReport = AdoptionPass(
                             oracle.store,
                             localIdMap,
-                            PageIdentityService(TestIdProvider()),
+                            PageIdentityService(TestIdProvider()) { 0 },
                             FrontmatterPatcher(),
+                            root = RootName.MAIN,
+                            registeredRoots = setOf(RootName.MAIN),
                         )
                             .run(AdoptionPass.Mode.MATERIALIZE)
 
@@ -283,8 +288,14 @@ class ObjectContentStoreOracleTest : FunSpec({
 
             inMemoryIdMap { idMap ->
                 shouldThrow<ObjectStoreException> {
-                    AdoptionPass(hybrid.store, idMap, PageIdentityService(TestIdProvider()), FrontmatterPatcher())
-                        .run(AdoptionPass.Mode.MATERIALIZE)
+                    AdoptionPass(
+                        hybrid.store,
+                        idMap,
+                        PageIdentityService(TestIdProvider()) { 0 },
+                        FrontmatterPatcher(),
+                        root = RootName.MAIN,
+                        registeredRoots = setOf(RootName.MAIN),
+                    ).run(AdoptionPass.Mode.MATERIALIZE)
                 }
             }
             // The bucket PUT landed BEFORE the mirror write failed (bucket-first): the patched id line is

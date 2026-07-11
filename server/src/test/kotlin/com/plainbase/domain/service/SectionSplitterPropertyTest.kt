@@ -7,6 +7,7 @@ import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.render.RenderedSection
+import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.property.Arb
@@ -50,6 +51,7 @@ class SectionSplitterPropertyTest : FunSpec({
         title: String = "Title",
     ) = IndexedPage(
         id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"),
+        root = RootName.MAIN,
         path = TreePath.require("notes/page.md"),
         slug = "page",
         urlPath = TreePath.require("notes/page"),

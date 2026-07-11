@@ -5,6 +5,7 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
@@ -18,6 +19,7 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.service.localRoot
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -297,17 +299,21 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val frontmatter = FrontmatterReader()
     private val searchIndexer = SearchIndexer(provider, SectionSplitter())
 
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", config.contentDir)))
+
     val builder = IndexBuilder(
-        contentStore = store,
+        // git state lives under CONTENT_DIR, untouched by the loss - hence NoOpHistoryProvider
+        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
         frontmatterParser = frontmatter,
         rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider()),
+        identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = registry,
         checkpoint = checkpoint,
         citations = citations,
-        history = NoOpHistoryProvider, // git state lives under CONTENT_DIR, untouched by the loss
+        rootRank = rootRegistry::rank,
+        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
             IndexBuilder.PublicationListener(checkpoint::replaceFrom),
             IndexBuilder.PublicationListener(searchIndexer::sync),
@@ -323,6 +329,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         dirtyPages = dirtyPages,
         idMap = idMap,
         aliasRegistry = registry,
+        root = rootRegistry.main.name,
         historyHook = WriteHistoryHook { _, _, _, _ -> null },
     )
 

@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -35,8 +37,12 @@ class RestGoldenTest : FunSpec({
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val welcomeId = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
-        idMap.bind(TreePath.require("index.md"), PageId.require(welcomeId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
+        idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
     }
     val deployGuideHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("guides/deploy-guide.md"))
     val welcomeHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("index.md"))

@@ -18,4 +18,4 @@ Format: Status · Date · Deciders · Context · Decision · Consequences. Keep 
 | [0008](0008-tls-terminates-at-an-external-reverse-proxy.md) | TLS terminates at an external reverse proxy (not in-process), with a fail-closed bind guard | Accepted |
 | [0009](0009-hocon-config-file-not-yaml.md) | The config file is HOCON (`plainbase.conf`), not YAML, layered under env | Accepted |
 | [0010](0010-object-storage-backend.md) | Object-storage backend: an S3-compatible bucket as the content authority | Accepted |
-| [0011](0011-multi-root-document-directories.md) | Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history | Proposed |
+| [0011](0011-multi-root-document-directories.md) | Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history | Accepted |

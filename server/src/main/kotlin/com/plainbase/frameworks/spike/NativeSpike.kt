@@ -3,6 +3,7 @@ package com.plainbase.frameworks.spike
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
@@ -357,7 +358,7 @@ object NativeSpike {
             path = treePath,
             status = "active",
         )
-        return PageDocuments(pageId = pageId, contentHash = contentHash, path = treePath, sections = listOf(section))
+        return PageDocuments(pageId = pageId, contentHash = contentHash, root = RootName.MAIN, path = treePath, sections = listOf(section))
     }
 
     // ---- 5. flexmark ---------------------------------------------------------------------

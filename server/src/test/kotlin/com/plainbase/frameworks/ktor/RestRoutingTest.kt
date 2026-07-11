@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -32,7 +34,11 @@ class RestRoutingTest : FunSpec({
 
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
 
     test("GET /p/{id} 302s to the current canonical /docs URL; a trailing stale slug is ignored") {
@@ -112,7 +118,7 @@ class RestRoutingTest : FunSpec({
         }) { root ->
             restTest(root) { harness ->
                 val client = restClient()
-                val loser = harness.builder.current.byPath.getValue(TreePath.require("a-b.md"))
+                val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a-b.md")))
                 loser.url.shouldBeNull()
 
                 // /p/{id} cannot redirect (no canonical path exists) — the permalink IS the loser's
@@ -131,7 +137,7 @@ class RestRoutingTest : FunSpec({
                 browse.status shouldBe HttpStatusCode.Found
                 browse.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}"
 
-                val winner = harness.builder.current.byPath.getValue(TreePath.require("a b.md"))
+                val winner = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a b.md")))
                 winner.url.shouldNotBeNull()
             }
         }

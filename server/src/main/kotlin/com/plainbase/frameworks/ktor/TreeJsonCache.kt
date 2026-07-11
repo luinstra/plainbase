@@ -3,6 +3,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.TreeBuilder
 import com.plainbase.frameworks.ktor.dto.RestJson
@@ -22,7 +23,10 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * only the guarded [RouteContext]. This per-snapshot framework memo now lives inside [GuardedReadFacade]
  * (`tree()`), the only remaining consumer.
  */
-class TreeJsonCache(private val indexBuilder: IndexBuilder) {
+class TreeJsonCache(
+    private val indexBuilder: IndexBuilder,
+    private val root: RootName,
+) {
 
     private class Entry(val snapshot: PageIndex, val json: String)
 
@@ -32,7 +36,7 @@ class TreeJsonCache(private val indexBuilder: IndexBuilder) {
     fun current(): String {
         val snapshot = indexBuilder.current
         memo.load()?.takeIf { it.snapshot === snapshot }?.let { return it.json }
-        val json = RestJson.encodeToString(TreeResponse.serializer(), TreeResponse(TreeBuilder.build(snapshot).toDto()))
+        val json = RestJson.encodeToString(TreeResponse.serializer(), TreeResponse(TreeBuilder.build(snapshot, root).toDto()))
         memo.store(Entry(snapshot, json))
         return json
     }

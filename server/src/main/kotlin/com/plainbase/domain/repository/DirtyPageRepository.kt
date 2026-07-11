@@ -1,7 +1,7 @@
 package com.plainbase.domain.repository
 
-import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The WRITE-AHEAD dirty-page journal (PB-WRITE-1 fix H): durable recovery state
@@ -23,18 +23,18 @@ interface DirtyPageRepository {
      * about-to-be-written bytes) and [stage]. Durable and idempotent (upsert) — marked BEFORE the disk
      * write so a crash between the write and the post-steps is still recoverable.
      */
-    fun mark(pageId: PageId, path: TreePath, expectedHash: String, stage: Stage)
+    fun mark(pageId: PageId, path: RootedPath, expectedHash: String, stage: Stage)
 
     /** Every page still dirty, for startup reconciliation. */
     fun all(): List<DirtyPage>
 
     /**
-     * True iff ANY dirty row currently carries [path]. An indexed single-row existence check for the
-     * object-mode poll's live dirty-ahead guard (MINOR-1) - it runs once per poll candidate under the apply
+     * True iff ANY dirty row currently carries the rooted [path]. An indexed single-row existence check for
+     * the object-mode poll's live dirty-ahead guard (MINOR-1) - it runs once per poll candidate under the apply
      * monitor, so it must not materialize the whole journal ([all]) per candidate. Preserves the guard's
      * correctness property: it observes a mark added at any point before the decision (mark-precedes-CAS).
      */
-    fun isDirty(path: TreePath): Boolean
+    fun isDirty(path: RootedPath): Boolean
 
     /**
      * The current dirty row for [pageId], or null if none. Captured BEFORE a write-ahead [mark]
@@ -54,5 +54,5 @@ interface DirtyPageRepository {
  */
 enum class Stage { WRITING, COMMITTING, INDEXING }
 
-/** One dirty-journal row: the page, its on-disk path, the hash being written, and the reached [stage]. */
-data class DirtyPage(val pageId: PageId, val path: TreePath, val expectedHash: String, val stage: Stage)
+/** One dirty-journal row: the page, its rooted on-disk path, the hash being written, and the reached [stage]. */
+data class DirtyPage(val pageId: PageId, val path: RootedPath, val expectedHash: String, val stage: Stage)

@@ -22,16 +22,33 @@ object DatabaseFactory {
         return driver
     }
 
-    /** Builds the typed database. Id columns are 16-byte BLOBs; paths are NFC text (the two column adapters). */
+    /** Builds the typed database. Id columns are 16-byte BLOBs; paths are NFC text; roots validated slugs (the three column adapters). */
     fun createDatabase(driver: SqlDriver): PlainbaseDb = PlainbaseDb(
         driver = driver,
-        id_mapAdapter = Id_map.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
-        // identity_issue's other_path/page_id stay untyped: their UNIQUE-key sentinels ('' / x'')
-        // are not valid TreePath/PageId values, so the repository maps them (see IssueRow).
-        identity_issueAdapter = Identity_issue.Adapter(pathAdapter = TreePathColumnAdapter),
-        url_aliasAdapter = Url_alias.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
-        page_checkpointAdapter = Page_checkpoint.Adapter(idAdapter = PageIdColumnAdapter, url_pathAdapter = TreePathColumnAdapter),
-        dirty_pageAdapter = Dirty_page.Adapter(idAdapter = PageIdColumnAdapter, pathAdapter = TreePathColumnAdapter),
+        id_mapAdapter = Id_map.Adapter(
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+            idAdapter = PageIdColumnAdapter,
+        ),
+        // identity_issue's other_root/other_path/page_id stay untyped: their UNIQUE-key sentinels
+        // ('' / x'') are not valid RootName/TreePath/PageId values, so the repository maps them
+        // (see IssueRow).
+        identity_issueAdapter = Identity_issue.Adapter(rootAdapter = RootNameColumnAdapter, pathAdapter = TreePathColumnAdapter),
+        url_aliasAdapter = Url_alias.Adapter(
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+            idAdapter = PageIdColumnAdapter,
+        ),
+        page_checkpointAdapter = Page_checkpoint.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            url_pathAdapter = TreePathColumnAdapter,
+        ),
+        dirty_pageAdapter = Dirty_page.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+        ),
         proposalsAdapter = Proposals.Adapter(
             idAdapter = ProposalIdColumnAdapter,
             page_idAdapter = PageIdColumnAdapter,
@@ -62,18 +79,24 @@ object DatabaseFactory {
     private fun migrate(driver: SqlDriver) {
         val current = driver.userVersion()
         val target = PlainbaseDb.Schema.version
-        when {
-            current == 0L -> {
+        // current > target: an older binary opening a newer DB. Intentionally a no-op for now —
+        // a downgrade guard (throwing) would be a behavior change; defer that hardening.
+        if (current >= target) return
+        // ONE SQLite transaction around the whole chain plus its `user_version` bump, all-or-nothing
+        // (SQLite DDL is transactional; `user_version` lives in the DB header and rolls back too).
+        // The generated Schema.create/migrate issue bare per-statement executes with NO transaction
+        // of their own, so a crash mid-way through a multi-statement rebuild (10.sqm's
+        // CREATE/INSERT/DROP/RENAME chain) would otherwise strand a half-rebuilt DB still stamped
+        // with the OLD version - unable to retry, unable to boot. The DRIVER-managed transaction is
+        // load-bearing: it pins one connection for every statement inside the block, where a raw
+        // BEGIN would die with the per-statement connection the file-backed driver borrows.
+        createDatabase(driver).transaction {
+            if (current == 0L) {
                 PlainbaseDb.Schema.create(driver)
-                driver.execute(null, "PRAGMA user_version = $target;", 0)
-            }
-            current < target -> {
+            } else {
                 PlainbaseDb.Schema.migrate(driver, current, target)
-                driver.execute(null, "PRAGMA user_version = $target;", 0)
             }
-            // current > target: an older binary opening a newer DB. Intentionally a no-op for now —
-            // a downgrade guard (throwing) would be a behavior change; defer that hardening.
-            else -> Unit
+            driver.execute(null, "PRAGMA user_version = $target;", 0)
         }
     }
 

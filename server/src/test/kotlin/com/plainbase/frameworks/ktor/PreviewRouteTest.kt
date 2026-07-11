@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -67,7 +68,7 @@ class PreviewRouteTest : FunSpec({
             Files.write(tree.resolve("parity.md"), original.toByteArray())
             val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
                 idMap.bind(
-                    com.plainbase.domain.content.TreePath.require("parity.md"),
+                    com.plainbase.domain.root.RootedPath(RootName.MAIN, com.plainbase.domain.content.TreePath.require("parity.md")),
                     com.plainbase.domain.page.PageId.require(pageId),
                     materialized = true,
                 )
@@ -93,7 +94,10 @@ class PreviewRouteTest : FunSpec({
         val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
         val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
             idMap.bind(
-                com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                com.plainbase.domain.root.RootedPath(
+                    RootName.MAIN,
+                    com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                ),
                 com.plainbase.domain.page.PageId.require(pageId),
                 materialized = false,
             )
@@ -135,7 +139,10 @@ class PreviewRouteTest : FunSpec({
         val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
         val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
             idMap.bind(
-                com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                com.plainbase.domain.root.RootedPath(
+                    RootName.MAIN,
+                    com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                ),
                 com.plainbase.domain.page.PageId.require(pageId),
                 materialized = false,
             )

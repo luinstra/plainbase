@@ -9,9 +9,13 @@
 
 import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
+import com.plainbase.domain.root.RootName;
 
+-- PK stays id (ids are globally unique across roots); root qualifies the root-relative url_path
+-- (multi-root C2, ADR-0011 D14).
 CREATE TABLE page_checkpoint (
   id BLOB AS PageId NOT NULL PRIMARY KEY,
+  root TEXT AS RootName NOT NULL,
   url_path TEXT AS TreePath
 );
 
@@ -23,5 +27,5 @@ deleteAll:
 DELETE FROM page_checkpoint;
 
 insertRow:
-INSERT INTO page_checkpoint(id, url_path)
-VALUES (:id, :urlPath);
+INSERT INTO page_checkpoint(id, root, url_path)
+VALUES (:id, :root, :urlPath);

@@ -7,6 +7,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.createGrantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -109,7 +111,7 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
 
                 // current agrees (byPath and byId both resolve it), the journal is clean, bytes are verbatim.
                 val racePath = TreePath.require("race.md")
-                harness.builder.current.byPath.getValue(racePath).id shouldBe pageId
+                harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, racePath)).id shouldBe pageId
                 harness.builder.current.byId.getValue(pageId).path shouldBe racePath
                 harness.dirtyPages.all().isEmpty() shouldBe true
                 Files.readAllBytes(root.resolve("race.md")) shouldBe bytes

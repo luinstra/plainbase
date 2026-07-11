@@ -2,17 +2,19 @@ package com.plainbase.domain.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 
 /**
  * One page's complete search-document set — the unit [SearchProvider.index] replaces atomically
  * (§B4 per-page atomicity: a concurrent query sees a page's documents entirely old or entirely
- * new, never half). [contentHash] and [path] are what [SearchProvider.indexedState] echoes back
- * for engine-truth diffing: the hash covers every in-file change, the path covers moves without
- * a content change.
+ * new, never half). [contentHash], [root], and [path] are what [SearchProvider.indexedState]
+ * echoes back for engine-truth diffing: the hash covers every in-file change, the root+path cover
+ * moves without a content change.
  */
 data class PageDocuments(
     val pageId: PageId,
     val contentHash: String,
+    val root: RootName,
     val path: TreePath,
     val sections: List<SectionDocument>,
 )

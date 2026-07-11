@@ -8,9 +8,10 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 /**
  * Engine-truth diff sync (§B4): [sync] reconciles a published [PageIndex] snapshot against
  * [SearchProvider.indexedState] — the engine's OWN record of what it holds — upserting pages the
- * engine lacks or holds stale (`contentHash` covers every in-file change, `path` covers moves)
- * and deleting pages the snapshot no longer has. An unchanged corpus makes ZERO engine calls
- * beyond the state read (the no-op fast path).
+ * engine lacks or holds stale (`contentHash` covers every in-file change, root+path cover moves,
+ * cross-root included) and deleting pages the snapshot no longer has. An unchanged corpus makes
+ * ZERO engine calls beyond the state read (the no-op fast path). The diff stays pageId-keyed:
+ * ids are global across roots under the D17 winner policy, so one engine row per page still holds.
  *
  * Diffing against engine truth instead of a previous in-memory snapshot is what makes the FIRST
  * sync after startup reconcile everything that changed while down, and a deleted engine database
@@ -30,7 +31,9 @@ class SearchIndexer(
         val stale = engineState.keys - snapshot.byId.keys
         val changed = snapshot.pages.filter { page ->
             val state = engineState[page.id]
-            state == null || state.contentHash != page.contentHash || state.path != page.path
+            // The root check keeps the engine's root column live: a cross-root move with an
+            // unchanged relative path and hash must still re-upsert.
+            state == null || state.contentHash != page.contentHash || state.path != page.path || state.root != page.root
         }
         if (stale.isEmpty() && changed.isEmpty()) {
             logger.debug { "search sync: engine matches the snapshot, nothing to do" }
@@ -73,7 +76,7 @@ class SearchIndexer(
      */
     fun syncPage(page: IndexedPage) {
         provider.index(listOf(splitter.split(page)))
-        logger.debug { "search syncPage: upserted ${page.id}" }
+        logger.debug { "search syncPage: upserted ${page.id} (root ${page.root})" }
     }
 
     companion object {

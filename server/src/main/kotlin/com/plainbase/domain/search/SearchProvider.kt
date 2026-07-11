@@ -2,6 +2,7 @@ package com.plainbase.domain.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 
 /**
  * The search engine port (§5.6/§B4 — master vocabulary: index, delete, search, rebuild, plus the
@@ -36,8 +37,9 @@ interface SearchProvider {
     fun indexedState(): Map<PageId, PageSearchState>
 }
 
-/** What the engine knows about one indexed page: enough to detect change ([contentHash]) and moves ([path]). */
+/** What the engine knows about one indexed page: enough to detect change ([contentHash]) and root+path cover moves. */
 data class PageSearchState(
     val contentHash: String,
+    val root: RootName,
     val path: TreePath,
 )

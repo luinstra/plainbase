@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.search
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -38,7 +40,7 @@ class Fts5TrigramFallbackTest : FunSpec({
                 val splitter = SectionSplitter()
                 provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
 
-                val cjkPage = snapshot.byPath.getValue(TreePath.require("notes/日本語ガイド.md"))
+                val cjkPage = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("notes/日本語ガイド.md")))
                 val results = provider.search(query("ガイド"))
                 results.hits.shouldNotBeEmpty()
                 results.hits.map { it.pageId }.toSet() shouldBe setOf(cjkPage.id)

@@ -114,7 +114,11 @@ class ProposalAuthzRouteTest : FunSpec({
                     proposals = com.plainbase.domain.service.ProposalService(
                         repository = harness.proposalRepository,
                         citations = com.plainbase.domain.service.CitationFactory(),
-                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, store),
+                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(
+                            harness.builder,
+                            store,
+                            harness.rootRegistry.main.name,
+                        ),
                         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                         clock = Clock.System,
                     ),

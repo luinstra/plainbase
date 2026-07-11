@@ -1,7 +1,10 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -18,6 +21,8 @@ import kotlin.concurrent.thread
  */
 class WritePipelineConcurrencyTest : FunSpec({
 
+    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+
     fun seedTwo(root: Path) {
         writePage(root, "a.md", "---\ntitle: A\n---\n\n# A\n\nbody a.\n")
         writePage(root, "b.md", "---\ntitle: B\n---\n\n# B\n\nbody b.\n")
@@ -28,8 +33,8 @@ class WritePipelineConcurrencyTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val pipeline = harness.writePipeline()
-                val pageA = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("a.md"))
-                val pageB = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("b.md"))
+                val pageA = harness.builder.current.byPath.getValue(mainPath("a.md"))
+                val pageB = harness.builder.current.byPath.getValue(mainPath("b.md"))
                 val saveA = "---\ntitle: A\n---\n\n# A\n\nnew a.\n".toByteArray()
                 val saveB = "---\ntitle: B\n---\n\n# B\n\nnew b.\n".toByteArray()
 
@@ -61,7 +66,7 @@ class WritePipelineConcurrencyTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val pipeline = harness.writePipeline()
-                val page = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("a.md"))
+                val page = harness.builder.current.byPath.getValue(mainPath("a.md"))
                 val baseHash = page.contentHash
                 val save1 = "---\ntitle: A\n---\n\n# A\n\nwriter one.\n".toByteArray()
                 val save2 = "---\ntitle: A\n---\n\n# A\n\nwriter two.\n".toByteArray()

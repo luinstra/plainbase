@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.repository.PageCheckpointRepository
+import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
@@ -46,7 +47,7 @@ class CheckpointModuleWiringTest : FunSpec({
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 2
                     val snapshot = app.koin.get<IndexBuilder>().rebuild()
                     app.koin.get<PageCheckpointRepository>().load() shouldContainExactly
-                        snapshot.pages.associate { it.id to it.urlPath }
+                        snapshot.pages.associate { it.id to PreviousUrl(it.root, it.urlPath) }
                 } finally {
                     app.close()
                 }

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageService
@@ -32,7 +33,7 @@ import kotlin.time.Clock
  * only — no reflection (native-image gate).
  */
 val restModule = module {
-    single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get()) }
+    single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get(), root = get<RootRegistry>().main.name) }
     single { SearchService(provider = get(), indexBuilder = get()) }
     single {
         WritePipeline(
@@ -43,6 +44,7 @@ val restModule = module {
             dirtyPages = get(),
             idMap = get(),
             aliasRegistry = get(),
+            root = get<RootRegistry>().main.name,
             historyHook = get(),
         )
     }
@@ -100,7 +102,7 @@ val restModule = module {
     // PB-PROPOSE-1 (P1a): the proposal store seam + the guarded facade. The live read seam over the SAME
     // IndexBuilder + ContentStore the read facade uses; the C4 label resolver over the token/user repos. Clock is
     // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
-    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), contentStore = get()) }
+    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), contentStore = get(), root = get<RootRegistry>().main.name) }
     single { ProposalAuthorLabeler(tokens = get(), users = get()) }
     single {
         ProposalService(
@@ -128,6 +130,7 @@ val restModule = module {
             aliasRegistry = get(),
             contentStore = get(),
             writePipeline = get(),
+            root = get<RootRegistry>().main.name,
             history = get(),
             idProvider = get(),
             proposalService = get(),

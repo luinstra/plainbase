@@ -8,6 +8,8 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -163,7 +165,7 @@ class WritePipelineTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 // The copy: its on-disk frontmatter id is the shared id, but its assigned pageId is minted (different).
-                val copy = harness.builder.current.byPath.getValue(TreePath.require("b-copy.md"))
+                val copy = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("b-copy.md")))
                 copy.frontmatter.scalar("id") shouldBe sharedId
                 copy.id.value shouldNotBe sharedId // the reassigned (minted) pageId genuinely differs
 
@@ -196,6 +198,7 @@ class WritePipelineTest : FunSpec({
                     dirtyPages = harness.dirtyPages,
                     idMap = harness.idMap,
                     aliasRegistry = harness.registry,
+                    root = RootName.MAIN,
                 )
                 val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, "x".toByteArray()))
                 outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>().cause shouldBe "simulated permission denied"

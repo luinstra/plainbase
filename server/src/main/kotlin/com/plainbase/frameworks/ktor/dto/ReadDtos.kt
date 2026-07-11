@@ -69,7 +69,8 @@ data class PageMetadataResponse(
 fun LinkReport.toDto(): ValidateLinksResponse = ValidateLinksResponse(broken = broken.map { it.toDto() })
 
 fun BrokenLink.toDto(): BrokenLinkDto =
-    BrokenLinkDto(page = page.value, target = target, text = text, reason = reason.wireValue)
+    // The bare path string: C2 roots the domain report, never the wire shape (C3 owns URL/DTO rooting).
+    BrokenLinkDto(page = page.path.value, target = target, text = text, reason = reason.wireValue)
 
 fun IndexedPage.toMetadataDto(): PageMetadataResponse = PageMetadataResponse(
     id = id.value,

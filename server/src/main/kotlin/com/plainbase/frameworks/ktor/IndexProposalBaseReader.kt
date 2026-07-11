@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalBaseReader
 
@@ -20,6 +22,8 @@ import com.plainbase.domain.service.ProposalBaseReader
 class IndexProposalBaseReader(
     private val indexBuilder: IndexBuilder,
     private val contentStore: ContentStore,
+    // The one root proposals target (main until C4; the port stays bare TreePath per D18).
+    private val root: RootName,
 ) : ProposalBaseReader {
 
     override fun pathOf(pageId: PageId): TreePath? = indexBuilder.current.byId[pageId]?.path
@@ -28,6 +32,6 @@ class IndexProposalBaseReader(
 
     override fun occupied(path: TreePath): Boolean {
         val snapshot = indexBuilder.current
-        return path in snapshot.byPath || path in snapshot.assets
+        return RootedPath(root, path) in snapshot.byPath || path in snapshot.section(root).assets
     }
 }

@@ -6,7 +6,9 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.PageCheckpointRepository
+import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -120,6 +122,7 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
 
     val renders = ConcurrentHashMap<String, Int>()
     val search = CountingSearchProvider()
@@ -136,16 +139,17 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     }
 
     val builder = IndexBuilder(
-        contentStore = store,
+        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = countingRenderer,
-        identity = PageIdentityService(UuidV7IdProvider()),
+        identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
         patcher = FrontmatterPatcher(),
         idMap = SqlDelightIdMapRepository(database),
         aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
         checkpoint = checkpoint,
         citations = CitationFactory(),
-        history = NoOpHistoryProvider,
+        rootRank = rootRegistry::rank,
+        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
         searchIndexer = SearchIndexer(search, SectionSplitter()),
     )
@@ -189,7 +193,7 @@ private class CountingSearchProvider : SearchProvider {
 private class CountingCheckpoint(private val delegate: PageCheckpointRepository) : PageCheckpointRepository {
     var replaceCalls = 0
     override fun load() = delegate.load()
-    override fun replace(urlPaths: Map<PageId, TreePath?>) {
+    override fun replace(urlPaths: Map<PageId, PreviousUrl>) {
         replaceCalls += 1
         delegate.replace(urlPaths)
     }

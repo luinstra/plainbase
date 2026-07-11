@@ -1,6 +1,9 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -44,17 +47,19 @@ class IndexBuilderNativeTest {
                 val idMap = SqlDelightIdMapRepository(database)
                 val aliases = SqlDelightUrlAliasRepository(database)
                 val registry = UrlAliasRegistry(aliases)
+                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
                 val builder = IndexBuilder(
-                    contentStore = LocalContentStore(content),
+                    sources = listOf(IndexBuilder.Source(rootRegistry.main, LocalContentStore(content), NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider()),
+                    identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
-                    history = NoOpHistoryProvider,
+                    rootRank = rootRegistry::rank,
+                    registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                 )
 
                 val first = builder.rebuild()
@@ -68,8 +73,8 @@ class IndexBuilderNativeTest {
                 Files.move(content.resolve("docs/start.md"), content.resolve("archive/start.md"))
                 val second = builder.rebuild()
                 assertEquals("/docs/archive/start", second.byId.getValue(page.id).url)
-                assertNotNull(registry.find(TreePath.require("docs/start")))
-                assertEquals(page.id, aliases.find(TreePath.require("docs/start")))
+                assertNotNull(registry.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
+                assertEquals(page.id, aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
             } finally {
                 Files.walk(content).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             }

@@ -2,6 +2,7 @@ package com.plainbase.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchHit
 import com.plainbase.domain.search.SearchQuery
@@ -46,6 +47,7 @@ fun page(
     return PageDocuments(
         pageId = id,
         contentHash = contentHash,
+        root = RootName.MAIN,
         path = treePath,
         sections = listOf(doc(null, null, preamble)) + sections.map { (headingId, body) -> doc(headingId, headingId, body) },
     )

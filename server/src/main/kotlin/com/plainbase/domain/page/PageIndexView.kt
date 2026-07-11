@@ -7,8 +7,9 @@ import com.plainbase.domain.content.TreePath
  * (PB-LINK-1 §A2). It exposes exactly the questions resolution asks of the scanned page index —
  * "does this path exist, and as what?" and "what is this page's emitted URL?" — and nothing else.
  *
- * Chunk 5's `PageIndex` implements this over the real snapshot (`byPath`, `byUrlPath`, the
- * `CanonicalUrlBuilder` output). In chunk 2 it is **stubbed** in tests over the fixture path set,
+ * Chunk 5's `PageIndex` vends root-scoped implementations of this over the real snapshot
+ * (`view(root)`, one per root since multi-root C2; the `CanonicalUrlBuilder` output behind them).
+ * In chunk 2 it is **stubbed** in tests over the fixture path set,
  * because URL *construction* (§A4) is chunk 5's job — the resolver only consumes the URL the view
  * hands it. Keeping this an interface is what lets the resolver be pure domain code with zero
  * dependency on the index implementation or any framework type.

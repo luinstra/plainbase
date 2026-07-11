@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
@@ -16,6 +17,7 @@ import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -84,17 +86,19 @@ fun withRestServices(
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
                 val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
                 val builder = IndexBuilder(
-                    contentStore = store,
+                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider()),
+                    identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
-                    history = NoOpHistoryProvider,
+                    rootRank = rootRegistry::rank,
+                    registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                     listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
                     searchIndexer = searchIndexer,
                 )
@@ -185,7 +189,8 @@ fun withRestServices(
                         database,
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
-                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, contentStore = store)
+                val proposalBaseReader =
+                    IndexProposalBaseReader(indexBuilder = builder, contentStore = store, root = rootRegistry.main.name)
                 val proposalService = com.plainbase.domain.service.ProposalService(
                     repository = SqlDelightProposalRepository(database),
                     citations = CitationFactory(),
@@ -196,7 +201,7 @@ fun withRestServices(
                 val services = buildRouteContext(
                     policy = policy,
                     indexBuilder = builder,
-                    pageService = PageService(builder, registry, CitationFactory()),
+                    pageService = PageService(builder, registry, CitationFactory(), rootRegistry.main.name),
                     searchService = SearchService(provider = searchProvider, indexBuilder = builder),
                     aliasRegistry = registry,
                     contentStore = store,
@@ -208,7 +213,9 @@ fun withRestServices(
                         dirtyPages = SqlDelightDirtyPageRepository(database),
                         idMap = idMap,
                         aliasRegistry = registry,
+                        root = rootRegistry.main.name,
                     ),
+                    root = rootRegistry.main.name,
                     history = NoOpHistoryProvider,
                     idProvider = UuidV7IdProvider(),
                     proposalService = proposalService,

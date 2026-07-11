@@ -2,6 +2,7 @@ package com.plainbase.frameworks.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -83,12 +84,16 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
     }
 
     override fun indexedState(): Map<PageId, PageSearchState> = db.write { connection ->
-        connection.prepareStatement("SELECT page_id, content_hash, path FROM search_page WHERE generation = ?").use { statement ->
+        connection.prepareStatement("SELECT page_id, content_hash, root, path FROM search_page WHERE generation = ?").use { statement ->
             statement.setLong(1, connection.activeGeneration())
             statement.executeQuery().use { rows ->
                 buildMap {
                     while (rows.next()) {
-                        val state = PageSearchState(contentHash = rows.getString(2), path = TreePath.require(rows.getString(3)))
+                        val state = PageSearchState(
+                            contentHash = rows.getString(2),
+                            root = RootName.require(rows.getString(3)),
+                            path = TreePath.require(rows.getString(4)),
+                        )
                         put(PageId.fromByteArray(rows.getBytes(1)), state)
                     }
                 }
@@ -182,15 +187,16 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         }
 
     private fun Connection.insertPage(generation: Long, page: PageDocuments) {
-        prepareStatement("INSERT INTO search_page(generation, page_id, content_hash, path) VALUES (?, ?, ?, ?)").use { statement ->
+        prepareStatement("INSERT INTO search_page(generation, page_id, content_hash, root, path) VALUES (?, ?, ?, ?, ?)").use { statement ->
             statement.setLong(1, generation)
             statement.setBytes(2, page.pageId.toByteArray())
             statement.setString(3, page.contentHash)
-            statement.setString(4, page.path.value)
+            statement.setString(4, page.root.value)
+            statement.setString(5, page.path.value)
             statement.executeUpdate()
         }
         val insertDoc = prepareStatement(
-            "INSERT INTO section_doc(generation, page_id, heading_id, status) VALUES (?, ?, ?, ?)",
+            "INSERT INTO section_doc(generation, page_id, root, heading_id, status) VALUES (?, ?, ?, ?, ?)",
             Statement.RETURN_GENERATED_KEYS,
         )
         val insertFts =
@@ -202,8 +208,9 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
                     page.sections.forEach { section ->
                         insertDoc.setLong(1, generation)
                         insertDoc.setBytes(2, page.pageId.toByteArray())
-                        insertDoc.setString(3, section.headingId)
-                        insertDoc.setString(4, section.status)
+                        insertDoc.setString(3, page.root.value)
+                        insertDoc.setString(4, section.headingId)
+                        insertDoc.setString(5, section.status)
                         insertDoc.executeUpdate()
                         val docId = insertDoc.generatedKeys.use { keys ->
                             keys.next()

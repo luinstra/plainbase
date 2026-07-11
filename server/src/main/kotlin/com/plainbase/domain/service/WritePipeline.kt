@@ -15,6 +15,8 @@ import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Stage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
@@ -50,6 +52,9 @@ class WritePipeline(
     private val dirtyPages: DirtyPageRepository,
     private val idMap: IdMapRepository,
     private val aliasRegistry: UrlAliasRegistry,
+    // The one root this pipeline writes into (main until C4): its ContentStore is that root's tree,
+    // so every rooted key the pipeline produces carries it.
+    private val root: RootName,
     private val historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _ -> null },
 ) {
 
@@ -66,7 +71,12 @@ class WritePipeline(
         val prior = dirtyPages.get(intent.pageId)
 
         // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk write.
-        dirtyPages.mark(intent.pageId, intent.path, expectedHash = citations.contentHash(intent.bytes), stage = Stage.WRITING)
+        dirtyPages.mark(
+            intent.pageId,
+            RootedPath(root, intent.path),
+            expectedHash = citations.contentHash(intent.bytes),
+            stage = Stage.WRITING,
+        )
 
         // (2) Atomic, disk-authoritative CAS (fix A).
         return when (val cas = contentStore.compareAndSwapWrite(intent.path, intent.baseHash, intent.bytes, citations::contentHash)) {
@@ -133,7 +143,12 @@ class WritePipeline(
 
         // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk create. A fresh pageId
         // has no prior recovery row, so a no-write outcome simply clears the mark.
-        dirtyPages.mark(intent.pageId, intent.path, expectedHash = citations.contentHash(intent.bytes), stage = Stage.WRITING)
+        dirtyPages.mark(
+            intent.pageId,
+            RootedPath(root, intent.path),
+            expectedHash = citations.contentHash(intent.bytes),
+            stage = Stage.WRITING,
+        )
 
         // (2) Exclusive create (write-if-absent) — collision is a race-safe pipeline outcome, not a pre-check.
         return when (val create = contentStore.createExclusive(intent.path, intent.bytes, citations::contentHash)) {
@@ -162,7 +177,7 @@ class WritePipeline(
     /** (3) Post-create steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
         try {
-            idMap.bind(intent.path, intent.pageId, materialized = true) // the create composed the id INTO frontmatter
+            idMap.bind(RootedPath(root, intent.path), intent.pageId, materialized = true) // the create composed the id INTO frontmatter
             // The create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
             // identity); create-apply threads the proposer->author + approver->committer (an in-glob agent: both = agent).
             val commit = historyHook.commit(intent.path, intent.bytes, intent.author, intent.committer)
@@ -199,11 +214,14 @@ class WritePipeline(
      * composed the bytes), so the computed URL is byte-identical to what the page would publish at.
      */
     private fun canonicalUrlCollision(intent: CreateIntent): String? {
+        // Root-scoped end to end: URL space is per root (§A4 holds per tree), so the walk, the
+        // page-URL probe, and the alias probe all read this pipeline's root's section.
         val snapshot = indexBuilder.current
+        val section = snapshot.section(root)
         val folderPath = intent.path.parent
         val slugOverride = frontmatterParser.parse(intent.bytes).scalar("slug")
-        val existingFolderUrls = CanonicalUrlBuilder.folderUrlPaths(snapshot.folders)
-        val indexedFolderPaths = snapshot.folders.map { it.path }.toSet()
+        val existingFolderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
+        val indexedFolderPaths = section.folders.map { it.path }.toSet()
         val folderUrlOwner = existingFolderUrls.entries.mapNotNull { (p, u) -> u?.let { it to p } }.toMap()
 
         // Walk the ancestor folders root-first, building the URL prefix the way the index does: an indexed
@@ -226,11 +244,11 @@ class WritePipeline(
         // The new page's full canonical URL: the (possibly null = root) prefix + the page slug.
         val pageSlug = HeadingSlugger.slugify(slugOverride ?: intent.path.name.removeSuffix(".md"), HeadingSlugger.PAGE_FALLBACK)
         val pageUrl = prefix?.resolveChild(pageSlug) ?: TreePath.require(pageSlug)
-        val pageOwner = snapshot.byUrlPath[pageUrl]
+        val pageOwner = snapshot.byUrlPath[RootedPath(root, pageUrl)]
         if (pageOwner != null && pageOwner.path != intent.path) return pageUrl.value // page-page
         // Only a LIVE alias blocks: a row pointing at a page id no longer in the snapshot is dangling
         // (the shadow-sweep hasn't dropped it yet) and must not permanently wedge the URL.
-        val aliasTarget = aliasRegistry.find(pageUrl)
+        val aliasTarget = aliasRegistry.find(RootedPath(root, pageUrl))
         if (aliasTarget != null && snapshot.byId[aliasTarget] != null) return pageUrl.value
         return null
     }
@@ -267,22 +285,31 @@ class WritePipeline(
         logger.info { "reconciling ${dirty.size} dirty page(s) from a prior interrupted save" }
         for (page in dirty) {
             try {
-                val onDisk = contentStore.read(page.path)
+                if (page.path.root != root) {
+                    // Cannot exist in C2 (every writer is main-wired); a belt for C4's multi-root
+                    // writers - this pipeline's store is ONE root's tree, so a foreign row must
+                    // never be resolved (or cleared) against it.
+                    logger.warn {
+                        "dirty page ${page.path.path.value} belongs to root '${page.path.root}', not '$root'; skipping reconcile"
+                    }
+                    continue
+                }
+                val onDisk = contentStore.read(page.path.path)
                 if (onDisk == null) {
                     dirtyPages.clear(page.pageId) // file gone — nothing to reconcile
                     continue
                 }
                 if (citations.contentHash(onDisk) != page.expectedHash) {
                     logger.warn {
-                        "dirty page ${page.path.value} drifted on disk since the interrupted save; skipping reconcile (left marked)"
+                        "dirty page ${page.path.path.value} drifted on disk since the interrupted save; skipping reconcile (left marked)"
                     }
                     continue
                 }
-                historyHook.commit(page.path, onDisk) // idempotent commit recovery
+                historyHook.commit(page.path.path, onDisk) // idempotent commit recovery
                 indexBuilder.reindex(page.pageId) // reindex tolerated to throw here only if the page truly vanished — caught below
                 dirtyPages.clear(page.pageId)
             } catch (e: Exception) {
-                logger.error(e) { "reconciliation of ${page.path.value} failed; leaving it dirty for the next startup" }
+                logger.error(e) { "reconciliation of ${page.path.path.value} failed; leaving it dirty for the next startup" }
             }
         }
     }

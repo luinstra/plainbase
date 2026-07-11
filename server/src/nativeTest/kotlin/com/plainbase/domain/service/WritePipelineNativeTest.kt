@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -47,17 +48,19 @@ class WritePipelineNativeTest {
                 val citations = CitationFactory()
                 val idMap = SqlDelightIdMapRepository(database)
                 val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
                 val builder = IndexBuilder(
-                    contentStore = store,
+                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider()),
+                    identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = citations,
-                    history = NoOpHistoryProvider,
+                    rootRank = rootRegistry::rank,
+                    registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                 )
                 builder.rebuild()
                 val pipeline = WritePipeline(
@@ -68,6 +71,7 @@ class WritePipelineNativeTest {
                     dirtyPages = SqlDelightDirtyPageRepository(database),
                     idMap = idMap,
                     aliasRegistry = registry,
+                    root = rootRegistry.main.name,
                 )
 
                 val page = builder.current.pages.single()

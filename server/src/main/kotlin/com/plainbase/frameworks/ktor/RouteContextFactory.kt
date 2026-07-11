@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IdProvider
@@ -38,6 +39,8 @@ fun buildRouteContext(
     aliasRegistry: UrlAliasRegistry,
     contentStore: ContentStore,
     writePipeline: WritePipeline,
+    // The one root the facades serve/mutate (main until C3/C4 widen URLs and writes).
+    root: RootName,
     history: HistoryProvider,
     idProvider: IdProvider,
     proposalService: ProposalService,
@@ -73,6 +76,7 @@ fun buildRouteContext(
         history = history,
         aliasRegistry = aliasRegistry,
         linkChecker = LinkChecker(),
+        root = root,
     )
     // P5: the mutate↔proposals construction cycle (the degrade path needs ProposalFacade; the apply path needs
     // MutatingFacade) is broken by a provider-lambda over a 2-phase `lateinit`. `mutate` only invokes the lambda at
@@ -83,6 +87,7 @@ fun buildRouteContext(
         writePipeline = writePipeline,
         contentStore = contentStore,
         indexBuilder = indexBuilder,
+        root = root,
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = agentDirectCommitGlobs,
         proposalLabeler = proposalLabeler,

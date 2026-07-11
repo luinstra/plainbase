@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
@@ -73,7 +74,7 @@ class AdoptCommandTest : FunSpec({
             captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 } // RECORD binds map-only ids
             val mappedId = DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                 DatabaseFactory.createDatabase(driver).idMapQueries
-                    .selectBinding(TreePath.require("titled.md")).executeAsOne().id
+                    .selectBinding(RootName.MAIN, TreePath.require("titled.md")).executeAsOne().id
             }
             Files.writeString(config.contentDir.resolve("copy.md"), "---\nid: $mappedId\n---\nA pasted duplicate.\n")
 

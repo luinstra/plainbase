@@ -7,6 +7,8 @@ import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.AuditEntry
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.Role
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.CommitGlob
@@ -91,8 +93,8 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             val history = historyFactory(root)
             IndexHarness(root, contentStore = store, history = history).use { harness ->
                 history.prepare()
-                harness.idMap.bind(TreePath.require("docs/in.md"), PageId.require(inId), materialized = false)
-                harness.idMap.bind(TreePath.require("notes/out.md"), PageId.require(outId), materialized = false)
+                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("docs/in.md")), PageId.require(inId), materialized = false)
+                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("notes/out.md")), PageId.require(outId), materialized = false)
                 harness.builder.rebuild()
                 val resolved: Principal = when {
                     seedAgentMode != null -> Principal.Agent(harness.apiTokens.mint(label = "ci", mode = seedAgentMode).id)

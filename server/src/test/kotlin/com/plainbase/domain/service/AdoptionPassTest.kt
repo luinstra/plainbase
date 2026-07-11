@@ -6,6 +6,9 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -50,7 +53,7 @@ class AdoptionPassTest : FunSpec({
             val pages = mdPages(h.root).map { Nfc.normalize(it) }
             report.pages shouldHaveSize pages.size
             h.idMap.bindings() shouldHaveSize pages.size
-            h.idMap.bindings().map { it.path.value }.shouldContainExactlyInAnyOrder(pages)
+            h.idMap.bindings().map { it.path.path.value }.shouldContainExactlyInAnyOrder(pages)
             // Read-only first index: nothing is materialized, every id is map-only.
             h.idMap.bindings().none { it.materialized }.shouldBeTrue()
             // Binary at rest over the adoption-seeded table (direct SQL, below the adapter).
@@ -112,7 +115,7 @@ class AdoptionPassTest : FunSpec({
                 val original = originals.getValue(page.path.value)
                 val patched = Files.readAllBytes(resolveByNfc(h.root, page.path.value))
                 assertSingleIdInsertion(original, patched, page.id)
-                h.idMap.find(page.path).shouldNotBeNull().materialized shouldBe true
+                h.idMap.find(RootedPath(RootName.MAIN, page.path)).shouldNotBeNull().materialized shouldBe true
             }
 
             // Refused pages are untouched, keep their map identity unmaterialized, and the crafted
@@ -121,7 +124,7 @@ class AdoptionPassTest : FunSpec({
                 .shouldContainExactlyInAnyOrder(expected.refused)
             expected.refused.forEach { rel ->
                 Files.readAllBytes(resolveByNfc(h.root, rel)) shouldBe originals.getValue(rel)
-                h.idMap.find(TreePath.require(rel)).shouldNotBeNull().materialized shouldBe false
+                h.idMap.find(RootedPath(RootName.MAIN, TreePath.require(rel))).shouldNotBeNull().materialized shouldBe false
             }
             val refusal = h.idMap.issues().filterIsInstance<IdentityIssue.PatchRefused>()
                 .single { it.path.value == REFUSAL_PAGE }
@@ -145,7 +148,7 @@ class AdoptionPassTest : FunSpec({
         withHarness { h ->
             h.pass().run(AdoptionPass.Mode.MATERIALIZE)
             val keptPath = TreePath.require("notes/no-frontmatter.md")
-            val keptId = h.idMap.find(keptPath).shouldNotBeNull().id
+            val keptId = h.idMap.find(RootedPath(RootName.MAIN, keptPath)).shouldNotBeNull().id
 
             // Copy the materialized page inside the temp tree — the §5.2 copied-file scenario.
             val copyPath = TreePath.require("notes/no-frontmatter-copy.md")
@@ -158,11 +161,11 @@ class AdoptionPassTest : FunSpec({
             // The copy's file still carries the OTHER page's id line -> AlreadyPresent -> never
             // overwritten, never marked materialized (§5.2: the fresh id is not materialized).
             copy.disposition shouldBe AdoptionPass.Disposition.MAPPED
-            h.idMap.find(copyPath).shouldNotBeNull().materialized shouldBe false
-            h.idMap.pathOf(keptId) shouldBe keptPath
+            h.idMap.find(RootedPath(RootName.MAIN, copyPath)).shouldNotBeNull().materialized shouldBe false
+            h.idMap.pathOf(keptId) shouldBe RootedPath(RootName.MAIN, keptPath)
 
             val issue = h.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
-            issue shouldBe IdentityIssue.DuplicateId(id = keptId, keptPath = keptPath, reassignedPath = copyPath)
+            issue shouldBe IdentityIssue.DuplicateId(id = keptId, root = RootName.MAIN, keptPath = keptPath, reassignedPath = copyPath)
 
             // Rescan stability: the copy keeps its minted id on the next run (now from id_map), so
             // its /p/{id} permalink is stable while the conflict persists.
@@ -198,7 +201,7 @@ class AdoptionPassTest : FunSpec({
             // Idempotence makes re-running the reconciliation: the pending page materializes now.
             h.pass().run(AdoptionPass.Mode.MATERIALIZE)
             val (pendingPath, _) = pending.single()
-            h.idMap.find(pendingPath).shouldNotBeNull().materialized shouldBe true
+            h.idMap.find(RootedPath(RootName.MAIN, pendingPath)).shouldNotBeNull().materialized shouldBe true
         }
     }
 
@@ -212,7 +215,92 @@ class AdoptionPassTest : FunSpec({
             page.id shouldBe PageId.require(v4)
             page.source shouldBe PageIdentityService.Source.FRONTMATTER
             page.disposition shouldBe AdoptionPass.Disposition.ALREADY_MATERIALIZED
-            h.idMap.find(page.path).shouldNotBeNull().materialized shouldBe true
+            h.idMap.find(RootedPath(RootName.MAIN, page.path)).shouldNotBeNull().materialized shouldBe true
+        }
+    }
+
+    // The D16 pass-level cases, adopt side (ADR-0011): the adopt pass is the partial-visibility
+    // consumer the rule exists for, and its in-pass issue lines are what the new describe arm renders.
+    // Seating discipline: no rank-0-main assumption - the extra sits AHEAD of main where the
+    // row-intact protection is exercised, AFTER main where the win-deletes consequence is.
+
+    test(
+        "D16, main loses: an extra seated AHEAD of main keeps its unscanned binding intact; main's page reassigns with the in-pass issue",
+    ) {
+        withHarness { h ->
+            val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(foreign, contested, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${contested.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("extra", h.root), localRoot("main", h.root)))
+
+            val report = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD)
+
+            val claimant = report.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldNotBe contested
+            h.idMap.pathOf(contested) shouldBe foreign // genuine protection: the foreign row survives the pass
+            val issue = claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single()
+            issue shouldBe
+                IdentityIssue.CrossRootDuplicateId(contested, kept = foreign, reassigned = RootedPath(RootName.MAIN, claimant.path))
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>() shouldHaveSize 1
+        }
+    }
+
+    test("D16, main wins: over a lower-ranked unscanned extra the bind deletes the foreign row AND records the loser-behalf issue") {
+        withHarness { h ->
+            val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(foreign, contested, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${contested.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+
+            val report = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD)
+
+            val claimant = report.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe contested
+            h.idMap.pathOf(contested) shouldBe RootedPath(RootName.MAIN, claimant.path) // the key-complete bind deleted the loser
+            // The loser sits unscanned and cannot record for itself: the PASS records on its behalf,
+            // and the issue surfaces in this page's report (what describe renders).
+            val expected = IdentityIssue.CrossRootDuplicateId(
+                contested,
+                kept = RootedPath(RootName.MAIN, claimant.path),
+                reassigned = foreign,
+            )
+            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe expected
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe expected
+        }
+    }
+
+    test("D16, PREVIEW: no bind happened, so nothing is superseded and nothing recorded") {
+        withHarness { h ->
+            val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(foreign, contested, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${contested.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+
+            val report = h.pass(registry = registry).run(AdoptionPass.Mode.PREVIEW)
+
+            h.idMap.pathOf(contested) shouldBe foreign // untouched: preview binds nothing
+            report.pages.single { it.path.value == "notes/claimant.md" }
+                .issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+        }
+    }
+
+    test("a binding under an UNREGISTERED root is superseded by the live main claim with NO issue (detached, D2)") {
+        withHarness { h ->
+            val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            val detached = RootedPath(RootName.require("gone"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(detached, contested, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${contested.value}\ntitle: x\n---\nbody\n")
+
+            val report = h.pass().run(AdoptionPass.Mode.RECORD) // main-only registry: 'gone' is detached
+
+            val claimant = report.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe contested
+            h.idMap.pathOf(contested) shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty() // the boot WARN is its visibility
         }
     }
 })
@@ -247,8 +335,19 @@ private fun withHarness(block: (Harness) -> Unit) {
 private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriver) {
     val idMap = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
 
-    fun pass(store: ContentStore = LocalContentStore(root)): AdoptionPass =
-        AdoptionPass(store, idMap, PageIdentityService(UuidV7IdProvider()), FrontmatterPatcher())
+    /** [registry] seats the configured roots in D7 order; the pass itself always adopts main's tree. */
+    fun pass(
+        store: ContentStore = LocalContentStore(root),
+        registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
+    ): AdoptionPass =
+        AdoptionPass(
+            contentStore = store,
+            idMap = idMap,
+            identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+            patcher = FrontmatterPatcher(),
+            root = RootName.MAIN,
+            registeredRoots = registry.roots.map { it.name }.toSet(),
+        )
 }
 
 /** Counts (and reports) delegated writes — the zero-writes-on-second-run and pairing probe. */
