@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.search
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.service.IndexHarness
@@ -86,7 +87,7 @@ class SearchEquivalenceTest : FunSpec({
             SearchDb(dbPath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 // No reindex — only the engine-truth diff sync against the empty (deleted) engine.
-                SearchIndexer(provider, SectionSplitter()).sync(snapshot)
+                SearchIndexer(provider, SectionSplitter()).sync(snapshot, setOf(RootName.MAIN))
                 equivalent(before, capture(provider))
             }
         }

@@ -27,16 +27,14 @@ class SqlDelightIdMapRepository(private val db: PlainbaseDb) : IdMapRepository {
     override fun pathOf(id: PageId): RootedPath? =
         queries.selectPathById(id).executeAsOneOrNull()?.let { RootedPath(it.root, it.path) }
 
-    override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersededOwnerIssue: IdentityIssue?) {
+    override fun bind(path: RootedPath, id: PageId, materialized: Boolean) {
         db.transaction {
             // Key-complete supersede: any OTHER (root, path) holding the id goes - a moved file's
-            // stale row or a detached root's row (port contract: the caller's D2/D17 duplicate
-            // policy is what keeps live owners safe) - keeping UNIQUE(id) honest. The D16
-            // loser-behalf issue rides the SAME transaction (port doc: a crash between a separate
-            // delete and record would silence the supersession forever).
+            // stale row, a detached root's row, or a scanned rank-contest loser's (port contract:
+            // the caller's D2/D16/D17 duplicate policy is what keeps unscanned owners safe) -
+            // keeping UNIQUE(id) honest.
             queries.unbindStale(id = id, root = path.root, path = path.path)
             queries.upsertBinding(root = path.root, path = path.path, id = id, materialized = materialized)
-            supersededOwnerIssue?.let(::insertIssue)
         }
     }
 

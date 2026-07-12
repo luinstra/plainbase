@@ -3,6 +3,7 @@
     "roots": [
       {
         "root": "main",
+        "available": true,
         "tree": {
           "type": "folder",
           "name": "",
@@ -212,6 +213,7 @@
     }
   },
   "createPageRequest": {
+    "root": "extra",
     "title": "Deploy Guide"
   },
   "createdResponse": {
@@ -325,6 +327,7 @@
         "id": "01970000-0000-7000-8000-0000000000a2",
         "operation": "create",
         "status": "PENDING",
+        "root": "main",
         "target_path": "guides/rollback.md",
         "page_id": null,
         "base_drifted": false,
@@ -338,6 +341,7 @@
     "id": "01970000-0000-7000-8000-0000000000a3",
     "operation": "create",
     "status": "PENDING",
+    "root": "main",
     "target_path": "guides/rollback.md",
     "page_id": null,
     "base_hash": null,

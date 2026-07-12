@@ -182,10 +182,9 @@ class RootsConfigTest : FunSpec({
         }
     }
 
-    test("extras on a single-root build warn that only main is served (D12)") {
+    test("the C1 unserved-extras warning is RETIRED: extras ARE served now, so warning about them would be a lie") {
         withDataDir("""roots { main { path = "/roots/m" }, memoria { path = "/roots/mem" }, notes { path = "/roots/n" } }""") { env ->
-            val warning = PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().single { it.contains("only main is served") }
-            warning shouldContain "memoria, notes"
+            PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().any { it.contains("only main is served") } shouldBe false
         }
     }
 
@@ -195,15 +194,8 @@ class RootsConfigTest : FunSpec({
         }
     }
 
-    test("a non-default editable/history value warns that the knob is recorded but not yet enforced") {
+    test("the C1 dormant-knob warning is RETIRED: editable/history ARE enforced now") {
         withDataDir("""roots { main { path = "/roots/m", editable = false } }""") { env ->
-            val warning = PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().single { it.contains("not yet enforced") }
-            warning shouldContain "main"
-        }
-    }
-
-    test("an all-defaults explicit block emits no dormant-knob warning") {
-        withDataDir("""roots { main { path = "/roots/m" } }""") { env ->
             PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().any { it.contains("not yet enforced") } shouldBe false
         }
     }

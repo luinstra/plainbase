@@ -11,6 +11,8 @@ import com.plainbase.domain.repository.AuditEntry
 import com.plainbase.domain.repository.AuditRepository
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.RoleRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.UnavailableCause
 import kotlin.time.Clock
 
 /**
@@ -31,6 +33,13 @@ import kotlin.time.Clock
  * (allowed AND denied) BEFORE returning the grant / throwing; [checkRead] does NOT audit (per-request read
  * volume). The filesystem effect and the audit row cannot be one txn, so the guaranteed row is the DECISION.
  *
+ * **Rooted resource strings (multi-root C4).** The WRITE gates take a [RootedResource] and audit through its
+ * ONE formatting rule (`{root}:{resource}`, or the bare resource when no registered root owns the target).
+ * `checkRead`/`checkApprove`/`checkManage` keep their plain-`String` resource: a rooted CALL SITE formats it
+ * via `RootedResource.audit` (URL-space and path resources gain the root prefix), while an ID-addressed
+ * resource stays the bare global id - a page id is unique across roots, and the row's rooted context arrives
+ * through the write gates.
+ *
  * Mode-aware ([enforced]): under `auth.mode = off` (loopback-dev — the phase-4 plan's "open behavior") the
  * matrix is NOT consulted — every principal is authorized (a grant is minted, reads pass) AND a mutating
  * decision is still audited as `allowed`. Under `builtin`/`proxy` the role×action [permits] matrix decides. This
@@ -44,6 +53,13 @@ class PolicyService(
     private val idProvider: IdProvider,
     private val clock: Clock,
     private val enforced: Boolean,
+    /**
+     * Whether a root permits page-mutation writes (ADR-0011 D6) - the registry's `editable` flag, wired
+     * as a narrow function so this domain service never holds the registry. Fails CLOSED on an unknown
+     * name (defense in depth behind the wire-level `invalid_root` check). Defaulted `true` = pre-C4
+     * semantics, so a single-root construction stays terse and inert.
+     */
+    private val editableOf: (RootName) -> Boolean = { true },
 ) {
 
     /** READ gate: throws [AccessDenied] on deny (no grant type for reads per the owner decision). Not audited. */
@@ -51,17 +67,21 @@ class PolicyService(
         if (!allows(principal, Action.READ)) throw AccessDenied(Action.READ, resource, principal)
     }
 
-    /** EDIT gate: mints + returns an [EditGrant] on success; records the decision row + throws on deny. */
-    fun checkEdit(principal: Principal, resource: String): EditGrant =
-        gate(principal, Action.EDIT, resource) { EditGrant() }
+    /**
+     * EDIT gate: mints + returns an [EditGrant] on success; records the decision row + throws on deny.
+     * Serves BOTH EDIT-action write classes - [WriteClass.PageEdit] and [WriteClass.AssetWrite] - and the
+     * caller passes the one it means, because a per-root policy discriminates on the CLASS, not the action.
+     */
+    fun checkEdit(principal: Principal, writeClass: WriteClass, resource: RootedResource): EditGrant =
+        gate(principal, Action.EDIT, writeClass, resource) { EditGrant() }
 
     /** CREATE gate: mints + returns a [CreateGrant] on success; records the decision row + throws on deny. */
-    fun checkCreate(principal: Principal, resource: String): CreateGrant =
-        gate(principal, Action.CREATE, resource) { CreateGrant() }
+    fun checkCreate(principal: Principal, writeClass: WriteClass, resource: RootedResource): CreateGrant =
+        gate(principal, Action.CREATE, writeClass, resource) { CreateGrant() }
 
     /** MANAGE gate (rescan/reindex): mints + returns a [ManageGrant]; records the decision row + throws on deny. */
     fun checkManage(principal: Principal): ManageGrant =
-        gate(principal, Action.MANAGE, MANAGE_RESOURCE) { ManageGrant() }
+        gate(principal, Action.MANAGE, writeClass = null, resource = RootedResource(null, MANAGE_RESOURCE)) { ManageGrant() }
 
     /**
      * APPROVE gate (the proposal status transition, P1a): mints + returns an [ApproveGrant]; records the decision
@@ -69,7 +89,7 @@ class PolicyService(
      * EDITOR exclude it, so an agent — PROPOSE/COMMIT -> EDITOR — can never approve its own proposal, D1).
      */
     fun checkApprove(principal: Principal, resource: String): ApproveGrant =
-        gate(principal, Action.APPROVE, resource) { ApproveGrant() }
+        gate(principal, Action.APPROVE, writeClass = null, resource = RootedResource(null, resource)) { ApproveGrant() }
 
     /**
      * Read-only, NON-auditing: the live [AgentMode] for a [Principal.Agent] (null for non-agents OR a revoked/expired
@@ -88,17 +108,61 @@ class PolicyService(
      * facade-level deny primitive.) Audit stays in this ONE choke point: the denial records exactly one denied row,
      * like a matrix deny, and never mints a grant the caller would then refuse.
      */
-    fun deny(principal: Principal, action: Action, resource: String): Nothing {
-        audit.record(decisionRow(principal, action, resource, allowed = false))
-        throw AccessDenied(action, resource, principal)
+    fun deny(principal: Principal, action: Action, resource: String, reason: DenyReason = DenyReason.POLICY): Nothing =
+        denied(principal, action, resource, reason)
+
+    /**
+     * Whether [root] permits page-mutation writes - the [gate]'s EDITABLE arm as a read-only PREDICATE, minting
+     * nothing and auditing nothing.
+     *
+     * It exists so a caller can ORDER the editable answer ahead of an availability throw without paying for a grant
+     * it is not ready to use yet. `editable = false` is TOPOLOGY and is knowable with the disk face-down; "the root
+     * is not serving" is a RETRYABLE condition. A surface that checks availability first would answer a permanently
+     * read-only root with "try again once it is back", which is a promise no retry can keep.
+     */
+    fun editable(root: RootName): Boolean = editableOf(root)
+
+    /**
+     * The shared mutating gate: record the ONE pre-effect decision row, then mint the grant or throw
+     * [AccessDenied]. Exactly one `audit_log` row per call, allowed or denied - the invariant the agent
+     * decide-first path and the proposal degrade both depend on.
+     *
+     * The three arms evaluate in THIS order, and the order is the decision (ADR-0011 D6):
+     *  1. **AUTHN/ROLE** (enforced modes only): an Anonymous caller, or one with no subject-role/token row,
+     *     denies with [DenyReason.POLICY] exactly as it does today. Authn precedes topology, so a root's
+     *     `editable` bit can never leak to an unauthenticated prober and anonymous semantics do not change.
+     *  2. **EDITABLE** (EVERY mode, `off` included): `editable = false` is TOPOLOGY, not authorization -
+     *     gating it behind [enforced] would leave the flag unexercised in the loopback-dev default and in
+     *     CI, which runs auth-off. A NULL root SKIPS this arm (no registered root owns the target, so there
+     *     is no topology to consult - and every unrooted arm 404s before it can write).
+     *  3. **MATRIX** (enforced modes only): the role×action grid, [DenyReason.POLICY].
+     *
+     * So: enforced anonymous × non-editable root = 401 (unchanged); off-mode anyone × non-editable root =
+     * 403 `root_not_editable`; enforced VIEWER × non-editable root = 403 `root_not_editable` (authenticated,
+     * so the bit may show).
+     */
+    private inline fun <G> gate(
+        principal: Principal,
+        action: Action,
+        writeClass: WriteClass?,
+        resource: RootedResource,
+        mint: () -> G,
+    ): G {
+        val role = roleFor(principal)
+        if (enforced && role == null) denied(principal, action, resource.audit, DenyReason.POLICY)
+        val root = resource.root
+        if (writeClass != null && writeClass.gatedByEditable && root != null && !editableOf(root)) {
+            denied(principal, action, resource.audit, DenyReason.ROOT_NOT_EDITABLE)
+        }
+        if (enforced && !permits(role, action)) denied(principal, action, resource.audit, DenyReason.POLICY)
+        audit.record(decisionRow(principal, action, resource.audit, allowed = true))
+        return mint()
     }
 
-    /** The shared mutating gate: record the pre-effect decision row, then mint the grant or throw [AccessDenied]. */
-    private inline fun <G> gate(principal: Principal, action: Action, resource: String, mint: () -> G): G {
-        val allowed = allows(principal, action)
-        audit.record(decisionRow(principal, action, resource, allowed))
-        if (!allowed) throw AccessDenied(action, resource, principal)
-        return mint()
+    /** Record the DENIED decision row, then throw - the ONE deny path, so every deny audits exactly once. */
+    private fun denied(principal: Principal, action: Action, resource: String, reason: DenyReason): Nothing {
+        audit.record(decisionRow(principal, action, resource, allowed = false))
+        throw AccessDenied(action, resource, principal, reason)
     }
 
     /** OFF (loopback-dev) opens everything; enforced modes consult the role×action matrix. */
@@ -170,6 +234,35 @@ enum class Action { READ, EDIT, CREATE, MANAGE, APPROVE }
  * guarded FACADE catches it and maps it to 401 ([Principal.Anonymous] — no credential) / 403 (an
  * authenticated-but-unauthorized principal), keeping [PolicyService] transport-free. Throwing (vs a nullable
  * grant) means a caller cannot accidentally ignore a deny and still get a grant — there is no grant on this path.
+ *
+ * [reason] distinguishes the role×action matrix deny ([DenyReason.POLICY], today's 401/403) from the
+ * per-root topology deny ([DenyReason.ROOT_NOT_EDITABLE], a 403 with its own code). It defaults to POLICY,
+ * so every pre-C4 throw site is unchanged.
  */
-class AccessDenied(val action: Action, val resource: String, val principal: Principal) :
-    RuntimeException("access denied: $action on '$resource' for ${principal::class.simpleName}")
+class AccessDenied(
+    val action: Action,
+    val resource: String,
+    val principal: Principal,
+    val reason: DenyReason = DenyReason.POLICY,
+) : RuntimeException("access denied: $action on '$resource' for ${principal::class.simpleName} ($reason)")
+
+/** WHY an [AccessDenied] fired: the role×action matrix, or the target root's `editable = false` topology. */
+enum class DenyReason { POLICY, ROOT_NOT_EDITABLE }
+
+/**
+ * A rooted operation whose root is NOT SERVING (ADR-0011 D5): its disk vanished, its watcher died, it was
+ * already gone at boot, or its name is DETACHED from `roots {}`. Mapped in ONE place - the `guarded {}`
+ * funnel and the two MCP catch funnels - to 503 `root_unavailable` + `Retry-After`.
+ *
+ * **A `RootUnavailable` may only become a RESPONSE on a path whose gate has already passed.** On any path
+ * that cannot produce a response - a boot reconcile, a background rebuild - it must be CONTAINED, and the
+ * containment must be named where the throw is. That is what keeps anonymous behavior byte-identical to
+ * today (shell/401/redirect) and stops availability leaking to an unauthenticated prober: authn precedes
+ * topology on every surface.
+ *
+ * [reason] is the TYPED health vocabulary, never a free-text string; the wire token is derived at the
+ * mapping sites so the 503 envelope and the `/healthz` payload speak the same words. (It is `reason`, not
+ * `cause`: `Throwable.cause` is taken, and it means something else entirely.)
+ */
+class RootUnavailable(val root: RootName, val reason: UnavailableCause) :
+    RuntimeException("root '${root.value}' is not serving ($reason)")

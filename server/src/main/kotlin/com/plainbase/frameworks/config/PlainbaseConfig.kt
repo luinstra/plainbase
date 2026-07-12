@@ -248,36 +248,44 @@ data class PlainbaseConfig(
                     "is ignored - main's path comes from roots.main.path",
             )
         }
+        // The C1 "extras are configured but unserved" and "editable/history are recorded but dormant" warnings are
+        // RETIRED as of C4: extras ARE served, and editable/history ARE enforced.
         val extras = roots.list.filter { it.name != RootName.MAIN }
-        if (extras.isNotEmpty()) {
-            add(
-                "extra root(s) ${extras.joinToString(", ") { it.name.value }} are configured but multi-root serving is " +
-                    "not yet enabled in this build: only main is served (restart-to-apply topology lands in a later release)",
-            )
-        }
-        // C1 honesty: the per-root knobs are parsed and recorded but nothing consumes them until C4,
-        // so a non-default value must never look like it took effect (main { editable = false } still
-        // accepts edits in this build).
-        val dormantKnobs = roots.list.filter { root ->
-            val isMain = root.name == RootName.MAIN
-            root.editable != isMain || root.history != (if (isMain) HistoryMode.AUTO else HistoryMode.OFF)
-        }
-        if (dormantKnobs.isNotEmpty()) {
-            add(
-                "editable/history on root(s) ${dormantKnobs.joinToString(", ") { it.name.value }} are recorded but not " +
-                    "yet enforced in this release; enforcement lands with multi-root serving",
-            )
-        }
         extras.forEach { extra ->
             val declared = requireNotNull(extra.localPath)
             if (canonicalRootPathOrNull(declared) == null) {
                 add(
                     "roots.${extra.name.value}.path does not exist or is not a readable/searchable directory: $declared " +
-                        "- the root would be unavailable",
+                        "- the root will serve 503 for every request until the path is restored AND the server is " +
+                        "restarted (its pages, aliases and checkpoints are left untouched in the meantime)",
                 )
             }
         }
+        // An operator trap, not an error: a direct-commit glob on a read-only root can never authorize anything,
+        // because the editable gate denies before the glob is ever consulted. Silently doing nothing is exactly how
+        // an operator ends up believing an agent has write access it does not have.
+        //
+        // Walked from the ROOTS side, not from the by-root glob map: main's globs live in their own key (D6 -
+        // `agentDirectCommit.globs`, the env var, or `roots.main`, never in the by-root map, which excludes main by
+        // construction), so a map-keyed walk would leave `roots.main { editable = false }` - the likeliest trap of
+        // the lot, since main is the root every glob was written for - the one case it could not see.
+        roots.list
+            .filter { !it.editable && globbedRoots().contains(it.name) }
+            .forEach { root ->
+                add(
+                    "auth.agentDirectCommit declares direct-commit globs for root '${root.name.value}', but " +
+                        "roots.${root.name.value} is editable = false - the globs can never authorize anything there, " +
+                        "because the root refuses page writes outright. Set editable = true, or drop the globs.",
+                )
+            }
     }
+
+    /** Every root carrying at least one direct-commit glob, across BOTH homes (main's own key + the per-root block). */
+    private fun globbedRoots(): Set<RootName> =
+        buildSet {
+            if (auth.agentDirectCommitGlobs.isNotEmpty()) add(RootName.MAIN)
+            auth.agentDirectCommitGlobsByRoot.forEach { (root, globs) -> if (globs.isNotEmpty()) add(root) }
+        }
 
     /**
      * ADR-0008 fail-closed bind guard. Returns an operator-actionable refusal MESSAGE when the bind is
@@ -347,11 +355,17 @@ data class PlainbaseConfig(
     }
 
     /**
-     * P5: the validated `agentDirectCommit.globs` as parsed [CommitGlob]s (the [mcpHostAllowlist] accessor idiom).
-     * Re-parsing is safe because config load already validated every pattern (`requireParseableGlobs`), so this never
-     * throws at request time.
+     * The validated agent direct-commit globs as parsed [CommitGlob]s, FLAT — each carrying the root whose config key
+     * declared it (the [mcpHostAllowlist] accessor idiom). Re-parsing is safe because config load already validated
+     * every pattern, so this never throws at request time.
+     *
+     * The two sources are `auth.agentDirectCommit.globs` (main's list, unchanged meaning) and
+     * `auth.agentDirectCommit.roots.<name>` (the per-root block). The matcher then filters by the TARGET root, so a
+     * pattern declared for main authorizes nothing in an extra root and vice versa.
      */
-    fun agentDirectCommitGlobs(): List<CommitGlob> = auth.agentDirectCommitGlobs.map(CommitGlob::parse)
+    fun agentDirectCommitGlobs(): List<CommitGlob> =
+        auth.agentDirectCommitGlobs.map { CommitGlob.parse(it, RootName.MAIN) } +
+            auth.agentDirectCommitGlobsByRoot.flatMap { (root, globs) -> globs.map { CommitGlob.parse(it, root) } }
 
     /**
      * Main's content root on the local filesystem: roots.main's path for a Local backend, contentDir
@@ -486,6 +500,11 @@ data class PlainbaseConfig(
             // HOCON file, so an explicit `roots {}` block is only ever parsed by passing it here.
             val contentDir = Path.of(contentDirEnv ?: contentDirFile ?: "./content").toAbsolutePath().normalize()
             val storage = buildStorage(env, file, insecureHttp)
+            // `roots` and `auth` are SIBLING named arguments of the one constructor call below, so `auth` cannot see
+            // the parsed roots from in there - and the per-root glob block has to validate its keys against them.
+            // Hoist.
+            val roots = buildRoots(file, contentDir, storage)
+            requireCoherentMainHistory(roots, env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"))
             return PlainbaseConfig(
                 contentDir = contentDir,
                 contentDirSource = when {
@@ -494,7 +513,7 @@ data class PlainbaseConfig(
                     else -> ConfigSource.DEFAULT
                 },
                 storage = storage,
-                roots = buildRoots(file, contentDir, storage),
+                roots = roots,
                 dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
                 host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
                 port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,
@@ -513,10 +532,8 @@ data class PlainbaseConfig(
                         env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
                     ),
                     insecureHttp = insecureHttp,
-                    agentDirectCommitGlobs = requireParseableGlobs(
-                        env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
-                            ?: file.stringListOrNull("auth.agentDirectCommit.globs") ?: emptyList(),
-                    ),
+                    agentDirectCommitGlobs = requireParseableGlobs(mainDirectCommitGlobs(env, file)),
+                    agentDirectCommitGlobsByRoot = buildDirectCommitGlobsByRoot(file, roots),
                     // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
                     // completeness; the deploy docs steer operators to env.
                     proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
@@ -626,13 +643,46 @@ data class PlainbaseConfig(
             val raw = entry.stringOrNull("path")?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("roots.$key.path is required and must be a non-blank directory path")
             val isMain = name == RootName.MAIN
+            val history = parseHistoryMode("roots.$key.history", entry.stringOrNull("history"))
+                ?: if (isMain) HistoryMode.AUTO else HistoryMode.OFF
+            // AUTO on an EXTRA is a boot error (ADR-0011 D4). Auto's semantics - detect a repo, maybe `git init` one,
+            // accept a `.git`-as-a-file worktree - are precisely what D4 exists to deny an extra root, where a wrong
+            // guess means Plainbase commits into a repository that exists for somebody else's reasons. An extra either
+            // CLAIMS its repo explicitly (`native`, strictly guarded at boot) or stays `off`.
+            require(isMain || history != HistoryMode.AUTO) {
+                "roots.$key.history = auto is not allowed on an extra root: auto detects a repository and may create " +
+                    "one, which Plainbase will not do in a tree it does not own. Use `native` to claim an existing " +
+                    "repository at that path (Plainbase then refuses to start if it is a linked worktree, a submodule, " +
+                    "or somebody else's checkout), or `off` for no history."
+            }
             return Root(
                 name = name,
                 backend = RootBackend.Local(Path.of(raw).toAbsolutePath().normalize()),
                 editable = entry.boolStrict("editable", "roots.$key.editable") ?: isMain,
-                history = parseHistoryMode("roots.$key.history", entry.stringOrNull("history"))
-                    ?: if (isMain) HistoryMode.AUTO else HistoryMode.OFF,
+                history = history,
             )
+        }
+
+        /**
+         * MAIN's history has two knobs — `roots.main.history` and the `git.enabled` tri-state — and when both are set
+         * explicitly they can CONTRADICT. Refuse, naming both keys, rather than pick a silent winner: whichever way
+         * Plainbase guessed, half the operators who wrote that config would get the opposite of what they asked for,
+         * and "history silently off" is not a failure anyone notices until they need the history.
+         *
+         * `history = auto` (the default, and what every synthesized config produces) is COMPATIBLE with either
+         * `git.enabled` value — that is exactly what auto means, and the tri-state keeps its full current meaning
+         * inside that arm. So this can only fire on a config that explicitly declares main's history non-auto.
+         */
+        private fun requireCoherentMainHistory(roots: RootsConfig, gitEnabled: Boolean?) {
+            val main = roots.list.first { it.name == RootName.MAIN }
+            require(!(main.history == HistoryMode.NATIVE && gitEnabled == false)) {
+                "roots.main.history = native and git.enabled = false contradict each other: one claims main's git " +
+                    "repository, the other turns git off. Set exactly one of them."
+            }
+            require(!(main.history == HistoryMode.OFF && gitEnabled == true)) {
+                "roots.main.history = off and git.enabled = true contradict each other: one turns main's history off, " +
+                    "the other forces it on. Set exactly one of them."
+            }
         }
 
         /**
@@ -655,6 +705,11 @@ data class PlainbaseConfig(
          * main guard demands) whose path canonicalizes cleanly. Returns the toRealPath form for the
          * validation comparisons, or null when unavailable (the caller falls back to the declared
          * normalized form).
+         *
+         * **Textually PAIRED with `LocalContentStore`'s `rootIsTraversable`**, the RUNTIME liveness probe
+         * (`ContentStore.available`): the same three predicates, deliberately. A root that boots as "available" and
+         * a root the runtime keeps calling available must be the same set, or the config's promise and the server's
+         * behavior fork. Change one, change the other.
          */
         private fun canonicalRootPathOrNull(path: Path): Path? =
             try {
@@ -743,6 +798,65 @@ data class PlainbaseConfig(
         private fun requireParseableGlobs(globs: List<String>): List<String> {
             globs.forEach { CommitGlob.parse(it) }
             return globs
+        }
+
+        /**
+         * MAIN's direct-commit glob list — env-wins over the file key, exactly as it always has.
+         *
+         * **Main's list has exactly ONE key, and it has three possible SPELLINGS** (ADR-0011 D6): the env var, the
+         * file's `globs`, and now `roots.main` inside the per-root block. Two sources naming the same list is either a
+         * silent UNION (a widening of what an agent may commit without review - precisely what this design exists to
+         * prevent) or a silent WINNER (which drops an authorization the operator wrote). This is an authorization
+         * surface, so "unspecified" is not an option: declaring `roots.main` alongside EITHER other spelling refuses
+         * the boot, naming both keys. It costs no back-compat at all — `roots.main` is a key C4 invents, so this can
+         * never fire on a config that is legal today. (`globs` + the env var stay the ORIGINAL one key with its
+         * original env-wins rule, untouched.)
+         */
+        private fun mainDirectCommitGlobs(env: Map<String, String>, file: Config): List<String> {
+            val fromEnv = env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
+            val fromFile = file.stringListOrNull("auth.agentDirectCommit.globs")
+            val fromBlock = file.stringListOrNull("auth.agentDirectCommit.roots.${RootName.MAIN}")
+            if (fromBlock != null) {
+                require(fromEnv == null) {
+                    "auth.agentDirectCommit.roots.${RootName.MAIN} and PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS both declare " +
+                        "main's direct-commit globs. Declare main's list ONCE - Plainbase will not guess which of the two " +
+                        "you meant, and neither unioning them (which would widen what an agent may commit unreviewed) nor " +
+                        "picking a winner (which would drop the other) is safe on an authorization surface."
+                }
+                require(fromFile == null) {
+                    "auth.agentDirectCommit.globs and auth.agentDirectCommit.roots.${RootName.MAIN} both declare main's " +
+                        "direct-commit globs. Declare main's list ONCE (see the note on the roots block)."
+                }
+                return fromBlock
+            }
+            return fromEnv ?: fromFile ?: emptyList()
+        }
+
+        /**
+         * The per-root direct-commit glob block: `auth.agentDirectCommit.roots.<name> = [...]`, keyed by root name
+         * exactly like the top-level `roots {}` itself. Every key must be a legal slug AND name a REGISTERED root -
+         * an unknown one refuses at boot rather than sitting there authorizing nothing (a glob nobody notices is dead
+         * is a glob an operator believes is live). `main` is handled by [mainDirectCommitGlobs] and excluded here, so
+         * its list has exactly one home.
+         */
+        private fun buildDirectCommitGlobsByRoot(file: Config, roots: RootsConfig): Map<RootName, List<String>> {
+            if (!file.hasPath("auth.agentDirectCommit.roots")) return emptyMap()
+            val registered = roots.list.map { it.name }.toSet()
+            return file.getObject("auth.agentDirectCommit.roots").keys
+                .mapNotNull { key ->
+                    val name = RootName.of(key) ?: throw IllegalArgumentException(
+                        "auth.agentDirectCommit.roots.$key is not a valid root name " +
+                            "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                    )
+                    require(name in registered) {
+                        "auth.agentDirectCommit.roots.$key names no configured root (declared roots: " +
+                            "${registered.joinToString(", ") { it.value }}). A direct-commit glob for a root that does not " +
+                            "exist authorizes nothing - fix the name, or remove the entry."
+                    }
+                    if (name == RootName.MAIN) return@mapNotNull null // owned by mainDirectCommitGlobs
+                    name to requireParseableGlobs(file.stringListOrNull("auth.agentDirectCommit.roots.$key").orEmpty())
+                }
+                .toMap()
         }
 
         /**
@@ -968,13 +1082,28 @@ enum class AuthMode {
  * - [agentDirectCommitGlobs] - LIVE as of P5 (§0.7): RestModule threads this into the route context and
  *   [com.plainbase.frameworks.ktor.GuardedMutatingFacade] consults it on every agent PUT. A COMMIT-mode agent
  *   writing INSIDE a glob direct-commits (200); OUTSIDE it degrades to a proposal (202). The default `[]` degrades
- *   EVERY agent write. Humans and the proposal-apply path are never glob-checked. Default `[]`.
+ *   EVERY agent write. Humans and the proposal-apply path are never glob-checked. Default `[]`. MAIN-SCOPED.
+ * - [agentDirectCommitGlobsByRoot] - the per-root block (`auth.agentDirectCommit.roots.<name> = [...]`), the ONLY
+ *   way to grant an EXTRA root. See its own doc: this is an authorization surface and the split is deliberate.
  */
 data class AuthConfig(
     val mode: AuthMode = AuthMode.OFF,
     val trustedProxyCidrs: List<String> = emptyList(),
     val insecureHttp: Boolean = false,
     val agentDirectCommitGlobs: List<String> = emptyList(),
+    /**
+     * Per-root agent direct-commit globs, keyed by root name (ADR-0011 D6).
+     *
+     * **The upgrade invariant, and it is the whole reason this is a BLOCK rather than a `<root>:<pattern>` string
+     * prefix: no config that authorizes X today may authorize anything different after the upgrade.** A colon is a
+     * legal path-segment character AND a legal glob character, so an operator's existing `archive:2024/...` pattern
+     * (over a folder literally named `archive:2024`) would be silently RETARGETED by an in-string grammar the day
+     * they add a root named `archive` - revoked in main, and granted, unasked, inside the new root. No printable
+     * separator is unambiguous against the path charset, so the root arrives structurally instead. The old `globs`
+     * key means exactly what it has always meant - main - forever; this block is opt-in and cannot be entered by
+     * accident. Every key must name a REGISTERED root (an unknown one refuses at boot).
+     */
+    val agentDirectCommitGlobsByRoot: Map<RootName, List<String>> = emptyMap(),
     /**
      * A4b PROXY mode: the shared secret the trusted proxy stamps as `X-Plainbase-Proxy-Secret`. REQUIRED in proxy
      * mode (the [bindGuardRefusal] enforces it) - it is the real trust anchor: a CIDR alone trusts a whole subnet,

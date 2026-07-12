@@ -62,6 +62,7 @@ const treeResponse: TreeResponse = {
   roots: [
     {
       root: "main",
+      available: true,
       tree: {
         type: "folder",
         name: "",
@@ -232,7 +233,9 @@ const pageExistsEnvelope: PageExistsEnvelope = {
   error: { code: "page_exists", message: "A page already exists at guides/deploy-guide.md", path: "guides/deploy-guide.md" },
 };
 
-const createPageRequest: CreatePageRequest = { title: "Deploy Guide" };
+// `root` rides the create request (multi-root C4). It is pinned HERE because omitting it is not a type error -
+// it is a SILENT default to `main`, i.e. the page lands in the wrong tree with no failure anywhere.
+const createPageRequest: CreatePageRequest = { root: "extra", title: "Deploy Guide" };
 
 const createdResponse: CreatedResponse = {
   id: PAGE_1,
@@ -335,6 +338,7 @@ const listChangesResponse: ListChangesResponse = {
       id: "01970000-0000-7000-8000-0000000000a2",
       operation: "create",
       status: "PENDING",
+      root: "main",
       target_path: "guides/rollback.md",
       page_id: null,
       base_drifted: false,
@@ -349,6 +353,7 @@ const changeDetail: ChangeDetail = {
   id: "01970000-0000-7000-8000-0000000000a3",
   operation: "create",
   status: "PENDING",
+  root: "main",
   target_path: "guides/rollback.md",
   page_id: null,
   base_hash: null,

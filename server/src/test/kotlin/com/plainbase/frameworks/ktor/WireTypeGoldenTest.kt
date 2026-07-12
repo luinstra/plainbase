@@ -82,6 +82,7 @@ class WireTypeGoldenTest : FunSpec({
                 roots = listOf(
                     RootTreeDto(
                         root = "main",
+                        available = true,
                         tree = TreeNodeDto.Folder(
                             name = "",
                             title = null,
@@ -399,7 +400,7 @@ class WireTypeGoldenTest : FunSpec({
                 proposals = listOf(
                     ChangeSummary(
                         id = "01970000-0000-7000-8000-0000000000a2", operation = "create", status = "PENDING",
-                        targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
+                        root = "main", targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
                         authorLabel = "ci-bot", createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",
                     ),
                 ),
@@ -409,7 +410,7 @@ class WireTypeGoldenTest : FunSpec({
             ChangeDetail.serializer(),
             ChangeDetail(
                 id = "01970000-0000-7000-8000-0000000000a3", operation = "create", status = "PENDING",
-                targetPath = "guides/rollback.md", pageId = null,
+                root = "main", targetPath = "guides/rollback.md", pageId = null,
                 baseHash = null, baseDrifted = false,
                 authorLabel = "ci-bot", authorIssuer = "plainbase", authorExternalId = TOKEN_ID,
                 createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",
@@ -441,9 +442,13 @@ class WireTypeGoldenTest : FunSpec({
         }
     }
 
-    test("createPageRequest decodes with the omitted optionals defaulted (folder -> \"\")") {
+    test("createPageRequest carries the client's declared root (multi-root C4) and defaults its other optionals") {
         RestJson.decodeFromString(CreatePageRequest.serializer(), fixture.getValue("createPageRequest").toString()) shouldBe
-            CreatePageRequest(folder = "", title = "Deploy Guide", slug = null, body = null)
+            CreatePageRequest(root = "extra", folder = "", title = "Deploy Guide", slug = null, body = null)
+    }
+
+    test("an omitted root still defaults to main - the back-compat pin every pre-multi-root client relies on") {
+        RestJson.decodeFromString(CreatePageRequest.serializer(), """{"title":"Deploy Guide"}""").root shouldBe "main"
     }
 
     test("rejectChangeRequest decodes with the omitted comment null") {

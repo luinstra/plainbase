@@ -1,14 +1,21 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.RootsConfig
+import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import java.io.ByteArrayOutputStream
@@ -187,7 +194,95 @@ class AdoptCommandTest : FunSpec({
             Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
         }
     }
+
+    // ---- every root, or none: the ids of a root adopt skips do not survive a lost DATA_DIR ---------
+
+    test("adopt --write-ids materializes ids in EVERY configured root - not just main") {
+        withTwoRootCliTree { config, handbook ->
+            val out = captureStdout { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0 }
+
+            withClue("each root gets its own named section - the same page path can exist in two of them") {
+                out shouldContain "adopt: root 'main': 3 page(s)"
+                out shouldContain "adopt: root 'handbook': 1 page(s)"
+            }
+            withClue("THE point: the extra root's identity now lives in the tree itself, so a lost DATA_DIR cannot take it") {
+                String(Files.readAllBytes(handbook.resolve("onboarding.md"))) shouldContain "id: "
+            }
+            out shouldContain "NFS/SMB"
+            withClue("one write-mechanism caveat for the run, not one per root") {
+                out.split("NFS/SMB").size shouldBe 2
+            }
+        }
+    }
+
+    test("the contested id goes to the root that OUTRANKS - and the loser's file is never given an id that is not its own") {
+        withTwoRootCliTree { config, handbook ->
+            // The lower-ranked root owns an id today (map-only, the read-only first index), and the higher-ranked
+            // root then turns out to hold a page carrying that same id in its frontmatter.
+            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 }
+            val contested = binding(config, RootName.require("handbook"), "onboarding.md")
+            Files.writeString(config.contentDir.resolve("claimant.md"), "---\nid: $contested\ntitle: Claimant\n---\nbody\n")
+
+            captureStdout { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0 }
+
+            withClue("D17: registry rank decides, and main is declared first - so main KEEPS the id it already carries") {
+                binding(config, RootName.MAIN, "claimant.md") shouldBe contested
+                String(Files.readAllBytes(config.contentDir.resolve("claimant.md"))) shouldContain "id: $contested"
+            }
+            withClue("THE regression: the beaten root's page must NOT be given the winner's id, DURABLY, in its own file") {
+                val reassigned = binding(config, RootName.require("handbook"), "onboarding.md")
+                reassigned shouldNotBe contested
+                val onboarding = String(Files.readAllBytes(handbook.resolve("onboarding.md")))
+                onboarding shouldContain "id: $reassigned"
+                onboarding shouldNotContain "id: $contested"
+            }
+        }
+    }
+
+    test("adopt REFUSES (exit 1) when a configured root is not available - a skipped root is a root whose permalinks die") {
+        withTwoRootCliTree { config, handbook ->
+            handbook.toFile().deleteRecursively() // the unmounted-disk shape
+
+            val err = captureStderr { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 1 }
+
+            err shouldContain "adopt: root 'handbook' is not available"
+            err shouldContain "would then cost that root every permalink and citation"
+            withClue("refuse BEFORE writing: a half-adopted corpus is the state an operator would never think to re-check") {
+                String(Files.readAllBytes(config.contentDir.resolve("plain.md"))) shouldNotContain "id: "
+            }
+        }
+    }
 })
+
+/** The id `adopt` bound to a rooted path, read straight out of the app db it just wrote. */
+private fun binding(config: PlainbaseConfig, root: RootName, path: String) =
+    DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+        DatabaseFactory.createDatabase(driver).idMapQueries.selectBinding(root, TreePath.require(path)).executeAsOne().id
+    }
+
+/** [withCliTree] plus a second configured root - the topology whose extra pages a main-only adopt used to leave behind. */
+private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> Unit) {
+    withCliTree { config ->
+        val handbook = Files.createTempDirectory("pb-cli-handbook")
+        try {
+            Files.writeString(handbook.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\n\n# Onboarding\n")
+            block(
+                config.copy(
+                    roots = RootsConfig(
+                        list = listOf(
+                            Root(RootName.MAIN, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
+                            Root(RootName.require("handbook"), RootBackend.Local(handbook), editable = true, history = HistoryMode.OFF),
+                        ),
+                        origin = RootsOrigin.EXPLICIT,
+                    ),
+                ),
+                handbook,
+            )
+        } finally {
+            handbook.toFile().deleteRecursively()
+        }
+    }
+}
 
 /** A three-page tree: two patchable pages and one §A3 case-9 refusal, plus a fresh DATA_DIR. */
 private fun withCliTree(block: (PlainbaseConfig) -> Unit) {

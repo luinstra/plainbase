@@ -67,9 +67,12 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                         "Request body must be JSON: {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
                     )
 
-                val command = when (val parse = parseProposeCommand(request)) {
+                // The parser owns the code, not this mapping site: an unknown root answers 400 `invalid_root`
+                // here and `invalid_root` on MCP, because BOTH read `parse.code` rather than hardcoding one.
+                val command = when (val parse = parseProposeCommand(request, ctx.roots)) {
                     is ProposeCommandParse.Ok -> parse.command
-                    is ProposeCommandParse.Invalid -> return@guarded call.invalidProposeRequest(parse.message)
+                    is ProposeCommandParse.Invalid ->
+                        return@guarded call.respondError(HttpStatusCode.BadRequest, parse.code, parse.message)
                 }
                 when (val outcome = ctx.proposals.propose(principal, command)) {
                     is ProposeOutcome.Created -> call.respondRest(

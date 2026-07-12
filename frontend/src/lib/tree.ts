@@ -1,12 +1,20 @@
 import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
 
 /**
- * A cross-root lookup's answer: the matched folder WITH its entry's root. The root is carried,
- * never re-derived from a url (two roots can hold the same root-relative folder path, so a bare
- * folder answer would be ambiguous).
+ * A cross-root lookup's answer: the matched folder WITH its entry's root and whether that root is
+ * SERVING. The root is carried, never re-derived from a url (two roots can hold the same
+ * root-relative folder path, so a bare folder answer would be ambiguous).
+ *
+ * `available` is carried for the same reason and it is not cosmetic: the server empties an
+ * unavailable root's subtree (it must never ship the stale carried listing), so a caller that reads
+ * only `folder` sees a folder with no children and renders "this directory is empty" over what is
+ * actually an outage. The server spent the whole of D5 learning to tell a down root from a deleted
+ * one; dropping the flag here throws that distinction away at the last step and tells the operator
+ * their docs are gone.
  */
 export interface FolderEntry {
   root: string;
+  available: boolean;
   folder: TreeFolder;
 }
 
@@ -27,9 +35,13 @@ export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
   return roots.find((entry) => entry.root === root)?.tree ?? null;
 }
 
-/** The reserved main root's tree - the `/docs` home view's resolution. */
-export function mainTree(roots: RootTree[]): TreeFolder | null {
-  return treeFor(roots, "main");
+/**
+ * The reserved main root's ENTRY - the `/docs` home view's resolution. The whole entry, not its bare
+ * tree: `/docs` lands on main's root folder, and main can be down like any other root (a vanished
+ * CONTENT_DIR), so the home view needs its `available` for exactly the reason [FolderEntry] does.
+ */
+export function mainEntry(roots: RootTree[]): RootTree | null {
+  return roots.find((entry) => entry.root === "main") ?? null;
 }
 
 /** Every page node across all entries, in wire (D7) order - the quick-switcher's candidate set. */
@@ -65,10 +77,38 @@ export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
 export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | null {
   for (const entry of roots) {
     for (const node of walk([entry.tree])) {
-      if (node.type === "folder" && node.url !== null && node.url === pathname) return { root: entry.root, folder: node };
+      if (node.type === "folder" && node.url !== null && node.url === pathname) {
+        return { root: entry.root, available: entry.available, folder: node };
+      }
     }
   }
   return null;
+}
+
+/**
+ * The ENTRY whose `/docs/{root}` URL space owns [pathname], or null when the location is not under one (the
+ * `/new`, `/review`, `/admin` and `/p/{id}` routes).
+ *
+ * Matched against each entry's SERVER-ISSUED root url (`RootTree.tree.url`) rather than by splitting the
+ * pathname on `/`: the server is the single URL authority (§A4), and this answer decides WHICH TREE a create
+ * writes its bytes into - the one place a client-side guess would be silently destructive rather than merely
+ * wrong on screen.
+ *
+ * The whole entry, not just the name: url ownership is the only thing an UNAVAILABLE root still tells the
+ * client (its subtree arrives empty, so no folder lookup can reach inside it), and reading that answer needs
+ * the entry's `available` - see PageView's FolderLanding.
+ */
+export function rootEntryOfUrl(roots: RootTree[], pathname: string): RootTree | null {
+  for (const entry of roots) {
+    const url = entry.tree.url;
+    if (url !== null && (pathname === url || pathname.startsWith(`${url}/`))) return entry;
+  }
+  return null;
+}
+
+/** The NAME of the root owning [pathname] - [rootEntryOfUrl]'s answer, so there stays exactly one url-ownership rule. */
+export function rootOfUrl(roots: RootTree[], pathname: string): string | null {
+  return rootEntryOfUrl(roots, pathname)?.root ?? null;
 }
 
 /**
@@ -120,7 +160,9 @@ export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
 export function folderForLanding(roots: RootTree[], pageId: string): FolderEntry | null {
   for (const entry of roots) {
     for (const node of walk([entry.tree])) {
-      if (node.type === "folder" && landingChild(node.children)?.id === pageId) return { root: entry.root, folder: node };
+      if (node.type === "folder" && landingChild(node.children)?.id === pageId) {
+        return { root: entry.root, available: entry.available, folder: node };
+      }
     }
   }
   return null;

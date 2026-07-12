@@ -50,10 +50,10 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
         )
         // Mirror Application.serve(): watcher registers, then the first rebuild runs.
         scheduler = RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm())
-        watch = store.watch { scheduler.schedule() }
+        watch = store.watch(onChange = { scheduler.schedule() })
         harness.builder.rebuild()
         // A3: auth ON, loopback-dev (OFF) open behavior (this watcher harness exercises search-after-edit logic).
-        services = harness.testRouteContext(contentStore = store, searchProvider = searchProvider)
+        services = harness.testRouteContext(searchProvider = searchProvider)
     }
 
     val idMap: IdMapRepository get() = harness.idMap

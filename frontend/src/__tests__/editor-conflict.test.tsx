@@ -7,7 +7,7 @@ import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 conflict UX (D-5 acceptance #2, #3). Core principle: a 409 NEVER discards the user's buffer.
@@ -182,6 +182,9 @@ describe("W6 conflict UX", () => {
     expect(sent.body).toContain("# Deploy Guide");
     // The title is the user's (possibly-edited) frontmatter title, not the filename.
     expect(sent.title).toBe("Deploy Guide");
+    // …and the recovered page goes back into the root it was deleted FROM. Omitting `root` is not a no-op:
+    // the server would default to `main`, quietly relocating an extra root's page on its rescue path.
+    expect(sent.root).toBe("main");
   });
 
   it("save-as-new invalidates the destination by-path cache BEFORE navigating (no stale deleted page, FIX 1)", async () => {

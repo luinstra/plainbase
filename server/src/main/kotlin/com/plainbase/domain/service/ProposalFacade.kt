@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 
 /**
  * The guarded PROPOSE/decision surface (P1a, the choke point — the [ReadFacade] shape). Every method takes a
@@ -72,7 +73,10 @@ object ProposalCommandResource {
  */
 sealed interface ProposeCommand {
 
-    /** An edit proposal: [pageId] is authoritative; [clientTargetPath] is the optional client path the service checks against `pathOf`. */
+    /**
+     * An edit proposal: [pageId] is authoritative; [clientTargetPath] is the optional client path the service
+     * checks against the server-resolved target.
+     */
     data class Edit(
         val pageId: PageId,
         val baseHash: String,
@@ -82,9 +86,17 @@ sealed interface ProposeCommand {
     ) : ProposeCommand
 
     /**
-     * A create proposal: [targetPath] is authoritative (no page exists yet). [pageId] is the SERVER-minted id (C1):
-     * null on the explicit-propose path (the facade mints + patches it into the blob), pre-set on the degrade path
-     * (the create route already minted it + baked it into the bytes — the facade stores both verbatim, no re-mint).
+     * A create proposal: [root] + [targetPath] is authoritative (no page exists yet). [pageId] is the SERVER-minted
+     * id (C1): null on the explicit-propose path (the facade mints + patches it into the blob), pre-set on the
+     * degrade path (the create route already minted it + baked it into the bytes — the facade stores both verbatim,
+     * no re-mint).
+     *
+     * [root] is an EXPLICIT wire field, defaulted to `main`, never inferred from the first path segment — the same
+     * rule `POST /pages` follows, for the same reason (silently retargeting a WRITE because a folder name matches a
+     * root name is not acceptable where bytes land). The SHARED parser validates it against the registry, so both
+     * wire entries — the REST propose route and the MCP `propose_change` tool — answer one `invalid_root` and cannot
+     * drift; the degrade path is the third construction site and sees no wire string at all (it inherits a legal root
+     * from the already-validated CreateIntent).
      *
      * Contract: when non-null, [pageId] MUST already be materialized into [proposedContent]'s `id:` frontmatter line —
      * the row stores the bytes verbatim and apply writes them verbatim, so the stored id and the on-disk id can only
@@ -92,6 +104,7 @@ sealed interface ProposeCommand {
      * the degrade path passes the create route's already-id-baked bytes), so no runtime re-scan validates this here.
      */
     data class Create(
+        val root: RootName,
         val targetPath: TreePath,
         val proposedContent: ByteArray,
         val rationale: String,

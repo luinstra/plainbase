@@ -63,16 +63,12 @@ class RestHarness(
      * A [TreeJsonCache] over the harness's builder for the §C4 memoization test. The route path's own memo lives
      * privately inside [GuardedReadFacade]; this exposes the SAME cache type for the per-snapshot-identity assertion.
      */
-    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder) }
+    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder, harness.rootRegistry, harness.availability) }
 
     init {
         seed(harness.idMap)
         harness.builder.rebuild()
-        services = harness.testRouteContext(
-            contentStore = store,
-            searchProvider = searchProvider,
-            history = history,
-        )
+        services = harness.testRouteContext(searchProvider = searchProvider, history = history)
     }
 
     override fun close() {
@@ -111,10 +107,11 @@ fun ApplicationTestBuilder.restClient(): HttpClient = createClient { followRedir
  */
 @Suppress("LongParameterList")
 fun IndexHarness.testRouteContext(
-    contentStore: com.plainbase.domain.content.ContentStore,
     writePipeline: com.plainbase.domain.service.WritePipeline = writePipeline(),
     searchProvider: com.plainbase.domain.search.SearchProvider,
     history: HistoryProvider = NoOpHistoryProvider,
+    /** The PER-ROOT providers, when a test needs roots whose history differs (C4); defaults to main-only. */
+    historiesByRoot: ((com.plainbase.domain.root.RootName) -> HistoryProvider)? = null,
     idProvider: com.plainbase.domain.service.IdProvider = UuidV7IdProvider(),
     enforced: Boolean = false,
     trustedProxyCidrs: List<String> = emptyList(),
@@ -136,31 +133,35 @@ fun IndexHarness.testRouteContext(
         idProvider = UuidV7IdProvider(),
         clock = Clock.System,
         enforced = enforced,
+        editableOf = { rootRegistry.byName(it)?.editable == true },
     )
-    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(
-        indexBuilder = builder,
-        contentStore = contentStore,
-        root = rootRegistry.main.name,
-    )
+    val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry)
+    // Every root the harness registers resolves to its own store; history is main's provider for main, no-op
+    // elsewhere (an extra root with no declared history records nothing, exactly as production wires it) - unless
+    // the test declares the whole per-root map itself.
+    val histories: (com.plainbase.domain.root.RootName) -> HistoryProvider =
+        historiesByRoot ?: { if (it == rootRegistry.main.name) history else NoOpHistoryProvider }
+    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores)
     val proposalService = com.plainbase.domain.service.ProposalService(
         repository = proposalRepository,
         citations = CitationFactory(),
         baseReader = proposalReader,
         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
         clock = Clock.System,
+        rootStatus = { root -> resolver.statusOf(root, availability.current()) },
     )
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
         pageService = PageService(builder, registry, CitationFactory()),
-        searchService = SearchService(provider = searchProvider, indexBuilder = builder),
+        searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability),
         aliasRegistry = registry,
-        contentStore = contentStore,
         writePipeline = writePipeline,
-        root = rootRegistry.main.name,
-        // Forward the registry names so multi-root grammar tests (extra-root-not-301) can seat extras.
-        knownRoots = rootRegistry.roots.map { it.name }.toSet(),
-        history = history,
+        registry = rootRegistry,
+        availability = availability,
+        resolver = resolver,
+        stores = stores,
+        histories = histories,
         idProvider = idProvider,
         proposalService = proposalService,
         proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),

@@ -1,7 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.root.RootName
-import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -20,8 +19,11 @@ import io.ktor.server.routing.get
  * A path-space collision loser has no canonical URL; its permalink is the page's one durable URL,
  * so the 302 targets `/p/{id}` instead — same contract (a redirect to where the page lives now).
  *
- * A3: `read`-gated — the snapshot resolve goes through the guarded facade, so the gate fires
- * (401/403) BEFORE the resolve and the 302 cannot leak page existence to an unauthorized caller.
+ * A3: `read`-gated — the resolve goes through a dedicated guarded facade OPERATION (never a route-side snapshot
+ * walk), so the gate fires (401/403) BEFORE it and the 302 cannot leak page existence to an unauthorized caller.
+ * That is also what lets it availability-gate: a root-blind snapshot walk would happily 302 to a carried-forward
+ * page in a root that answers 503 everywhere else. An unavailable root answers 503 through the existing
+ * `guarded {}` wrap; anonymous still gets its 401, unchanged.
  */
 fun Route.browseRedirectRoute(ctx: RouteContext) {
     get("/browse/{path...}") {
@@ -40,9 +42,9 @@ fun Route.browseRedirectRoute(ctx: RouteContext) {
             if (path == null) {
                 return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
             }
-            val page = ctx.read.currentSnapshot(principal, path.value).byPath[RootedPath(root, path)]
+            val target = ctx.read.browseTarget(principal, root, path)
                 ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such page file: ${path.value}")
-            call.respondRedirectPreservingQuery(page.url ?: page.permalink, permanent = false)
+            call.respondRedirectPreservingQuery(target, permanent = false)
         }
     }
 }

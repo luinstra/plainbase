@@ -139,7 +139,7 @@ private class ReindexFacadeHarness(
 
     init {
         harness.builder.rebuild()
-        routeContext = harness.testRouteContext(contentStore = store, searchProvider = engine)
+        routeContext = harness.testRouteContext(searchProvider = engine)
     }
 
     override fun close() = harness.close()

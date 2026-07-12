@@ -48,6 +48,8 @@ class AuthRouteHarness(
 
     private val auth = harness.authServices(policy)
 
+    private val resolver = com.plainbase.domain.service.PageRootResolver(harness.idMap, harness.rootRegistry)
+
     val context: RouteContext = buildRouteContext(
         policy = policy,
         indexBuilder = harness.builder,
@@ -56,20 +58,26 @@ class AuthRouteHarness(
             harness.registry,
             com.plainbase.domain.service.CitationFactory(),
         ),
-        searchService = com.plainbase.domain.service.SearchService(provider = harness.fts(), indexBuilder = harness.builder),
+        searchService = com.plainbase.domain.service.SearchService(
+            provider = harness.fts(),
+            indexBuilder = harness.builder,
+            availability = harness.availability,
+        ),
         aliasRegistry = harness.registry,
-        contentStore = store,
         writePipeline = harness.writePipeline(),
-        root = harness.rootRegistry.main.name,
-        knownRoots = harness.rootRegistry.roots.map { it.name }.toSet(),
-        history = com.plainbase.frameworks.git.NoOpHistoryProvider,
+        registry = harness.rootRegistry,
+        availability = harness.availability,
+        resolver = resolver,
+        stores = harness.stores,
+        histories = { com.plainbase.frameworks.git.NoOpHistoryProvider },
         idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
         proposalService = com.plainbase.domain.service.ProposalService(
             repository = harness.proposalRepository,
             citations = com.plainbase.domain.service.CitationFactory(),
-            baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
+            baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, harness.stores),
             proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
             clock = Clock.System,
+            rootStatus = { root -> resolver.statusOf(root, harness.availability.current()) },
         ),
         proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository),
         tokens = harness.apiTokens,

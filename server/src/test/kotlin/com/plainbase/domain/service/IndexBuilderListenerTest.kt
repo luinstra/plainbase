@@ -28,7 +28,7 @@ class IndexBuilderListenerTest : FunSpec({
             harness = IndexHarness(
                 root,
                 listeners = listOf(
-                    IndexBuilder.PublicationListener { snapshot ->
+                    IndexBuilder.PublicationListener { snapshot, _ ->
                         seen += snapshot
                         currentAtCallback = harness.builder.current
                     },
@@ -51,8 +51,8 @@ class IndexBuilderListenerTest : FunSpec({
             val harness = IndexHarness(
                 root,
                 listeners = listOf(
-                    IndexBuilder.PublicationListener { error("listener blew up (deliberately)") },
-                    IndexBuilder.PublicationListener { laterListenerSaw = it },
+                    IndexBuilder.PublicationListener { _, _ -> error("listener blew up (deliberately)") },
+                    IndexBuilder.PublicationListener { snapshot, _ -> laterListenerSaw = snapshot },
                 ),
             )
             harness.use {

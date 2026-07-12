@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.Frontmatter
@@ -81,10 +82,13 @@ class IndexBuilderFixtureTest : FunSpec({
         val renders = mutableMapOf<String, Int>()
         var frontmatterParses = 0
         val store = LocalContentStore(Fixtures.demoDocs)
+        // The builder's read seam is `readClassified` (a null read cannot tell a deleted page from a downed root,
+        // and the builder must be able to), so the count lives THERE - counting the now-unused `read` would make
+        // this assertion vacuously pass whatever the builder did.
         val counting = object : ContentStore by store {
-            override fun read(path: TreePath): ByteArray? {
+            override fun readClassified(path: TreePath): ContentRead {
                 reads.merge(path.value, 1, Int::plus)
-                return store.read(path)
+                return store.readClassified(path)
             }
         }
         // The §C2 value parse is counted at the FrontmatterParser seam — the builder's single

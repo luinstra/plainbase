@@ -2,6 +2,7 @@ package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentEntry
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
@@ -14,6 +15,7 @@ import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.withDirectoryStream
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.network.sockets.ConnectTimeoutException
 import kotlinx.coroutines.async
@@ -91,12 +93,28 @@ class ObjectContentStore(
 
     // ---- Reads: pure delegation to the mirror ------------------------------------------------
 
+    /**
+     * Always available: the BUCKET is the authority, and its transport failures have their own error paths.
+     * Root availability is a LOCAL-path concept in v1 (ADR-0011 D10 keeps object mode single-root), so there
+     * is no root to probe here and nothing to mark. This is an IMPLEMENTATION of the port, not a consumer of it.
+     */
+    override fun available(): Boolean = true
+
     // An absent mirror scans to an empty tree (seam c): PREVIEW adopt never hydrates and never mkdirs,
     // so a fresh install with no mirror yet previews cleanly instead of throwing NoSuchFileException.
     override fun scan(): ScanResult =
         if (Files.isDirectory(mirrorRoot)) mirror.scan() else ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList())
 
     override fun read(path: TreePath): ByteArray? = mirror.read(path)
+
+    /**
+     * Read-or-[ContentRead.Absent], and a read THROW propagates exactly as it does today - there is no root to
+     * re-probe and nothing to mark, so `RootDown` is a state this store can never be in. Deliberately NOT
+     * delegated to `mirror.readClassified`: the mirror is a `LocalContentStore` whose classifier would answer
+     * `RootDown` for an ABSENT mirror, which is object mode's legitimate fresh-install state.
+     */
+    override fun readClassified(path: TreePath): ContentRead =
+        read(path)?.let(ContentRead::Bytes) ?: ContentRead.Absent
 
     override fun list(dir: TreePath?): List<ContentEntry> = mirror.list(dir)
 
@@ -230,7 +248,10 @@ class ObjectContentStore(
 
     // ---- Watch: the Q5 poll-reconcile ----------------------------------------------------------
 
-    override fun watch(onChange: (TreePath) -> Unit): AutoCloseable {
+    // [onFailure] is accepted and IGNORED beyond the existing retry/logging below: a poll fault is transient by
+    // design (the next tick re-reconciles), and availability is not an object-mode concept (D10) - there is no
+    // root to mark unavailable.
+    override fun watch(onChange: (TreePath) -> Unit, onFailure: (Throwable) -> Unit): AutoCloseable {
         val stop = CountDownLatch(1)
         val thread = Thread {
             while (true) {
@@ -889,7 +910,7 @@ class ObjectContentStore(
     private fun removeStaleNfcSiblings(target: Path) {
         val parent = target.parent ?: return
         val wantNfc = Nfc.normalize(target.fileName.toString())
-        Files.newDirectoryStream(parent).use { stream ->
+        withDirectoryStream(parent) { stream ->
             for (entry in stream) {
                 if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
                 if (Nfc.normalize(entry.fileName.toString()) != wantNfc) continue
@@ -993,7 +1014,7 @@ class ObjectContentStore(
         var dir = start?.toAbsolutePath()?.normalize()
         while (dir != null && dir != mirrorRoot && dir.startsWith(mirrorRoot)) {
             try {
-                val empty = Files.isDirectory(dir) && Files.newDirectoryStream(dir).use { !it.iterator().hasNext() }
+                val empty = Files.isDirectory(dir) && withDirectoryStream(dir) { !it.iterator().hasNext() }
                 if (!empty) return
                 Files.delete(dir)
             } catch (_: IOException) {

@@ -30,11 +30,11 @@ class BindingVisibilityTest : FunSpec({
         BindingVisibility.isLive(RootedPath(main, TreePath.require("moved.md")), scannedLive, scannedRoots, registered) shouldBe false
     }
 
-    test("unscanned-but-registered root: always an untouchable live owner (the D17 contest still happens)") {
+    test("unscanned-but-registered root: always an untouchable live owner") {
         BindingVisibility.isLive(RootedPath(extra, page), scannedLive, scannedRoots, registered) shouldBe true
     }
 
-    test("unregistered root: detached, supersedable (D2 - the boot WARN is its visibility)") {
+    test("unregistered root: detached, not an owner at all (D2 - the boot WARN is its visibility)") {
         BindingVisibility.isLive(RootedPath(gone, page), scannedLive, scannedRoots, registered) shouldBe false
     }
 
@@ -42,5 +42,15 @@ class BindingVisibilityTest : FunSpec({
         val allScanned = setOf(main, extra)
         BindingVisibility.isLive(RootedPath(extra, page), scannedLive, allScanned, registered) shouldBe false
         BindingVisibility.isLive(RootedPath(main, page), scannedLive, allScanned, registered) shouldBe true
+    }
+
+    // The OTHER half of D16: being a live owner and being takeable are different questions, and the D17
+    // rank contest may only ask the second one about a root the pass actually looked at.
+    test("only a SCANNED root's binding can lose the rank contest") {
+        BindingVisibility.isSupersedable(RootedPath(main, page), scannedRoots) shouldBe true
+    }
+
+    test("an unscanned root's binding is NON-supersedable, however the two roots rank (D-C4-10)") {
+        BindingVisibility.isSupersedable(RootedPath(extra, page), scannedRoots) shouldBe false
     }
 })

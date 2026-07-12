@@ -1,10 +1,12 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.ktor.testRouteContext
@@ -45,7 +47,10 @@ import io.ktor.server.cio.CIO as ServerCIO
  * and a READ_ONLY (→ VIEWER) agent token, seeds ONE page (with a broken link, for validate_links), and syncs the
  * search engine so the read tools return real data.
  */
-class McpHarness : AutoCloseable {
+class McpHarness(
+    /** Whether the seeded root accepts page writes (ADR-0011 D6). `false` exercises the `root_not_editable` deny. */
+    editable: Boolean = true,
+) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
     private val searchDir = Files.createTempDirectory("plainbase-mcp-search")
@@ -81,6 +86,7 @@ class McpHarness : AutoCloseable {
             contentStore = store,
             listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
             searchIndexer = searchIndexer,
+            rootRegistry = RootRegistry.of(listOf(localRoot("main", root, editable = editable))),
         )
         index.builder.rebuild()
         val page = index.builder.current.pages.single()
@@ -90,7 +96,7 @@ class McpHarness : AutoCloseable {
         proposeBearer = propose.plaintext
         proposeTokenId = propose.id
         readOnlyBearer = index.apiTokens.mint(label = "ro", mode = AgentMode.READ_ONLY).plaintext
-        val ctx = index.testRouteContext(contentStore = store, searchProvider = searchProvider, enforced = true)
+        val ctx = index.testRouteContext(searchProvider = searchProvider, enforced = true)
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }
         port = blocking { server.engine.resolvedConnectors().first().port }
     }

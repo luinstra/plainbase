@@ -129,9 +129,15 @@ data class BodyTooLargeBody(val code: String, val message: String, @SerialName("
  * mints the id, derives the on-disk path + slug, and composes the frontmatter+body bytes. `folder` is
  * the content-relative parent (`""`/omitted = root); `title` is required non-blank; `slug` is the
  * optional author slug intent; `body` is the optional Markdown body (the server adds the frontmatter).
+ *
+ * `root` names WHICH document directory the page lands in, EXPLICITLY - additive, defaulted `main`, so every
+ * existing client and golden stays byte-compatible. It is never inferred from `folder`'s first segment: the read
+ * surface's one-segment convenience grammar is one thing, but silently retargeting a WRITE because a folder name
+ * happens to match a root name is not acceptable where bytes land. An unknown name is a 400 `invalid_root`.
  */
 @Serializable
 data class CreatePageRequest(
+    val root: String = "main",
     val folder: String = "",
     val title: String,
     val slug: String? = null,
@@ -234,9 +240,9 @@ fun WriteOutcome.toWire(submittedHash: String): WriteWire = when (this) {
         if (reason == WriteConflictReason.CONTENT_CHANGED && currentHash == submittedHash) {
             WriteWire.of(HttpStatusCode.OK, WrittenResponse.serializer(), WrittenResponse(contentHash = submittedHash, commit = null))
         } else {
-            // FROZEN page_deleted shape: ALL current_* are null — the file is gone, so the path it WAS at
-            // is not surfaced (the write pipeline still carries the stale snapshot path on `currentPath`; the wire nulls it
-            // to keep `page_deleted` a clean "nothing to rebase against" signal, per the PB-WRITE-1 freeze).
+            // FROZEN page_deleted shape: ALL current_* are null — the file is gone, so the path it WAS at is not
+            // surfaced. The pipeline now agrees (a no-current-bytes conflict carries no path), so this is a belt on
+            // the frozen shape rather than a scrub: the wire contract must not depend on an upstream detail to hold.
             val deleted = reason == WriteConflictReason.PAGE_DELETED
             WriteWire.of(
                 HttpStatusCode.Conflict,

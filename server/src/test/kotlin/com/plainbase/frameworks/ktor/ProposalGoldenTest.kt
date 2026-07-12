@@ -79,7 +79,8 @@ class ProposalGoldenTest : FunSpec({
             "change-detail.json",
             ChangeDetail.serializer(),
             ChangeDetail(
-                id = proposalId1, operation = "edit", status = "PENDING", targetPath = "guides/deploy-guide.md",
+                id = proposalId1, operation = "edit", status = "PENDING", root = "main",
+                targetPath = "guides/deploy-guide.md",
                 pageId = pageId, baseHash = baseHash, baseDrifted = false, authorLabel = "ci-bot",
                 authorIssuer = "agent", authorExternalId = "pb_token", createdAt = createdAt,
                 rationale = "tighten the deploy steps", unifiedDiff = editDiff, approverIssuer = null,
@@ -97,7 +98,8 @@ class ProposalGoldenTest : FunSpec({
             ListChangesResponse(
                 proposals = listOf(
                     ChangeSummary(
-                        id = proposalId1, operation = "edit", status = "PENDING", targetPath = "guides/deploy-guide.md",
+                        id = proposalId1, operation = "edit", status = "PENDING", root = "main",
+                        targetPath = "guides/deploy-guide.md",
                         pageId = pageId, baseDrifted = false, authorLabel = "ci-bot", createdAt = createdAt,
                         rationale = "tighten the deploy steps",
                     ),
@@ -112,7 +114,8 @@ class ProposalGoldenTest : FunSpec({
             "reject-rejected.json",
             ChangeDetail.serializer(),
             ChangeDetail(
-                id = proposalId1, operation = "edit", status = "REJECTED", targetPath = "guides/deploy-guide.md",
+                id = proposalId1, operation = "edit", status = "REJECTED", root = "main",
+                targetPath = "guides/deploy-guide.md",
                 pageId = pageId, baseHash = baseHash, baseDrifted = false, authorLabel = "ci-bot",
                 authorIssuer = "agent", authorExternalId = "pb_token", createdAt = createdAt,
                 rationale = "tighten the deploy steps", unifiedDiff = editDiff, approverIssuer = "builtin",

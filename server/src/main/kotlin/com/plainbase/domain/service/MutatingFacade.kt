@@ -7,6 +7,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 
 /**
  * The guarded MUTATING surface (A3, the choke point). Every method takes a [Principal], calls the matching
@@ -75,6 +76,14 @@ interface MutatingFacade {
  *
  * [author]/[committer] (P1b) carry the optional git attribution the apply coordinator supplies (the proposer +
  * approver); they DEFAULT to null so the existing PUT route constructs a [SaveRequest] unchanged (server identity).
+ *
+ * [expectedRoot] pins WHICH root's page this save is allowed to touch. Null (the PUT route) means "wherever the id
+ * lives" — for a bare `PUT /pages/{id}` the id IS the address, the gate and the write read ONE snapshot, and there
+ * is no earlier answer to be inconsistent with. The proposal-APPLY path is different: it decided its root at PROPOSE
+ * time, showed that root to the approving admin, and gated on it — so it pins it here, and a page whose id has since
+ * been re-awarded to another root (ADR-0011 D17, which moves no file) reads as GONE from the approved root rather
+ * than silently redirecting an approved edit into a repository nobody reviewed. Two checkouts of one repo hold
+ * byte-identical files, so `base_hash` would not have caught it.
  */
 class SaveRequest(
     val pageId: PageId,
@@ -83,6 +92,7 @@ class SaveRequest(
     val author: CommitIdentity? = null,
     val committer: CommitIdentity? = null,
     val origin: WriteOrigin = WriteOrigin.DIRECT_PUT,
+    val expectedRoot: RootName? = null,
 )
 
 /**

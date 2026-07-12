@@ -104,9 +104,8 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
                     }
                     else -> principal
                 }
-                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     writePipeline = harness.writePipeline(pipelineHook, store),
                     searchProvider = harness.fts(),
                     history = history,
@@ -152,7 +151,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             withClue(inDirect.bodyAsText()) { inDirect.status shouldBe HttpStatusCode.OK }
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe edited
             harness.proposalRepository.all().shouldBeEmpty()
-            harness.auditRepository.recent(50).edits().single { it.resource == inId }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).edits().single { it.resource == "main:$inId" }.decision shouldBe "allowed"
 
             // The SAME call shape to the OUT-of-glob page → 202 degrade, a proposal row, disk byte-UNCHANGED,
             // an allowed EDIT@"proposal" row.
@@ -167,7 +166,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             body.getValue("unified_diff").jsonPrimitive.content.shouldNotBeEmpty()
             store.read(TreePath.require("notes/out.md"))!!.decodeToString() shouldBe outDoc // UNCHANGED
             harness.proposalRepository.all().shouldHaveSize(1)
-            harness.auditRepository.recent(50).edits().single { it.resource == "proposal" }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "allowed"
         }
     }
 
@@ -188,7 +187,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.Forbidden
             harness.proposalRepository.all().shouldBeEmpty()
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe inDoc
-            harness.auditRepository.recent(50).edits().single { it.resource == "proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -221,7 +220,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.Forbidden
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe inDoc // disk byte-unchanged
             harness.proposalRepository.all().shouldBeEmpty() // the degrade's propose was denied before any row
-            harness.auditRepository.recent(50).edits().single { it.resource == "proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -237,7 +236,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             store.read(TreePath.require("docs/newpage.md")) shouldBe null // nothing written — it is a proposal now
             harness.proposalRepository.all().shouldHaveSize(1)
             harness.proposalRepository.all().single().operation shouldBe com.plainbase.domain.repository.ProposalOperation.CREATE
-            harness.auditRepository.recent(50).creates().single { it.resource == "proposal" }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).creates().single { it.resource == "main:proposal" }.decision shouldBe "allowed"
         }
     }
 
@@ -270,7 +269,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
             store.read(TreePath.require("docs/newpage.md")) shouldBe null
             harness.proposalRepository.all().shouldBeEmpty()
-            harness.auditRepository.recent(50).creates().single { it.resource == "proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).creates().single { it.resource == "main:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -316,6 +315,8 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("error").jsonObject
                 .getValue("code").jsonPrimitive.content shouldBe "page_not_found"
             harness.proposalRepository.all().shouldBeEmpty()
+            // An UNKNOWN id resolves to NO root, so its audit resource stays the BARE id - byte-identical to pre-C4
+            // (the null-root arm of the rooted audit rule; a rooted row would churn every unknown-id audit).
             harness.auditRepository.recent(50).edits().single { it.resource == unknown }.decision shouldBe "allowed"
         }
     }

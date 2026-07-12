@@ -4,12 +4,15 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.ProposeOutcome
+import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.SearchService
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ChangeDetail
 import com.plainbase.frameworks.ktor.dto.ErrorBody
+import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
 import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
@@ -98,8 +101,10 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
                     "Request must be {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
                 )
             }
-            when (val parse = parseProposeCommand(decoded)) {
-                is ProposeCommandParse.Invalid -> errorResult("invalid_propose_request", parse.message)
+            when (val parse = parseProposeCommand(decoded, ctx.roots)) {
+                // parse.code, never a hardcoded string: an unknown root must answer `invalid_root` here exactly as
+                // it does on REST, or the two propose surfaces drift.
+                is ProposeCommandParse.Invalid -> errorResult(parse.code, parse.message)
                 is ProposeCommandParse.Ok -> when (val outcome = ctx.proposals.propose(principal, parse.command)) {
                     is ProposeOutcome.Created -> jsonResult(
                         ProposeChangeResponse.serializer(),
@@ -162,8 +167,9 @@ private fun <T> jsonResult(serializer: KSerializer<T>, dto: T): CallToolResult =
  * Run [body], serializing its DTO through [RestJson] into a success [CallToolResult]; map a null result to
  * `not_found` and EVERY failure to `CallToolResult(isError=true)`. NEVER lets an exception escape (an open SSE
  * stream can't become a clean error after the header flush). Catch ORDER is load-bearing: [AccessDenied]
- * (Anonymous → `unauthorized` / else → `forbidden`) BEFORE the null path so existence never leaks; then a generic
- * `internal` net (cause to the log, NEVER on the wire).
+ * (mapped by [deniedResult]) BEFORE the null path so existence never leaks; then
+ * [RootUnavailable] BEFORE the catch-all, or a downed root would misreport as `internal`; then a generic net (cause
+ * to the log, NEVER on the wire).
  */
 private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): CallToolResult =
     try {
@@ -171,6 +177,8 @@ private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): C
         jsonResult(serializer, dto)
     } catch (denied: AccessDenied) {
         deniedResult(denied)
+    } catch (unavailable: RootUnavailable) {
+        unavailableResult(unavailable)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" } // cause to the log, never the wire
         errorResult("internal", "Internal error")
@@ -187,18 +195,40 @@ private inline fun catchingErrors(body: () -> CallToolResult): CallToolResult =
         body()
     } catch (denied: AccessDenied) {
         deniedResult(denied)
+    } catch (unavailable: RootUnavailable) {
+        unavailableResult(unavailable)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" }
         errorResult("internal", "Internal error")
     }
 
-/** Maps an [AccessDenied] to the SAME 401-vs-403 split the REST `guarded` block uses (Anonymous → unauthorized). */
-private fun deniedResult(denied: AccessDenied): CallToolResult =
-    if (denied.principal is Principal.Anonymous) {
-        errorResult("unauthorized", "Authentication required")
-    } else {
-        errorResult("forbidden", "You do not have permission for this action")
-    }
+/**
+ * Maps a [RootUnavailable] to the MCP twin of the REST 503 (ADR-0011 D5). The wording is aimed at an AGENT, because
+ * an agent is what is on the other end of this transport: `not_found` means the page is gone and you should drop your
+ * citations; THIS means a disk is unmounted and the page is coming back. Do not delete anything; retry after the
+ * operator restores the root.
+ */
+private fun unavailableResult(unavailable: RootUnavailable): CallToolResult =
+    errorResult(
+        ErrorCodes.ROOT_UNAVAILABLE,
+        "Root '${unavailable.root.value}' is not serving (${unavailable.reason.name.lowercase()}). Nothing was written. " +
+            "The page is NOT deleted - keep your citations. Retry after the operator restores the root and restarts.",
+    )
+
+/**
+ * Maps an [AccessDenied] to the SAME split the REST `guarded` block uses, REASON first: a read-only root is
+ * `root_not_editable` on every surface (ADR-0011 D13 - one vocabulary, so an agent that learns the code over REST
+ * reads the same code over MCP), and only a POLICY deny splits Anonymous → `unauthorized` / else → `forbidden`.
+ */
+private fun deniedResult(denied: AccessDenied): CallToolResult = when {
+    denied.reason == DenyReason.ROOT_NOT_EDITABLE ->
+        errorResult(
+            ErrorCodes.ROOT_NOT_EDITABLE,
+            "This root is configured read-only (editable = false); page writes are not accepted here",
+        )
+    denied.principal is Principal.Anonymous -> errorResult("unauthorized", "Authentication required")
+    else -> errorResult("forbidden", "You do not have permission for this action")
+}
 
 /** A `CallToolResult(isError=true)` carrying the frozen `{error:{code,message}}` envelope — the SAME shape as a REST error. */
 private fun errorResult(code: String, message: String): CallToolResult =

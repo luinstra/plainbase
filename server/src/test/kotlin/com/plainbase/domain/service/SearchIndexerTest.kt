@@ -27,6 +27,12 @@ import io.mockk.verify
  * ZERO mutating calls (the no-op fast path). The diff base is the mocked engine's own
  * [SearchProvider.indexedState], never a previous snapshot.
  */
+// Every legacy row here is a full pass over a single-root corpus, so the delete-authority set is simply "main was
+// scanned" - which reproduces the pre-C4 wholesale-delete behavior exactly. The rows that pin the AUTHORITY itself
+// (an unscanned root's engine rows must SURVIVE the diff) live in the multi-root runtime suite, where a root can
+// actually be skipped.
+private val ALL_ROOTS = setOf(RootName.MAIN)
+
 class SearchIndexerTest : FunSpec({
 
     val idA = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
@@ -69,7 +75,7 @@ class SearchIndexerTest : FunSpec({
         val added = page(idA, "a.md", hash('a'))
         val (provider, indexer) = harness(emptyMap())
 
-        indexer.sync(snapshot(added))
+        indexer.sync(snapshot(added), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -84,7 +90,7 @@ class SearchIndexerTest : FunSpec({
         val same = page(idB, "b.md", hash('c'))
         val (provider, indexer) = harness(mapOf(idA to state(before), idB to state(same)))
 
-        indexer.sync(snapshot(after, same))
+        indexer.sync(snapshot(after, same), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -98,7 +104,7 @@ class SearchIndexerTest : FunSpec({
         val moved = page(idA, "new/a.md", hash('a'))
         val (provider, indexer) = harness(mapOf(idA to state(before)))
 
-        indexer.sync(snapshot(moved))
+        indexer.sync(snapshot(moved), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -111,7 +117,7 @@ class SearchIndexerTest : FunSpec({
         val engineThinks = PageSearchState(contentHash = current.contentHash, root = RootName.require("extra"), path = current.path)
         val (provider, indexer) = harness(mapOf(idA to engineThinks))
 
-        indexer.sync(snapshot(current))
+        indexer.sync(snapshot(current), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -122,7 +128,7 @@ class SearchIndexerTest : FunSpec({
         val a = page(idA, "a.md", hash('a'))
         val (provider, indexer) = harness(emptyMap())
 
-        indexer.sync(snapshot(a))
+        indexer.sync(snapshot(a), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -134,7 +140,7 @@ class SearchIndexerTest : FunSpec({
         val gone = page(idB, "b.md", hash('b'))
         val (provider, indexer) = harness(mapOf(idA to state(kept), idB to state(gone)))
 
-        indexer.sync(snapshot(kept))
+        indexer.sync(snapshot(kept), ALL_ROOTS)
 
         val deleted = slot<Collection<PageId>>()
         verify(exactly = 1) { provider.delete(capture(deleted)) }
@@ -147,7 +153,7 @@ class SearchIndexerTest : FunSpec({
         val b = page(idB, "b.md", hash('b'))
         val (provider, indexer) = harness(mapOf(idA to state(a), idB to state(b)))
 
-        indexer.sync(snapshot(a, b))
+        indexer.sync(snapshot(a, b), ALL_ROOTS)
 
         verify(exactly = 1) { provider.indexedState() }
         confirmVerified(provider) // no index, no delete, no search, no rebuild
@@ -164,7 +170,7 @@ class SearchIndexerTest : FunSpec({
         )
         val (provider, indexer) = harness(engineState)
 
-        indexer.sync(snapshot(unchanged, changed, added))
+        indexer.sync(snapshot(unchanged, changed, added), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         val deleted = slot<Collection<PageId>>()
@@ -179,7 +185,7 @@ class SearchIndexerTest : FunSpec({
         val b = page(idB, "b.md", hash('b'))
         val (provider, indexer) = harness(emptyMap()) // search.db deleted / first start
 
-        indexer.sync(snapshot(a, b))
+        indexer.sync(snapshot(a, b), ALL_ROOTS)
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
@@ -195,7 +201,7 @@ class SearchIndexerTest : FunSpec({
         }
         val (provider, indexer) = harness(emptyMap())
 
-        indexer.sync(snapshot(*many.toTypedArray()))
+        indexer.sync(snapshot(*many.toTypedArray()), ALL_ROOTS)
 
         val batches = mutableListOf<List<PageDocuments>>()
         verify { provider.index(capture(batches)) }

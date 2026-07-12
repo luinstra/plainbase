@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -24,15 +25,17 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.time.Clock
 
 /**
  * The C2 multi-root matrix over the real IndexBuilder (ADR-0011 D2/D16/D17): the cross-root
  * duplicate-id rank contest at the pass level (including the round-1 panel crash case and the
  * prior-owner mint-guard case, each named), the D16 partial-visibility protection on BOTH sides of
- * the contest, per-root URL space, per-root lowercase rescue, detached/re-add restore semantics,
- * cross-root move aliasing, the rooted checkpoint, and rooted link reports. Registries are
- * synthetic 2-root worlds over temp trees; NO rank-0-main assumption (the extra is seated ahead of
- * main wherever the protection is exercised).
+ * the contest - which since C4 means a pass NEVER supersedes a binding under a root it did not
+ * scan, however it ranks, and the outage cases that pins - per-root URL space, per-root lowercase
+ * rescue, detached/re-add restore semantics, cross-root move aliasing, the rooted checkpoint, and
+ * rooted link reports. Registries are synthetic 2-root worlds over temp trees; NO rank-0-main
+ * assumption (the extra is seated ahead of main wherever the protection is exercised).
  */
 class IndexBuilderMultiRootTest : FunSpec({
 
@@ -101,6 +104,37 @@ class IndexBuilderMultiRootTest : FunSpec({
         }
     }
 
+    test("the id_map-ONLY loser records its issue - a permalink is never reassigned SILENTLY") {
+        withTrees { mainDir, extraDir ->
+            // The loser's ONLY claim on the contested id is its id_map row: it carries no frontmatter id to lose
+            // the contest WITH. Under a pass that bound INLINE, the winner's key-complete bind deleted that row
+            // before the loser's own draft was ever resolved - so the loser read back unmapped AND unidentified,
+            // i.e. indistinguishable from a page nobody had ever seen. It minted a fresh id in silence, and its
+            // /p/{id} permalink moved to another page in another root with NO CrossRootDuplicateId recorded
+            // anywhere. A durable permalink reassignment with no record is the precise outcome the D16/D17
+            // loser-behalf issue recording exists to make impossible.
+            writePage(mainDir, "guides/doc.md", identified(contested))
+            writePage(extraDir, "guides/orphan.md", "---\ntitle: Orphan\n---\n\n# Orphan\n\nbody\n")
+            val orphan = RootedPath(EXTRA, TreePath.require("guides/orphan.md"))
+            World(mainFirst(mainDir, extraDir)).use { world ->
+                world.idMap.bind(orphan, contested, materialized = false)
+
+                val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
+
+                snapshot.byId.getValue(contested).root shouldBe RootName.MAIN // main outranks and takes the id
+                val loser = snapshot.section(EXTRA).pages.single()
+                loser.id shouldNotBe contested
+                // THE assertion: the reassignment is RECORDED. Not a mint that looks like a first sighting.
+                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe
+                    IdentityIssue.CrossRootDuplicateId(
+                        id = contested,
+                        kept = RootedPath(RootName.MAIN, TreePath.require("guides/doc.md")),
+                        reassigned = orphan,
+                    )
+            }
+        }
+    }
+
     test("the prior-owner case, registry flipped: the prior binder outranks, keeps the id; the other side mints") {
         withTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/doc.md", identified(contested))
@@ -137,9 +171,7 @@ class IndexBuilderMultiRootTest : FunSpec({
         }
     }
 
-    test(
-        "D16, pass page wins: the key-complete bind deletes the unscanned loser AND records the loser-behalf issue; the full rebuild converges without growing it",
-    ) {
+    test("D16, pass page OUTRANKS an unscanned owner: it STILL loses - a pass never supersedes a binding it has no authority over") {
         withTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/claimant.md", identified(contested))
             writePage(extraDir, "mirror/page.md", identified(contested))
@@ -147,23 +179,100 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val foreign = RootedPath(EXTRA, TreePath.require("mirror/page.md"))
                 world.idMap.bind(foreign, contested, materialized = true)
 
+                // main OUTRANKS extra and would win a real contest - but this pass cannot see extra's disk,
+                // so it cannot know extra still holds the page, and superseding would DELETE a durable
+                // binding it has no authority over. main's page reassigns instead.
                 world.builder(mainOnlySource(world.registry, mainDir)).rebuild()
 
-                // BOTH the delete and the loser-behalf record, at supersession time.
-                world.idMap.pathOf(contested) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
-                val expected = IdentityIssue.CrossRootDuplicateId(
-                    id = contested,
-                    kept = RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md")),
-                    reassigned = foreign,
-                )
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe expected
+                world.idMap.pathOf(contested) shouldBe foreign // the unscanned owner's binding SURVIVES
+                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe
+                    IdentityIssue.CrossRootDuplicateId(
+                        id = contested,
+                        kept = foreign,
+                        reassigned = RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md")),
+                    )
 
-                // Convergence + natural-key dedup: the full two-source rebuild decides the same
-                // outcome and the loser's own record dedups against the loser-behalf row.
+                // ...and rank DOES settle it, on the first pass that can actually see both roots: main wins,
+                // extra's page reassigns. Both events are audited - the deferral and the contest that finally
+                // decided it - so the issues list holds one row per event, not one merged row.
                 val full = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
                 full.byId.getValue(contested).root shouldBe RootName.MAIN
                 full.section(EXTRA).pages.single().id shouldNotBe contested
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>() shouldHaveSize 1
+                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().last() shouldBe
+                    IdentityIssue.CrossRootDuplicateId(
+                        id = contested,
+                        kept = RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md")),
+                        reassigned = foreign,
+                    )
+            }
+        }
+    }
+
+    test("D-C4-10: an UNAVAILABLE root's binding survives a higher-ranked claimant, and the carried snapshot holds no duplicate id") {
+        // The outage shape of the case above, end to end: extra is DOWN (its section is carried forward
+        // verbatim, so it still CONTAINS the contested page), and main - which outranks it - now presents
+        // the same frontmatter id. Superseding here would both destroy extra's permalink and put the id in
+        // the snapshot TWICE, throwing on PageIndex's byId check and wedging every later rebuild.
+        withTrees { mainDir, extraDir ->
+            writePage(extraDir, "mirror/page.md", identified(contested))
+            writePage(mainDir, "placeholder.md", "# P\n")
+            val availability = RootAvailability(Clock.System)
+            World(mainFirst(mainDir, extraDir), availability).use { world ->
+                // ONE builder across both passes: carrying a section forward means carrying the builder's OWN
+                // last-published snapshot, so this is the live-server shape (a root that vanishes mid-run).
+                val builder = world.builder(bothSources(world.registry, mainDir, extraDir))
+                builder.rebuild()
+                val foreign = RootedPath(EXTRA, TreePath.require("mirror/page.md"))
+                world.idMap.pathOf(contested) shouldBe foreign
+
+                // extra goes away; main gains a page carrying extra's id (a copy, or a half-finished move).
+                extraDir.toFile().deleteRecursively()
+                writePage(mainDir, "guides/claimant.md", identified(contested))
+                val snapshot = builder.rebuild() // must NOT throw
+
+                availability.current().isAvailable(EXTRA) shouldBe false
+                world.idMap.pathOf(contested) shouldBe foreign // durable identity intact through the outage
+                snapshot.byId.getValue(contested).root shouldBe EXTRA // still the down root's page, carried
+                snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))).id shouldNotBe contested
+
+                // ...and the scheduler/rescan paths keep working: a repeat rebuild neither throws nor churns
+                // the claimant's minted id (rescan stability through the whole outage).
+                val claimant = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))).id
+                val again = builder.rebuild()
+                again.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))).id shouldBe claimant
+                again.byId.getValue(contested).root shouldBe EXTRA
+            }
+        }
+    }
+
+    test("a carried page whose id a scanned root already holds is dropped from the SNAPSHOT only - its rows and its siblings survive") {
+        // The belt behind the rule above, driven from the one state that can still reach it: an id_map that
+        // has already LOST the carried page's binding (a row an older build superseded). Without it,
+        // PageIndex's duplicate-id check throws and EVERY rebuild after the outage fails.
+        withTrees { mainDir, extraDir ->
+            writePage(extraDir, "mirror/page.md", identified(contested))
+            writePage(extraDir, "mirror/keep.md", "# Keep\n")
+            writePage(mainDir, "placeholder.md", "# P\n")
+            val availability = RootAvailability(Clock.System)
+            World(mainFirst(mainDir, extraDir), availability).use { world ->
+                val builder = world.builder(bothSources(world.registry, mainDir, extraDir)) // ONE builder: see above
+                builder.rebuild()
+
+                extraDir.toFile().deleteRecursively()
+                // The state that reaches the belt, produced through the port's own key-complete bind: the
+                // contested id moves to a DETACHED root's row, which deletes extra's binding for it. Nothing
+                // now tells the contest that extra owns the id (a detached owner is supersedable, D2) - while
+                // extra's carried section still holds the page.
+                world.idMap.bind(RootedPath(RootName.require("ghost"), TreePath.require("mirror/page.md")), contested, materialized = true)
+                writePage(mainDir, "guides/claimant.md", identified(contested))
+
+                val snapshot = builder.rebuild() // must NOT throw
+
+                // The scanned side (live disk truth) keeps the id; the carried page steps out of the snapshot.
+                snapshot.byId.getValue(contested).root shouldBe RootName.MAIN
+                snapshot.section(EXTRA).pages.map { it.path.value } shouldBe listOf("mirror/keep.md")
+                // Nothing durable was deleted for the down root: its OTHER page's binding is untouched.
+                world.idMap.find(RootedPath(EXTRA, TreePath.require("mirror/keep.md"))).shouldNotBeNull()
             }
         }
     }
@@ -326,7 +435,11 @@ private fun <T> withTrees(block: (Path, Path) -> T): T {
  * visibility, re-added roots) against the same identity state - what the D16/re-add pins need and
  * the single-builder [IndexHarness] cannot express.
  */
-private class World(val registry: RootRegistry) : AutoCloseable {
+private class World(
+    val registry: RootRegistry,
+    /** Shared across the world's builders, so a root marked by one pass stays marked for the next (the C4 outage shape). */
+    private val availability: RootAvailability = RootAvailability(Clock.System),
+) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
@@ -348,6 +461,7 @@ private class World(val registry: RootRegistry) : AutoCloseable {
         rootRank = registry::rank,
         registeredRoots = registry.roots.map { it.name }.toSet(),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
+        availability = availability,
     )
 
     override fun close() = driver.close()

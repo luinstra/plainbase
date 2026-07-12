@@ -1,6 +1,8 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.search.SearchHit
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchResults
@@ -16,6 +18,8 @@ import io.mockk.mockk
  *
  *  - a hit whose page left the snapshot is DROPPED (never served stale; `total` stays the
  *    engine's count, the documented §A2 shortfall);
+ *  - a hit whose ROOT is not serving is DROPPED the same way (ADR-0011 D5's liveness filter, pinned HERE and
+ *    not only through the REST suite: it is a §B7 assembly rule, and the assembly is what this spec owns);
  *  - a hit whose heading left `page.headings` DEGRADES to a page-level hit — stale anchors are
  *    never emitted, and the citation carries the degraded (null) heading id;
  *  - display fields (`title`/`url`/`heading_path`) always come from the snapshot.
@@ -44,6 +48,27 @@ class SearchServiceTest : FunSpec({
 
                 payload.total shouldBe 2L
                 payload.hits.map { it.pageId } shouldBe listOf(alpha.id)
+            }
+        }
+    }
+
+    test("a hit whose ROOT is not serving is dropped at assembly; total stays engine-truth (ADR-0011 D5)") {
+        withTempTree(seed = { root -> writePage(root, "alpha.md", "# Alpha\n\nshared body text.\n") }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val alpha = harness.builder.current.pages.single()
+                val service = SearchService(providerReturning(hit(alpha.id, "alpha")), harness.builder, harness.availability)
+
+                resultsOf(service.search("shared")).hits.map { it.pageId } shouldBe listOf(alpha.id)
+
+                // No rebuild: an unavailable root's section is CARRIED FORWARD, so the page is still in `byId` and the
+                // engine still returns it. The liveness filter is the ONLY thing standing between a downed root and a
+                // live search result served from its stale index rows.
+                harness.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+
+                val payload = resultsOf(service.search("shared"))
+                payload.hits shouldBe emptyList()
+                payload.total shouldBe 1L // the engine's count is untouched - the documented §A2 short-page shape
             }
         }
     }

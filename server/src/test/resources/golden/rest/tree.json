@@ -2,6 +2,7 @@
   "roots": [
     {
       "root": "main",
+      "available": true,
       "tree": {
         "type": "folder",
         "name": "",

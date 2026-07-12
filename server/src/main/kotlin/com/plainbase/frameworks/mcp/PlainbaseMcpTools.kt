@@ -101,6 +101,13 @@ internal val listChangesSchema = ToolSchema(
 internal val proposeChangeSchema = ToolSchema(
     properties = buildJsonObject {
         put("operation", enumProperty(listOf("edit", "create"), "edit an existing page or create a new one."))
+        put(
+            "root",
+            stringProperty(
+                "Which document directory a CREATE lands in (default 'main'). Ignored for an edit - an edit's root " +
+                    "comes from the page itself. Use the names `list` shows on the tree.",
+            ),
+        )
         put("page_id", stringProperty("The page to edit (an edit requires it; a create omits it)."))
         put("base_hash", stringProperty("The sha256:<64-hex> content hash you edited against (an edit requires it)."))
         put("target_path", stringProperty("A create's content-relative path (required for create); optional for an edit."))

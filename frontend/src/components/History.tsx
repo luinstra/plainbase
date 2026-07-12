@@ -6,6 +6,7 @@ import { diffQuery, historyQuery, pageByPathQuery } from "../api/queries";
 import type { CommitDto, DiffResponse } from "../api/types";
 import { formatTime } from "../lib/datetime";
 import { DiffView } from "./DiffView";
+import { isRootUnavailable, QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 
 /**
@@ -35,12 +36,7 @@ export function History({ path }: { path: string }) {
   }
   if (page.isError) {
     if (page.error instanceof ApiError && (page.error.isNotFound || page.error.status === 400)) return <NotFoundView />;
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{page.error.message}</p>
-      </div>
-    );
+    return <QueryErrorView error={page.error} />;
   }
 
   // Key by id so a navigation to a different page remounts the view with a fresh selection/diff.
@@ -87,9 +83,15 @@ function HistoryView({ id, path }: { id: string; path: string }) {
     return (
       <div className="pb-history" data-pb-history>
         {back}
-        <p className="py-16 text-center text-muted" data-pb-history-error>
-          Couldn’t load the page history. {history.error.message}
-        </p>
+        {/* `/history` gates on the page's root like every other read, so this fetch has its own 503 to answer for:
+            the root can go down between resolving the page and asking for its commits. */}
+        {isRootUnavailable(history.error) ? (
+          <RootUnavailableView detail={history.error.message} />
+        ) : (
+          <p className="py-16 text-center text-muted" data-pb-history-error>
+            Couldn’t load the page history. {history.error.message}
+          </p>
+        )}
       </div>
     );
   }

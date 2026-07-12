@@ -5,6 +5,7 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchProvider
@@ -301,6 +302,8 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
 
     private val rootRegistry = RootRegistry.of(listOf(localRoot("main", config.contentDir)))
 
+    private val availability = RootAvailability(kotlin.time.Clock.System)
+
     val builder = IndexBuilder(
         // git state lives under CONTENT_DIR, untouched by the loss - hence NoOpHistoryProvider
         sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
@@ -312,6 +315,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         aliasRegistry = registry,
         checkpoint = checkpoint,
         citations = citations,
+        availability = availability,
         rootRank = rootRegistry::rank,
         registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
@@ -322,15 +326,15 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     )
 
     val pipeline = WritePipeline(
-        contentStore = store,
+        stores = { store },
         indexBuilder = builder,
         citations = citations,
         frontmatterParser = frontmatter,
         dirtyPages = dirtyPages,
         idMap = idMap,
         aliasRegistry = registry,
-        root = rootRegistry.main.name,
-        historyHook = WriteHistoryHook { _, _, _, _ -> null },
+        availability = availability,
+        historyHook = WriteHistoryHook { _, _, _, _, _ -> null },
     )
 
     override fun close() {

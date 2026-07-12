@@ -32,5 +32,15 @@ value class RootName private constructor(val value: String) {
         /** Like [of] but throws [IllegalArgumentException] on invalid input. */
         fun require(raw: String): RootName =
             requireNotNull(of(raw)) { "not a valid root name: '$raw' (a lowercase slug [a-z0-9][a-z0-9-]*, max $MAX_LENGTH chars)" }
+
+        /**
+         * The REGISTERED name [raw] denotes, or null when [raw] is not a legal slug OR names no root in
+         * [roots] - the ONE wire-string root resolution, shared by every surface that lets a client name a
+         * root (`POST /pages` and the shared propose parser), each answering 400 `invalid_root` on null.
+         *
+         * PURE by design: it takes the name SET, never the [RootRegistry], so the transport-neutral propose
+         * parser stays CALL-FREE and the two entries cannot drift into two hand-rolled two-step checks.
+         */
+        fun registered(raw: String, roots: Set<RootName>): RootName? = of(raw)?.takeIf { it in roots }
     }
 }

@@ -49,6 +49,7 @@ class WritePipelineNativeTest {
                 val idMap = SqlDelightIdMapRepository(database)
                 val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
                 val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val availability = com.plainbase.domain.root.RootAvailability(kotlin.time.Clock.System)
                 val builder = IndexBuilder(
                     sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
@@ -61,22 +62,26 @@ class WritePipelineNativeTest {
                     citations = citations,
                     rootRank = rootRegistry::rank,
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
+                    availability = availability,
                 )
                 builder.rebuild()
                 val pipeline = WritePipeline(
-                    contentStore = store,
+                    stores = { store },
                     indexBuilder = builder,
                     citations = citations,
                     frontmatterParser = FrontmatterReader(),
                     dirtyPages = SqlDelightDirtyPageRepository(database),
                     idMap = idMap,
                     aliasRegistry = registry,
-                    root = rootRegistry.main.name,
+                    availability = availability,
                 )
 
                 val page = builder.current.pages.single()
                 val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nnatively saved.\n".toByteArray()
-                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(
+                    grantForTests(),
+                    WriteIntent(page.id, rootRegistry.main.name, page.path, page.contentHash, saveBytes),
+                )
 
                 assertTrue(outcome is WriteOutcome.Written, "expected Written, got $outcome")
                 assertEquals(citations.contentHash(saveBytes), (outcome as WriteOutcome.Written).newHash)

@@ -15,6 +15,7 @@ const tree: TreeResponse = {
   roots: [
     {
       root: "main",
+      available: true,
       tree: {
         type: "folder",
         name: "",
@@ -43,6 +44,7 @@ const tree: TreeResponse = {
     // A second root holding the SAME relative folder path - the lookup must never borrow across roots.
     {
       root: "extra",
+      available: true,
       tree: {
         type: "folder",
         name: "",

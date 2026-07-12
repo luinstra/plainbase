@@ -36,10 +36,15 @@ val indexModule = module {
     single { CitationFactory() }
     single {
         val registry = get<RootRegistry>()
+        val stores = get<RootStores>()
+        val histories = get<HistoryProviders>()
         IndexBuilder(
-            // Extras stay unserved in C2 (D12): the runtime builder scans main only; C4 widens
-            // this list to every registered root.
-            sources = listOf(IndexBuilder.Source(root = registry.main, store = get(), history = get())),
+            // Every registered root, in D7 order - the N-source machinery the C1-C3 seams were built for. The
+            // builder sorts by rank itself, so the order is enforced by construction, not trusted from here.
+            sources = registry.roots.map { root ->
+                IndexBuilder.Source(root = root, store = stores[root.name], history = histories[root.name])
+            },
+            availability = get(),
             frontmatterParser = get(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
             identity = get(),

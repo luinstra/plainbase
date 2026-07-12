@@ -54,7 +54,6 @@ class ProposalAuthzRouteTest : FunSpec({
                     else -> principal ?: Principal.Anonymous
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     searchProvider = harness.fts(root),
                     enforced = enforced,
                     extract = fixedPrincipal(resolved),
@@ -114,11 +113,7 @@ class ProposalAuthzRouteTest : FunSpec({
                     proposals = com.plainbase.domain.service.ProposalService(
                         repository = harness.proposalRepository,
                         citations = com.plainbase.domain.service.CitationFactory(),
-                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(
-                            harness.builder,
-                            store,
-                            harness.rootRegistry.main.name,
-                        ),
+                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, harness.stores),
                         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                         clock = Clock.System,
                     ),
@@ -126,6 +121,9 @@ class ProposalAuthzRouteTest : FunSpec({
                     // This test only drives propose (a denied EDIT) — the apply seam is never consulted.
                     mutate = UnusedMutatingFacade,
                     idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
+                    indexBuilder = harness.builder,
+                    resolver = com.plainbase.domain.service.PageRootResolver(harness.idMap, harness.rootRegistry),
+                    availability = harness.availability,
                 )
                 val readOnly = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY).id)
                 val page = harness.builder.current.pages.single()

@@ -20,12 +20,13 @@ files.
 - **Humans stay in charge.** Agents open change proposals with diffs and
   rationale; nothing lands without a human approving it in the review UI.
 - **No lock-in, structurally.** Your docs are a plain tree you can always walk
-  away with, and there is exactly one authority per deployment. Local deploy:
-  the `CONTENT_DIR` directory (or `roots.main.path` when a `roots {}` block is
-  configured) IS the authority. Cloud deploy: an S3-compatible
-  bucket IS the authority (a plain tree of objects any S3 tool can read).
-  Git is an optional layer, every index is derived and rebuildable. Leaving
-  Plainbase is copying a directory or syncing a bucket.
+  away with, and Plainbase never keeps a second copy of them. Local deploy: the
+  `CONTENT_DIR` directory IS the authority - or, with a `roots {}` block, *every*
+  configured root's directory is (each is a plain tree in its own right, and each
+  one is content you back up). Cloud deploy: an S3-compatible bucket IS the
+  authority (a plain tree of objects any S3 tool can read). Git is an optional
+  layer, every index is derived and rebuildable. Leaving Plainbase is copying
+  those directories or syncing the bucket.
 - **One binary, no fleet.** A single native executable (no JRE, no database
   server, no Node) with embedded SQLite + FTS5 search and sub-second cold
   start. `docker compose up` if you'd rather run a container.

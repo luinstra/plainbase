@@ -8,6 +8,7 @@ import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.ProposalSummaryRow
+import com.plainbase.domain.root.RootName
 import kotlin.time.Instant
 
 /**
@@ -42,6 +43,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
             decidedAt = row.decidedAt?.toEpochMilliseconds(),
             appliedCommit = row.appliedCommit,
             statusReason = row.statusReason,
+            root = row.root,
         )
     }
 
@@ -146,11 +148,12 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         decidedAt: Long?,
         appliedCommit: String?,
         statusReason: String?,
-        @Suppress("UNUSED_PARAMETER") root: String, // D18: schema stamp only; the domain row stays root-blind until C4
+        root: RootName, // D18, threaded as of C4: the root this proposal targets
     ) = ProposalRow(
         id = id,
         operation = ProposalOperation.valueOf(operation),
         pageId = pageId,
+        root = root,
         baseHash = baseHash,
         targetPath = targetPath,
         proposedContent = proposedContent,
@@ -175,6 +178,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         operation: String,
         pageId: PageId?,
         targetPath: TreePath,
+        root: RootName,
         baseHash: String?,
         status: String,
         rationale: String,
@@ -191,6 +195,7 @@ class SqlDelightProposalRepository(private val db: PlainbaseDb) : ProposalReposi
         operation = ProposalOperation.valueOf(operation),
         pageId = pageId,
         targetPath = targetPath,
+        root = root,
         baseHash = baseHash,
         status = ProposalStatus.valueOf(status),
         rationale = rationale,

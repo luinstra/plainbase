@@ -234,7 +234,7 @@ class ObjectHybridRouteParityTest : FunSpec({
     }
 
     test("WrittenButUnindexed: a post-write hook failure is 200 with warning reindex_deferred, bytes on disk") {
-        val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _ -> throw RuntimeException("boom") }
+        val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _, _ -> throw RuntimeException("boom") }
         writeRestTest(Fixtures.demoDocs, seed, historyHook = throwingHook, storeOverride = hybridOverride) { harness ->
             val original = harness.diskBytes("guides/deploy-guide.md")
             val edited = original + "\ndeferred.\n".toByteArray()

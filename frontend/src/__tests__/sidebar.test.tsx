@@ -287,8 +287,8 @@ describe("Sidebar (the tree-fed parent)", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(treeQuery.queryKey, {
       roots: [
-        { root: "main", tree: entryTree("main", "id-main-intro", "Main Intro") },
-        { root: "extra", tree: entryTree("extra", "id-extra-intro", "Extra Intro") },
+        { root: "main", available: true, tree: entryTree("main", "id-main-intro", "Main Intro") },
+        { root: "extra", available: true, tree: entryTree("extra", "id-extra-intro", "Extra Intro") },
       ],
     });
     queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });

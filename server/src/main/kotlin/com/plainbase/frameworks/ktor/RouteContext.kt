@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
@@ -27,13 +29,14 @@ class RouteContext(
     val mutate: MutatingFacade,
     /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
     val proposals: ProposalFacade,
+    /** The configured topology, in D7 order — health enumerates it, and [roots] derives from it. */
+    val registry: RootRegistry,
     /**
-     * The registry root names the C3 URL grammar scopes by ([splitRootTail]'s known set): config
-     * topology only (operator-declared names, never content existence), so the pre-gate root
-     * decision leaks nothing. Always contains [com.plainbase.domain.root.RootName.MAIN] - the
-     * legacy 301 arm targets `/docs/main/...`, so a set without it would redirect its own target.
+     * Runtime per-root serving state. The only route that reads it is the UNAUTHENTICATED `/healthz` probe: every
+     * gated surface learns about availability through its facade's own throw, never by asking here, so the
+     * authn-precedes-topology rule cannot be sidestepped by a route.
      */
-    val roots: Set<RootName>,
+    val availability: RootAvailability,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,
@@ -90,4 +93,13 @@ class RouteContext(
                 proxyIdentityHeader = proxyIdentityHeader,
             )
         },
-)
+) {
+
+    /**
+     * The registry root names the URL grammar scopes by (`splitRootTail`'s known set) and the shared propose parser
+     * validates a declared root against: config TOPOLOGY only (operator-declared names, never content existence), so
+     * the pre-gate root decision leaks nothing. [RootRegistry] guarantees `main` is present — the legacy 301 arm
+     * targets `/docs/main/...`, so a set without it would redirect its own target forever.
+     */
+    val roots: Set<RootName> = registry.roots.map { it.name }.toSet()
+}

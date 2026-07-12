@@ -53,6 +53,7 @@ object DatabaseFactory {
             idAdapter = ProposalIdColumnAdapter,
             page_idAdapter = PageIdColumnAdapter,
             target_pathAdapter = TreePathColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
         ),
     )
 

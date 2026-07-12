@@ -102,7 +102,6 @@ class RestRedirectTest : FunSpec({
             IndexHarness(root, contentStore = LocalContentStore(root)).use { harness ->
                 harness.builder.rebuild()
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = redirectNoopSearchProvider(),
                     enforced = true,
                     extract = { PrincipalExtraction.InsecureTransportRefused },

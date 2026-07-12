@@ -26,12 +26,17 @@ import kotlinx.serialization.Serializable
  * `POST /api/v1/changes` request. [operation] is the LOWERCASE discriminator `edit`|`create`, mapped EXPLICITLY
  * to the domain enum (NOT `.name`). For an `edit`: [pageId] is AUTHORITATIVE (the server resolves the path from it)
  * and [baseHash] present; [targetPath] is optional + non-authoritative (a disagreeing value is a 400). For a
- * `create`: [targetPath] is required + authoritative, [pageId]/[baseHash] are null. [proposedContent] is the UTF-8
- * markdown SOURCE TEXT (the route encodes it to bytes for storage/hash/diff).
+ * `create`: [root] + [targetPath] are required + authoritative, [pageId]/[baseHash] are null. [proposedContent] is
+ * the UTF-8 markdown SOURCE TEXT (the route encodes it to bytes for storage/hash/diff).
+ *
+ * [root] is additive and defaulted `main`, so every existing client and golden stays byte-compatible. It applies to
+ * a CREATE only - an edit's root is never declared, it is resolved from the page id. An unknown name is a 400
+ * `invalid_root`, decided in the SHARED parser so REST and MCP cannot drift.
  */
 @Serializable
 data class ProposeChangeRequest(
     val operation: String,
+    val root: String = "main",
     @SerialName("page_id") val pageId: String? = null,
     @SerialName("base_hash") val baseHash: String? = null,
     @SerialName("target_path") val targetPath: String? = null,
@@ -58,6 +63,9 @@ data class ChangeSummary(
     val id: String,
     val operation: String,
     val status: String,
+    /** The root [targetPath] lives under. A reviewer needs it to read a `base_drifted` row correctly: a proposal
+     *  against a root that is not serving reads drifted, and this (with the tree/health surfaces) is how they see why. */
+    val root: String,
     @SerialName("target_path") val targetPath: String,
     @SerialName("page_id") val pageId: String?,
     @SerialName("base_drifted") val baseDrifted: Boolean,
@@ -79,6 +87,8 @@ data class ChangeDetail(
     val id: String,
     val operation: String,
     val status: String,
+    /** The root [targetPath] lives under (see [ChangeSummary.root]). */
+    val root: String,
     @SerialName("target_path") val targetPath: String,
     @SerialName("page_id") val pageId: String?,
     @SerialName("base_hash") val baseHash: String?,
@@ -187,6 +197,7 @@ fun ProposalSummaryView.toDto(): ChangeSummary = ChangeSummary(
     id = row.id.value,
     operation = row.operation.toWire(),
     status = row.status.toWire(),
+    root = row.root.value,
     targetPath = row.targetPath.value,
     pageId = row.pageId?.value,
     baseDrifted = baseDrifted,
@@ -199,6 +210,7 @@ fun ProposalView.toDto(): ChangeDetail = ChangeDetail(
     id = row.id.value,
     operation = row.operation.toWire(),
     status = row.status.toWire(),
+    root = row.root.value,
     targetPath = row.targetPath.value,
     pageId = row.pageId?.value,
     baseHash = row.baseHash,

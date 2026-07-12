@@ -16,6 +16,7 @@ import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { previewPath } from "../lib/slugPreview";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
+import { isRootUnavailable, QueryErrorView } from "./ErrorView";
 import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -60,12 +61,7 @@ export function EditorPage({ path }: { path: string }) {
   }
   if (page.isError) {
     if (page.error instanceof ApiError && (page.error.isNotFound || page.error.status === 400)) return <NotFoundView />;
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{page.error.message}</p>
-      </div>
-    );
+    return <QueryErrorView error={page.error} />;
   }
 
   // Key by id so a navigation to a different page remounts the editor with a fresh buffer/base_hash.
@@ -73,6 +69,7 @@ export function EditorPage({ path }: { path: string }) {
     <Editor
       key={page.data.id}
       id={page.data.id}
+      root={page.data.root}
       initialPath={page.data.path}
       initialUrl={page.data.url}
       initialBuffer={page.data.markdown}
@@ -99,12 +96,15 @@ type SaveOutcome =
 
 function Editor({
   id,
+  root,
   initialPath,
   initialUrl,
   initialBuffer,
   initialHash,
 }: {
   id: string;
+  /** The page's OWN root — the preview must resolve its links against that root's space, never main's. */
+  root: string;
   initialPath: string;
   initialUrl: string | null;
   initialBuffer: string;
@@ -155,7 +155,9 @@ function Editor({
   const debounced = useDebounced(buffer, 300);
   // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
   // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
-  const previewOptions = previewQuery(debounced, docPath);
+  // The page's OWN root: link resolution is per-root, so previewing an extra root's page against main's
+  // link space would render `[[other page]]` as a broken (or, worse, a WRONG) link.
+  const previewOptions = previewQuery(debounced, docPath, root);
   const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
 
   // Split-view (C2/D-3): the body CodeMirror holds the BODY SLICE only — the `---` fence and metadata
@@ -229,9 +231,15 @@ function Editor({
       case "too-large":
         setOutcome({ kind: "notice", message: `Document exceeds ${result.maxBytes} bytes — trim it and try again.` });
         return;
-      case "error":
-        setOutcome({ kind: "notice", message: result.error.status === 503 ? "Couldn't save (transient) — please retry." : result.error.message });
+      case "error": {
+        // A 503 is retryable when it is a transient FS fault (`content_unreadable`, `written_but_unindexed`), and NOT
+        // when the ROOT is not serving: that one lasts until an operator restores the path AND restarts, so "please
+        // retry" would send the author looping against a disk that is not coming back on its own. The outage
+        // envelope's own message names the root and the remedy, so it is the one to show.
+        const transient = result.error.status === 503 && !isRootUnavailable(result.error);
+        setOutcome({ kind: "notice", message: transient ? "Couldn't save (transient) — please retry." : result.error.message });
         return;
+      }
     }
   }
 
@@ -268,7 +276,7 @@ function Editor({
         {/* The narrowed outcome is a SUPERSET of the prop's {field, message} — legal only because TS
             skips excess-property checks on non-literal args; don't assume the prop type is exact. */}
         {outcome?.kind === "refusal" && <RefusalBanner refusal={outcome} />}
-        {outcome?.kind === "deleted" && <DeletedBanner buffer={buffer} initialPath={initialPath} />}
+        {outcome?.kind === "deleted" && <DeletedBanner buffer={buffer} root={root} initialPath={initialPath} />}
         {outcome?.kind === "notice" && (
           <p className="text-sm text-muted" data-pb-editor-notice>
             {outcome.message}
@@ -411,7 +419,7 @@ async function sha256Hex(text: string): Promise<string | null> {
 const stripHashPrefix = (hash: string): string => (hash.startsWith("sha256:") ? hash.slice("sha256:".length) : hash);
 
 /** page_deleted — no rebase target; offer "save as new page" prefilled with the buffer (no dead-end, D-5). */
-function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: string }) {
+function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: string; initialPath: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -428,7 +436,10 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
     // frontmatter blocks). The title comes from the user's possibly-edited frontmatter, else the filename.
     const { frontmatter, body } = splitFrontmatter(buffer);
     const title = (frontmatter && frontmatterValue(frontmatter, "title")) || fallbackTitle;
-    const result = await createPage({ folder, title, body });
+    // The recovered page is re-created in the root it was deleted FROM. Omitting the root would default the
+    // server to `main`, quietly relocating an extra root's page - a rescue path is the last place to lose the
+    // user's tree.
+    const result = await createPage({ root, folder, title, body });
     setSaving(false);
     if (result.kind === "created") {
       // Invalidate the DESTINATION url's by-path/page cache BEFORE navigating — save-as-new can reuse a
@@ -474,8 +485,12 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
 /**
  * The `/new` route body (D-2/D-3): title (+ optional folder/slug) → `POST /api/v1/pages` → navigate
  * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
+ *
+ * [root] is the document root the page lands in (multi-root C4), carried from the `/docs/{root}/…` location
+ * the "New" action was started from (the route's `?root=` search param). Undefined = the server's `main`
+ * default, which is right for a create started outside any root's URL space.
  */
-export function NewPage() {
+export function NewPage({ root }: { root?: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
@@ -497,6 +512,7 @@ export function NewPage() {
   const create = useMutation({
     mutationFn: () =>
       createPage({
+        root,
         folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the

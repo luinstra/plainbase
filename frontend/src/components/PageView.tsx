@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
-import { folderByUrl, folderForLanding, folderTitle, landingPage, mainTree, pageHref, type FolderEntry } from "../lib/tree";
+import { folderByUrl, folderForLanding, folderTitle, landingPage, mainEntry, pageHref, rootEntryOfUrl, type FolderEntry } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
+import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
 import { Toc } from "./Toc";
@@ -97,7 +98,20 @@ export function FolderLanding({ url }: { url?: string }) {
 
   if (tree.isPending) return <PagePending />;
   if (tree.isError) return <PageError error={tree.error} />;
-  if (!resolved) return <NotFoundView />;
+  if (!resolved) {
+    // No folder owns the location - a 404, UNLESS a root that is not serving owns the url SPACE: its subtree is empty
+    // on the wire, so every folder under it is missing and a DEEP url resolves to nothing at all (only its bare root
+    // url survives, on the synthetic root folder node below). URL ownership is the one thing a down root still tells
+    // us - every CONFIGURED root is listed with its url - so ask who owns the address before calling this not-found.
+    const owner = rootEntryOfUrl(tree.data.roots, target);
+    if (owner && !owner.available) return <RootUnavailableView root={owner.root} />;
+    return <NotFoundView />;
+  }
+  // A root that is not serving has an EMPTY subtree on the wire (the server must never ship its stale carried
+  // listing), so rendering the folder anyway would draw an empty directory over an outage - "your docs are gone"
+  // instead of "this disk is not mounted". The pages under it 503 through their own requests; the folder view has
+  // no request to 503, which is exactly why the flag has to be read here.
+  if (!resolved.available) return <RootUnavailableView root={resolved.root} />;
 
   // The landing renders AT the folder URL — its one canonical home (the index/README's own bare
   // page URL redirects here; see DocsPage). With an index/README the authored content renders as the
@@ -112,21 +126,18 @@ export function FolderLanding({ url }: { url?: string }) {
  * The ONE folder-landing resolver: bare `/docs` is the MAIN entry ("main" is the reserved D1
  * literal, the one legal client-side root name); everything else matches entries' folder `url`s
  * verbatim, then retries a legacy tail under main. The retry's known-root set is the tree entries
- * themselves - the SERVED set, the only authority that can render a folder. One known divergence
- * window (panel-adjudicated, documented-benign): a configured-but-UNSERVED extra root whose name
- * matches a main top-level folder has no entry here, so the retry resurrects `/docs/{extra}/x` as
- * main's folder while the server treats the same URL as the extra root's (empty) space - the SPA
- * render and a fresh server request for the SAME initial URL therefore disagree inside the window
- * (a refresh before the replace lands shows the server's miss). Closed structurally in C4:
- * registry-backed tree entries (with the `available` flag) list unserved roots too, so the
- * client's known-root set matches the server's and the first-segment exclusion becomes complete.
- * `replaceTo` carries the canonical url for the caller's history.replace. `/docs/nope` misses the
- * retry too - no loop.
+ * themselves - which are now REGISTRY-backed, so they list every CONFIGURED root (each carrying an
+ * `available` flag), not just the served ones. That is what makes the first-segment exclusion below
+ * COMPLETE: the client's known-root set is exactly the server's, so a legacy-tail retry can never
+ * resurrect `/docs/{extra}/x` as one of main's folders while the server reads the same URL as the
+ * extra root's space. The C3 divergence window this comment used to describe is closed structurally,
+ * not merely narrowed. `replaceTo` carries the canonical url for the caller's history.replace.
+ * `/docs/nope` misses the retry too - no loop.
  */
 function resolveLanding(roots: RootTree[], target: string): (FolderEntry & { replaceTo?: string }) | null {
   if (target === "/docs") {
-    const main = mainTree(roots);
-    return main ? { root: "main", folder: main } : null;
+    const main = mainEntry(roots);
+    return main ? { root: "main", available: main.available, folder: main.tree } : null;
   }
   const entry = folderByUrl(roots, target);
   if (entry) return entry;
@@ -485,10 +496,7 @@ function PagePending() {
 
 function PageError({ error }: { error: Error }) {
   if (error instanceof ApiError && (error.isNotFound || error.status === 400)) return <NotFoundView />;
-  return (
-    <div className="py-16 text-center" data-pb-error>
-      <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-      <p className="mt-3 text-muted">{error.message}</p>
-    </div>
-  );
+  // Everything else - including the outage arriving the other way (a 503 on the page request rather than the tree's
+  // flag) - is the shared query-error surface's call, not this one's.
+  return <QueryErrorView error={error} />;
 }

@@ -23,7 +23,8 @@ import kotlinx.coroutines.withContext
  * Both answer **empty 200 with `git_enabled:false`** when Git mode is off (the SPA owns the "history
  * requires Git mode" copy) — never a 404 for the FEATURE; a 404 here always means the page id is unknown
  * (distinct concern, mirrors [pageRoutes]). The `git_enabled` flag comes from [com.plainbase.domain
- * .history.HistoryProvider.enabled], never type-sniffing. A bad/unknown `from`/`to` SHA in `diff` is a
+ * .history.HistoryProvider.enabled], never type-sniffing, and from the PAGE's root — history is per-root topology
+ * (ADR-0011 D4), so the flag and the commits beside it must be answered by one and the same provider. A bad/unknown `from`/`to` SHA in `diff` is a
  * 404 `not_found` ("no such thing", the unknown-asset family); a malformed (non-hex) param is a 400
  * `invalid_query`. The git reads run off the CIO event loop on `Dispatchers.IO`.
  *
@@ -44,10 +45,18 @@ fun Route.historyRoutes(ctx: RouteContext) {
                 // Bound the response by default (defense-in-depth over the GitExecutor byte cap): a page with very
                 // deep history would otherwise return an unbounded list. DEFAULT_HISTORY_LIMIT newest-first commits
                 // is plenty for the UI; cursor/pagination is the documented future grow (not built here).
-                val commits = withContext(Dispatchers.IO) { ctx.read.history(principal, page.page.path, DEFAULT_HISTORY_LIMIT) }
+                // History is per-root topology, so the PAGE's root selects its provider. The 503 for a downed root already
+                // arrived from `pageById` above - these routes resolve the page first and inherit it, so they never
+                // reach the provider at all.
+                val commits = withContext(Dispatchers.IO) {
+                    ctx.read.history(principal, page.page.root, page.page.path, DEFAULT_HISTORY_LIMIT)
+                }
                 call.respondRest(
                     HistoryResponse.serializer(),
-                    HistoryResponse(gitEnabled = ctx.read.gitEnabled(principal), commits = commits.map { it.toDto() }),
+                    HistoryResponse(
+                        gitEnabled = ctx.read.gitEnabled(principal, page.page.root),
+                        commits = commits.map { it.toDto() },
+                    ),
                 )
             }
         }
@@ -65,12 +74,12 @@ fun Route.historyRoutes(ctx: RouteContext) {
                 // unsupported flag) is a plain GitCommandException that propagates to the default 500 path —
                 // collapsing it to 404 would hide a real failure as "no diff / not found".
                 val diff = try {
-                    withContext(Dispatchers.IO) { ctx.read.diff(principal, from, to, page.page.path) }
+                    withContext(Dispatchers.IO) { ctx.read.diff(principal, page.page.root, from, to, page.page.path) }
                 } catch (e: UnknownRevisionException) {
                     logger.debug(e) { "diff $from..$to of ${page.page.path.value} failed (unknown/unresolvable ref)" }
                     return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No diff between $from and $to")
                 }
-                call.respondRest(DiffResponse.serializer(), diff.toDto(gitEnabled = ctx.read.gitEnabled(principal)))
+                call.respondRest(DiffResponse.serializer(), diff.toDto(gitEnabled = ctx.read.gitEnabled(principal, page.page.root)))
             }
         }
     }

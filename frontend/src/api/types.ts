@@ -41,10 +41,17 @@ export type TreeNode = TreeFolder | TreePage;
 /** One root's tree entry (multi-root C3): the root-name slug + its synthetic root folder node. */
 export interface RootTree {
   root: string;
+  /**
+   * Whether the root is currently SERVING. `false` means it is configured but its content is not reachable
+   * (an unmounted disk, a failed watcher): `tree` is EMPTY - never a stale listing - and every read of it
+   * answers 503. It is listed rather than omitted so the client can tell "this root is down" from "this root
+   * does not exist", and so the client's known-root set matches the server's exactly.
+   */
+  available: boolean;
   tree: TreeFolder;
 }
 
-/** One entry per served root, in the server's registry (D7) order. */
+/** One entry per CONFIGURED root, in the server's registry (D7) order. */
 export interface TreeResponse {
   roots: RootTree[];
 }
@@ -197,6 +204,13 @@ export interface PageExistsEnvelope {
 
 /** `POST /api/v1/pages` request — the server mints the id and derives the path/slug; the client never does. */
 export interface CreatePageRequest {
+  /**
+   * WHICH document root the page lands in (multi-root C4). The server defaults it to `main`, so omitting it
+   * is not a syntax error — it is a SILENT relocation: a create started from `/docs/{root}/...` would write
+   * into `main` instead. Every call site therefore threads the root it is creating in. An unknown name is a
+   * 400 `invalid_root`.
+   */
+  root?: string;
   folder?: string;
   title: string;
   slug?: string | null;
@@ -349,6 +363,9 @@ export interface ChangeSummary {
   id: string;
   operation: ProposalOperation;
   status: ProposalStatus;
+  /** The root `target_path` lives under. A reviewer needs it to read a `base_drifted` row correctly: a proposal
+   *  against a root that is not serving reads as drifted, and this is how they see why. */
+  root: string;
   target_path: string;
   page_id: string | null;
   base_drifted: boolean;
@@ -367,6 +384,8 @@ export interface ChangeDetail {
   id: string;
   operation: ProposalOperation;
   status: ProposalStatus;
+  /** The root `target_path` lives under (see `ChangeSummary.root`). */
+  root: string;
   target_path: string;
   page_id: string | null;
   base_hash: string | null;

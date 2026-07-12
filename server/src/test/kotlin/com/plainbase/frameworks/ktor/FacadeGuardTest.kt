@@ -37,7 +37,6 @@ class FacadeGuardTest : FunSpec({
                 harness.roleRepository.upsert("builtin", "editor", Role.EDITOR, Clock.System.now())
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )
@@ -72,7 +71,6 @@ class FacadeGuardTest : FunSpec({
                 harness.builder.rebuild()
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )
@@ -86,7 +84,9 @@ class FacadeGuardTest : FunSpec({
                 rows shouldHaveSize 1
                 rows.single().action shouldBe "EDIT"
                 rows.single().decision shouldBe "denied"
-                rows.single().resource shouldBe page.id.value
+                // Rooted since C4: a write decision audits `{root}:{resource}` (the id alone would lose which
+                // tree the bytes were bound for, which is the one thing an auditor most needs from a write row).
+                rows.single().resource shouldBe "main:${page.id.value}"
             }
         } finally {
             root.toFile().deleteRecursively()
@@ -102,7 +102,6 @@ class FacadeGuardTest : FunSpec({
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )

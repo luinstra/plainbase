@@ -47,7 +47,6 @@ class AuthMatrixTest : FunSpec({
                     }
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root),
                     searchProvider = harness.fts(root),
                     enforced = true,
                     extract = fixedPrincipal(principal),
@@ -114,7 +113,6 @@ class AuthMatrixTest : FunSpec({
                 // first (BLOCKING 1: the write path's FIRST authorization is the audited edit/create/manage check).
                 harness.roleRepository.upsert("builtin", "subject", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root),
                     searchProvider = harness.fts(root),
                     enforced = true,
                     extract = fixedPrincipal(Principal.Human("builtin", "subject")),
@@ -164,7 +162,6 @@ class AuthMatrixTest : FunSpec({
                 // A real loopback bearer for a READ_ONLY agent — the genuine extraction path (loopback is secure).
                 val minted = harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY)
                 val ctx = harness.testRouteContext(
-                    contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root),
                     searchProvider = harness.fts(root),
                     enforced = true, // the REAL extractPrincipal over the bearer (no fixed-principal seam)
                 )
@@ -195,7 +192,6 @@ class AuthMatrixTest : FunSpec({
                 // is enforced on the single authenticate path, so the very same bearer flips 200 → 401 with no restart.
                 val minted = harness.apiTokens.mint(label = "ci-revoked", mode = AgentMode.READ_ONLY)
                 val ctx = harness.testRouteContext(
-                    contentStore = com.plainbase.frameworks.filesystem.LocalContentStore(root),
                     searchProvider = harness.fts(root),
                     enforced = true, // the REAL extractPrincipal over the bearer (no fixed-principal seam)
                 )

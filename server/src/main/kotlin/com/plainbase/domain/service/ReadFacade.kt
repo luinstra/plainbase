@@ -21,6 +21,12 @@ import com.plainbase.domain.root.RootName
  * The impl ([com.plainbase.frameworks.ktor.GuardedReadFacade]) lives frameworks-side because the
  * [AccessDenied] → HTTP-status mapping is a frameworks concern; it holds the raw read services + the
  * [PolicyService] as PRIVATE deps.
+ *
+ * **Availability (ADR-0011 D5).** Every method here throws [RootUnavailable] — AFTER its `checkRead` has passed,
+ * never before — when the root it resolves is not serving, and the route funnel maps that to ONE 503
+ * `root_unavailable` + `Retry-After`. The gate order is not an implementation detail: authn precedes topology, so
+ * an anonymous prober's answer is byte-identical to today's on every surface and availability cannot leak. The one
+ * deliberate exception is [currentSnapshot] (see its doc).
  */
 interface ReadFacade {
 
@@ -51,18 +57,25 @@ interface ReadFacade {
     /** The memoized `/api/v1/tree` JSON for the current published snapshot. */
     fun tree(principal: Principal): String
 
-    fun preview(principal: Principal, sourcePath: TreePath, bytes: ByteArray): RenderedPage
+    /** A read-only render of a submitted buffer against [root]'s view of the published snapshot (W3b). */
+    fun preview(principal: Principal, root: RootName, sourcePath: TreePath, bytes: ByteArray): RenderedPage
 
-    fun history(principal: Principal, path: TreePath, limit: Int): List<Commit>
+    /** [root]'s history for [path] — history is per-root topology, so the page's root selects the provider. */
+    fun history(principal: Principal, root: RootName, path: TreePath, limit: Int): List<Commit>
 
-    fun diff(principal: Principal, from: String, to: String, path: TreePath): FileDiff
+    fun diff(principal: Principal, root: RootName, from: String, to: String, path: TreePath): FileDiff
 
     /**
-     * Whether the history layer is Git-backed (the `git_enabled` flag). Intentionally UNGATED — it is a server
+     * Whether [root]'s history layer is Git-backed (the `git_enabled` flag). Intentionally UNGATED — it is a server
      * CAPABILITY flag, not page existence, so it leaks nothing about the content tree. The [principal] is kept only
      * for port-signature uniformity with the gated reads above (the impl ignores it); do NOT read it as enforced.
+     *
+     * It is PER-ROOT, like the history reads it accompanies (C4): history is per-root topology, so a flag read off
+     * MAIN would hide an extra root's real history whenever main is `off`, and advertise history an extra does not
+     * have whenever only main is on. The `/history` + `/diff` responses pair the flag with commits from the PAGE's
+     * provider, so both must come from the same root or the pair contradicts itself.
      */
-    fun gitEnabled(principal: Principal): Boolean
+    fun gitEnabled(principal: Principal, root: RootName): Boolean
 
     /**
      * A content-tree asset read under [root] (the route-parsed root segment, C3; read-gated - the gate fires
@@ -75,13 +88,18 @@ interface ReadFacade {
      */
     fun assetRead(principal: Principal, root: RootName, path: TreePath): AssetReadOutcome
 
-    /** The page file's bytes for the asset-route stale recheck (a read), or null when gone / unreadable→throw. */
-    fun pageBytes(principal: Principal, path: TreePath): ByteArray?
+    /** The page file's bytes under [root] (a read), or null when gone / unreadable→throw; 503 when the root is down. */
+    fun pageBytes(principal: Principal, root: RootName, path: TreePath): ByteArray?
 
     /**
-     * The current published snapshot, for the routes that resolve against it (permalink/browse redirects, the
-     * asset content-tree membership). Read-GATED so the redirect's existence is not revealed to an anonymous
-     * caller (the gate fires BEFORE the resolve). [resource] names the lookup for the audit-free read gate.
+     * The current published snapshot. Read-GATED so a resolve's existence is not revealed to an anonymous caller
+     * (the gate fires BEFORE the resolve). [resource] names the lookup for the audit-free read gate.
+     *
+     * **The ONE read that deliberately does NOT availability-gate**: it returns the WHOLE snapshot, carried sections
+     * and all, so there is no single root to gate on - the CALLER owns the per-root gate. After C4 its only route
+     * caller is the benign post-create outcome renderer, whose created page's root just passed the WRITE gate. Every
+     * other route-side snapshot walk moved BEHIND a dedicated, gated facade method ([browseTarget], [permalink]), and
+     * any future root-scoped resolution must follow that precedent rather than reach in here.
      */
     fun currentSnapshot(principal: Principal, resource: String): PageIndex
 
@@ -92,8 +110,56 @@ interface ReadFacade {
      * the `docsRoutes` shell-fallback arm is PUBLIC, so an unauthorized caller must fall through to the shell
      * EXACTLY like any unknown path - a 401 here would itself leak that an alias exists. A live canonical path
      * shadows an alias (§A4).
+     *
+     * An alias is NOT root-local: it resolves to a page ID, and that page may live in a DIFFERENT root than the one
+     * the route named. When that root is unavailable the redirect STILL fires - to the target's permalink if it has
+     * no canonical URL to offer - and the target surface answers the 503. A documented, accepted two-step: the point
+     * is that a caller lands on an honest "this root is down", never on a soft 404 that says the page is gone.
      */
     fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String?
+
+    /**
+     * The `/browse/{root}/{file-path}` redirect target: the page's canonical URL, or its permalink for a collision
+     * loser - null for a miss (the route's 404). A gated facade operation rather than a route-side [currentSnapshot]
+     * walk, precisely so it CAN availability-gate: the pre-C4 route would have 302'd to a carried-forward page in a
+     * root that answers 503 everywhere else.
+     *
+     * Genuinely root-parameterized: it resolves through `byPath` alone, with no alias and no id resolution, so it
+     * gates on the route's root directly and needs no id_map fallback.
+     */
+    fun browseTarget(principal: Principal, root: RootName, path: TreePath): String?
+
+    /**
+     * `/p/{id}` — the permanent ID permalink's resolution (§A4's durability layer), as ONE facade operation so the
+     * route keeps only its 302/shell/400 mapping.
+     *
+     * The truth table, after `checkRead`: a snapshot HIT under an AVAILABLE root is [PermalinkResolution.Found] (or
+     * [PermalinkResolution.LoserNoUrl] for a path-space collision loser, whose permalink IS its only human URL); a
+     * snapshot hit under an unavailable root THROWS. On a snapshot MISS the persisted `id_map` binding decides, and
+     * it is load-bearing for exactly one arm: a root unavailable SINCE BOOT was never scanned this process, so its
+     * pages are in NO section and only the binding can tell 503 from 404. So: no binding -> [PermalinkResolution
+     * .Unknown] (404); a binding under a DETACHED root -> Unknown (404 - it has no availability status to consult,
+     * and the boot WARN is its visibility); a binding under a registered-but-UNAVAILABLE root -> THROW (503); a
+     * binding under an AVAILABLE root whose page is nonetheless absent from the snapshot -> Unknown, because the
+     * root is up and serving, so 404 is the honest answer.
+     *
+     * There is deliberately NO `Unavailable` variant: the unavailable arms THROW like every other facade method, so
+     * the 503 stays mapped in ONE place instead of being re-minted route-side.
+     */
+    fun permalink(principal: Principal, id: PageId): PermalinkResolution
+}
+
+/** The outcome of [ReadFacade.permalink] — the route maps these to 302 / SPA shell / 404. */
+sealed interface PermalinkResolution {
+
+    /** The page's current canonical URL — a 302 (never a 301: the target moves with the page). */
+    data class Found(val url: String) : PermalinkResolution
+
+    /** A path-space collision loser: no canonical URL exists, so the permalink itself IS its human URL (the shell). */
+    data object LoserNoUrl : PermalinkResolution
+
+    /** No such page, here or in the persisted bindings — a 404. */
+    data object Unknown : PermalinkResolution
 }
 
 /**

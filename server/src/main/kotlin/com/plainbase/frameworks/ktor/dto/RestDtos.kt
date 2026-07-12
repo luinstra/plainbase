@@ -107,6 +107,24 @@ object ErrorCodes {
     /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
     const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
 
+    // ---- multi-root C4: the per-root vocabulary (append-only) ----------------------------------------
+
+    /**
+     * 503 (+ `Retry-After`): the target root is not SERVING — its disk vanished, its watcher died, it was already
+     * gone at boot, or its name has been removed from `roots {}` while its rows remain.
+     *
+     * Deliberately NOT a 404: a 404 tells an agent the page is GONE and it should drop its citations, when the truth
+     * is that a disk is unmounted and the content is coming back. NOTHING was written on a write that answers this.
+     * Recovery is an operator action (restore the root, restart the server), which is why the retry window is long.
+     */
+    const val ROOT_UNAVAILABLE: String = "root_unavailable"
+
+    /** 403: the target root is declared `editable = false` — page-mutation writes are refused there in EVERY auth mode. */
+    const val ROOT_NOT_EDITABLE: String = "root_not_editable"
+
+    /** 400: a request named a root that is not a legal slug, or names no configured root. */
+    const val INVALID_ROOT: String = "invalid_root"
+
     // ---- A3: the authorization vocabulary (append-only) ----------------------------------------------
 
     /** 401: no (or anonymous) credential on a gated route under auth-on — the client must authenticate. */
@@ -234,21 +252,26 @@ data class HeadingDto(val id: String, val level: Int, val text: String)
 
 /**
  * `GET /api/v1/tree` wire shape (frozen as SHAPE; child ordering is documented-not-frozen): one
- * entry per served root, in registry (D7) order. Reshaped from `{root: <node>}` under the same
+ * entry per CONFIGURED root, in registry (D7) order. Reshaped from `{root: <node>}` under the same
  * ADR-0011 D3 amendment as the url values (multi-root C3; the ForeverApiGoldenSuite ledger records
- * it). Manual-RestJson DTOs, no reflect-config; C4 appends `available` to [RootTreeDto].
+ * it).
  */
 @Serializable
 data class TreeResponse(val roots: List<RootTreeDto>)
 
 /**
- * One root's tree entry: the validated root-name slug + its synthetic root folder node. [tree] is
- * always a folder node, but it is DECLARED as the sealed interface so the polymorphic serializer
- * emits the `type` discriminator on the root exactly like on every child (the pre-C3 TreeResponse
+ * One root's tree entry: the validated root-name slug, whether it is currently SERVING, and its synthetic root
+ * folder node. [tree] is always a folder node, but it is DECLARED as the sealed interface so the polymorphic
+ * serializer emits the `type` discriminator on the root exactly like on every child (the pre-C3 TreeResponse
  * rule, unchanged).
+ *
+ * [available] `false` means the root is configured but not serving: its subtree is EMPTY here (never its stale
+ * carried-forward listing) and every read of it answers 503. It is listed rather than omitted so a client can tell
+ * "this root is down" from "this root does not exist" - and so the client's known-root set matches the server's,
+ * which is what lets it route `/docs/{root}/...` without guessing.
  */
 @Serializable
-data class RootTreeDto(val root: String, val tree: TreeNodeDto)
+data class RootTreeDto(val root: String, val available: Boolean, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable

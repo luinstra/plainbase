@@ -66,7 +66,6 @@ class ReadAuthzRouteTest : FunSpec({
                     else -> principal ?: Principal.Anonymous
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     searchProvider = harness.fts(searchRoot),
                     enforced = enforced,
                     extract = fixedPrincipal(resolved),

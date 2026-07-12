@@ -24,7 +24,7 @@ class FileWatcherNativeTest {
         val root = Files.createTempDirectory("pb-native-watch")
         try {
             val fired = CountDownLatch(1)
-            LocalContentStore(root).watch { fired.countDown() }.use {
+            LocalContentStore(root).watch(onChange = { fired.countDown() }).use {
                 Files.writeString(root.resolve("touched.md"), "# Touched\n")
                 assertTrue(fired.await(90, TimeUnit.SECONDS), "watch event never arrived")
             }

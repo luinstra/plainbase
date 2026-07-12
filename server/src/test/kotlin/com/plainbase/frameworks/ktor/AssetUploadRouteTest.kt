@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
@@ -418,13 +419,16 @@ class AssetUploadRouteTest : FunSpec({
         // tree (incl. this page), so we arm the throw AFTER construction, right before the upload, so ONLY
         // the route's step-4b re-check sees the fault (mirrors test 21's armed override).
         val armed = java.util.concurrent.atomic.AtomicBoolean(false)
+        // The fault is injected at `readClassified`, because that is the seam the facade's stale-page re-check now
+        // uses - and it models the REAL store faithfully: on a LIVE root the exit classifier re-probes, sees the root
+        // is fine, and RETHROWS the genuine fault (a false 503 `root_unavailable` here would be a lie about the disk).
         val readThrows: (ContentStore) -> ContentStore = { real ->
             object : ContentStore by real {
-                override fun read(path: TreePath): ByteArray? =
+                override fun readClassified(path: TreePath): ContentRead =
                     if (armed.get() && path.value == "guides/deploy-guide.md") {
                         throw java.io.IOException("simulated transient FS fault reading the page file")
                     } else {
-                        real.read(path)
+                        real.readClassified(path)
                     }
             }
         }

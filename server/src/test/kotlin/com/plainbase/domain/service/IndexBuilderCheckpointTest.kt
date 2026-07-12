@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -170,13 +171,16 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
     fun startProcess(): Process {
         val store = LocalContentStore(root)
         val registry = UrlAliasRegistry(aliases)
+        val availability = RootAvailability(kotlin.time.Clock.System)
+        val idMap = SqlDelightIdMapRepository(database)
         val builder = IndexBuilder(
             sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+            availability = availability,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
             identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
             patcher = FrontmatterPatcher(),
-            idMap = SqlDelightIdMapRepository(database),
+            idMap = idMap,
             aliasRegistry = registry,
             checkpoint = checkpoints,
             citations = CitationFactory(),
@@ -184,7 +188,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
             listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
         )
-        return Process(store, registry, builder)
+        return Process(store, registry, builder, availability, idMap)
     }
 
     fun seedGarbageCheckpointRow() {
@@ -197,6 +201,8 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
         private val store: LocalContentStore,
         val registry: UrlAliasRegistry,
         val builder: IndexBuilder,
+        private val availability: RootAvailability,
+        private val idMap: SqlDelightIdMapRepository,
     ) {
         /** The A3 route graph (RouteContext) over this process's services (the 301 alias-redirect assertion). */
         fun services() = buildRouteContext(
@@ -211,12 +217,14 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             ),
             indexBuilder = builder,
             pageService = PageService(builder, registry, CitationFactory()),
-            searchService = SearchService(mockk(relaxed = true), builder), // 301s never touch search
+            searchService = SearchService(mockk(relaxed = true), builder, availability), // 301s never touch search
             aliasRegistry = registry,
-            contentStore = store,
             writePipeline = mockk(relaxed = true), // 301s never touch the write pipeline
-            root = RootName.MAIN,
-            history = NoOpHistoryProvider,
+            registry = rootRegistry,
+            availability = availability,
+            resolver = PageRootResolver(idMap, rootRegistry),
+            stores = { store },
+            histories = { NoOpHistoryProvider },
             idProvider = UuidV7IdProvider(),
             // 301 alias-redirects never touch the proposal surface; relaxed mocks satisfy the wiring.
             proposalService = mockk(relaxed = true),

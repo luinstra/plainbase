@@ -89,23 +89,33 @@ Per-root keys:
 | Key | Meaning | Default (`main`) | Default (extras) |
 |---|---|---|---|
 | `path` | the directory the root serves (**required**, non-blank) | - | - |
-| `editable` | whether pages in this root can be edited/created - **recorded but not yet enforced in this release** (a startup warning names any non-default value) | `true` | `false` |
-| `history` | `off` \| `auto` \| `native` git history mode - **recorded but not yet enforced in this release**; `git.enabled` remains the live history knob | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
+| `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
+| `history` | `off` \| `auto` \| `native` git history mode | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
 
-No `roots {}` block still means the single-root setup: `CONTENT_DIR`/`contentDir` is the one root,
-synthesized as `main`. Note that since the multi-root URL change (ADR-0011 D3) this is no longer
-byte-identical to pre-multi-root releases even without the block: every content URL now carries the
-root segment (`/docs/main/...`, `/assets/main/...`), old rootless links answer a permanent 301 to
-the `main`-qualified form, `/api/v1/tree` returns one entry per root (e.g.
-`{"roots":[{"root":"main","tree":{...}}]}`), and page/search API responses carry a `root` field.
-`/p/{id}` permalinks are unchanged.
+### `history` on an extra root: `native` or `off`, never `auto`
+
+`auto` on an EXTRA root is a **boot error**. Auto detects a repository and may `git init` one - which
+is exactly what Plainbase must not do in a tree it does not own. An extra root either CLAIMS an
+existing repository explicitly (`history = native`) or records no history (`off`).
+
+A `native` root is strictly guarded at boot, and the guard **refuses to start** rather than degrade:
+Plainbase will not commit into a **linked worktree**, a **submodule**, or a repository rooted at a
+SURROUNDING checkout. In all three cases `git -C <root>` succeeds quietly against a repository that
+is not this root's, and you would find out when an unrelated branch had Plainbase commits on it. It
+also never `git init`s a claimed root: a missing `.git` there is reported, not created.
+
+For `main`, `history` and the `git.enabled` tri-state are two knobs on one thing. `auto` (the
+default, and what every config without a `roots {}` block produces) is compatible with either
+`git.enabled` value. Setting them to CONTRADICT (`history = native` with `git.enabled = false`, or
+`history = off` with `git.enabled = true`) is a boot error naming both keys - never a silent winner.
 
 Validation at boot (each failure is an actionable `serve:` refusal naming the offending root):
 
 - a root named `main` is **required** (it is the reserved primary);
 - names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars);
-- `main`'s path must exist and be readable; a missing/unreadable EXTRA path is a startup **warning**
-  only (the root would be unavailable), never a boot error;
+- `main`'s path must exist and be readable; a missing/unreadable EXTRA path is a startup **warning**,
+  never a boot error - the root serves 503 until it is restored AND the server is restarted;
+- `history = auto` on an extra root is refused (see above);
 - no two roots may resolve to the same directory (symlinks are resolved for this check), no root may
   nest inside another, and no root may equal or live inside `DATA_DIR`;
 - `roots {}` cannot be combined with `storage.backend=object` in this release - object deployments
@@ -114,11 +124,61 @@ Validation at boot (each failure is an actionable `serve:` refusal naming the of
 When a `roots {}` block is present, an explicitly set `CONTENT_DIR`/`contentDir` is **ignored** with
 a startup warning: `roots.main.path` is main's directory.
 
-**Current limitation:** this build parses and validates extra roots but serves **only `main`** -
-extras produce a startup warning saying so. The per-root URL grammar is already live (an extra
-root's `/docs/{name}/...` URL space is reserved and answers empty rather than redirecting); serving
-extras' content (per-root stores, search, watchers) lands in later releases. Declaring extras today
-is harmless but serves nothing yet.
+## Per-root agent direct-commit globs
+
+`auth.agentDirectCommit` is the agent **privilege gate**: a COMMIT-mode agent writing inside a glob
+lands its change UNREVIEWED; outside one it degrades to a proposal for a human.
+
+```hocon
+auth {
+  agentDirectCommit {
+    globs = ["notes/**", "archive:2024/**"]   # MAIN's list - unchanged meaning, colons and all
+    roots {
+      archive  = ["2024/**"]                  # the ONLY way to grant an EXTRA root
+      handbook = ["**"]
+    }
+  }
+}
+```
+
+**The existing `globs` key is main-scoped and always will be**, and neither it nor its env var
+(`PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS`) changes meaning when you add roots. That is why per-root
+globs are a structured block rather than a `<root>:<pattern>` prefix: a colon is a legal directory
+name character AND a legal glob character, so an in-string grammar would silently RETARGET an
+operator's existing `archive:2024/**` pattern the day they added a root named `archive` - revoking it
+in main and granting it, unasked, inside the new root. **No config that authorizes something today
+authorizes anything different after an upgrade.**
+
+Rules:
+
+- every key in the block must name a **configured** root (an unknown or malformed name refuses at boot);
+- main's list has exactly ONE key. Declaring `roots.main` alongside `globs` or the env var is a boot
+  error naming both - Plainbase will not guess, because a union would silently widen what an agent may
+  commit unreviewed and a winner would silently drop an authorization you wrote;
+- there is no env form for the block (extra roots are file-only by construction);
+- a glob on a root with `editable = false` can authorize nothing - the editable gate denies first - so
+  it emits a startup warning naming the root.
+
+## When a root is not there
+
+A root that is missing at boot, or whose directory vanishes while the server runs, is marked
+**unavailable** and:
+
+- every read and write of it answers **503 `root_unavailable`** with a `Retry-After`, **never a 404**.
+  A 404 tells an agent the page is gone and it should drop its citations; the truth is that a disk is
+  unmounted and the content is coming back. Nothing is written on a 503;
+- **nothing is deleted for it.** Its pages stay in the index (carried forward), and its `id_map`,
+  `url_alias`, `page_checkpoint` and `dirty_page` rows are left exactly as they are;
+- it still appears in `GET /api/v1/tree` with `"available": false` and an EMPTY subtree (never a stale
+  listing), and in `GET /healthz` with a cause (`missing_at_boot` | `vanished` | `watcher_failed`);
+- search results from it are dropped;
+- a mid-run disappearance is detected **within 5 seconds even if the root is completely idle** - each
+  available root's watcher probes its own directory on that interval, so a silent unmount or a renamed
+  directory (neither of which raises a file event) is caught without any traffic to trip it.
+
+**Unavailability is sticky until restart.** Restoring the directory does not bring the root back on
+its own: a vanished root's scan and identity state cannot be trusted afterwards. Restore the path,
+then restart the server.
 
 ## `auth.mode` - the three modes
 

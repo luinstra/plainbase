@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.frameworks.filesystem
 
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -6,6 +8,8 @@ import java.nio.channels.FileLock
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.io.path.createDirectories
 
 /**
@@ -30,7 +34,15 @@ class DataDirLock private constructor(
     private val lock: FileLock,
 ) : AutoCloseable {
 
+    private val closed = AtomicBoolean(false)
+
+    /**
+     * Idempotent, per the AutoCloseable contract — and load-bearing since graceful shutdown: the SIGTERM hook
+     * and the clean-exit `finally` in `serve()` can BOTH reach it. `FileLock.release()` on an already-released
+     * lock is not a no-op when the channel is gone (it throws ClosedChannelException), so the guard is here.
+     */
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
         try {
             lock.release()
         } finally {

@@ -11,7 +11,6 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
@@ -116,27 +115,13 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
-    test("bind commits the loser-behalf issue together with the key-complete supersede (the D16 combined op)") {
-        withRepo { repo, driver ->
-            val foreign = RootedPath(extra, TreePath.require("mirror/page.md"))
-            repo.bind(foreign, idX, materialized = true)
-            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = pathA, reassigned = foreign)
-
-            repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue)
-
-            repo.pathOf(idX) shouldBe pathA
-            repo.issues() shouldContainExactly listOf(issue)
-            driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe 1L
-        }
-    }
-
-    test("the supersede and its loser-behalf issue are atomic: a failed issue write rolls the delete back (D16)") {
-        // Crash-shaped fault injection below the repository: the issue INSERT throws inside bind's
-        // transaction, so the key-complete delete it rides with must roll back too - a committed
-        // delete with no audit row would be the permanently silent supersession the combined op exists
-        // to prevent (the winner's next resolve sees itself as owner and never re-detects).
+    test("the key-complete supersede is atomic: a failed upsert rolls the stale-unbind back, never orphaning the id") {
+        // Crash-shaped fault injection below the repository: the upsert throws inside bind's transaction,
+        // so the key-complete DELETE it rides with must roll back too. A committed delete with no
+        // replacement row would leave the id bound to NOBODY - the page silently loses its permalink, and
+        // the caller's duplicate policy (which reads pathOf) can no longer see that anyone ever owned it.
         DatabaseFactory.createInMemoryDriver().use { real ->
-            var failIssueInsert = false
+            var failUpsert = false
             val driver = object : SqlDriver by real {
                 override fun execute(
                     identifier: Int?,
@@ -144,28 +129,25 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
                     parameters: Int,
                     binders: (SqlPreparedStatement.() -> Unit)?,
                 ): QueryResult<Long> {
-                    if (failIssueInsert && "INSERT INTO identity_issue" in sql) error("injected crash before the issue write")
+                    if (failUpsert && "INTO id_map" in sql) error("injected crash before the replacement binding lands")
                     return real.execute(identifier, sql, parameters, binders)
                 }
             }
             val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-            val foreign = RootedPath(extra, TreePath.require("mirror/page.md"))
-            repo.bind(foreign, idX, materialized = true)
-            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = pathA, reassigned = foreign)
+            val moved = RootedPath(extra, TreePath.require("mirror/page.md"))
+            repo.bind(moved, idX, materialized = true)
 
-            failIssueInsert = true
-            shouldThrowAny { repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue) }
+            failUpsert = true
+            shouldThrowAny { repo.bind(pathA, idX, materialized = true) }
 
-            // All-or-nothing: the foreign owner's row survived and no orphaned state exists.
-            repo.pathOf(idX) shouldBe foreign
+            // All-or-nothing: the prior owner's row survived, and nothing half-landed.
+            repo.pathOf(idX) shouldBe moved
             repo.find(pathA).shouldBeNull()
-            repo.issues().shouldBeEmpty()
 
-            // The retry (next pass re-detects the contest) then commits both together.
-            failIssueInsert = false
-            repo.bind(pathA, idX, materialized = true, supersededOwnerIssue = issue)
+            failUpsert = false
+            repo.bind(pathA, idX, materialized = true)
             repo.pathOf(idX) shouldBe pathA
-            repo.issues() shouldContainExactly listOf(issue)
+            repo.bindings() shouldHaveSize 1
         }
     }
 

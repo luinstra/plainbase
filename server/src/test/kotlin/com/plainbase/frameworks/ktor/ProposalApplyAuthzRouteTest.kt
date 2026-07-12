@@ -9,6 +9,7 @@ import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.Role
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.CommitGlob
@@ -97,11 +98,10 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     }
                     else -> principal
                 }
-                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { path, bytes, author, committer ->
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, path, bytes, author, committer ->
                     history.commit(path, bytes, author, committer)?.sha
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     writePipeline = harness.writePipeline(pipelineHook, store),
                     searchProvider = harness.fts(),
                     history = history,
@@ -165,12 +165,12 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     enforced = enforced,
                 )
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
-                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val pipeline = harness.writePipeline(pipelineHook, store)
                 val proposalService = ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
+                    IndexProposalBaseReader(harness.builder, harness.stores),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -178,15 +178,25 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val mutate = GuardedMutatingFacade(
                     policy = policy,
                     writePipeline = pipeline,
-                    contentStore = store,
+                    stores = harness.stores,
                     indexBuilder = harness.builder,
-                    root = harness.rootRegistry.main.name,
+                    availability = harness.availability,
+                    resolver = harness.resolver,
                     proposals = { proposalsFacade },
                     agentDirectCommitGlobs = globs,
                     proposalLabeler = labeler,
                 )
                 val facade =
-                    GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
+                    GuardedProposalFacade(
+                        policy,
+                        proposalService,
+                        labeler,
+                        mutate,
+                        com.plainbase.domain.service.UuidV7IdProvider(),
+                        harness.builder,
+                        harness.resolver,
+                        harness.availability,
+                    )
                 proposalsFacade = facade
                 block(harness, store, facade, mutate, root)
             }
@@ -341,7 +351,6 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 harness.builder.rebuild()
                 harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     writePipeline = harness.writePipeline(store = store),
                     searchProvider = harness.fts(),
                     enforced = true,
@@ -376,7 +385,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
             val (id, hash) = app.pageIdAndHash()
             // Rebuild the route ctx with a pipeline whose history hook throws AFTER the disk write.
-            val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _ -> throw RuntimeException("post-write boom") }
+            val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _, _ -> throw RuntimeException("post-write boom") }
             val pipeline = harness.writePipeline(throwingHook, store)
             val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
             val policy =
@@ -388,16 +397,25 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Clock.System,
                     enforced = true,
                 )
-            val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder, harness.rootRegistry.main.name)
+            val mutate = GuardedMutatingFacade(policy, pipeline, harness.stores, harness.builder, harness.availability, harness.resolver)
             val proposalService =
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
+                    IndexProposalBaseReader(harness.builder, harness.stores),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
-            val facade = GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
+            val facade = GuardedProposalFacade(
+                policy,
+                proposalService,
+                labeler,
+                mutate,
+                com.plainbase.domain.service.UuidV7IdProvider(),
+                harness.builder,
+                harness.resolver,
+                harness.availability,
+            )
             val admin = Principal.Human("builtin", "admin")
             val proposalId = app.proposeEdit(id, hash)
             val pid = com.plainbase.domain.page.ProposalId.require(proposalId)
@@ -431,7 +449,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
+                    IndexProposalBaseReader(harness.builder, harness.stores),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -461,6 +479,9 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository),
                     fakeMutate,
                     com.plainbase.domain.service.UuidV7IdProvider(),
+                    harness.builder,
+                    harness.resolver,
+                    harness.availability,
                 )
             val outcome = facade.approve(Principal.Human("builtin", "admin"), pid)
             (outcome as ApplyOutcome.Failed).reason shouldBe "unreadable" // the STABLE string, never the raw cause
@@ -561,7 +582,11 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val admin = Principal.Human("builtin", "admin")
             val pageId = UuidV7IdProvider().next()
             val bytes = composeDocument(pageId.value, "Landed", null, "# body\n")
-            val degraded = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/landed.md"), bytes), WriteOrigin.DIRECT_PUT)
+            val degraded = mutate.create(
+                agent,
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/landed.md"), bytes),
+                WriteOrigin.DIRECT_PUT,
+            )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
             facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
             store.read(TreePath.require("guides/landed.md"))!!.contentEquals(bytes) shouldBe true
@@ -573,7 +598,11 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val agent = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.PROPOSE).id)
             val pageId = UuidV7IdProvider().next()
             val bytes = composeDocument(pageId.value, "OffMode", null, "# body\n")
-            val degraded = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/offmode.md"), bytes), WriteOrigin.DIRECT_PUT)
+            val degraded = mutate.create(
+                agent,
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/offmode.md"), bytes),
+                WriteOrigin.DIRECT_PUT,
+            )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
             // The approver is the AGENT itself (auth.mode=off permits everyone).
             facade.approve(agent, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
@@ -598,7 +627,11 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val agent = Principal.Agent(agentId)
             val pageId = UuidV7IdProvider().next()
             val bytes = composeDocument(pageId.value, "Direct", null, "# body\n")
-            val outcome = mutate.create(agent, CreateIntent(pageId, TreePath.require("guides/direct.md"), bytes), WriteOrigin.DIRECT_PUT)
+            val outcome = mutate.create(
+                agent,
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/direct.md"), bytes),
+                WriteOrigin.DIRECT_PUT,
+            )
             outcome.shouldBeInstanceOf<CreateOutcome.DirectCreated>()
             openOracle(root).use { repo ->
                 val head = repo.headCommits().first()
@@ -620,7 +653,10 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
             val admin = Principal.Human("builtin", "admin")
             // Agent proposes a create (the facade mints + patches the id); ADMIN approves.
-            facade.propose(agent, ProposeCommand.Create(TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"))
+            facade.propose(
+                agent,
+                ProposeCommand.Create(RootName.MAIN, TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"),
+            )
             val pid = harness.proposalRepository.all().single().id
             facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
             openOracle(root).use { repo ->
@@ -787,20 +823,30 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         Clock.System,
                         enforced = true,
                     )
-                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { p, b, a, c -> history.commit(p, b, a, c)?.sha }
+                val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val pipeline = harness.writePipeline(pipelineHook, store)
-                val mutate = GuardedMutatingFacade(policy, pipeline, store, harness.builder, harness.rootRegistry.main.name)
+                val mutate =
+                    GuardedMutatingFacade(policy, pipeline, harness.stores, harness.builder, harness.availability, harness.resolver)
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
                 val proposalService =
                     ProposalService(
                         harness.proposalRepository,
                         citations,
-                        IndexProposalBaseReader(harness.builder, store, harness.rootRegistry.main.name),
+                        IndexProposalBaseReader(harness.builder, harness.stores),
                         UuidV7ProposalIdProvider(),
                         Clock.System,
                     )
                 val facade =
-                    GuardedProposalFacade(policy, proposalService, labeler, mutate, com.plainbase.domain.service.UuidV7IdProvider())
+                    GuardedProposalFacade(
+                        policy,
+                        proposalService,
+                        labeler,
+                        mutate,
+                        com.plainbase.domain.service.UuidV7IdProvider(),
+                        harness.builder,
+                        harness.resolver,
+                        harness.availability,
+                    )
                 // Propose (agent) then approve (admin).
                 val page = harness.builder.current.pages.single()
                 facade.propose(

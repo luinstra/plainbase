@@ -40,7 +40,6 @@ class CreateApplyDifferentialTest : FunSpec({
     val createdPath = TreePath.require("guides/diff-page.md")
 
     fun IndexHarness.contextFor(store: LocalContentStore, principal: Principal, enforced: Boolean) = testRouteContext(
-        contentStore = store,
         writePipeline = writePipeline(store = store),
         searchProvider = fts(),
         enforced = enforced,

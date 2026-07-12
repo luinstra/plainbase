@@ -9,7 +9,7 @@ import { createAppRouter } from "../router";
 
 const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 new-page creation (D-2 acceptance #4). `POST /api/v1/pages` returns the minted id + the
@@ -209,6 +209,96 @@ describe("W6 new-page creation", () => {
       return call!;
     });
     expect(JSON.parse(post[1]!.body as string)).toEqual({ folder: "runbooks", title: "Runbooks", slug: "index" });
+  });
+
+  it("a create started from an EXTRA root's URL lands in THAT root — never silently in main", async () => {
+    // The gap this pins: `root` is optional on the wire and the server defaults it to `main`. So a create
+    // that forgets to send it does not fail — it writes the page into the WRONG TREE, silently. The root has
+    // to survive the whole chain: the docs URL the reader is on → the "New" link's `?root=` → the POST body.
+    const EXTRA_ID = "01900000-0000-7000-8000-0000000000ee";
+    const EXTRA_URL = "/docs/extra/notes/rollback";
+    const extraPage: PageResponse = {
+      ...pageResponse(),
+      id: EXTRA_ID,
+      root: "extra",
+      path: "notes/rollback.md",
+      slug: "rollback",
+      url: EXTRA_URL,
+      title: "Rollback",
+    };
+    const extraHtml: PageHtmlResponse = { ...htmlResponse(), id: EXTRA_ID, root: "extra", path: "notes/rollback.md", url: EXTRA_URL };
+    const twoRoots: TreeResponse = {
+      roots: [
+        ...emptyTree.roots,
+        {
+          root: "extra",
+          available: true,
+          tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/extra", page_count: 1, children: [] },
+        },
+      ],
+    };
+
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return jsonResponse({ id: NEW_ID, url: "/docs/extra/notes/fresh", content_hash: HASH, commit: null }, 201);
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/tree")) return jsonResponse(twoRoots);
+      if (url.includes("/pages/by-path/")) return jsonResponse(extraPage);
+      if (url.endsWith("/html")) return jsonResponse(extraHtml);
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(treeQuery.queryKey, twoRoots);
+    queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
+    queryClient.setQueryData(pageByPathQuery("extra/notes/rollback").queryKey, extraPage);
+    queryClient.setQueryData(pageHtmlQuery(EXTRA_ID).queryKey, extraHtml);
+    const history = createMemoryHistory({ initialEntries: [EXTRA_URL] });
+    const router = createAppRouter(queryClient, history);
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The reader is inside `extra`, and hits "New" in the header.
+    const newLink = await waitFor(() => {
+      const el = view.container.querySelector<HTMLAnchorElement>("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    fireEvent.click(newLink);
+
+    await waitFor(() => expect(history.location.pathname).toBe("/new"));
+    expect(history.location.search).toBe("?root=extra");
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).root).toBe("extra");
+  });
+
+  it("a create started OUTSIDE any root's URL space sends no root — the server's `main` default is the honest answer", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    // `/new` reached with no `?root=` (the header link off the docs routes): the key is absent, not guessed.
+    expect("root" in JSON.parse(post[1]!.body as string)).toBe(false);
   });
 
   it("the new-section checkbox with a blank folder leaves Create disabled and does NOT POST", async () => {

@@ -14,7 +14,7 @@ import { createAppRouter } from "../router";
  */
 
 const ID = "rev-1";
-const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "csrf-xyz", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -26,6 +26,7 @@ function detail(over: Partial<ChangeDetail>): ChangeDetail {
     id: ID,
     operation: "edit",
     status: "PENDING",
+    root: "main",
     target_path: "guides/deploy-guide.md",
     page_id: "page-1",
     base_hash: "sha256:base",
@@ -102,6 +103,17 @@ describe("review detail", () => {
     const kinds = [...view.container.querySelectorAll("[data-pb-diff-line]")].map((el) => el.getAttribute("data-pb-diff-line"));
     expect(kinds).toEqual(["meta", "context", "del", "add"]); // the mocked unified_diff, NOT a client re-derivation
     expect(view.container.querySelector("[data-pb-review-rationale]")?.textContent).toContain("tighten the rollback steps");
+  });
+
+  it("names the ROOT the approve would write into, not just the root-relative target_path", async () => {
+    const { view } = renderDetail(detail({ root: "handbook" }));
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-review-header]")).not.toBeNull());
+    const header = view.container.querySelector("[data-pb-review-header]")!;
+    // An approve lands bytes. `target_path` is root-relative and repeats across roots, so a header showing only
+    // the path lets an admin approve a change against a repository they never looked at.
+    expect(view.container.querySelector("[data-pb-review-root]")?.textContent).toBe("handbook");
+    expect(header.textContent).toContain("guides/deploy-guide.md");
   });
 
   it("a CONFLICTED change shows the drift banner, disables approve, and offers rebase", async () => {

@@ -8,10 +8,15 @@ import { previewQuery } from "../api/queries";
  * retention). The queryFn still returns the rendered HTML.
  */
 describe("previewQuery", () => {
-  it("keys on the buffer + path and is disabled for an empty buffer", () => {
-    expect(previewQuery("# hi", "guides/x.md").queryKey).toEqual(["preview", "guides/x.md", "# hi"]);
+  it("keys on the buffer + root + path and is disabled for an empty buffer", () => {
+    expect(previewQuery("# hi", "guides/x.md").queryKey).toEqual(["preview", null, "guides/x.md", "# hi"]);
     expect(previewQuery("").enabled).toBe(false);
     expect(previewQuery("x").enabled).toBe(true);
+  });
+
+  it("keys on the ROOT too: the same buffer previews differently per root (link resolution is per-root)", () => {
+    expect(previewQuery("# hi", "guides/x.md", "archive").queryKey).toEqual(["preview", "archive", "guides/x.md", "# hi"]);
+    expect(previewQuery("# hi", "guides/x.md", "archive").queryKey).not.toEqual(previewQuery("# hi", "guides/x.md", "main").queryKey);
   });
 
   it("sets a bounded gcTime so stale preview entries are collected (not held the default ~5min)", () => {

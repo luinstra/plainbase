@@ -201,5 +201,5 @@ data class IndexedPage(
     val url: String? = urlPath?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) }
 
     /** The permanent ID permalink — the §A4 durability layer, unaffected by any path change. */
-    val permalink: String get() = "/p/${id.value}"
+    val permalink: String get() = id.permalink
 }

@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Outlet, useRouter } from "@tanstack/react-router";
+import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import type { MouseEvent } from "react";
-import { sessionQuery } from "../api/queries";
+import { sessionQuery, treeQuery } from "../api/queries";
 import { interceptableHref } from "../lib/links";
+import { rootOfUrl } from "../lib/tree";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
@@ -24,6 +25,18 @@ function SearchTrigger() {
   );
 }
 
+/** The "New" affordance's chrome, shared by the live link and its disabled twin (see [Shell]). */
+const NEW_PAGE_CLASS = "pb-new-page flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted";
+
+function NewPageLabel() {
+  return (
+    <>
+      <span aria-hidden="true">+</span>
+      <span className="max-sm:hidden">New</span>
+    </>
+  );
+}
+
 /**
  * App shell: header + tree sidebar + content outlet. One delegated click handler routes
  * every internal `/docs/...` / `/p/...` anchor — sidebar links AND links inside the
@@ -37,6 +50,21 @@ export function Shell() {
   // an approve/reject/rebase 403 becomes the no-access state in the detail (NOT a hard client capability gate —
   // that would need a server DTO change, out of scope for this frontend-only chunk).
   const session = useQuery(sessionQuery);
+
+  // WHERE a new page lands: the root whose `/docs/{root}` URL space the reader is currently in, carried into
+  // `/new` as `?root=`. Without it every create defaults to `main`, so a "New" click from an extra root would
+  // silently write the page into somebody else's tree. Off the docs routes it is legitimately absent and the
+  // server's `main` default is the honest answer.
+  //
+  // Until the tree RESOLVES there is no answer at all — not even "no root": the roots and their url prefixes are
+  // exactly what the tree carries, so a `/new` link rendered in that window would look identical on an extra-root
+  // page and on `/review`, and land the bytes in main either way. So the action is DISABLED rather than wrong: a
+  // reader who has to wait a beat has lost nothing, a reader whose page silently appeared in the wrong repository
+  // has. (Same reason the create payload threads the root explicitly — see api/types.ts `CreateRequest.root`.)
+  const tree = useQuery(treeQuery);
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const roots = tree.data?.roots;
+  const currentRoot = roots ? rootOfUrl(roots, pathname) : null;
 
   const onClick = (event: MouseEvent) => {
     const href = interceptableHref(event.nativeEvent);
@@ -68,15 +96,21 @@ export function Shell() {
               <span className="max-sm:hidden">Review</span>
             </Link>
           )}
-          <Link
-            to="/new"
-            className="pb-new-page flex items-center gap-2 rounded-md border border-edge bg-surface px-3 py-1.5 text-sm text-muted hover:text-ink"
-            data-pb-new-page
-            aria-label="New page"
-          >
-            <span aria-hidden="true">+</span>
-            <span className="max-sm:hidden">New</span>
-          </Link>
+          {roots ? (
+            <Link
+              to="/new"
+              search={currentRoot ? { root: currentRoot } : {}}
+              className={`${NEW_PAGE_CLASS} hover:text-ink`}
+              data-pb-new-page
+              aria-label="New page"
+            >
+              <NewPageLabel />
+            </Link>
+          ) : (
+            <button type="button" disabled className={`${NEW_PAGE_CLASS} cursor-not-allowed opacity-60`} data-pb-new-page aria-label="New page">
+              <NewPageLabel />
+            </button>
+          )}
           <ThemeToggle />
         </div>
       </header>

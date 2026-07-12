@@ -46,7 +46,7 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
             // the serialized rebuild, so the recording order IS the publish order. Synchronized for visibility;
             // every access is otherwise ordered by the IndexBuilder monitor + the final join() happens-before.
             val recorded: MutableList<List<String>> = Collections.synchronizedList(mutableListOf())
-            val recorder = IndexBuilder.PublicationListener { snapshot -> recorded.add(snapshot.pages.map { it.path.value }) }
+            val recorder = IndexBuilder.PublicationListener { snapshot, _ -> recorded.add(snapshot.pages.map { it.path.value }) }
 
             val armed = AtomicBoolean(false)
             val staleScanDone = CountDownLatch(1)
@@ -89,7 +89,9 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
                 val bytes = "---\nid: ${pageId.value}\ntitle: Race\n---\n\n# Race\n\nraced body.\n".toByteArray()
                 val outcome = AtomicReference<WriteOutcome>()
                 val threadB = thread {
-                    outcome.set(pipeline.create(createGrantForTests(), CreateIntent(pageId, TreePath.require("race.md"), bytes)))
+                    outcome.set(
+                        pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require("race.md"), bytes)),
+                    )
                 }
 
                 check(fileLanded.await(10, TimeUnit.SECONDS)) { "the create never landed the file" }

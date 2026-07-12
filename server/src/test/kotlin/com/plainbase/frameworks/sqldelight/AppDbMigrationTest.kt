@@ -116,6 +116,7 @@ class AppDbMigrationTest : FunSpec({
                     diffArtifact = "", status = "PENDING", authorIssuer = "agent", authorExternalId = "00ff",
                     authorLabel = "ci", approverIssuer = null, approverExternalId = null, decisionComment = null,
                     createdAt = 0, decidedAt = null, appliedCommit = null, statusReason = null,
+                    root = RootName.MAIN,
                 )
                 db.proposalsQueries.selectById(proposalId).executeAsOne().status shouldBe "PENDING"
             }
@@ -218,10 +219,12 @@ class AppDbMigrationTest : FunSpec({
                 dirty.root shouldBe RootName.MAIN
                 dirty.path.value shouldBe "guides/a.md"
 
+                // `root` is a TYPED RootName as of C4 (D18 threads it end to end); the v10 rows still migrate to the
+                // 'main' stamp, which is the whole point of the DEFAULT.
                 db.proposalsQueries.selectById(
                     com.plainbase.domain.page.ProposalId.require("03030303-0303-0303-0303-030303030303"),
                 ) { _, _, _, _, _, _, _, _, status, _, _, _, _, _, _, _, _, _, _, root -> status to root }
-                    .executeAsOne() shouldBe ("PENDING" to "main")
+                    .executeAsOne() shouldBe ("PENDING" to RootName.MAIN)
 
                 // The composite PK is live (same relative path under another root inserts cleanly)...
                 db.idMapQueries.upsertBinding(

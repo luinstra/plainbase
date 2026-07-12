@@ -5,6 +5,7 @@ import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchHit
@@ -29,6 +30,15 @@ import com.plainbase.domain.search.SearchQuery
 class SearchService(
     private val provider: SearchProvider,
     private val indexBuilder: IndexBuilder,
+    /**
+     * The liveness filter's source (ADR-0011 D5). It lands HERE, at §B7 assembly, not in SQL: assembly already joins
+     * every display field against the published snapshot and has `page.root` in hand, so the filter is one predicate,
+     * it respects the never-read-display-fields-from-engine-copies rule, and it needs no search.db query change.
+     *
+     * The honest consequence: the ENGINE's `total` still counts hits from unavailable roots, so a page of results
+     * simply runs SHORT - the same documented shape as the §A2 narrow race a snapshot-departed page already produces.
+     */
+    private val availability: RootAvailability = RootAvailability(kotlin.time.Clock.System),
 ) {
 
     sealed interface Outcome {
@@ -50,6 +60,11 @@ class SearchService(
 
         val results = provider.search(SearchQuery(text = query, limit = limitValue, offset = offsetValue))
         val snapshot = indexBuilder.current
+        // ONE availability snapshot per request, threaded - the same discipline as the page snapshot beside it.
+        // A hit whose root is not serving is DROPPED here: a vanished root's section is carried forward, so its
+        // pages are still in `byId` and would otherwise be served, stale, from a root that answers 503 everywhere
+        // else. A DETACHED root needs no arm - it has no section, so its hits already drop at the `byId` join.
+        val available = availability.current()
         return Outcome.Results(
             SearchPayload(
                 query = query,
@@ -57,7 +72,11 @@ class SearchService(
                 limit = limitValue,
                 offset = offsetValue,
                 total = results.total,
-                hits = results.hits.mapNotNull { hit -> snapshot.byId[hit.pageId]?.let { page -> assemble(hit, page) } },
+                hits = results.hits.mapNotNull { hit ->
+                    snapshot.byId[hit.pageId]
+                        ?.takeIf { available.isAvailable(it.root) }
+                        ?.let { page -> assemble(hit, page) }
+                },
             ),
         )
     }

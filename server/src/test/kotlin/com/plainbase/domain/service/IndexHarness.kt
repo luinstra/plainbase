@@ -8,6 +8,7 @@ import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -58,6 +59,8 @@ class IndexHarness(
     // both derive from it - and [sources] is the subset this builder actually scans.
     val rootRegistry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
     sources: List<IndexBuilder.Source>? = null,
+    /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
+    val availability: RootAvailability = RootAvailability(Clock.System),
 ) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
@@ -91,8 +94,22 @@ class IndexHarness(
     )
     private val frontmatter = frontmatterParser
     private val patcher = FrontmatterPatcher()
+
+    /** The builder's sources, kept so [writePipeline] can resolve a store per root without a second wiring. */
+    private val sourceList: List<IndexBuilder.Source> =
+        sources ?: listOf(IndexBuilder.Source(rootRegistry.main, contentStore, history))
+
+    /** The per-root store lookup the C4 write path takes — over the SAME sources the builder scans. */
+    val stores: (RootName) -> ContentStore = { name ->
+        requireNotNull(sourceList.firstOrNull { it.root.name == name }?.store) { "no store for root '$name' in this harness" }
+    }
+
+    /** The ONE id→root / root→status resolver, shared by every facade the harness wires (as production does). */
+    val resolver = PageRootResolver(idMap, rootRegistry)
+
     val builder = IndexBuilder(
-        sources = sources ?: listOf(IndexBuilder.Source(rootRegistry.main, contentStore, history)),
+        sources = sourceList,
+        availability = availability,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
         identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
@@ -115,18 +132,20 @@ class IndexHarness(
      * a failing/wrapping stand-in while the index/search wiring keeps using the real copy.
      */
     fun writePipeline(
-        historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _ -> null },
-        store: ContentStore = contentStore,
+        historyHook: WriteHistoryHook = WriteHistoryHook { _, _, _, _, _ -> null },
+        store: ContentStore? = null,
     ): WritePipeline =
         WritePipeline(
-            contentStore = store,
+            // A [store] override stands in for MAIN's tree (the failing/wrapping stand-in case); every other root
+            // resolves through the harness's own sources, so a multi-root pipeline writes into the right disk.
+            stores = { name -> if (store != null && name == rootRegistry.main.name) store else stores(name) },
             indexBuilder = builder,
             citations = citations,
             frontmatterParser = frontmatter,
             dirtyPages = dirtyPages,
             idMap = idMap,
             aliasRegistry = registry,
-            root = rootRegistry.main.name,
+            availability = availability,
             historyHook = historyHook,
         )
 

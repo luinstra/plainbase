@@ -16,10 +16,13 @@ import com.plainbase.domain.root.RootedPath
  * One binding per (root, path) AND per id, so the adapter may enforce id-uniqueness structurally.
  * The adapter's stale-unbind in [bind] is key-complete: it removes ANY other (root, path) holding
  * the id, which is what lets a live bind supersede a DETACHED row (a binding under a root absent
- * from the registry - the ADR-0011 D2 conditional-restore consequence). The caller's duplicate
- * policy guarantees a live owner is never superseded SILENTLY or by a lower-ranked claim:
- * live-owner supersession happens ONLY as the deterministic D17 rank-contest outcome, with the
- * loser reassigned (in-pass, or on its next scan).
+ * from the registry - the ADR-0011 D2 conditional-restore consequence) and sweep a moved file's own
+ * stale row. The caller's duplicate policy is what bounds it: a LIVE owner's row is only ever
+ * removed as the deterministic D17 rank-contest outcome, and only when the caller SCANNED that
+ * owner's root - so the loser is a page the same pass re-resolves and reassigns. A binding under a
+ * root the caller could not look at is never superseded at all (D16 [BindingVisibility]
+ * [com.plainbase.domain.service.BindingVisibility.isSupersedable]), which is what keeps an outage
+ * from costing a page its durable identity.
  *
  * Pure domain port: only chunk 1.5/4a/C1 domain types appear; the at-rest representation (16-byte
  * BLOBs, decision log #6) is invisible here — that is the storage adapter's single concern.
@@ -35,16 +38,9 @@ interface IdMapRepository {
     /**
      * Binds [path] to [id], replacing the key's previous binding and superseding any stale binding
      * of the same id under another (root, path) - see the class doc for the key-complete SQL vs
-     * within-root supersede POLICY split (ADR-0011 D2/D17).
-     *
-     * [supersededOwnerIssue] is the D16 outcome-two audit row, committed in the SAME transaction
-     * as the bind: when the key-complete delete removes a registered-but-unscanned owner's row,
-     * the loser-behalf [IdentityIssue.CrossRootDuplicateId] must land atomically with it - a crash
-     * between a separate delete and record would make the supersession PERMANENTLY silent (the
-     * winner's next resolve sees itself as owner and never re-detects the contest). Ordinary
-     * binds pass null.
+     * the caller's supersede POLICY split (ADR-0011 D2/D16/D17).
      */
-    fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersededOwnerIssue: IdentityIssue? = null)
+    fun bind(path: RootedPath, id: PageId, materialized: Boolean)
 
     /** Marks [path]'s binding materialized — called after the patched file write lands (§5.2). */
     fun markMaterialized(path: RootedPath)

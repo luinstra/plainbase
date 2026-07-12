@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Files
@@ -51,6 +52,19 @@ class GitCliHistoryProvider(
     // (default false) keeps the full access probe — a Docker uid-mismatch/dubious-ownership `.git` there
     // has no self-heal path and must still fail loud at the gate, byte-identical to pre-C5 behavior.
     private val objectMode: Boolean = false,
+    /**
+     * The operator EXPLICITLY claimed this root's existing repository (`history = native`, ADR-0011 D4) - so
+     * Plainbase is a GUEST in a repo it does not own, and two things follow, which is why this is ONE flag and not
+     * two that could drift apart:
+     *  - it NEVER `git init`s. A missing `.git` is an operator error to REPORT, not a repo to mint. That binds the
+     *    racy commit-time belt call too, not just [prepare] - the belt is precisely where an init would slip through.
+     *  - [gateCheck] runs the STRICT four-check guard ([nativeRootGuardFailure]) and refuses the boot loudly on a
+     *    linked worktree, a submodule, or a `.git` that does not root exactly here.
+     *
+     * False for main's grandfathered AUTO detection (which may init, and deliberately tolerates a `.git`-as-a-file
+     * worktree) and for the object-mode mirror, which Plainbase owns outright.
+     */
+    private val claimedRepo: Boolean = false,
 ) : HistoryProvider {
 
     override val enabled: Boolean = true
@@ -289,7 +303,15 @@ class GitCliHistoryProvider(
      * a forced-on content root never aborts serve (plain dir → operational failure) nor reads the wrong
      * ancestor repo. Idempotent — [commit] still calls [ensureRepo] too (harmless belt-and-suspenders).
      */
-    override fun prepare() = ensureRepo()
+    override fun prepare() {
+        // A CLAIMED root's repo already exists (gateCheck refused the boot otherwise), and creating one is exactly
+        // what this provider may not do - so prepare readies the git-home and nothing else.
+        if (claimedRepo) {
+            Files.createDirectories(gitHome)
+            return
+        }
+        ensureRepo()
+    }
 
     override fun gateCheck() {
         // Cluster-1 (C5): the `--version` probe never touches `-C workTree`, so this passes even when
@@ -345,6 +367,12 @@ class GitCliHistoryProvider(
                 )
             }
         }
+        // The D4 strict guard, for a root whose repo the operator CLAIMED. It runs after the shared version/access
+        // probes above, so it can assume a working git; it refuses the boot loudly rather than degrading, because a
+        // root that silently commits into the WRONG repository is worse than one that will not start.
+        if (claimedRepo) {
+            nativeRootGuardFailure(exec, workTree)?.let { throw GitUnavailableException(it) }
+        }
     }
 
     /**
@@ -357,9 +385,19 @@ class GitCliHistoryProvider(
      */
     private fun ensureRepo() {
         Files.createDirectories(gitHome)
-        if (!Files.exists(workTree.resolve(".git"))) {
-            exec.run(listOf("init")).orThrow("git init")
+        if (Files.exists(workTree.resolve(".git"))) return
+        // Plainbase must NEVER `git init` a repo it does not own (ADR-0011 D4). A claimed root's missing `.git` is
+        // an operator error to REPORT - and this binds the commit-time belt call, not just prepare().
+        if (claimedRepo) {
+            throw GitCommandException(
+                "history = native",
+                1,
+                "no git repository at $workTree. This root declares `history = native`, so Plainbase expects to find a " +
+                    "repository it does not own and will never create one. Run `git init` there yourself, or set " +
+                    "`history = off` for this root.",
+            )
         }
+        exec.run(listOf("init")).orThrow("git init")
     }
 
     /**
@@ -633,9 +671,15 @@ internal fun runAutoMaintenance(exec: GitExecutor) {
     if (!auto.ok) exec.run(listOf("gc", "--auto"))
 }
 
-/** A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the write-pipeline catch. */
+/**
+ * A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the write-pipeline catch.
+ *
+ * The concrete git flavor of the port's [HistoryCommandException], which is what a DOMAIN root-loss classifier
+ * catches: every git call is `git -C <workTree>`, so a work tree that vanished under a running server exits
+ * non-zero here and this is the carrier it arrives as.
+ */
 open class GitCommandException(step: String, exitCode: Int, stderr: String) :
-    RuntimeException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
+    HistoryCommandException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
 
 /**
  * A `git diff` over a ref that does not resolve to a commit — a CLIENT error the diff route maps to

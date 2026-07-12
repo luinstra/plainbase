@@ -1,5 +1,7 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.CasResult
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
@@ -7,35 +9,74 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
- * The adoption pass (§5.2, chunk 4b): scan the content tree, resolve every page's identity through
+ * The adoption pass (§5.2, chunk 4b): scan the content trees, resolve every page's identity through
  * the 4a precedence/duplicate logic ([PageIdentityService]), persist the resulting id_map bindings
  * and issues, and — in [Mode.MATERIALIZE] only — write `id:` lines into accepted pages through the
  * surgical patcher and the ContentStore's atomic write.
  *
- * **One tree, rooted keys (C2):** the pass adopts ONE root ([root] - its [ContentStore] is one tree
- * by construction), but identity is global: a binding under another root is classified by the
- * shared [BindingVisibility] rule over [registeredRoots] (ADR-0011 D16), so a single-root adopt
- * never silently steals a configured-but-unscanned root's id - the D17 rank contest decides, and a
- * win over an unscanned owner records the loser-behalf [IdentityIssue.CrossRootDuplicateId]
- * in-pass. [Report]/[PageReport] keep bare [TreePath]s: the report is per-tree by construction and
- * the `adopt` output contract is pinned.
+ * **TWO PHASES, and the split is the whole design (D19).** [plan] resolves the WHOLE corpus - every
+ * configured root - and writes NOTHING: no file, no row. [apply] then materializes exactly that plan.
+ * Both of the bugs the split closes were faces of one sequential per-root loop:
+ *  - **Identity.** Resolving root-by-root made every root the loop had not REACHED yet look
+ *    *unscanned* to the D16 rule, hence untouchable - so a rank winner could not take the id it
+ *    outranks, and `--write-ids` went on to materialize ids into files that rank says belong to
+ *    another page, DURABLY. One global contest over ALL roots is what lets rank decide at all,
+ *    because now both sides have turned up to it.
+ *  - **Atomicity.** A root vanishing mid-loop escaped AFTER earlier roots had already been mutated,
+ *    leaving a half-adopted corpus. The plan is read-only, so an abort in phase 1 costs nothing, and
+ *    [apply] RE-PROBES every root before its first write, so a root lost between the phases aborts
+ *    with nothing written rather than half-applied.
+ *
+ * The plan is also what the DRY RUN prints. [Mode.PREVIEW] renders the very same [Plan] object - down
+ * to the patched BYTES - that a [Mode.MATERIALIZE] run would put on disk, so a preview that disagrees
+ * with the write it previews is not merely unlikely, it is unconstructible.
+ *
+ * **Rooted keys, global identity (C2/D16):** adopt covers every configured root or refuses to run at
+ * all (the caller's precondition), so its scanned set IS the registry and the D16 middle arm -
+ * configured-but-unscanned, hence non-supersedable - is structurally empty. What remains is the rule's
+ * other two arms: a scanned root's binding is live iff its path is on disk, and a DETACHED root's
+ * binding (a root absent from the registry, D2) is not an owner at all and is swept by the winner's
+ * key-complete bind. Rank (D17) settles every genuine cross-root contest right here.
  *
  * **Read-only first index (frozen policy):** [Mode.RECORD] performs ZERO ContentStore writes —
- * unidentified pages get id_map rows only. [Mode.PREVIEW] (`adopt --write-ids --dry-run`) writes
- * nothing at all, file or row: it reports exactly what a MATERIALIZE run would do, including every
- * would-refuse page with its rule-naming reason — the §A3 asymmetric-freeze measurement input.
+ * unidentified pages get id_map rows only. [Mode.PREVIEW] writes nothing at all, file or row: it
+ * reports exactly what a MATERIALIZE run would do, including every would-refuse page with its
+ * rule-naming reason — the §A3 asymmetric-freeze measurement input.
  *
- * **Materialization (frozen order):** patcher output is written via the ContentStore atomic write,
- * THEN the binding is marked materialized — an interruption between the two re-resolves cleanly on
- * the next run (the file's own frontmatter id wins by precedence). `Refused` records an
- * [IdentityIssue.PatchRefused] with the patcher's rule-naming message; the page keeps its map
- * identity. A file already carrying a column-0 `id` key that is NOT this page's assigned id (a
+ * **Materialization (frozen order):** patcher output is written via the ContentStore's atomic
+ * compare-and-swap, THEN the binding is marked materialized — an interruption between the two
+ * re-resolves cleanly on the next run (the file's own frontmatter id wins by precedence). `Refused`
+ * records an [IdentityIssue.PatchRefused] with the patcher's rule-naming message; the page keeps its
+ * map identity. A file already carrying a column-0 `id` key that is NOT this page's assigned id (a
  * copied duplicate, or a shape-invalid value) comes back `AlreadyPresent` and is never overwritten —
  * reconciling frontmatter-vs-map is exactly this pass's policy, and the policy is "keep the map
  * identity, surface the issue".
+ *
+ * **It CANNOT create, and that is a safety property, not an optimization.** The write is
+ * [ContentStore.compareAndSwapWrite], never [ContentStore.write]: `write` is a create-or-replace that
+ * MAKES MISSING PARENTS, so a root deleted or unmounted between the plan and the write would be
+ * RECREATED on disk holding only the pages this run patched - a partial skeleton of the operator's
+ * tree, laid down wherever that path now resolves (possibly a different mount entirely), by the run
+ * that then reported SUCCESS. CAS cannot do that: it replaces a file it already resolved and creates
+ * nothing, so a vanished root aborts as a classified [RootUnavailable] and a vanished PAGE aborts as
+ * [PlanStale] instead of being conjured back into existence.
+ *
+ * The same CAS also refuses to IMPROVISE. Its precondition is the hash of the very bytes the patch was
+ * computed from ([PlannedWrite.baseHash]), so a page edited under a plan that was already resolved
+ * comes back `Mismatch` rather than being overwritten with bytes derived from a stale read. The plan
+ * is executed or it is abandoned; it is never partially reinterpreted against a corpus that moved.
+ *
+ * **What an abort leaves behind (and why that is enough).** A filesystem cannot be transacted against
+ * SQLite, so this pass does not pretend to two-phase commit. It guarantees the properties that
+ * actually matter: it never resurrects a root, never writes into a path whose root is gone, and always
+ * aborts LOUDLY. What survives an abort is a page whose `id_map` row exists while its file has no `id:`
+ * line yet - which is precisely the state adopt EXISTS to repair, and re-running converges on it
+ * (adopt deletes nothing and is idempotent). So: if a root disappears mid-run, adopt aborts; restore
+ * the root and re-run.
  *
  * **Write durability (debate item 9):** every ContentStore write is announced through the
  * `logIntent` callback (path + id) BEFORE it is performed, so an interrupted run leaves a log from
@@ -43,23 +84,53 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * performs zero writes) makes re-running safe. On NFS/SMB the underlying atomic rename falls back
  * to copy+delete (not crash-atomic) — the caveat the `adopt` output documents.
  *
+ * **Root loss** takes the shared exit boundary ([RootLossClassifier]) on both phases, so a vanished
+ * disk aborts the run as a classified [RootUnavailable] the CLI can report, while a genuine fault (a
+ * corrupt file, a bug) still propagates as itself instead of being laundered into "the disk is gone".
+ *
  * Git-mode single batched commit for `adopt --write-ids` is Phase 3 (no Git layer exists yet) — a
  * deferred hook, not a dropped requirement.
  *
- * Pure domain orchestration over ports; pages are scanned in path order so duplicate resolution and
- * the intent log are deterministic.
+ * Pure domain orchestration over ports; roots are resolved in registry (D7) rank order and pages in
+ * path order, so duplicate resolution and the intent log are deterministic.
  */
 class AdoptionPass(
-    private val contentStore: ContentStore,
+    sources: List<Source>,
     private val idMap: IdMapRepository,
     private val identity: PageIdentityService,
     private val patcher: FrontmatterPatcher,
-    private val root: RootName,
+    private val rootLoss: RootLossClassifier,
+    // The frozen content hash, passed as the domain object every other pass holds: it is the CAS
+    // PRECONDITION here, so the value adopt compares against must be bit-for-bit the one the write
+    // pipeline and the citations use, never a second definition that could drift from it.
+    private val citations: CitationFactory,
+    rootRank: (RootName) -> Int,
     private val registeredRoots: Set<RootName>,
 ) {
 
-    /** The one root this pass can see (D16: everything else is unscanned or detached). */
-    private val scannedRoots = setOf(root)
+    /** One root's tree. */
+    data class Source(val root: RootName, val store: ContentStore)
+
+    init {
+        val names = sources.map { it.root }
+        require(names.size == names.toSet().size) {
+            "duplicate source root(s): ${names.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.joinToString(", ")}"
+        }
+        // A root the rank source does not know comes back -1, which would otherwise silently sort it
+        // FIRST - i.e. silently seat an unknown root as the top-rank winner (the `IndexBuilder` guard).
+        sources.forEach { source ->
+            require(rootRank(source.root) >= 0) { "source root '${source.root}' is unknown to the registry rank" }
+        }
+    }
+
+    // Sorted by the shared D7 rank, never trusted from the caller: the rank contest is only decided
+    // correctly if the registry-order winner resolves (and claims) first.
+    private val sources: List<Source> = sources.sortedBy { rootRank(it.root) }
+
+    private val storeOf: Map<RootName, ContentStore> = this.sources.associate { it.root to it.store }
+
+    /** The roots this pass can see. Adopt covers every configured root or refuses, so this IS the registry. */
+    private val scannedRoots: Set<RootName> = this.sources.mapTo(mutableSetOf()) { it.root }
 
     /** The three `adopt` modes — see the class header for the frozen write policy of each. */
     enum class Mode {
@@ -93,6 +164,7 @@ class AdoptionPass(
 
     /** One page's resolved identity and outcome, plus any issues raised on the way. */
     data class PageReport(
+        val root: RootName,
         val path: TreePath,
         val id: PageId,
         val source: PageIdentityService.Source,
@@ -100,7 +172,7 @@ class AdoptionPass(
         val issues: List<IdentityIssue>,
     )
 
-    /** The whole pass: per-page reports in scan (path) order. */
+    /** One root's section of a [Plan] — the `adopt` output contract's unit, per-tree by construction. */
     data class Report(val mode: Mode, val pages: List<PageReport>) {
 
         val issues: List<IdentityIssue> get() = pages.flatMap { it.issues }
@@ -109,98 +181,233 @@ class AdoptionPass(
     }
 
     /**
-     * Runs the pass in [mode]. [logIntent] is invoked (path + id) immediately BEFORE each
-     * ContentStore write — the pre-write intent log the durability policy requires.
+     * One page's planned file write: the patched [bytes], and [baseHash] over the bytes they were computed
+     * FROM. The base hash is what makes the write a CAS rather than a hopeful overwrite - the plan's authority
+     * to replace a file expires the moment that file stops being the one it read.
      */
-    fun run(mode: Mode, logIntent: (TreePath, PageId) -> Unit = { _, _ -> }): Report {
-        val pages = contentStore.scan().files
-            .map { it.path }
-            .filter { it.name.endsWith(".md") }
-            .sortedBy { it.value }
-        val livePaths = pages.mapTo(mutableSetOf()) { RootedPath(root, it) }
-        val claimed = HashMap<PageId, RootedPath>()
+    class PlannedWrite(val baseHash: String, val bytes: ByteArray)
 
-        val reports = pages.map { path ->
-            val bytes = checkNotNull(contentStore.read(path)) { "scanned page vanished before read: ${path.value}" }
-            val rooted = RootedPath(root, path)
+    /**
+     * The whole corpus, resolved but not yet applied: what every page's identity WILL be, and — for the
+     * pages that get patched — the exact bytes that will land. [apply] is a pure execution of this, and
+     * the dry run is a pure rendering of it, which is what makes the two impossible to disagree.
+     */
+    class Plan(
+        val mode: Mode,
+        /** Every page, in rank-then-path order (the bind order [apply] must keep). */
+        val pages: List<PageReport>,
+        private val patched: Map<RootedPath, PlannedWrite>,
+    ) {
+
+        /** [root]'s section of the report — the per-tree unit the `adopt` output prints. */
+        fun report(root: RootName): Report = Report(mode, pages.filter { it.root == root })
+
+        /** The write [apply] will perform for [page], or null when the page needs none. */
+        fun writeFor(page: RootedPath): PlannedWrite? = patched[page]
+
+        /** The bytes [apply] will write for [page], or null when the page needs no write (what a PREVIEW renders). */
+        fun bytesFor(page: RootedPath): ByteArray? = patched[page]?.bytes
+    }
+
+    /**
+     * The whole pass: [plan], then — unless the mode is [Mode.PREVIEW], whose contract is zero writes — [apply] of
+     * THAT plan. Returns it, because the plan is also the report: the dry run renders the very same object the write
+     * phase executes, so a preview cannot disagree with the write it previews.
+     */
+    fun run(mode: Mode, logIntent: (RootedPath, PageId) -> Unit = { _, _ -> }): Plan =
+        plan(mode).also { if (mode != Mode.PREVIEW) apply(it, logIntent) }
+
+    /**
+     * PHASE 1, READ-ONLY: scans every configured root, resolves the whole corpus's identity in ONE
+     * global duplicate contest, and computes each accepted page's patched bytes. Writes nothing —
+     * not a file, not a row — so an abort here (a root that vanishes mid-scan) costs nothing.
+     *
+     * ALL roots are scanned before the FIRST resolve (the D17 execution invariant): under interleaved
+     * scan-and-resolve, a binding in a not-yet-scanned root would be misclassified as detached.
+     */
+    fun plan(mode: Mode): Plan {
+        val drafts = sources.flatMap { source -> scan(source) }
+        val livePaths = drafts.mapTo(mutableSetOf()) { it.page }
+        val claimed = HashMap<PageId, RootedPath>()
+        val patched = HashMap<RootedPath, PlannedWrite>()
+
+        val pages = drafts.map { draft ->
             val assignment = identity.resolve(
-                path = rooted,
-                rawFrontmatterId = patcher.readIdValue(bytes),
-                mappedId = idMap.find(rooted)?.id,
-                // Duplicate-detection seam: within-run claims first, then id_map bindings classified
-                // by the shared D16 rule (scanned root live-iff-on-disk, configured-but-unscanned
-                // untouchable, detached supersedable).
+                path = draft.page,
+                rawFrontmatterId = patcher.readIdValue(draft.bytes),
+                mappedId = idMap.find(draft.page)?.id,
+                // Duplicate-detection seam: within-run claims first, then id_map bindings classified by
+                // the shared D16 rule. This pass scans EVERY registered root, so the rule's arms here are
+                // "live iff on disk" and "a detached root is not an owner" - and rank decides the rest.
                 ownerOf = { id ->
                     claimed[id] ?: idMap.pathOf(id)?.takeIf { BindingVisibility.isLive(it, livePaths, scannedRoots, registeredRoots) }
                 },
+                supersedable = { owner -> BindingVisibility.isSupersedable(owner, scannedRoots) },
             )
-            claimed[assignment.id] = rooted
-            adopt(mode, path, bytes, assignment, logIntent)
+            claimed[assignment.id] = draft.page
+            planPage(mode, draft, assignment, patched)
         }
 
         logger.info {
-            "adoption pass ($mode): ${reports.size} page(s), " +
-                "${reports.count { it.disposition == Disposition.MATERIALIZED }} materialized, " +
-                "${reports.count { it.issues.isNotEmpty() }} with issues"
+            "adoption plan ($mode) over ${sources.size} root(s): ${pages.size} page(s), " +
+                "${patched.size} to materialize, ${pages.count { it.issues.isNotEmpty() }} with issues"
         }
-        return Report(mode, reports)
+        return Plan(mode, pages, patched)
     }
 
-    private fun adopt(
+    /**
+     * PHASE 2: materializes [plan] — id_map bindings for every page, and the planned bytes for the
+     * pages that carry a patch. Never called for [Mode.PREVIEW], whose contract is zero writes.
+     *
+     * **RE-PROBES every root before the first write.** The plan was resolved against all of them, so a
+     * root that has gone away since must abort the whole run rather than half-apply it: a corpus whose
+     * identity is partly adopted is the state an operator would never think to re-check. Adopt deletes
+     * nothing and is idempotent, so aborting costs only a re-run.
+     *
+     * [logIntent] is invoked (page + id) immediately BEFORE each ContentStore write — the pre-write
+     * intent log the durability policy requires. THROWS [RootUnavailable] if a root is gone, [PlanStale]
+     * if a PAGE moved under the plan, and [AdoptWriteFailed] if a write faulted. All three ABORT the run
+     * rather than improvise, and all three leave only state a re-run converges on.
+     */
+    fun apply(plan: Plan, logIntent: (RootedPath, PageId) -> Unit = { _, _ -> }) {
+        check(plan.mode != Mode.PREVIEW) { "PREVIEW's contract is zero writes; it is rendered from the plan, never applied" }
+        sources.forEach { source ->
+            if (rootLoss.markIfGone(source.root, source.store)) throw RootUnavailable(source.root, UnavailableCause.VANISHED)
+        }
+
+        plan.pages.forEach { page ->
+            val target = RootedPath(page.root, page.path)
+            val idInFile = page.source == PageIdentityService.Source.FRONTMATTER
+            idMap.bind(target, page.id, materialized = idInFile)
+            plan.writeFor(target)?.let { planned ->
+                // Intent BEFORE write (durability policy), write, THEN mark materialized.
+                logIntent(target, page.id)
+                materialize(target, planned)
+                idMap.markMaterialized(target)
+            }
+            page.issues.forEach(idMap::record)
+        }
+        val materialized = plan.pages.count { it.disposition == Disposition.MATERIALIZED }
+        logger.info { "adoption pass (${plan.mode}): ${plan.pages.size} page(s) bound, $materialized materialized" }
+    }
+
+    /**
+     * ONE page's file write: the non-resurrecting, non-clobbering CAS (class header). Every arm but
+     * `Written` ABORTS the run - there is no arm on which improvising is the safe move:
+     *  - `Deleted`: the page is gone. [ContentStore.write] would have RECREATED it (parents and all), which
+     *    is how a lost root came back as a partial skeleton tree. Refuse, and say which page.
+     *  - `Mismatch`: the file is no longer the one the patch was computed from. The planned bytes are stale;
+     *    writing them would silently revert whoever edited it.
+     *  - `Unreadable`: the write faulted. Its [CasResult.Unreadable.targetMutated] is carried out verbatim
+     *    rather than flattened, because "nothing landed" and "the AUTHORITY holds the bytes but the local
+     *    mirror does not" are different things to tell an operator - and the second one SELF-HEALS, since
+     *    every non-PREVIEW run hydrates the mirror before it plans.
+     * A root that went away raises [RootUnavailable] from inside the store (already marked); [rootLoss]
+     * carries it out unchanged, and re-classifies a raw IO fault that turns out to BE a lost root.
+     */
+    private fun materialize(target: RootedPath, planned: PlannedWrite) {
+        val store = storeOf.getValue(target.root)
+        val result = rootLoss.guarding(target.root, store) {
+            store.compareAndSwapWrite(target.path, planned.baseHash, planned.bytes, citations::contentHash)
+        }
+        when (result) {
+            is CasResult.Written -> Unit
+            CasResult.Deleted -> throw PlanStale(target, "the page was deleted after the plan read it")
+            is CasResult.Mismatch -> throw PlanStale(target, "the page changed on disk after the plan read it")
+            is CasResult.Unreadable -> throw AdoptWriteFailed(target, result.cause, result.targetMutated)
+        }
+    }
+
+    /** One page in hand: its rooted identity-to-be and the bytes both the resolve and the patch read. */
+    private class Draft(val page: RootedPath, val bytes: ByteArray)
+
+    /** ONE root's tree, in path order, under the shared root-loss exit boundary. */
+    private fun scan(source: Source): List<Draft> = rootLoss.guarding(source.root, source.store) {
+        source.store.scan().files
+            .map { it.path }
+            .filter { it.name.endsWith(".md") }
+            .sortedBy { it.value }
+            .map { path ->
+                // CLASSIFIED, not `checkNotNull` (the `IndexBuilder.scan` rule, which this had escaped): a bare
+                // null read cannot tell a page deleted mid-scan from a root that went away UNDER the scan, and
+                // the resulting IllegalStateException would walk straight past the `guarding` boundary above -
+                // bypassing the classifier, leaving the root unmarked, and handing the CLI a stack trace where
+                // it had an actionable "restore the path and re-run" to print.
+                val bytes = when (val read = source.store.readClassified(path)) {
+                    is ContentRead.Bytes -> read.bytes
+                    ContentRead.RootDown -> throw RootUnavailable(source.root, UnavailableCause.VANISHED)
+                    ContentRead.Absent -> error("scanned page vanished before read: ${path.value}")
+                }
+                Draft(RootedPath(source.root, path), bytes)
+            }
+    }
+
+    /**
+     * One page's planned outcome. The patch is computed HERE, in the read-only phase, and its bytes are
+     * handed to the plan: the preview and the write are then the same bytes by construction, and the
+     * write phase never re-derives anything it could get wrong.
+     */
+    private fun planPage(
         mode: Mode,
-        path: TreePath,
-        bytes: ByteArray,
+        draft: Draft,
         assignment: PageIdentityService.Assignment,
-        logIntent: (TreePath, PageId) -> Unit,
+        patched: MutableMap<RootedPath, PlannedWrite>,
     ): PageReport {
         val issues = mutableListOf<IdentityIssue>()
         assignment.issue?.let(issues::add)
-        val idInFile = assignment.source == PageIdentityService.Source.FRONTMATTER
-
-        if (mode != Mode.PREVIEW) {
-            // D16 outcome two, adopt side: winning the rank contest against a registered-but-
-            // unscanned owner deletes its row via the key-complete bind, so the loser-behalf issue
-            // rides the bind's OWN transaction (the port's D16 atomicity contract; same natural key
-            // the loser itself would record at its next rebuild - the UNIQUE upsert dedups) and
-            // surfaces in this page's report. PREVIEW binds nothing, so nothing is superseded or
-            // recorded.
-            val superseded = assignment.supersededOwner
-                ?.takeIf { it.root in registeredRoots && it.root !in scannedRoots }
-                ?.let { IdentityIssue.CrossRootDuplicateId(id = assignment.id, kept = RootedPath(root, path), reassigned = it) }
-            idMap.bind(RootedPath(root, path), assignment.id, materialized = idInFile, supersededOwnerIssue = superseded)
-            superseded?.let(issues::add)
-        }
+        val page = draft.page
 
         val disposition = when {
-            idInFile -> Disposition.ALREADY_MATERIALIZED
+            assignment.source == PageIdentityService.Source.FRONTMATTER -> Disposition.ALREADY_MATERIALIZED
             mode == Mode.RECORD -> Disposition.MAPPED
-            else -> when (val result = patcher.patch(bytes, assignment.id)) {
-                is FrontmatterPatcher.PatchResult.Patched ->
-                    if (mode == Mode.PREVIEW) {
-                        Disposition.WOULD_MATERIALIZE
-                    } else {
-                        // Intent BEFORE write (durability policy), write, THEN mark materialized.
-                        logIntent(path, assignment.id)
-                        contentStore.write(path, result.bytes)
-                        idMap.markMaterialized(RootedPath(root, path))
-                        Disposition.MATERIALIZED
-                    }
+            else -> when (val result = patcher.patch(draft.bytes, assignment.id)) {
+                is FrontmatterPatcher.PatchResult.Patched -> {
+                    // The base hash is captured HERE, off the very bytes the patch was derived from, so the
+                    // CAS in [apply] is asserting exactly the read this plan was built on - not a re-read.
+                    patched[page] = PlannedWrite(baseHash = citations.contentHash(draft.bytes), bytes = result.bytes)
+                    if (mode == Mode.PREVIEW) Disposition.WOULD_MATERIALIZE else Disposition.MATERIALIZED
+                }
                 // A column-0 `id` key whose value is not this page's assigned id — never overwritten.
                 FrontmatterPatcher.PatchResult.AlreadyPresent -> Disposition.MAPPED
                 is FrontmatterPatcher.PatchResult.Refused -> {
-                    issues += IdentityIssue.PatchRefused(root, path, result.message)
+                    issues += IdentityIssue.PatchRefused(page.root, page.path, result.message)
                     Disposition.REFUSED
                 }
             }
         }
-
-        if (mode != Mode.PREVIEW) {
-            issues.forEach(idMap::record)
-        }
-        return PageReport(path, assignment.id, assignment.source, disposition, issues.toList())
+        return PageReport(page.root, page.path, assignment.id, assignment.source, disposition, issues.toList())
     }
 
     companion object {
         private val logger = KotlinLogging.logger {}
     }
 }
+
+/**
+ * The corpus moved under a plan that had already been resolved: [page] was deleted, changed, or could not be
+ * written. Distinct from [RootUnavailable] on purpose - the DISK is fine, one PAGE is not what it was - and the
+ * two want different words from the operator ("restore the root" vs "something is writing to your tree").
+ *
+ * It aborts rather than skipping because the plan IS the report: a page reported MATERIALIZED that was quietly
+ * stepped over would make the printed run a lie, and the two things adopt could do instead - recreate a deleted
+ * page, or overwrite an edited one with bytes derived from a stale read - are both worse than stopping. Adopt
+ * deletes nothing and is idempotent, so the cost of aborting is one re-run against whatever is there now.
+ */
+class PlanStale(val page: RootedPath, val reason: String) :
+    RuntimeException("adoption plan is stale at ${page.root}:${page.path.value}: $reason")
+
+/**
+ * A planned write FAULTED at [page] (permission, locked file, transport, a failed mirror apply) - as distinct from
+ * [PlanStale], where the write was refused because the target was no longer the page the plan had read.
+ *
+ * [targetMutated] is the one thing an operator has to know here, and it is the port's own
+ * [CasResult.Unreadable.targetMutated]: false means NOTHING landed; true means the bytes may already be DURABLE at
+ * the authority even though the operation failed (an object backend whose conditional PUT succeeded and whose local
+ * mirror apply then did not). Neither is a corruption, and neither needs a hand-repair: the binding was made, the
+ * file either has its id or does not, and a re-run - which hydrates the mirror first - re-plans against whichever
+ * of those is true and converges. Adopt is idempotent; this is why that matters.
+ */
+class AdoptWriteFailed(val page: RootedPath, val reason: String, val targetMutated: Boolean) : RuntimeException(
+    "adoption write failed at ${page.root}:${page.path.value}: $reason" +
+        if (targetMutated) " (the bytes may already be durable at the authority)" else "",
+)

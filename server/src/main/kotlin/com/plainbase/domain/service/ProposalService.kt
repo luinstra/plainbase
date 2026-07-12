@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
@@ -13,6 +14,9 @@ import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.ProposalSummaryRow
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.time.Clock
 
@@ -38,6 +42,21 @@ class ProposalService(
     private val baseReader: ProposalBaseReader,
     private val proposalIdProvider: ProposalIdProvider,
     private val clock: Clock,
+    /**
+     * The serving status of the root a durable ROW names (ADR-0011 D15) — a NARROW function over domain types,
+     * not a service graph: the composition root closes over the resolver + the availability holder, exactly as
+     * `PolicyService` takes an `editableOf` and `LocalContentStore` an `onRootUnavailable`.
+     *
+     * Defaulted AVAILABLE = today's exact semantics (every root serves), so a single-root construction stays
+     * terse and inert and every existing construction site compiles untouched.
+     *
+     * It is evaluated PER CALL, not once per pass, and that is the more current answer rather than the sloppier
+     * one: the watchers are already live when the boot reconcile runs, so a WATCHER_FAILED flip can land DURING
+     * the pass, and a pass-level snapshot would miss it and then rewrite a row for a root that just went down.
+     * Availability is monotonic, so a per-call read can only ever get MORE unavailable — which is the safe
+     * direction for a guard whose whole job is to NOT rewrite the row.
+     */
+    private val rootStatus: (RootName) -> RootStatus = { RootStatus.AVAILABLE },
 ) {
 
     /**
@@ -46,27 +65,40 @@ class ProposalService(
      * the target's live current hash (else `StaleBase`) and the target must still be published (else `StaleBase`,
      * target-missing). The stored `diff_artifact` is `live-base -> proposed` (so base == current). Nothing is
      * persisted on a `StaleBase`.
+     *
+     * [target] is THREADED from the facade, never re-resolved here (ADR-0011 D17). The facade had to resolve the
+     * page anyway to derive the gate's rooted resource, and `baseReader.pathOf` is a FRESH read of the published
+     * snapshot — so re-resolving would let a rebuild landing between the gate and this call persist a proposal
+     * against a root the gate never authorized (possibly a non-editable or unavailable one). Gate-root and
+     * row-root are one object's answer, end to end.
      */
     fun proposeEdit(
         @Suppress("UNUSED_PARAMETER") grant: EditGrant,
         pageId: PageId,
+        target: RootedPath,
         baseHash: String,
         clientTargetPath: TreePath?,
         proposedContent: ByteArray,
         rationale: String,
         author: ProposalAuthor,
     ): ProposeOutcome {
-        val targetPath = baseReader.pathOf(pageId) ?: return ProposeOutcome.StaleBase
         // C3: page_id is authoritative; a client target_path that disagrees with the resolved path is malformed.
-        if (clientTargetPath != null && clientTargetPath != targetPath) return ProposeOutcome.InvalidRequest
-        val currentBytes = baseReader.currentBytes(targetPath) ?: return ProposeOutcome.StaleBase
+        if (clientTargetPath != null && clientTargetPath != target.path) return ProposeOutcome.InvalidRequest
+        val currentBytes = when (val read = baseReader.currentBytes(target)) {
+            is ContentRead.Bytes -> read.bytes
+            // NEVER StaleBase: "your base moved" is a lie when the truth is that the disk is unmounted, and it is
+            // the kind of lie that makes an agent re-read and re-propose against nothing.
+            ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
+            ContentRead.Absent -> return ProposeOutcome.StaleBase
+        }
         if (citations.contentHash(currentBytes) != baseHash) return ProposeOutcome.StaleBase
 
         val row = newPending(
             operation = ProposalOperation.EDIT,
             pageId = pageId,
+            root = target.root,
             baseHash = baseHash,
-            targetPath = targetPath,
+            targetPath = target.path,
             proposedContent = proposedContent,
             rationale = rationale,
             diffArtifact = unifiedDiff(currentBytes, proposedContent),
@@ -88,7 +120,7 @@ class ProposalService(
     fun proposeCreate(
         @Suppress("UNUSED_PARAMETER") grant: CreateGrant,
         pageId: PageId,
-        targetPath: TreePath,
+        target: RootedPath,
         proposedContent: ByteArray,
         rationale: String,
         author: ProposalAuthor,
@@ -96,8 +128,11 @@ class ProposalService(
         val row = newPending(
             operation = ProposalOperation.CREATE,
             pageId = pageId,
+            // A CREATE proposal's stored root is AUTHORITATIVE - there is no page yet to resolve one from, so this
+            // is what apply will write into. (An EDIT's is authoritative too, for its own reason: see [writeRootOf].)
+            root = target.root,
             baseHash = null,
-            targetPath = targetPath,
+            targetPath = target.path,
             proposedContent = proposedContent,
             rationale = rationale,
             diffArtifact = unifiedDiff(ByteArray(0), proposedContent),
@@ -235,9 +270,25 @@ class ProposalService(
         // A CONFLICTED row is ALWAYS an EDIT (creates never enter APPLYING -> never CONFLICTED), so pageId is non-null
         // by construction; assert the invariant rather than silently treat an impossible null as Gone.
         val pageId = requireNotNull(row.pageId) { "CONFLICTED proposal $id must be an edit with a non-null page_id" }
-        val path = baseReader.pathOf(pageId)
-        val currentBytes = path?.let(baseReader::currentBytes)
-        if (path == null || currentBytes == null) {
+        // Resolved IN THE ROW'S OWN ROOT: a rebase re-pins `base_hash` and recomputes the diff a human then approves,
+        // so resolving across roots would silently re-point the whole review at another repository's file.
+        val target = baseReader.pathOf(row.root, pageId)
+        // A null pathOf needs NO classification, and the proof is worth stating: pathOf is SNAPSHOT-derived, so a
+        // null means the id is in no published section OF THIS ROOT. Under a root whose status the facade's pre-guard
+        // already passed, that can only be a never-scanned root (which is MISSING_AT_BOOT and therefore already marked,
+        // so the pre-guard fired), a genuinely absent page under a live root, or a page whose id was re-awarded to
+        // another root (D17) - all of them the honest Gone. It CANNOT be an unmarked-vanished root, because such a
+        // root's section is carried forward, so its pages are still in byId.
+        val currentBytes = when (val read = target?.let(baseReader::currentBytes)) {
+            is ContentRead.Bytes -> read.bytes
+            // The facade's pre-guard is a STATUS check, so the root can vanish after it passes and the read then
+            // comes back empty for a reason the status has not heard about. Stamping the row terminally FAILED off
+            // THAT would rewrite durable state on evidence a missing root could not supply - and it would FORECLOSE
+            // the recovery that restoring the root would otherwise give. Leave it CONFLICTED; answer 503.
+            ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
+            null, ContentRead.Absent -> null
+        }
+        if (target == null || currentBytes == null) {
             // The target page is gone → stamp terminal FAILED via the CONFLICTED->FAILED CAS. HONOR the CAS result the
             // SAME way the success path honors a lost `rebaseToPending` CAS: a false means a concurrent rebase/terminal
             // transition won this row after our initial CONFLICTED read, so the row already left CONFLICTED — report
@@ -253,12 +304,32 @@ class ProposalService(
         // Re-pin target_path to the CURRENT path too (the page may have MOVED since propose): otherwise a rebased
         // PENDING row would show a stale propose-time path against a fresh base_hash/diff — mixed staleness (the same
         // class as the stale decision metadata cleared below).
-        return if (repository.rebaseToPending(id, newBaseHash, newDiff, path)) {
+        return if (repository.rebaseToPending(id, newBaseHash, newDiff, target.path)) {
             RebaseOutcome.Rebased(requireNotNull(get(id)) { "rebased proposal $id vanished" })
         } else {
             RebaseOutcome.NotConflicted
         }
     }
+
+    /**
+     * The two facts the facade's PRE-CLAIM guards (`approve`/`rebase`) need before they act: which root the write
+     * would land in, and whether the row is still ACTIONABLE at all. Both must be answered BEFORE the
+     * PENDING->APPLYING claim, since that claim is itself a durable rewrite that would convert a decidable row into
+     * an undecidable one. Deliberately NOT [get], which would compute `baseDrifted` and touch the base reader.
+     *
+     * [ProposalGuard.status] does NOT become a second source of truth: the CAS in [apply] (and the CONFLICTED check
+     * in [rebase]) still decides, so a row that turns terminal after this read is still caught. It exists so an
+     * ALREADY-DECIDED row can be reported as decided — a 409 — without first demanding that its root be up. Reading
+     * the state of a proposal nobody can act on any more needs no disk.
+     *
+     * The root is the STORED one, for BOTH operations (ADR-0011 D15/D17). A create has no page to resolve one from.
+     * An edit HAS one - and still does not follow it: the D17 cross-root duplicate-id contest re-awards an ID, it
+     * does not MOVE a file, so following the id would walk an approved edit off the root it was proposed, reviewed
+     * and gated against. The apply pins the same stored root ([SaveRequest.expectedRoot]), so the guard and the
+     * write can never disagree about which root a 503 is about; an id re-awarded across roots answers `page_deleted`
+     * -> CONFLICTED instead. That is also why the guard needs nothing but this name.
+     */
+    fun guardOf(id: ProposalId): ProposalGuard? = repository.findById(id)?.let { ProposalGuard(it.root, it.status) }
 
     /**
      * The inspect-then-decide crash-recovery reconciler (P1b/C1), run at startup AFTER the disk + index are ready
@@ -290,14 +361,48 @@ class ProposalService(
      * conditions on `status='APPLYING'`, so a row that already left APPLYING (a racing winner) is a no-op.
      */
     private fun recoverApplyingRow(row: ProposalRow) {
-        // EDIT resolves the page's CURRENT path via pageId (it may have moved); CREATE resolves by the IMMUTABLE
-        // target_path — a fresh page is not in the index/idMap after a crash, so pathOf(pageId) would wrongly miss a
-        // landed create. Both operations carry a non-null page_id (the edit invariant / the propose-time mint).
-        val path = when (row.operation) {
-            ProposalOperation.EDIT -> baseReader.pathOf(requireNotNull(row.pageId) { "APPLYING edit ${row.id} must carry a page_id" })
-            ProposalOperation.CREATE -> row.targetPath
+        // A root name read back off a DURABLE ROW is UNTRUSTED: plainbase.db outlives roots{}. A DETACHED stored root
+        // refuses BEFORE anything is resolved through it - it has no store to read AT ALL (its per-root lookup would
+        // throw, and the boot reconcile is unwrapped, so the server would die at startup instead of serving).
+        if (rootStatus(row.root) == RootStatus.DETACHED) {
+            logger.warn {
+                "APPLYING proposal ${row.id} targets root '${row.root}', which is not configured; leaving it APPLYING - " +
+                    "it is never stamped off evidence a root that is not serving cannot supply. Re-add the root and restart to decide it."
+            }
+            return
         }
-        val diskBytes = path?.let(baseReader::currentBytes)
+        // EDIT resolves the page's CURRENT path via pageId, WITHIN the row's root (it may have moved inside that root;
+        // it may never cross out of it — see [ProposalBaseReader.pathOf]); CREATE resolves by the IMMUTABLE target_path
+        // — a fresh page is not in the index/idMap after a crash, so pathOf would wrongly miss a landed create. Both
+        // operations carry a non-null page_id (the edit invariant / the propose-time mint).
+        val target = when (row.operation) {
+            ProposalOperation.EDIT ->
+                baseReader.pathOf(row.root, requireNotNull(row.pageId) { "APPLYING edit ${row.id} must carry a page_id" })
+            ProposalOperation.CREATE -> RootedPath(row.root, row.targetPath)
+        }
+        // Every target now resolves inside the row's own root, so THAT root is the one whose evidence decides - and an
+        // unavailable root cannot supply the evidence this recovery decides on: leave the row APPLYING and WARN.
+        val status = rootStatus(row.root)
+        if (status != RootStatus.AVAILABLE) {
+            logger.warn {
+                "APPLYING proposal ${row.id} targets root '${row.root}' ($status); leaving it APPLYING - it is never " +
+                    "stamped off evidence a root that is not serving cannot supply. Restore the root and restart to decide it."
+            }
+            return
+        }
+        val diskBytes = when (val read = target?.let(baseReader::currentBytes)) {
+            is ContentRead.Bytes -> read.bytes
+            // The window the status guard CANNOT close: the root vanished after it passed, and nothing has marked it,
+            // so a second look at the status would return the same stale AVAILABLE. The window closes at the READ.
+            // Stamping PENDING here would rewrite durable state off a null a missing root produced.
+            ContentRead.RootDown -> {
+                logger.warn {
+                    "APPLYING proposal ${row.id}: root '${row.root}' went away under the recovery read; leaving it APPLYING"
+                }
+                return
+            }
+            null, ContentRead.Absent -> null
+        }
         if (diskBytes != null && citations.contentHash(diskBytes) == citations.contentHash(row.proposedContent)) {
             repository.markApplied(
                 id = row.id,
@@ -314,18 +419,19 @@ class ProposalService(
 
     /** Every proposal as a summary view, newest-first, each carrying its LIVE-derived `base_drifted` flag. */
     fun list(): List<ProposalSummaryView> = repository.all().map {
-        ProposalSummaryView(it, baseDrifted(it.status, it.operation, it.pageId, it.targetPath, it.baseHash))
+        ProposalSummaryView(it, baseDrifted(it.status, it.operation, it.pageId, RootedPath(it.root, it.targetPath), it.baseHash))
     }
 
     /** The full proposal view for [id] (incl. the stable `unified_diff`) with its LIVE `base_drifted`, or null. */
     fun get(id: ProposalId): ProposalView? {
         val row = repository.findById(id) ?: return null
-        return ProposalView(row, baseDrifted(row.status, row.operation, row.pageId, row.targetPath, row.baseHash))
+        return ProposalView(row, baseDrifted(row.status, row.operation, row.pageId, RootedPath(row.root, row.targetPath), row.baseHash))
     }
 
     private fun newPending(
         operation: ProposalOperation,
         pageId: PageId?,
+        root: RootName,
         baseHash: String?,
         targetPath: TreePath,
         proposedContent: ByteArray,
@@ -336,6 +442,7 @@ class ProposalService(
         id = proposalIdProvider.next(),
         operation = operation,
         pageId = pageId,
+        root = root,
         baseHash = baseHash,
         targetPath = targetPath,
         proposedContent = proposedContent,
@@ -363,21 +470,32 @@ class ProposalService(
      *  - EDIT: the live current hash differs from the stored `base_hash` — OR the target was deleted since propose
      *    (currentBytes null IS drift; do NOT diff against empty here);
      *  - CREATE: a content file now occupies `target_path` (the file-path collision, `byPath` ∪ `assets`).
+     *
+     * A `RootDown` read answers `true`, EXPLICITLY, and it must NOT throw: `list`/`get` render the review queue, and
+     * an unavailable root's rows are exactly the ones an operator most needs to see - throwing would take the whole
+     * queue down for them. The consequence is named rather than hidden: such a row reads `base_drifted = true`, which
+     * under the existing rule (an unreadable base IS drift) is the honest "not applyable right now". It is an
+     * explicitly NON-AUTHORITATIVE triage datum, and the reviewer sees the real reason directly, because the row
+     * carries its `root` and the tree/health say whether that root is serving.
      */
     private fun baseDrifted(
         status: ProposalStatus,
         operation: ProposalOperation,
         pageId: PageId?,
-        targetPath: TreePath,
+        target: RootedPath,
         baseHash: String?,
     ): Boolean {
         if (status != ProposalStatus.PENDING && status != ProposalStatus.CONFLICTED) return false
         return when (operation) {
-            ProposalOperation.EDIT -> {
-                val current = pageId?.let(baseReader::pathOf)?.let(baseReader::currentBytes)
-                current == null || citations.contentHash(current) != baseHash
+            // Resolved in the row's own root ([target].root): drift is the reviewer's "is this still applyable"
+            // signal, so it must report on the file the apply will actually touch, never on a stranger that
+            // happens to hold the id today.
+            ProposalOperation.EDIT -> when (val read = pageId?.let { baseReader.pathOf(target.root, it) }?.let(baseReader::currentBytes)) {
+                is ContentRead.Bytes -> citations.contentHash(read.bytes) != baseHash
+                ContentRead.RootDown -> true
+                null, ContentRead.Absent -> true
             }
-            ProposalOperation.CREATE -> baseReader.occupied(targetPath)
+            ProposalOperation.CREATE -> baseReader.occupied(target)
         }
     }
 
@@ -423,6 +541,9 @@ sealed interface ProposeOutcome {
     /** A create blob the server could not materialize an id into (FrontmatterPatcher refusal / an agent-supplied id) (400 invalid_create_content). */
     data class InvalidCreateContent(val message: String) : ProposeOutcome
 }
+
+/** A row's write [root] and current [status]: what the facade's pre-claim guards read before they act. */
+data class ProposalGuard(val root: RootName, val status: ProposalStatus)
 
 /** The outcome of an apply (the wire contract maps these). */
 sealed interface ApplyOutcome {

@@ -7,7 +7,7 @@ import { pageByPathQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 editor (D-1/D-4/D-5 acceptance #1, #1b, #5). The `?mode=edit` dispatch reaches `<EditorPage>`,
@@ -279,6 +279,43 @@ describe("W6 editor", () => {
     expect(notice.textContent).not.toContain("Saved");
     // …and the baseline never advanced: the buffer is still dirty, so Save stays enabled.
     expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(false);
+  });
+
+  it("a save that 503s tells the truth about WHICH 503: a transient fault says retry, a downed root does not", async () => {
+    // "Couldn't save (transient) — please retry." is right for a `content_unreadable` blip and a LIE for
+    // `root_unavailable`: that one lasts until an operator restores the path and restarts, so the retry advice would
+    // loop the author against a disk that is not coming back. The outage envelope's message names the remedy instead.
+    const save503 = async (envelope: unknown) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (init?.method === "PUT" ? jsonResponse(envelope, 503) : jsonResponse({ html: "", headings: [] }))),
+      );
+      const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+        qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
+      });
+      await appendToEditor(view, "more.\n");
+      const button = await waitFor(() => {
+        const btn = view.container.querySelector<HTMLButtonElement>("[data-pb-save]")!;
+        expect(btn.disabled).toBe(false);
+        return btn;
+      });
+      fireEvent.click(button);
+      const notice = await waitFor(() => {
+        const found = view.container.querySelector("[data-pb-editor-notice]");
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      return { notice, view };
+    };
+
+    const outage = await save503({ error: { code: "root_unavailable", message: "the main root is not serving; an operator must restore it" } });
+    expect(outage.notice.textContent).toContain("an operator must restore it");
+    expect(outage.notice.textContent).not.toContain("retry");
+    outage.view.unmount();
+    vi.unstubAllGlobals();
+
+    const transient = await save503({ error: { code: "content_unreadable", message: "the file could not be read" } });
+    expect(transient.notice.textContent).toContain("please retry");
   });
 
   it("a non-UTF-8 page (markdown is a lossy U+FFFD decode) disables Save and shows the byte-fidelity banner", async () => {

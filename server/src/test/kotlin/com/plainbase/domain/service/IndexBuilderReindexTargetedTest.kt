@@ -8,7 +8,9 @@ import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.PageCheckpointRepository
 import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -43,7 +45,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
         repeat(n) { i -> writePage(root, "p%03d.md".format(i), "---\ntitle: Page $i\n---\n\n# Page $i\n\nbody $i.\n") }
     }
 
-    test("reindex(pageId) re-renders exactly one page and shares every other page instance") {
+    test("reindex(target) re-renders exactly one page and shares every other page instance") {
         withTempTree({ seedCorpus(it, 5) }) { root ->
             ReindexHarness(root).use { h ->
                 h.builder.rebuild()
@@ -56,7 +58,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                 val edited = "---\ntitle: Page 0\n---\n\n# Page 0\n\nedited.\n"
                 Files.write(root.resolve(targetPath), edited.toByteArray())
 
-                val after = h.builder.reindex(targetId)
+                val after = h.builder.reindex(mainPath(targetPath))
 
                 h.renders.keys shouldBe setOf(targetPath)
                 h.renders.values.all { it == 1 } shouldBe true
@@ -81,7 +83,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                     h.checkpoint.replaceCalls = 0
                     Files.write(root.resolve(targetPath), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 
-                    h.builder.reindex(targetId)
+                    h.builder.reindex(mainPath(targetPath))
 
                     // render count = 1, regardless of N.
                     h.renders.values.sum() shouldBe 1
@@ -111,11 +113,14 @@ class IndexBuilderReindexTargetedTest : FunSpec({
         withTempTree({ seedCorpus(it, 2) }) { root ->
             ReindexHarness(root).use { h ->
                 h.builder.rebuild()
-                shouldThrow<IllegalStateException> { h.builder.reindex(PageId.require("00000000-0000-0000-0000-000000000000")) }
+                shouldThrow<IllegalStateException> { h.builder.reindex(mainPath("gone.md")) }
             }
         }
     }
 })
+
+/** The reindex target for a path in `main` — the write location, which is what [IndexBuilder.reindex] addresses. */
+private fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
 
 /** A reindex harness with counting collaborators — built directly (not via IndexHarness) for spy control. */
 private class ReindexHarness(root: Path) : AutoCloseable {

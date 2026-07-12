@@ -85,11 +85,11 @@ class WriteRestHarness(
         // (possibly wrapped) store. Override wrappers delegate scan/read to the real copy via `by real`,
         // so the snapshot stays genuine; with no override, pipelineStore === store (a no-op). With no
         // explicit hook, the pipeline commits through `history` (NoOp → null; a Git provider → the SHA).
-        val hook = historyHook ?: WriteHistoryHook { path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
+        val hook = historyHook
+            ?: WriteHistoryHook { _, path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
         val pipeline = harness.writePipeline(hook, store = pipelineStore)
         // A3: auth ON, loopback-dev (OFF) open behavior — the write/golden suites run byte-identically to pre-auth.
         services = harness.testRouteContext(
-            contentStore = pipelineStore,
             writePipeline = pipeline,
             searchProvider = searchProvider,
             history = history,

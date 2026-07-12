@@ -1,8 +1,10 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.LoginService
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -34,17 +36,21 @@ import kotlin.time.Clock
  */
 val restModule = module {
     single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get()) }
-    single { SearchService(provider = get(), indexBuilder = get()) }
+    single { SearchService(provider = get(), indexBuilder = get(), availability = get()) }
+    // The ONE owner of the id->root and root->status questions. EXACTLY two deps: both snapshots arrive as call
+    // PARAMETERS, which is what keeps it stateless and holder-free (and therefore safe to reach from the domain
+    // proposal service through a lambda).
+    single { PageRootResolver(get(), get()) }
     single {
         WritePipeline(
-            contentStore = get(),
+            stores = get<RootStores>()::get,
             indexBuilder = get(),
             citations = get(),
             frontmatterParser = get(),
             dirtyPages = get(),
             idMap = get(),
             aliasRegistry = get(),
-            root = get<RootRegistry>().main.name,
+            availability = get(),
             historyHook = get(),
         )
     }
@@ -52,6 +58,7 @@ val restModule = module {
         // No `Clock` Koin single exists (ApiTokenService inlines Clock.System — SecurityModule.kt:18); inline it
         // here too, the least-surprising choice. `enforced` is auth-mode-derived: OFF (loopback-dev) opens the
         // choke point; builtin/proxy enforce the role×action matrix.
+        val registry = get<RootRegistry>()
         PolicyService(
             roles = get(),
             apiTokens = get(),
@@ -59,6 +66,8 @@ val restModule = module {
             idProvider = get(),
             clock = Clock.System,
             enforced = get<PlainbaseConfig>().auth.mode != AuthMode.OFF,
+            // Fails CLOSED on an unknown name - a belt behind the wire-level `invalid_root` check.
+            editableOf = { registry.byName(it)?.editable == true },
         )
     }
     // A4a session/login/setup/admin services. Session id ROTATES on login/change/reset (§5); the TTLs use the
@@ -102,7 +111,7 @@ val restModule = module {
     // PB-PROPOSE-1 (P1a): the proposal store seam + the guarded facade. The live read seam over the SAME
     // IndexBuilder + ContentStore the read facade uses; the C4 label resolver over the token/user repos. Clock is
     // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
-    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), contentStore = get(), root = get<RootRegistry>().main.name) }
+    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), stores = get<RootStores>()::get) }
     single { ProposalAuthorLabeler(tokens = get(), users = get()) }
     single {
         ProposalService(
@@ -111,6 +120,10 @@ val restModule = module {
             baseReader = get(),
             proposalIdProvider = get(),
             clock = Clock.System,
+            // The D15 guard's narrow dependency. Evaluated PER CALL, so a watcher-failure flip landing DURING the
+            // boot reconcile is seen - a pass-level snapshot would miss it and then rewrite a row for a root that
+            // just went down. The resolver stays the ONE owner of `statusOf`: this is a call, not a second copy.
+            rootStatus = { root -> get<PageRootResolver>().statusOf(root, get<RootAvailability>().current()) },
         )
     }
     // P1b: the GuardedProposalFacade is no longer a standalone single — it needs the guarded MutatingFacade (built
@@ -128,11 +141,12 @@ val restModule = module {
             pageService = get(),
             searchService = get(),
             aliasRegistry = get(),
-            contentStore = get(),
             writePipeline = get(),
-            root = get<RootRegistry>().main.name,
-            knownRoots = get<RootRegistry>().roots.map { it.name }.toSet(),
-            history = get(),
+            registry = get(),
+            availability = get(),
+            resolver = get(),
+            stores = get<RootStores>()::get,
+            histories = get<HistoryProviders>()::get,
             idProvider = get(),
             proposalService = get(),
             proposalLabeler = get(),

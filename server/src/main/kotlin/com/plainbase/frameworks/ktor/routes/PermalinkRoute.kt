@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.service.PermalinkResolution
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -21,8 +22,13 @@ import io.ktor.server.routing.get
  * the permalink IS the loser's only human URL, and the API surface (`/api/v1/pages/{id}`) resolves
  * it regardless. Redirecting (nowhere to go) or 404ing (breaks the promise) would both be wrong.
  *
- * A3: `read`-gated — the snapshot resolve goes through the guarded facade, so the gate fires (401/403)
+ * A3: `read`-gated — the resolution goes through the guarded facade, so the gate fires (401/403)
  * BEFORE the resolve and a redirect cannot leak page existence to an unauthorized caller.
+ *
+ * **A root that is not serving answers 503, never 404** (ADR-0011 D5): the facade throws and the existing
+ * `guarded {}` wrap maps it, so this route needs no new arm. That is load-bearing for a page in a root that was
+ * unavailable at BOOT - it was never scanned, so it is in no snapshot section, and only the persisted `id_map`
+ * binding the facade consults can tell "the disk is unmounted" from "this page never existed".
  */
 fun Route.permalinkRoute(ctx: RouteContext) {
     get("/p/{id}") { call.handlePermalink(ctx) }
@@ -35,11 +41,12 @@ private suspend fun ApplicationCall.handlePermalink(ctx: RouteContext) {
         val raw = parameters["id"].orEmpty()
         val id = PageId.of(raw)
             ?: return@guarded respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PAGE_ID, "Not a canonical-shape UUID: '$raw'")
-        val page = ctx.read.currentSnapshot(principal, id.value).byId[id]
-            ?: return@guarded respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
-        when (val url = page.url) {
-            null -> respondSpaShell() // collision loser: the permalink is its only human URL (see class doc)
-            else -> respondRedirectPreservingQuery(url, permanent = false)
+        when (val resolution = ctx.read.permalink(principal, id)) {
+            is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
+            // collision loser: the permalink is its only human URL (see class doc)
+            PermalinkResolution.LoserNoUrl -> respondSpaShell()
+            PermalinkResolution.Unknown ->
+                respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
         }
     }
 }

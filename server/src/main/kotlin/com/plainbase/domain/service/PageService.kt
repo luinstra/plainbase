@@ -29,15 +29,25 @@ class PageService(
     private val citations: CitationFactory,
 ) {
 
-    /** The published index snapshot the routing layer reads from. */
+    /**
+     * The published index snapshot, freshly read. Kept for the callers that legitimately want CURRENT truth; the
+     * GATED read paths do NOT use it - they thread the ONE snapshot their facade already read (below).
+     */
     val index: PageIndex get() = indexBuilder.current
 
-    /** The full page payload for [id], or null when unknown. */
-    fun byId(id: PageId): PagePayload? = index.byId[id]?.let(::payload)
+    /**
+     * The full page payload for [id] in [snapshot], or null when unknown.
+     *
+     * [snapshot] is a PARAMETER, not a fresh `indexBuilder.current` read, and that is the one-snapshot rule the write
+     * side already holds itself to (ADR-0011 D17): the facade gates on the root it resolved from ITS snapshot, and a
+     * rebuild landing between the two reads can re-award a cross-root duplicate id to a DIFFERENT root - one whose
+     * section may be a carried-forward one from a root that is DOWN. The facade would then have gated root A and
+     * served root B's stale bytes with a 200. Gate-root and serve-root are now one object's answer by construction.
+     */
+    fun byId(snapshot: PageIndex, id: PageId): PagePayload? = snapshot.byId[id]?.let(::payload)
 
-    /** The full page payload at [root]'s canonical-or-alias URL [path], or null (§A4 by-path rules). */
-    fun byUrlPath(root: RootName, path: TreePath): PagePayload? {
-        val snapshot = index
+    /** The full page payload at [root]'s canonical-or-alias URL [path] in [snapshot], or null (§A4 by-path rules). */
+    fun byUrlPath(snapshot: PageIndex, root: RootName, path: TreePath): PagePayload? {
         val rooted = RootedPath(root, path)
         val page = snapshot.byUrlPath[rooted]
             ?: aliasRegistry.find(rooted)?.let { snapshot.byId[it] }
@@ -45,8 +55,8 @@ class PageService(
         return payload(page)
     }
 
-    /** The rendered-HTML payload for [id], or null when unknown. */
-    fun htmlById(id: PageId): PageHtmlPayload? = index.byId[id]?.let { page ->
+    /** The rendered-HTML payload for [id] in [snapshot], or null when unknown. */
+    fun htmlById(snapshot: PageIndex, id: PageId): PageHtmlPayload? = snapshot.byId[id]?.let { page ->
         PageHtmlPayload(page = page, citation = citations.pageLevel(page, page.contentHash))
     }
 

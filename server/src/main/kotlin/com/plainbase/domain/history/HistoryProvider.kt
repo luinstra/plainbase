@@ -78,3 +78,18 @@ data class Commit(
 
 /** A Git identity — a name and an email. The author/committer split is settable per [HistoryProvider.commit]. */
 data class CommitIdentity(val name: String, val email: String)
+
+/**
+ * A history BACKEND operation failed (ADR-0006's fail-loud rule) — the PORT's operational failure type.
+ *
+ * It lives here, in the domain, rather than in the git adapter for one concrete reason: a DOMAIN consumer has
+ * to be able to CATCH it, and `IndexBuilder`'s root-loss classifier is exactly such a consumer. Every history
+ * call is rooted at a work tree, so a work tree that has VANISHED makes the backend exit non-zero and raise
+ * this — it is the carrier a lost root produces out of the history collaborator, the way an `IOException` is
+ * the carrier it produces out of the content store. A classifier that could not see it would let a vanished
+ * root escape unmarked and keep serving its carried content.
+ *
+ * The git adapter's `GitCommandException` is the concrete subtype, so every existing throw site, catch and
+ * `shouldThrow<GitCommandException>` is untouched.
+ */
+open class HistoryCommandException(message: String) : RuntimeException(message)

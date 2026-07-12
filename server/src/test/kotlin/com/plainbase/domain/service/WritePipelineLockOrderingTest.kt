@@ -75,7 +75,8 @@ class WritePipelineLockOrderingTest : FunSpec({
                     // Fire the save; its reindex must BLOCK at the @Synchronized IndexBuilder monitor.
                     var outcome: WriteOutcome? = null
                     val saver = thread(name = "save") {
-                        outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                        outcome =
+                            pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
                     }
                     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
                     while (saver.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)

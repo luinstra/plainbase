@@ -280,7 +280,6 @@ private fun enforcedAnonApp(
             harness.builder.rebuild()
             val searchDb = SearchDb(Files.createTempDirectory("asset-enforced-search").resolve("search.db"))
             val ctx = harness.testRouteContext(
-                contentStore = LocalContentStore(root),
                 searchProvider = Fts5SearchProvider(searchDb),
                 enforced = true,
                 builtinAuthEnabled = builtinAuthEnabled,

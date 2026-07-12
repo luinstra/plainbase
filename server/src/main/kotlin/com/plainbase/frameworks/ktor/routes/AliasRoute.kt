@@ -53,10 +53,18 @@ fun Route.docsRoutes(ctx: RouteContext) {
         // An undecodable tail can never name content - no first segment to make a root decision on;
         // serve the shell exactly as before the root grammar existed.
         val path = raw?.let(::decodedTreePath) ?: return@get call.respondSpaShell()
+        // The legacy 301 stays OUTSIDE the wrap: it is pure config topology, calls no facade, and can throw nothing.
         val (root, remainder) = splitRootTail(path, ctx.roots)
             ?: return@get call.respondRedirectPreservingQuery("/docs/${RootName.MAIN}/$raw", permanent = true)
-        val target = remainder?.let { ctx.read.resolveDocsRedirect(principal, root, it) }
-        if (target != null) return@get call.respondRedirectPreservingQuery(target, permanent = true)
-        call.respondSpaShell()
+        // The alias arm IS wrapped, which is what makes `guarded {}` the one 503 mapping site literally rather than
+        // by convention: this handler had no wrap at all, so a RootUnavailable would have escaped it as a 500. The
+        // facade keeps its deny->null->shell contract for AccessDenied (it swallows it internally), so the wrap's 401
+        // arm is simply never reached from here - anonymous still gets the shell - while an AUTHORIZED caller under an
+        // unavailable root gets the honest 503 and never the miss-to-shell fallthrough (a 503 must not degrade into
+        // "SPA not-found", which is the whole point).
+        call.guarded {
+            val target = remainder?.let { ctx.read.resolveDocsRedirect(principal, root, it) }
+            if (target != null) call.respondRedirectPreservingQuery(target, permanent = true) else call.respondSpaShell()
+        }
     }
 }

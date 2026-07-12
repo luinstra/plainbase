@@ -3,6 +3,7 @@ package com.plainbase.frameworks.git
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.frameworks.filesystem.withDirectoryStream
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -634,7 +635,7 @@ class GitBundleDr(
     private fun reapPreRestoreHusks() {
         if (!Files.exists(mirrorRoot)) return
         val husks = try {
-            Files.newDirectoryStream(mirrorRoot, "$PRE_RESTORE_HUSK_PREFIX*").use { stream ->
+            withDirectoryStream(mirrorRoot, "$PRE_RESTORE_HUSK_PREFIX*") { stream ->
                 stream.mapNotNull { entry ->
                     val tail = entry.fileName.toString().removePrefix(PRE_RESTORE_HUSK_PREFIX)
                     // toLongOrNull: an over-long numeric name is SKIPPED, never reaped (fail-safe, no throw).

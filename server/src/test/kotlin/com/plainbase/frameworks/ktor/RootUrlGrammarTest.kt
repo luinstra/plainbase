@@ -125,7 +125,7 @@ class RootUrlGrammarTest : FunSpec({
                 val registry = RootRegistry.of(listOf(localRoot("main", root), localRoot("extra", extraDir)))
                 IndexHarness(root, contentStore = store, rootRegistry = registry).use { harness ->
                     harness.builder.rebuild()
-                    val ctx = harness.testRouteContext(contentStore = store, searchProvider = noopSearchProvider())
+                    val ctx = harness.testRouteContext(searchProvider = noopSearchProvider())
                     testApplication {
                         application { plainbaseModule(ctx) }
                         val client = restClient()

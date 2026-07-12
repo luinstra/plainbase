@@ -2,8 +2,8 @@ package com.plainbase.domain.root
 
 /**
  * The immutable topology snapshot: every configured root, built once at boot. Runtime AVAILABILITY
- * is deliberately NOT part of it - a root going unavailable mid-run is a separate atomic status (C4),
- * never a registry mutation.
+ * is deliberately NOT part of it - a root going unavailable mid-run is a separate atomic status
+ * ([RootAvailability]), never a registry mutation.
  *
  * [roots] preserves the order [of] was given, which config parsing produces as origin-line-with-
  * name-tiebreak order (ADR-0011 D7) - the deterministic contract C2's cross-root duplicate-id winner

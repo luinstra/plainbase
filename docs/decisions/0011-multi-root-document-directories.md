@@ -53,12 +53,17 @@ anywhere. (Debate synthesis #2.)
 
 Two checkouts of one repo, or templated `.crew` pages, make cross-root duplicate ids ROUTINE input,
 not corruption. The C2 rules, landing atomically in the id_map migration: `unbindStale` becomes
-key-complete (`WHERE id = :id AND (root, path) != (:root, :path)`); `bind()`'s supersede scope is
-WITHIN-ROOT only; a cross-root duplicate id mints a new identity_issue variant (its natural key
-gains root) with a deterministic winner - the root earlier in declaration order (see D7 for what
-"declaration order" precisely means) - and the loser stays reachable by path; never a silent
-cross-root supersede or a UNIQUE(id) crash. Detached rows still hold ids under UNIQUE(id), and a
-live bind supersedes a detached row, so "re-add restores permalinks" is conditional. (Synthesis #3.)
+key-complete (`WHERE id = :id AND (root, path) != (:root, :path)`), so the SQL itself is root-agnostic
+by design - it must be, or UNIQUE(id) would crash on the very duplicates this decision exists to
+absorb. The supersede SCOPE is therefore a CALLER policy, not a SQL one: a stale same-root row or a
+DETACHED row is simply swept, while a LIVE cross-root owner is superseded only as the deterministic
+D17 rank-contest outcome, and only when the pass actually scanned that owner's root (D16). A cross-root
+duplicate id mints a new identity_issue variant (its natural key gains root) with a deterministic
+winner - the root earlier in declaration order (see D7 for what "declaration order" precisely means) -
+and the loser stays reachable by path; never a silent cross-root supersede (the supersession records
+the loser-behalf issue in-pass, D16) or a UNIQUE(id) crash. Detached rows still hold ids under
+UNIQUE(id), and a live bind supersedes a detached row, so "re-add restores permalinks" is conditional.
+(Synthesis #3.)
 
 ### D3 - URLs are `/docs/{root}/{path}` always, with a query-preserving 301 for legacy paths
 
@@ -93,6 +98,23 @@ index purge, no search deletes, no alias/identity churn - "root gone" is never "
 durable state is untouched. Unavailable is sticky until restart in v1; the health endpoint lists
 per-root status. `/p/{id}` for a page in an unavailable root falls back to id_map (which persists
 and knows the root) to answer 503 not 404. (Synthesis #5; C4 implements.)
+
+**The DETECTION bound, stated exactly** (it is what makes "never serve stale" an invariant rather than a
+hope). Nothing serves stale bytes once a root is MARKED, so the whole guarantee reduces to how long a lost
+root can go unmarked. Every *operation-driven* detector - a write's probe, a rebuild's probe, the read
+facade's exit classifier - is triggered by traffic somebody generated, and therefore says NOTHING about an
+idle root: with no writes and no rescan, none of them ever runs. A root loss also does not reliably raise a
+watch event (a rename or an unmount touches no child; on Linux the JDK does not even invalidate the key),
+so "the watcher will see the deletes" is not a bound either. Both together would leave an idle root serving
+carried-forward content as `available: true` **indefinitely**, which is not a lag - it is the invariant
+broken.
+
+So each root's watcher POLLS its own root on a fixed interval (`FileWatcher.LIVENESS_INTERVAL`, 5 s) and
+treats loss of the root's own watch key as the same condition. On loss it marks (VANISHED - the operator's
+remedy follows the *cause*, and the cause is a gone disk, not a dead thread) and schedules the converging
+pass. Every AVAILABLE root has a watcher (the boot loop skips only roots that are already marked), so the
+bound holds corpus-wide: **an available root's loss is detected within the liveness interval, with or
+without traffic.** The operation-driven detectors remain as the faster path for a root that IS being used.
 
 ### D6 - policy checks `(principal, writeClass, RootedResource)`; `editable` gates page mutation only
 
@@ -130,8 +152,9 @@ ACLs are explicitly out of v1. (Synthesis #7; C4 implements.)
 - **D11 - explicit `roots {}` + an explicitly set CONTENT_DIR: the roots block wins, a WARN names
   the ignored key** (the existing object-mode ignored-CONTENT_DIR precedent; env-always-wins is a
   same-key invariant and these are different keys).
-- **D12 - extras parsed by a single-root build are validated but NOT served; a WARN says so** (no
-  silent discrepancy between config and serving surface).
+- **D12 (HISTORICAL, C1-C3) - extras parsed by a single-root build are validated but NOT served; a
+  WARN says so** (no silent discrepancy between config and serving surface). **Superseded by C4**,
+  which wires every registered root as an index source and serves it; the WARN is gone with it.
 - **D13 - a missing/unreadable EXTRA root path is a WARN, not a boot error** (extras degrade to
   Unavailable; C1 logs, C4 adds the runtime status). A missing MAIN path stays fatal. An
   unavailable extra still PARTICIPATES in every duplicate/nesting/DATA_DIR comparison via its
@@ -159,21 +182,28 @@ ACLs are explicitly out of v1. (Synthesis #7; C4 implements.)
   whose roots are entirely disjoint from the configured names means every permalink in the
   DATA_DIR is orphaned - almost certainly a wrong DATA_DIR or a wholesale-rewritten roots block -
   so serve() refuses (fail-closed) with remediation that is config-first and then TARGETED and
-  backup-first: per-root DELETEs on the five identity tables, NEVER "delete plainbase.db" (the
+  backup-first: per-root DELETEs on the six root-bearing tables (D14), NEVER "delete plainbase.db" (the
   app DB is also the security and review truth: users, sessions, API tokens, roles, proposals,
   the audit log). Partial detachment logs the dormant-permalink WARN and serves.
-- **D16 - a partial-visibility pass never lets a LOSING page steal across roots.** Ownership
-  classification (the shared `BindingVisibility` rule): a binding under a SCANNED root is live iff
-  its path was scanned; a binding under an UNSCANNED-but-CONFIGURED root is ALWAYS a live owner,
-  so the D17 rank contest still happens; a binding under a root absent from the registry is
-  detached and supersedable (D2). Two outcomes exist (UNIQUE(id) admits no both-survive state):
-  the pass's page LOSES to the unscanned owner (reassigned, issue recorded in-pass, foreign row
-  untouched - the protection), or it OUTRANKS the owner and legitimately WINS - its key-complete
-  bind necessarily deletes the foreign row, and the PASS records the loser-behalf issue AT
-  SUPERSESSION TIME with the loser's exact natural key (the next full rebuild's own record dedups
-  via the UNIQUE upsert), so the delete is never a silent, time-shifted supersede. NO rank-0-main
-  assumption anywhere: registry order can seat an extra ahead of main, so both outcomes are
-  reachable from the main-only CLIs.
+- **D16 - a partial-visibility pass never takes an id from a root it could not look at.** Ownership
+  classification (the shared `BindingVisibility` rule) answers two SEPARATE questions. *Is the binding
+  a live owner* (does it enter the duplicate contest at all)? A binding under a SCANNED root is live
+  iff its path was scanned; a binding under an UNSCANNED-but-CONFIGURED root is ALWAYS live (the pass
+  cannot see that root's disk, so treating its rows as detached is exactly the silent cross-root steal
+  this rule closes); a binding under a root absent from the registry is detached and not an owner at
+  all (D2). *May the pass SUPERSEDE it* - knowing the winner's key-complete bind DELETES the owner's
+  row? **ONLY when the pass actually SCANNED the owner's root.** Rank decides a contest between two
+  roots that both showed up; it cannot decide one for a root that is not there. So against an
+  unscanned owner there is exactly ONE outcome, and rank does not enter into it: the SCANNED claimant
+  REASSIGNS (issue recorded in-pass, foreign row untouched), and the D17 rank contest waits for a pass
+  that can see both roots. A pass has no authority to destroy durable identity state for a root it
+  could not look at - it cannot know the root still holds the page, the root's section is carried
+  forward verbatim (so winning would ALSO put a duplicate id in the snapshot, i.e. a rebuild crash),
+  and an outage must never silently cost a page its permalink (D-C4-10). NO rank-0-main assumption
+  anywhere: this holds however main and an extra rank. The rule's subject is the REBUILD, which skips
+  an unavailable root and carries its section: partial visibility is the OUTAGE shape. `adopt` is NOT
+  a partial-visibility pass - it plans over every configured root in one go and refuses to run if it
+  cannot see one (see D19), so the unscanned-but-configured arm is structurally empty there.
 - **D17 - cross-root winner mechanics: registry rank beats previously-bound; within-root §5.2 is
   untouched.** When two LIVE paths in different roots carry the same frontmatter id, the root
   earlier in D7 order wins regardless of which path held the id_map binding ("previously-bound
@@ -182,8 +212,13 @@ ACLs are explicitly out of v1. (Synthesis #7; C4 implements.)
   else it MINTS FRESH - a loser that was itself the prior owner (two checkouts of one repo) would
   otherwise read its own stale binding back and either key-complete the winner's row away or
   crash the snapshot's byId uniqueness check. The mint is rescan-stable from the next pass on.
-  Two execution invariants keep the scheme sound: binds land INLINE per draft during resolution
-  (never batched afterward), and ALL sources are scanned before the FIRST resolve.
+  A loser with NO frontmatter id loses the contest just as hard: its `id_map` row is contested by
+  the same `ownerOf` seam, so a taken id is reassigned there too, and identity resolution never
+  depends on a side effect of the previous page's bind. One execution invariant keeps the scheme
+  sound: ALL sources are scanned before the FIRST resolve. (`IndexBuilder` additionally binds
+  INLINE per draft, which is why a superseded row is already gone by the time its owner re-resolves;
+  `adopt` binds NOTHING until its whole plan is resolved, which is what makes the plan abortable -
+  and is sound for exactly the reason above.)
 - **D18 - proposals root lands as schema + DEFAULT stamp only; domain threading is C4's.** The
   `proposals` table gains `root TEXT NOT NULL DEFAULT 'main'`; queries, port, and domain types
   stay root-blind (every C2/C3 proposal IS main-scoped - proposals ride the main-wired write
@@ -191,15 +226,34 @@ ACLs are explicitly out of v1. (Synthesis #7; C4 implements.)
   them. dirty_page and page_checkpoint are, by contrast, threaded now: the N-root IndexBuilder
   consumes the checkpoint directly and the write pipeline binds identity, so their ports cannot
   stay root-blind without hardcoding.
+- **D19 - `adopt` resolves the WHOLE corpus in one read-only plan, then writes it.** Adopting root by
+  root, sequentially, is not sound, and in two ways that are really one. Every root the loop had not
+  REACHED yet looked *unscanned* to D16 - hence untouchable - so a rank winner could not take the id
+  it outranks: it reassigned, and `--write-ids` then materialized ids into files that rank says belong
+  to another page, DURABLY. And a root that vanished mid-loop escaped after earlier roots had already
+  been mutated, leaving a half-adopted corpus - the state an operator would never think to re-check.
+  So: phase 1 scans every configured root and resolves one global duplicate contest, writing NOTHING
+  (rank decides, because both sides turned up); phase 2 re-probes every root and materializes exactly
+  that plan, aborting rather than half-applying if one has gone. The dry run RENDERS the same plan
+  object - the same patched bytes - that the write phase executes, so a preview cannot disagree with
+  the write it previews. `adopt` still refuses outright if a configured root is missing before it
+  starts (the `reindex` rule): a root it skipped is a root whose ids stay in `DATA_DIR` alone.
 
-Per-root `editable` and `history` are parsed, validated, and recorded but deliberately DORMANT in
-this release (intentional C1 state; a startup warning names any non-default value) - C4 wires
-their enforcement together with multi-root serving.
+Per-root `editable` and `history` were parsed, validated, and recorded but DORMANT through C1-C3.
+**C4 enforces both**: `editable = false` denies every page-write class at the `PolicyService` gate
+(403 `root_not_editable`, on REST and MCP alike), and `history` selects each root's provider -
+`off` records nothing, `native` claims an existing repository under a strict boot guard (it never
+`git init`s, and refuses to start on a linked worktree, a submodule, or somebody else's checkout),
+`auto` (main only) keeps the legacy detect-or-override behavior.
 
-Known and unchanged in C1 (pre-existing CLI behavior): `adopt`/`reindex` construct their
-`LocalContentStore` without DATA_DIR exclusions, so with an explicit block that legally nests
-DATA_DIR inside main they can walk app state as content - revisit with C4's per-root
-watcher-exclusion work.
+Known and unchanged through C1-C3 (pre-existing CLI behavior), **closed in C4**: `adopt`/`reindex`
+used to construct their `LocalContentStore` without DATA_DIR exclusions, so with an explicit block
+that legally nests DATA_DIR inside main they could walk app state as content. Both CLIs now pass the
+same `exclusions = listOf(config.dataDir)` the server's store has always carried. `adopt` was also
+MAIN-ONLY, which made its `--write-ids` DR promise ("every page's identity now lives in the tree, so
+a lost DATA_DIR cannot cost it") false for every extra root - their ids stayed in `DATA_DIR` alone,
+and losing it would have cost them every permalink and citation. It now covers every configured root
+in ONE plan (D19) and refuses to run at all if it cannot see one of them, the `reindex` rule.
 
 ### Recorded scope cuts (v1)
 

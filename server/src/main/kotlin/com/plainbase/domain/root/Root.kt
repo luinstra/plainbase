@@ -3,12 +3,15 @@ package com.plainbase.domain.root
 import java.nio.file.Path
 
 /**
- * How a root records page history (ADR-0011 D4). C1 stores the mode; nothing consumes it at runtime
- * until C4 enforces it - the `git.enabled` tri-state remains the only live history knob until then.
+ * How a root records page history (ADR-0011 D4), ENFORCED since multi-root C4: the per-root history
+ * provider is selected from this mode, and `git.enabled` keeps its full tri-state meaning only INSIDE
+ * main's [AUTO] arm.
  * - [OFF] - no history; the default for extra roots (Plainbase never commits into a repo it does not own).
  * - [AUTO] - today's repo auto-detection, grandfathered for `main` (including its deliberate
- *   .git-as-file worktree acceptance).
- * - [NATIVE] - the operator explicitly claims the root's repo; C4 adds the strict fail-closed guard.
+ *   .git-as-file worktree acceptance). A boot VALIDATION ERROR on an extra root: detect-and-maybe-init
+ *   with lax worktree acceptance is exactly what D4 exists to deny extras.
+ * - [NATIVE] - the operator explicitly claims the root's repo; the strict four-check fail-closed guard
+ *   runs at boot and the provider never `git init`s a repo it does not own.
  */
 enum class HistoryMode {
     OFF,
@@ -38,7 +41,12 @@ sealed interface RootBackend {
 data class Root(
     val name: RootName,
     val backend: RootBackend,
-    /** Whether page-mutation write classes are allowed here; never gates browsing/search (ADR-0011 D6). */
+    /**
+     * Whether page-mutation write classes are allowed here; never gates browsing/search (ADR-0011 D6).
+     *
+     * Editable is TOPOLOGY, not authorization: the gate fires in every auth mode, `off` included, so a
+     * loopback-dev deployment (and CI, which runs auth-off) exercises the flag exactly as production does.
+     */
     val editable: Boolean,
     val history: HistoryMode,
 ) {

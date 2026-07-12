@@ -2,6 +2,7 @@ package com.plainbase.frameworks.git
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.WriteHistoryHook
@@ -36,7 +37,7 @@ class WritePipelineGitConcurrencyTest : FunSpec({
         try {
             val exec = GitExecutor(workTree = root, home = home)
             val provider = providerOver(exec, root, home)
-            val hook = WriteHistoryHook { path, bytes, author, committer -> provider.commit(path, bytes, author, committer)?.sha }
+            val hook = WriteHistoryHook { _, path, bytes, author, committer -> provider.commit(path, bytes, author, committer)?.sha }
 
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
@@ -46,8 +47,8 @@ class WritePipelineGitConcurrencyTest : FunSpec({
 
                 val newA = "---\ntitle: A\n---\n\n# A edited\n".toByteArray()
                 val newB = "---\ntitle: B\n---\n\n# B edited\n".toByteArray()
-                val intentA = WriteIntent(idA, TreePath.require(pageA), citations.contentHash(seedA), newA)
-                val intentB = WriteIntent(idB, TreePath.require(pageB), citations.contentHash(seedB), newB)
+                val intentA = WriteIntent(idA, RootName.MAIN, TreePath.require(pageA), citations.contentHash(seedA), newA)
+                val intentB = WriteIntent(idB, RootName.MAIN, TreePath.require(pageB), citations.contentHash(seedB), newB)
 
                 val go = CountDownLatch(1)
                 val threads = listOf(intentA, intentB).map { intent ->

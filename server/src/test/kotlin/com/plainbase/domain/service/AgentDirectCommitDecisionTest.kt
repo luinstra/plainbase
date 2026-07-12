@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -106,16 +107,16 @@ class AgentDirectCommitDecisionTest : FunSpec({
         val inGlob = path("docs/a.md")
         val outGlob = path("guides/a.md")
 
-        agentWriteDecision(AgentMode.COMMIT, globs, inGlob).shouldBeInstanceOf<AgentWriteDecision.DirectCommit>()
-        agentWriteDecision(AgentMode.COMMIT, globs, outGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
-        agentWriteDecision(AgentMode.PROPOSE, globs, inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
-        agentWriteDecision(AgentMode.READ_ONLY, globs, inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
-        agentWriteDecision(AgentMode.COMMIT, emptyList(), inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
+        agentWriteDecision(AgentMode.COMMIT, globs, RootName.MAIN, inGlob).shouldBeInstanceOf<AgentWriteDecision.DirectCommit>()
+        agentWriteDecision(AgentMode.COMMIT, globs, RootName.MAIN, outGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
+        agentWriteDecision(AgentMode.PROPOSE, globs, RootName.MAIN, inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
+        agentWriteDecision(AgentMode.READ_ONLY, globs, RootName.MAIN, inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
+        agentWriteDecision(AgentMode.COMMIT, emptyList(), RootName.MAIN, inGlob).shouldBeInstanceOf<AgentWriteDecision.DegradeToProposal>()
     }
 
     test("no-divergence: the decision's targetPath is the SAME object passed in (reference identity, WI-3)") {
         val target = path("docs/a.md")
-        val decision = agentWriteDecision(AgentMode.COMMIT, listOf(glob("docs/**")), target)
+        val decision = agentWriteDecision(AgentMode.COMMIT, listOf(glob("docs/**")), RootName.MAIN, target)
         decision.shouldBeInstanceOf<AgentWriteDecision.DirectCommit>()
         // The facade builds the WriteIntent from decision.targetPath, so === here means matched path === written path.
         (decision.targetPath === target) shouldBe true

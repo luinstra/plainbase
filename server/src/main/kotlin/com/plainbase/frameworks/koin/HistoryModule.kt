@@ -3,6 +3,9 @@ package com.plainbase.frameworks.koin
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
@@ -14,21 +17,22 @@ import com.plainbase.frameworks.git.GitRepoLocks
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.git.runAutoMaintenance
 import com.plainbase.frameworks.objectstore.ObjectContentStore
+import org.koin.core.scope.Scope
 import org.koin.dsl.module
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * Wires the optional Git-history layer (ADR-0006, extended by C5's git-over-the-mirror). The impl is
- * selected by `git.enabled` (explicit override) falling back, in LOCAL mode, to detection of a repo in
- * main's content root (`mainContentRoot()` - contentDir for every legacy config). The
- * [WriteHistoryHook] single adapts the chosen [HistoryProvider] to the write-pipeline seam -
- * `RestModule` passes it into the `WritePipeline`.
+ * Wires the optional Git-history layer (ADR-0006, extended by C5's git-over-the-mirror, made per-root by C4's
+ * ADR-0011 D4). EVERY root's impl - main included - is selected by its own `history` knob; only main's AUTO arm
+ * falls back to the `git.enabled` override / repo detection in its content root (`mainContentRoot()` - contentDir
+ * for every legacy config). The [WriteHistoryHook] single adapts the per-root [HistoryProviders] map to the
+ * write-pipeline seam - `RestModule` passes it into the `WritePipeline`.
  *
  * [GitRepoLocks] and [GitBundleDr] are declared UNCONDITIONALLY-but-LAZY singles (the R9 exemplar,
  * `ContentModule.kt`'s `contentDirStoreConstructions`): resolved ONLY on the object+`git.enabled=true`
- * path (this file's `single<HistoryProvider>` lambda only calls `get<GitRepoLocks>()` there, and
+ * path (this file's [autoHistoryProvider] only calls `get<GitRepoLocks>()` there, and
  * `Application.kt`'s `serve()` only calls `get<GitBundleDr>()` there too), so a LOCAL boot or a
  * git-disabled object boot never constructs either.
  *
@@ -59,6 +63,7 @@ val historyModule = module {
     // ObjectContentStore (C5) - both resolve their store ON CALL (commit time), never at wiring time.
     single<HistoryProvider> {
         val config = get<PlainbaseConfig>()
+        val main = get<RootRegistry>().main
         val repoPath: (TreePath) -> String = { path ->
             if (config.storage.backend == StorageBackend.LOCAL) {
                 get<LocalContentStore>().resolveRepoRelativePath(path)
@@ -66,14 +71,79 @@ val historyModule = module {
                 get<ObjectContentStore>().mirror.resolveRepoRelativePath(path)
             }
         }
-        // OBJECT + git.enabled==true is the ONLY combination that touches GitRepoLocks/GitBundleDr - every
-        // other combination (LOCAL, OBJECT git-off/null) leaves both singles UNRESOLVED (R9).
+        // This single is MAIN's provider, and it OBEYS MAIN'S MODE - the same three-way selection every extra
+        // gets, not a mode-blind legacy path. `off` really is off (an explicit `history = off` must not commit,
+        // and the AUTO arm below commits whenever `git.enabled`/detection says so), and `native` really is
+        // CLAIMED (it must run the strict four-check guard and never `git init`) - main is where an operator is
+        // MOST likely to be pointing Plainbase at a repository that exists for somebody else's reasons.
         //
-        // Multi-root C1 seam: main's content root flows through mainContentRoot() below - equal to
-        // contentDir for every legacy config, non-null in both storage modes (a synthesized object
-        // main has no local path; the accessor falls back to the ignored contentDir). C1 changes NO
-        // history behavior: Root.history is stored on the registry but nothing consumes it yet - the
-        // git.enabled tri-state stays the only live knob until C4 cuts per-root selection in here.
+        // AUTO - which every synthesized (legacy) config produces, object mode included - is EXACTLY today's
+        // selectHistoryProvider result, `git.enabled` tri-state and all. A contradiction between the two knobs
+        // is already a boot error naming both (PlainbaseConfig.requireCoherentMainHistory), never a silent winner.
+        when (main.history) {
+            HistoryMode.OFF -> NoOpHistoryProvider
+            // A `roots {}` block is LOCAL-only (object + roots{} is refused at parse), and only a roots{} block
+            // can set main's mode, so a NATIVE main always has a declared local path.
+            HistoryMode.NATIVE -> claimedRootProvider(
+                config = config,
+                root = requireNotNull(main.localPath) { "a native-history root must be local-backed" },
+                repoPath = repoPath,
+            )
+            HistoryMode.AUTO -> autoHistoryProvider(config, repoPath, koin = this)
+        }
+    }
+    // The per-root history providers (ADR-0011 D4). `single<HistoryProvider>` above STAYS and is main's, so every
+    // main-only consumer (the object-mode warning) keeps resolving unchanged.
+    //
+    // Selection per root:
+    //  - main: its own `history` knob, resolved by the single above (AUTO = today's behavior, `git.enabled`
+    //    tri-state and all; `off` = the no-op; `native` = the strict-guarded provider).
+    //  - extras: `off` -> no-op. `native` -> a guarded provider over the root's own declared path, which never inits
+    //    and refuses the boot on a linked worktree / submodule / foreign repo. `auto` is a boot VALIDATION error
+    //    (rejected at config parse): detect-and-maybe-init with lax worktree acceptance is precisely what D4 exists
+    //    to deny an extra root.
+    //
+    // Lazily constructed per the R9 discipline - a NoOp root builds no GitExecutor and touches no disk.
+    single {
+        val config = get<PlainbaseConfig>()
+        val registry = get<RootRegistry>()
+        val stores = get<RootStores>()
+        HistoryProviders(
+            registry.roots.associate { root ->
+                root.name to when {
+                    root.name == registry.main.name -> get<HistoryProvider>()
+                    root.history == HistoryMode.NATIVE -> claimedRootProvider(
+                        config = config,
+                        root = requireNotNull(root.localPath) { "a native-history root must be local-backed" },
+                        // The RAW on-disk repo-relative path, resolved through THIS root's store - so an NFD-named
+                        // file is staged at its real path rather than at an NFC phantom that does not exist.
+                        repoPath = { path -> stores.localOrNull(root.name)?.resolveRepoRelativePath(path) ?: path.value },
+                    )
+                    else -> NoOpHistoryProvider
+                }
+            },
+        )
+    }
+    single<WriteHistoryHook> {
+        // Root-aware: history is per-root topology, so the hook DISPATCHES over the provider map rather than
+        // closing over one. A root with `history = off` records nothing and returns a null SHA, exactly as the
+        // no-op adapter always has.
+        val histories = get<HistoryProviders>()
+        WriteHistoryHook { root, path, bytes, author, committer ->
+            histories[root].commit(path, bytes, author, committer)?.sha
+        }
+    }
+}
+
+/**
+ * Main's AUTO arm — detect-or-override, the pre-multi-root selection verbatim (`git.enabled` tri-state and all).
+ *
+ * OBJECT + `git.enabled == true` is the ONLY combination that touches [GitRepoLocks]/[GitBundleDr]; every other
+ * combination (LOCAL, OBJECT git-off/null) leaves both singles UNRESOLVED (R9), which is why [koin] is threaded in
+ * rather than the two collaborators being resolved eagerly at the call site.
+ */
+private fun autoHistoryProvider(config: PlainbaseConfig, repoPath: (TreePath) -> String, koin: Scope): HistoryProvider =
+    with(koin) {
         if (config.storage.backend == StorageBackend.OBJECT && config.git.enabled == true) {
             // A throwaway GitExecutor for the maintenance daemon (GitExecutor is stateless - hermetic per
             // call - so a second instance over the same workTree/home is equivalent to the one
@@ -106,10 +176,40 @@ val historyModule = module {
             selectHistoryProvider(config, config.mainContentRoot(), repoPath)
         }
     }
-    single<WriteHistoryHook> {
-        val history = get<HistoryProvider>()
-        WriteHistoryHook { path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
+
+/**
+ * The per-root [HistoryProvider] map. Registry-built, so a name it does not hold is a PROGRAMMING error - the
+ * [RootStores] rule, and the same loud, named failure for the same reason.
+ */
+class HistoryProviders(private val byRoot: Map<RootName, HistoryProvider>) {
+
+    /** Main's provider — the one every main-only consumer (the capability flag, the object-mode warning) wants. */
+    val main: HistoryProvider get() = get(RootName.MAIN)
+
+    operator fun get(root: RootName): HistoryProvider = requireNotNull(byRoot[root]) {
+        "no history provider for root '$root': a per-root lookup ran on an unregistered root"
     }
+}
+
+/**
+ * A provider over a root whose repository the operator CLAIMED (`history = native`): it never `git init`s and its
+ * gate check runs the strict four-check guard. Its git-home is Plainbase's own (in DATA_DIR), because the hermetic
+ * executor needs one — but the REPOSITORY is entirely the operator's.
+ */
+private fun claimedRootProvider(config: PlainbaseConfig, root: Path, repoPath: (TreePath) -> String): HistoryProvider {
+    val gitHome = config.dataDir.resolve("git-home")
+    val exec = GitExecutor(workTree = root, home = gitHome)
+    return GitCliHistoryProvider(
+        exec = exec,
+        workTree = root,
+        gitHome = gitHome,
+        defaultAuthor = CommitIdentity(config.git.authorName, config.git.authorEmail),
+        defaultCommitter = CommitIdentity(config.git.authorName, config.git.authorEmail),
+        clock = Clock.System,
+        repoPath = repoPath,
+        maintenance = { Thread { runCatching { runAutoMaintenance(exec) } }.apply { isDaemon = true }.start() },
+        claimedRepo = true,
+    )
 }
 
 /**

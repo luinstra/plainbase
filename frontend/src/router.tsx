@@ -107,11 +107,26 @@ function DocsSplat() {
 // (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
 // dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
 
+/** The `/new` search: `?root=` names the document root the create lands in (absent → the server's `main`). */
+interface NewSearch {
+  root?: string;
+}
+
 const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
-  component: NewPage,
+  component: NewSplat,
+  // A non-string `root` coerces to undefined → the server's `main` default. An unknown NAME is not decided
+  // here: the server owns the registry and answers 400 `invalid_root`, so the client never guesses.
+  validateSearch: (search: Record<string, unknown>): NewSearch =>
+    typeof search.root === "string" && search.root !== "" ? { root: search.root } : {},
 });
+
+/** Threads the `?root=` search param into the form (the [DocsSplat] shape) — the root the bytes will land in. */
+function NewSplat() {
+  const { root } = newRoute.useSearch();
+  return <NewPage root={root} />;
+}
 
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,

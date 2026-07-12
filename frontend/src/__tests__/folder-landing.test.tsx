@@ -30,6 +30,7 @@ function tree(guidesChildren: TreeFolder["children"]): TreeResponse {
     roots: [
       {
         root: "main",
+        available: true,
         tree: {
           type: "folder",
           name: "",
@@ -261,6 +262,31 @@ describe("folder landing views (ADR-0003)", () => {
     expect(undated.querySelector(".pdate")).toBeNull();
   });
 
+  it("an UNAVAILABLE root's folder URL renders the outage state, never an empty listing (D5)", async () => {
+    stubNotFound();
+    // What the server actually sends for a root that is not serving: `available: false` and an EMPTY subtree (it
+    // must never ship the stale carried listing). A client that reads only the tree sees a folder with no children
+    // and draws "this directory is empty", telling an operator their docs are GONE when a disk is merely unmounted.
+    // The pages under it 503 through their own requests; this view has no request to 503, so the flag is the only
+    // thing that can tell the two apart.
+    const downRoot: TreeResponse = {
+      roots: [
+        ...tree([]).roots,
+        {
+          root: "handbook",
+          available: false,
+          tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] },
+        },
+      ],
+    };
+    const { view } = renderAt("/docs/handbook", downRoot);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-root-unavailable]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-root-unavailable]")?.textContent).toContain("handbook");
+    expect(view.container.querySelector("[data-pb-folder]")).toBeNull(); // never the empty-directory lie
+    expect(view.container.querySelector("[data-pb-folder-children]")).toBeNull();
+  });
+
   it("a folder with a single direct page renders `· 1 page` (singular)", async () => {
     stubNotFound();
     const singularTree = tree([
@@ -277,6 +303,7 @@ describe("folder landing views (ADR-0003)", () => {
       roots: [
         {
           root: "main",
+          available: true,
           tree: {
             type: "folder",
             name: "",
@@ -332,6 +359,7 @@ describe("folder landing views (ADR-0003)", () => {
       roots: [
         {
           root: "main",
+          available: true,
           tree: {
             type: "folder",
             name: "",
@@ -405,6 +433,7 @@ describe("folder landing views (ADR-0003)", () => {
     stubNotFound();
     const entry = (root: string, title: string): TreeResponse["roots"][number] => ({
       root,
+      available: true,
       tree: {
         type: "folder",
         name: "",

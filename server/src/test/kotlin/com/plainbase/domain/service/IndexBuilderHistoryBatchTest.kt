@@ -36,7 +36,7 @@ class IndexBuilderHistoryBatchTest : FunSpec({
         }
     }
 
-    test("reindex(pageId) does one bounded log(path,1) lookup, never an unbounded lastCommits scan") {
+    test("reindex(target) does one bounded log(path,1) lookup, never an unbounded lastCommits scan") {
         for (n in listOf(3, 30)) {
             withTempTree({ seedCorpus(it, n) }) { root ->
                 val history = CountingHistoryProvider()
@@ -47,7 +47,7 @@ class IndexBuilderHistoryBatchTest : FunSpec({
                     history.reset()
                     Files.write(root.resolve(target.path.value), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 
-                    h.builder.reindex(targetId)
+                    h.builder.reindex(com.plainbase.domain.root.RootedPath(target.root, target.path))
 
                     // Bounded single-commit read (re-review P2-1): exactly ONE log(path, 1) for the single
                     // target, ZERO unbounded lastCommits — and the limit arg itself is asserted, so the

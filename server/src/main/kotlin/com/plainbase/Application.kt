@@ -1,6 +1,5 @@
 package com.plainbase
 
-import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
@@ -9,9 +8,11 @@ import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.root.DetachedRoots
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.CanonicalUrlBuilder
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
@@ -27,6 +28,8 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.git.GitBundleDr
+import com.plainbase.frameworks.koin.HistoryProviders
+import com.plainbase.frameworks.koin.RootStores
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.historyModule
@@ -36,6 +39,7 @@ import com.plainbase.frameworks.koin.restModule
 import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.lifecycle.GracefulShutdown
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.spike.NativeSpike
@@ -94,8 +98,8 @@ private fun serve() {
     // Q9/Q10 ignored-key warnings (never fatal): local mode names any configured-but-ignored
     // storage.object.* keys; object mode warns when CONTENT_DIR was explicitly set.
     config.storageWarnings().forEach { logger.warn { it } }
-    // Multi-root C1 warnings (never fatal): an ignored explicit CONTENT_DIR, extras a single-root
-    // build cannot serve yet, and unavailable extra-root paths (ADR-0011 D11-D13).
+    // Multi-root warnings (never fatal): an ignored explicit CONTENT_DIR, an extra root whose path is not there
+    // (it serves 503 until restored + restarted), and direct-commit globs on a read-only root (ADR-0011 D11-D13).
     config.rootsWarnings().forEach { logger.warn { it } }
     // ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild work.
     // Same idiom as the gates that follow (System.err + exitProcess(1), never a thrown stack trace) - a bind
@@ -119,11 +123,31 @@ private fun serve() {
     // reconcile block - rebuild() and reconcileDirtyPages() trigger commits, so a "git missing" failure
     // must fire FIRST with an actionable message, never as a doomed commit's stack trace. NoOp is a clean
     // no-op. Mirror the DataDirLock failure idiom: System.err + exitProcess(1), never a thrown trace.
-    try {
-        koin.get<HistoryProvider>().gateCheck()
-    } catch (e: Exception) {
-        System.err.println("serve: ${e.message}")
-        exitProcess(1)
+    //
+    // Per root, with the D5-over-D4 boot ordering: MAIN gate-checks unconditionally (a missing main is already fatal
+    // at requireContentDir, so nothing degrades here). An EXTRA is PROBED FIRST - an unavailable one is marked
+    // MISSING_AT_BOOT and its gate check is SKIPPED, because a `history = native` extra sitting on an unmounted disk
+    // must degrade to 503 like any other unavailable root, not take the whole server down; the guard re-arms on the
+    // next restart, when the disk is back and it can actually judge the repo. The guard is loud ONLY when the path
+    // IS there. This loop is therefore also where boot availability is SEEDED.
+    val availability = koin.get<RootAvailability>()
+    val stores = koin.get<RootStores>()
+    val histories = koin.get<HistoryProviders>()
+    for (root in koin.get<RootRegistry>().roots) {
+        if (root.name != RootName.MAIN && !stores[root.name].available()) {
+            availability.markUnavailable(root.name, UnavailableCause.MISSING_AT_BOOT)
+            logger.warn {
+                "root '${root.name}' is not available at ${root.localPath}: it will serve 503 until the path is " +
+                    "restored and the server restarted (its pages, aliases and checkpoints are left untouched)"
+            }
+            continue
+        }
+        try {
+            histories[root.name].gateCheck()
+        } catch (e: Exception) {
+            System.err.println("serve: ${e.message}")
+            exitProcess(1)
+        }
     }
     // Rev-3.4 DR nudge: an object boot that survives the gate check with git DISABLED (`git.enabled`
     // unset/false) has no commit-grained history, so name the exposure ONCE (backups are operator-owned).
@@ -149,9 +173,13 @@ private fun serve() {
         // CONSTRAINT: this repository get is the process's FIRST app-DB open, which runs the
         // migration - it must stay AFTER DataDirLock.tryAcquire (a concurrent second instance
         // racing that first-open migration is exactly what the lock prevents) and satisfies the
-        // fix-D never-open-before-the-lock rule below the OBJECT branch. C4 RE-VERIFY: the guard
-        // runs BEFORE the object-mode hydrate/git-DR branch; when C4 wires multi-root object
-        // storage, confirm the guard still reads post-restore id_map state.
+        // fix-D never-open-before-the-lock rule below the OBJECT branch.
+        //
+        // The guard runs BEFORE the object-mode hydrate/git-DR branch, and that ordering is CORRECT rather than
+        // merely tolerated: this reads id_map (the app DB), while the restore/hydrate branch touches the bucket and
+        // the DATA_DIR mirror and never id_map - so the guard sees the same rows on either side of it. Multi-root
+        // does not change that: object mode stays single-root by decision (an explicit `roots {}` plus object storage
+        // is a boot error), so there is no multi-root object wiring for it to race.
         detachedRootsRefusal(
             koin.get<IdMapRepository>().roots(),
             // The REGISTRY, not config.roots.list: one runtime topology snapshot for the guard to
@@ -212,7 +240,12 @@ private fun serve() {
         // walks UP to an ancestor `.git` when CONTENT_DIR has none - so a forced-on content root with no own
         // repo would otherwise abort serve (plain dir) or read the wrong ancestor repo. NoOp is a no-op.
         try {
-            koin.get<HistoryProvider>().prepare()
+            // Same per-root loop as the gate, skipping the roots the gate loop marked unavailable: main-AUTO keeps
+            // its ensureRepo, a CLAIMED root readies only the git-home (its repo is the operator's), NoOp no-ops.
+            val serving = availability.current()
+            koin.get<RootRegistry>().roots
+                .filter { serving.isAvailable(it.name) }
+                .forEach { histories[it.name].prepare() }
         } catch (e: Exception) {
             // exitProcess terminates the JVM without running the outer finally, so release the lock
             // explicitly here - otherwise a forced-on Git failure would leak it in embedded/test use.
@@ -221,11 +254,54 @@ private fun serve() {
             exitProcess(1)
         }
         val builder = koin.get<IndexBuilder>()
-        // §B2 startup ordering, no unwatched window: the watcher registers BEFORE the first rebuild.
+        // §B2 startup ordering, no unwatched window: the watchers register BEFORE the first rebuild.
         // Events arriving while the initial build is in flight coalesce into at most one follow-up
         // rebuild via the scheduler's single-flight dirty flag.
         val scheduler = RebuildScheduler(rebuild = { builder.rebuild() }, alarm = ExecutorAlarm())
-        val watch = koin.get<ContentStore>().watch { scheduler.schedule() }
+        // ONE watcher per AVAILABLE root, all feeding the ONE debounced scheduler. The scheduler stays root-BLIND
+        // and needs no change: a rebuild is a whole-corpus pass, so a vanished root's queued events are harmless
+        // (the next pass's probe skips it), and the root on each closure is carried for LOGGING only. A root that
+        // was unavailable at boot gets no watcher at all - there is nothing to watch, and the status is sticky
+        // until restart anyway. Which means every AVAILABLE root has a watcher, and that is what makes the
+        // watcher's root-liveness probe (ContentStore.watch) a corpus-wide bound rather than a per-root nicety:
+        // an idle root's loss is detected without any traffic to trip it. The failure callback below is the
+        // narrower detector - a worker that dies while the root is FINE would otherwise leave a healthy-looking
+        // server that has silently stopped converging.
+        val watchers = koin.get<RootRegistry>().roots
+            .filter { availability.current().isAvailable(it.name) }
+            .map { root ->
+                stores[root.name].watch(
+                    onChange = { scheduler.schedule() },
+                    onFailure = { failure ->
+                        logger.error(failure) { "the watcher for root '${root.name}' died; marking it unavailable" }
+                        availability.markUnavailable(root.name, UnavailableCause.WATCHER_FAILED)
+                    },
+                )
+            }
+        val server = KtorServer(config, koin.get())
+        // The ONE teardown, run by BOTH the SIGTERM hook and the clean-exit `finally` below (idempotent, so
+        // both firing is safe). SIGTERM is how docker/systemd/k8s all stop us, and `embeddedServer` installs
+        // no hook of its own - so without this NONE of these closes ran on a normal production restart, and
+        // object mode silently skipped its final DR bundle ship every time (see [GracefulShutdown]).
+        //
+        // ORDER IS LOAD-BEARING: the HTTP server drains first, so no in-flight save is severed mid-write;
+        // watchers stop the object-mode poll thread BEFORE the transport it uses; the scheduler drains before
+        // the DR flush, so an in-flight rebuild's commits still make the final bundle; the transport closes
+        // after the ship that needs it; the DATA_DIR lock releases last, once nothing is writing under it.
+        val shutdown = GracefulShutdown(
+            buildList {
+                add(GracefulShutdown.Step("http server") { server.stop() })
+                add(GracefulShutdown.Step("watchers") { watchers.forEach { it.close() } })
+                add(GracefulShutdown.Step("rebuild scheduler") { scheduler.close() })
+                if (config.storage.backend == StorageBackend.OBJECT) {
+                    // Same `git.enabled` guard as the boot-side wiring, so a git-disabled object boot never
+                    // constructs GitBundleDr here either (the R9 lazy-wiring discipline).
+                    if (config.git.enabled == true) add(GracefulShutdown.Step("git bundle DR") { koin.get<GitBundleDr>().close() })
+                    add(GracefulShutdown.Step("object store transport") { koin.get<ObjectContentStore>().close() })
+                }
+                add(GracefulShutdown.Step("DATA_DIR lock") { lock.close() })
+            },
+        )
         try {
             // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
             // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
@@ -247,22 +323,17 @@ private fun serve() {
                 exitProcess(1)
             }
             deadLegacyAliasWarning(koin.get<UrlAliasRegistry>().all())?.let { logger.warn { it } }
-            KtorServer(config, koin.get()).start(wait = true)
+            // Armed as late as possible - directly around the only call that parks the main thread. Arming it
+            // earlier would let a SIGTERM during the boot rebuild tear the tree down UNDER a main thread that
+            // then goes on to bind the port; boot is already crash-safe (the reconciles above recover an
+            // interrupted one), so the narrow window costs nothing and the interleaving would.
+            shutdown.installHook()
+            server.start(wait = true)
         } finally {
-            watch.close() // stops the object-mode poll thread BEFORE the transport it uses is closed
-            scheduler.close()
-            // Release the object-store transport (the ktor HttpClient) on shutdown; the poll is already
-            // stopped by watch.close() above. LOCAL mode has no transport to close.
-            if (config.storage.backend == StorageBackend.OBJECT) {
-                // C5: the final graceful-shutdown bundle ship BEFORE the transport it needs closes; same
-                // `git.enabled` guard as the boot-side wiring so a git-disabled object boot never touches
-                // GitBundleDr here either. Order load-bearing.
-                if (config.git.enabled == true) koin.get<GitBundleDr>().close()
-                koin.get<ObjectContentStore>().close()
-            }
+            shutdown.run() // the clean-exit / embedded path; a no-op wait if the SIGTERM hook already ran it
         }
     } finally {
-        lock.close()
+        lock.close() // idempotent: the teardown above already released it, unless we failed before it existed
     }
 }
 
@@ -292,10 +363,12 @@ internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName
                 "(1) fix roots{} so the bound name(s) above are declared again (root names are permanent identifiers), " +
                 "or point DATA_DIR at the right directory; (2) if the removal is intentional and losing those roots' " +
                 "permalinks and old-URL redirects is accepted: back up DATA_DIR first, then delete only the detached " +
-                "rows, per root name, from the five identity tables - e.g. " +
+                "rows, per root name, from the six root-bearing tables - e.g. " +
                 "sqlite3 DATA_DIR/plainbase.db \"DELETE FROM id_map WHERE root='<name>'\" " +
-                "(repeat for url_alias, identity_issue, page_checkpoint, dirty_page). Do NOT delete plainbase.db " +
-                "itself: it also holds users, sessions, API tokens, roles, proposals, and the audit log."
+                "(repeat for url_alias, identity_issue, page_checkpoint, dirty_page, and proposals). Do NOT delete " +
+                "plainbase.db itself: it also holds users, sessions, API tokens, roles, proposals, and the audit log. " +
+                "NOTE: a detached root's PENDING/APPLYING proposals stay exactly as they are - they are never applied, " +
+                "never terminally failed, and never deleted - and they revive if the root's name returns to roots{}."
     }
 
 private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().joinToString(", ")

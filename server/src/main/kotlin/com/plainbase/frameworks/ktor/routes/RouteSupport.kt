@@ -6,6 +6,8 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
@@ -334,23 +336,56 @@ internal sealed interface ExtractedPrincipal {
 }
 
 /**
- * Runs [body] under the A3 choke point, mapping a [AccessDenied] thrown by a facade `check*` to the frozen
- * auth envelope: 401 `unauthorized` for an [Principal.Anonymous] (no credential), 403 `forbidden` for an
- * authenticated-but-unauthorized principal (the role×action matrix denied it). Every gated route wraps its
- * facade call(s) in this so the deny → status mapping lives in ONE place. The facade's [AccessDenied] is thrown
- * BEFORE any resolve/membership work, so a denied read never leaks page existence.
+ * Runs [body] under the A3 choke point, mapping the two facade-thrown conditions to their frozen envelopes — and it
+ * is the ONE place either mapping lives, so a route never catches or re-mints them:
+ *  - [AccessDenied] with [DenyReason.POLICY] → 401 `unauthorized` for an [Principal.Anonymous] (no credential),
+ *    403 `forbidden` for an authenticated-but-unauthorized principal (the role×action matrix denied it);
+ *  - [AccessDenied] with [DenyReason.ROOT_NOT_EDITABLE] → 403 `root_not_editable` (the root refuses page writes in
+ *    EVERY auth mode — but only ever AFTER authn has passed, so anonymous still sees 401 and the flag never leaks);
+ *  - [RootUnavailable] → 503 `root_unavailable` + [ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS].
+ *
+ * Both are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
+ * a denied read never leaks page existence and an unauthenticated prober never learns a root's topology.
  */
 internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
     try {
         body()
     } catch (denied: AccessDenied) {
-        if (denied.principal is Principal.Anonymous) {
-            respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
-        } else {
-            respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
+        when {
+            // The REASON is checked BEFORE the principal type, and that ordering is load-bearing. A
+            // ROOT_NOT_EDITABLE deny can only ever be produced AFTER authn has passed (the gate's own arms run
+            // authn -> editable -> matrix), so 401 is never the right answer for it - and under `auth.mode = off`,
+            // where Anonymous is a legitimate principal and the server is not asking for credentials at all, a 401
+            // would be nonsense. The enforced-anonymous case still gets its 401, because there the AUTHN arm denies
+            // first and arrives here as POLICY.
+            denied.reason == DenyReason.ROOT_NOT_EDITABLE ->
+                respondError(
+                    HttpStatusCode.Forbidden,
+                    ErrorCodes.ROOT_NOT_EDITABLE,
+                    "This root is configured read-only (editable = false); page writes are not accepted here",
+                )
+            denied.principal is Principal.Anonymous ->
+                respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
+            else -> respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
         }
+    } catch (unavailable: RootUnavailable) {
+        response.header(HttpHeaders.RetryAfter, ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS.toString())
+        respondError(
+            HttpStatusCode.ServiceUnavailable,
+            ErrorCodes.ROOT_UNAVAILABLE,
+            // The MESSAGE carries the difference between the causes, because the operator ACTION differs: a vanished
+            // root wants its disk back; a detached one wants its name back in roots{}. The CODE stays one.
+            "Root '${unavailable.root.value}' is not serving (${unavailable.reason.name.lowercase()}). Nothing was " +
+                "written. The page still exists - do not discard it. Restore the root and restart the server.",
+        )
     }
 }
+
+/**
+ * The `Retry-After` a 503 `root_unavailable` advertises. Recovery is an operator restart, not a transient blip, so
+ * five minutes balances agent politeness against how long a fixed deployment sits unnoticed.
+ */
+internal const val ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS: Int = 300
 
 /**
  * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the

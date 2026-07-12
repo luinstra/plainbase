@@ -107,6 +107,19 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                     )
                 }
 
+                // The declared root, resolved against the registry BEFORE the gate - the same pre-gate shape the
+                // malformed-folder 400 below already uses, so anonymous behavior does not change class. This is the
+                // ONE surface that validates a declared root in its own route: the two PROPOSE surfaces (REST and
+                // MCP) share the transport-neutral parser instead, so they cannot drift into two answers. Without the
+                // check, an unknown-but-well-formed name would reach the facade, where `editableOf` fails closed and
+                // answers 403 `root_not_editable` - a lie, since the root does not exist at all.
+                val root = RootName.registered(request.root, ctx.roots)
+                    ?: return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_ROOT,
+                        "Unknown root: '${request.root}'",
+                    )
+
                 // The folder is the content-relative parent; "" (or omitted) is the content root. A folder
                 // that fails TreePath validation (traversal/absolute/empty segment) is the client's 400.
                 val folderPath = if (request.folder.isEmpty()) {
@@ -142,9 +155,9 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                 // a create-proposal (202, the create twin of the PUT degrade); a refused blob is a 400. The clean-create
                 // 201 url is looked up from the now-published snapshot via the read facade (a creator is an EDITOR who
                 // may read).
-                when (val result = ctx.mutate.create(principal, CreateIntent(pageId = id, path = path, bytes = bytes))) {
+                when (val result = ctx.mutate.create(principal, CreateIntent(pageId = id, root = root, path = path, bytes = bytes))) {
                     is CreateOutcome.DirectCreated ->
-                        call.respondCreateOutcome(result.outcome, id) { ctx.read.currentSnapshot(principal, id.value) }
+                        call.respondCreateOutcome(result.outcome, root, id) { ctx.read.currentSnapshot(principal, id.value) }
                     is CreateOutcome.DegradedToProposal -> call.respondRest(
                         DegradedToProposalResponse.serializer(),
                         DegradedToProposalResponse(
@@ -193,16 +206,19 @@ private fun controlCharField(title: String, slug: String?): String? = when {
     else -> null
 }
 
-/** 409 `slug_conflict` — the create's canonical URL is already owned by a published page; nothing written. */
-private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
+/**
+ * 409 `slug_conflict` — the create's canonical URL is already owned by a published page; nothing written.
+ * The URL is qualified with the root the request ASKED for: URL space is per root (C3), so the contested
+ * URL only exists in [root], and naming main's would point the client at a page that isn't the conflict.
+ */
+private suspend fun ApplicationCall.respondSlugConflict(root: RootName, urlPath: String) {
     respondText(
         RestJson.encodeToString(
             PageExistsEnvelope.serializer(),
             PageExistsEnvelope(
                 PageExistsBody(
                     code = ErrorCodes.SLUG_CONFLICT,
-                    // Creates are main-wired (D18), so the contested canonical URL is main's (C3 root-qualified).
-                    message = "Another page already owns the canonical URL /docs/${RootName.MAIN}/$urlPath",
+                    message = "Another page already owns the canonical URL /docs/$root/$urlPath",
                     path = urlPath,
                 ),
             ),
@@ -224,7 +240,7 @@ private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
  * unpublished, so no reliable canonical url exists until reconciliation and fabricating one from the raw
  * path would diverge (slug override / unicode / collision-de-dup) — the client doesn't navigate there.
  */
-private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, id: PageId, snapshot: () -> PageIndex) {
+private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, root: RootName, id: PageId, snapshot: () -> PageIndex) {
     when (outcome) {
         is WriteOutcome.Written -> {
             setContentHashETag(outcome.newHash)
@@ -288,7 +304,7 @@ private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, 
         is WriteOutcome.SlugConflict ->
             // P1/P2: the prospective canonical URL is owned by a different page/folder/live alias —
             // evaluated under the create monitor, so a concurrent URL-colliding create can't both win.
-            respondSlugConflict(outcome.urlPath)
+            respondSlugConflict(root, outcome.urlPath)
         is WriteOutcome.Unreadable ->
             respondError(
                 HttpStatusCode.ServiceUnavailable,
@@ -317,7 +333,7 @@ private suspend fun ApplicationCall.respondWriteWire(wire: WriteWire) {
  * a `null` url instead (the client doesn't navigate there).
  */
 internal fun createUrl(id: PageId, snapshot: PageIndex): String =
-    snapshot.byId[id]?.url ?: "/p/${id.value}"
+    snapshot.byId[id]?.url ?: id.permalink
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */
 private const val REINDEX_DEFERRED_MESSAGE =

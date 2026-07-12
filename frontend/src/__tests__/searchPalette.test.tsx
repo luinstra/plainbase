@@ -18,6 +18,7 @@ const tree: TreeResponse = {
   roots: [
     {
       root: "main",
+      available: true,
       tree: {
         type: "folder",
         name: "",

@@ -122,10 +122,10 @@ export function searchQuery(q: string, limit = SEARCH_LIMIT, offset = 0) {
  * for the default 5 minutes. A short `gcTime` collects superseded entries promptly so a long editing
  * session can't hoard memory (long enough to still serve the in-flight debounced render).
  */
-export function previewQuery(text: string, path?: string) {
+export function previewQuery(text: string, path?: string, root?: string) {
   return queryOptions({
-    queryKey: ["preview", path ?? null, text],
-    queryFn: () => previewRaw(text, path),
+    queryKey: ["preview", root ?? null, path ?? null, text],
+    queryFn: () => previewRaw(text, path, root),
     enabled: text.length > 0,
     staleTime: 5_000,
     gcTime: 5_000,

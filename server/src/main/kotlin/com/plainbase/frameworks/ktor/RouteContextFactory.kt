@@ -3,12 +3,15 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LinkChecker
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -37,15 +40,18 @@ fun buildRouteContext(
     pageService: PageService,
     searchService: SearchService,
     aliasRegistry: UrlAliasRegistry,
-    contentStore: ContentStore,
     writePipeline: WritePipeline,
-    // The one root the facades serve/mutate (main until C4 widens writes; the read facade takes
-    // the route-parsed root per call since C3).
-    root: RootName,
-    // The registry root names the C3 URL grammar scopes by; MAIN is required (the legacy 301 arm
-    // targets /docs/main/..., so a known set without it would 301 its own redirect target forever).
-    knownRoots: Set<RootName> = setOf(root) + RootName.MAIN,
-    history: HistoryProvider,
+    /** The configured topology (D7 order). The known-root set the URL grammar and the propose parser use derives
+     *  from it, so client and server can never disagree about which names are roots. */
+    registry: RootRegistry,
+    /** Runtime per-root serving state — the facades gate on it; only `/healthz` reads it directly. */
+    availability: RootAvailability,
+    /** The ONE owner of the id→root and root→status questions, injected into all three guarded facades. */
+    resolver: PageRootResolver,
+    /** Per-root content trees. Registry-built, so an unregistered name is a PROGRAMMING error, not a runtime one. */
+    stores: (RootName) -> ContentStore,
+    /** Per-root history providers (a root may legitimately have none — the no-op adapter). */
+    histories: (RootName) -> HistoryProvider,
     idProvider: IdProvider,
     proposalService: ProposalService,
     proposalLabeler: ProposalAuthorLabeler,
@@ -71,17 +77,18 @@ fun buildRouteContext(
     agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
     extract: (ApplicationCall.() -> PrincipalExtraction)? = null,
 ): RouteContext {
-    require(RootName.MAIN in knownRoots) { "knownRoots must contain '${RootName.MAIN}' (the legacy grammar's 301 target)" }
     val read = GuardedReadFacade(
         policy = policy,
         pageService = pageService,
         searchService = searchService,
-        contentStore = contentStore,
         indexBuilder = indexBuilder,
-        history = history,
         aliasRegistry = aliasRegistry,
         linkChecker = LinkChecker(),
-        root = root,
+        registry = registry,
+        availability = availability,
+        resolver = resolver,
+        stores = stores,
+        histories = histories,
     )
     // P5: the mutate↔proposals construction cycle (the degrade path needs ProposalFacade; the apply path needs
     // MutatingFacade) is broken by a provider-lambda over a 2-phase `lateinit`. `mutate` only invokes the lambda at
@@ -90,9 +97,10 @@ fun buildRouteContext(
     val mutate = GuardedMutatingFacade(
         policy = policy,
         writePipeline = writePipeline,
-        contentStore = contentStore,
+        stores = stores,
         indexBuilder = indexBuilder,
-        root = root,
+        availability = availability,
+        resolver = resolver,
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = agentDirectCommitGlobs,
         proposalLabeler = proposalLabeler,
@@ -106,13 +114,17 @@ fun buildRouteContext(
         labeler = proposalLabeler,
         mutate = mutate,
         idProvider = idProvider,
+        indexBuilder = indexBuilder,
+        resolver = resolver,
+        availability = availability,
     )
     proposalsFacade = proposals
     return RouteContext(
         read = read,
         mutate = mutate,
         proposals = proposals,
-        roots = knownRoots,
+        registry = registry,
+        availability = availability,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

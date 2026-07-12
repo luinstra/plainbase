@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
 
 /**
  * The PURE decision core for an agent's `PUT /api/v1/pages/{id}` write: does a COMMIT-capable agent's write to
@@ -26,12 +27,16 @@ sealed interface AgentWriteDecision {
 }
 
 /**
- * The decision: a [AgentMode.COMMIT] agent whose [targetPath] matches SOME [globs] entry commits directly; every
- * other case (`PROPOSE`/`READ_ONLY`, COMMIT out-of-glob, or empty [globs]) degrades to a proposal. Both arms carry
- * [targetPath] so the facade can assert reference identity against the WriteIntent's path on either branch.
+ * The decision: a [AgentMode.COMMIT] agent whose [targetPath] matches SOME [globs] entry declared for
+ * [targetRoot] commits directly; every other case (`PROPOSE`/`READ_ONLY`, COMMIT out-of-glob, no glob for this
+ * root, or empty [globs]) degrades to a proposal. Both arms carry [targetPath] so the facade can assert
+ * reference identity against the WriteIntent's path on either branch.
+ *
+ * The root filter is what makes the per-root glob block an AUTHORIZATION boundary rather than a naming
+ * convention: a pattern declared for main authorizes nothing in an extra root, and vice versa (ADR-0011 D6).
  */
-fun agentWriteDecision(mode: AgentMode, globs: List<CommitGlob>, targetPath: TreePath): AgentWriteDecision =
-    if (mode == AgentMode.COMMIT && globs.any { it.matches(targetPath) }) {
+fun agentWriteDecision(mode: AgentMode, globs: List<CommitGlob>, targetRoot: RootName, targetPath: TreePath): AgentWriteDecision =
+    if (mode == AgentMode.COMMIT && globs.any { it.root == targetRoot && it.matches(targetPath) }) {
         AgentWriteDecision.DirectCommit(targetPath)
     } else {
         AgentWriteDecision.DegradeToProposal(targetPath)
@@ -52,8 +57,18 @@ fun agentWriteDecision(mode: AgentMode, globs: List<CommitGlob>, targetPath: Tre
  *  - `**` matches ZERO OR MORE WHOLE segments — a `docs` prefix with a trailing `**` matches `docs` itself
  *    (zero segments), `docs/a.md` (one), and `docs/a/b.md` (two);
  *  - a plain segment matches a path segment iff byte-equal (post-NFC).
+ *
+ * **[root] comes from WHICH CONFIG KEY declared the pattern, never from the pattern text** (ADR-0011 D6, and
+ * this is a security property, not a style choice). A colon is a legal `TreePath` segment character AND a legal
+ * glob character - a directory literally named `archive:2024` indexes, serves, and is glob-matchable today - so a
+ * `<root>:<pattern>` in-string grammar would silently RETARGET such an operator's existing pattern the day they
+ * add a root named `archive`: revoking it in main, and granting it, unasked, inside the new root. That is a
+ * privilege change produced by a version bump and nothing else. No printable separator is unambiguous against the
+ * path charset, so the root arrives STRUCTURALLY instead: `auth.agentDirectCommit.globs` is main's list (unchanged
+ * meaning, forever) and `auth.agentDirectCommit.roots.<name>` is the ONLY way to grant an extra root. A pattern is
+ * never split on any character but the path separator.
  */
-class CommitGlob private constructor(private val segments: List<String>) {
+class CommitGlob private constructor(private val segments: List<String>, val root: RootName) {
 
     /** True iff this glob matches [path]'s segment list under the [CommitGlob] grammar. */
     fun matches(path: TreePath): Boolean = matchSegments(0, path.segments, 0)
@@ -121,8 +136,12 @@ class CommitGlob private constructor(private val segments: List<String>) {
          * segment) is dropped; an interior empty segment, a `.`/`..` segment, a blank pattern, or a pattern that
          * normalizes to zero segments is REJECTED. Each surviving segment is NFC-normalized (so an operator's NFD-form
          * glob matches the always-NFC [TreePath.value]); the wildcard metacharacters stay literal in the segment.
+         *
+         * [root] is the root the DECLARING config key names, defaulted to [RootName.MAIN] - so the grammar, the
+         * matcher and every pre-C4 call site are byte-identical, and an existing `globs` list keeps meaning
+         * exactly what it means today.
          */
-        fun parse(raw: String): CommitGlob {
+        fun parse(raw: String, root: RootName = RootName.MAIN): CommitGlob {
             require(raw.isNotBlank()) { "agentDirectCommit glob must not be blank: '$raw'" }
             val parts = raw.removePrefix("/").split("/").toMutableList()
             if (parts.size > 1 && parts.last().isEmpty()) parts.removeAt(parts.lastIndex) // a single trailing '/'
@@ -132,7 +151,7 @@ class CommitGlob private constructor(private val segments: List<String>) {
             require(parts.none { it == "." || it == ".." }) {
                 "agentDirectCommit glob must not contain a '.' or '..' segment: '$raw'"
             }
-            return CommitGlob(parts.map(Nfc::normalize))
+            return CommitGlob(parts.map(Nfc::normalize), root)
         }
     }
 }

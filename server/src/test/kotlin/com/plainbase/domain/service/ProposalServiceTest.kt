@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
@@ -12,6 +13,8 @@ import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.ProposalSummaryRow
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
@@ -43,15 +46,35 @@ class ProposalServiceTest : FunSpec({
     val createPageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
     val path = TreePath.require("guides/deploy.md")
 
+    /**
+     * A [ProposalBaseReader] double — LEGITIMATE here, and worth saying why: the SUBJECT of these rows is what
+     * [ProposalService] DOES with a classified read, so the reader is the service's COLLABORATOR, not the code under
+     * test. (A row pinning the STORE's own classification would have to run against a real store; that lives in the
+     * native suite.) Its API stays TreePath-keyed — every root here is main — so the rooted port is an implementation
+     * detail of the double rather than noise in every fixture.
+     */
     class FakeReader(
         var pathById: Map<PageId, TreePath> = emptyMap(),
         var bytesByPath: Map<TreePath, ByteArray> = emptyMap(),
         var occupiedPaths: Set<TreePath> = emptySet(),
+        /** Paths whose ROOT is not serving — the arm that must never drive a durable rewrite (ADR-0011 D5). */
+        var rootDownPaths: Set<TreePath> = emptySet(),
     ) : ProposalBaseReader {
-        override fun pathOf(pageId: PageId): TreePath? = pathById[pageId]
-        override fun currentBytes(path: TreePath): ByteArray? = bytesByPath[path]
-        override fun occupied(path: TreePath): Boolean = path in occupiedPaths
+        // Root-scoped like the real reader: a page lives in main here, so a lookup under any OTHER root answers null -
+        // which is what makes the cross-root rows below assert something rather than accidentally pass.
+        override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
+            pathById[pageId]?.takeIf { root == RootName.MAIN }?.let { RootedPath(RootName.MAIN, it) }
+
+        override fun currentBytes(target: RootedPath): ContentRead = when {
+            target.path in rootDownPaths -> ContentRead.RootDown
+            else -> bytesByPath[target.path]?.let(ContentRead::Bytes) ?: ContentRead.Absent
+        }
+
+        override fun occupied(target: RootedPath): Boolean = target.path in occupiedPaths
     }
+
+    /** Main-rooted, since every fixture here is main's. */
+    fun rooted(p: TreePath) = RootedPath(RootName.MAIN, p)
 
     /** A trivial in-memory ProposalRepository capturing inserts + the P1b status CASes (no SQLite needed). */
     class MemRepo : ProposalRepository {
@@ -64,7 +87,7 @@ class ProposalServiceTest : FunSpec({
         override fun findById(id: com.plainbase.domain.page.ProposalId) = rows.firstOrNull { it.id == id }
         override fun all(): List<ProposalSummaryRow> = rows.sortedByDescending { it.createdAt }.map {
             ProposalSummaryRow(
-                it.id, it.operation, it.pageId, it.targetPath, it.baseHash, it.status, it.rationale,
+                it.id, it.operation, it.pageId, it.targetPath, it.root, it.baseHash, it.status, it.rationale,
                 it.authorIssuer, it.authorExternalId, it.authorLabel, it.approverIssuer, it.approverExternalId,
                 it.decisionComment, it.createdAt, it.decidedAt,
             )
@@ -84,7 +107,7 @@ class ProposalServiceTest : FunSpec({
             appliedCommit: String? = r.appliedCommit,
             statusReason: String? = r.statusReason,
         ) = ProposalRow(
-            r.id, r.operation, r.pageId, baseHash, targetPath, r.proposedContent, r.rationale, diffArtifact,
+            r.id, r.operation, r.pageId, r.root, baseHash, targetPath, r.proposedContent, r.rationale, diffArtifact,
             status, r.authorIssuer, r.authorExternalId, r.authorLabel, approverIssuer, approverExternalId,
             decisionComment, r.createdAt, decidedAt, appliedCommit, statusReason,
         )
@@ -212,7 +235,16 @@ class ProposalServiceTest : FunSpec({
         val current = "# Old\n".toByteArray()
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
         val (svc, repo) = service(reader)
-        val outcome = svc.proposeEdit(grantForTests(), pageId, citations.contentHash(current), null, "# New\n".toByteArray(), "r", author)
+        val outcome = svc.proposeEdit(
+            grantForTests(),
+            pageId,
+            rooted(path),
+            citations.contentHash(current),
+            null,
+            "# New\n".toByteArray(),
+            "r",
+            author,
+        )
         outcome.shouldBeInstanceOf<ProposeOutcome.Created>()
         val row = (repo as MemRepo).rows.single()
         row.status shouldBe ProposalStatus.PENDING
@@ -225,7 +257,16 @@ class ProposalServiceTest : FunSpec({
         val current = "# Old\n".toByteArray()
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
         val (svc, repo) = service(reader)
-        val outcome = svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "# New\n".toByteArray(), "r", author)
+        val outcome = svc.proposeEdit(
+            grantForTests(),
+            pageId,
+            rooted(path),
+            "sha256:" + "0".repeat(64),
+            null,
+            "# New\n".toByteArray(),
+            "r",
+            author,
+        )
         outcome shouldBe ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -233,7 +274,7 @@ class ProposalServiceTest : FunSpec({
     test("an edit whose page_id resolves to no published page is stale_base, nothing inserted (target-missing branch)") {
         val reader = FakeReader(pathById = emptyMap())
         val (svc, repo) = service(reader)
-        svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
+        svc.proposeEdit(grantForTests(), pageId, rooted(path), "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
             ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -241,7 +282,7 @@ class ProposalServiceTest : FunSpec({
     test("an edit whose currentBytes is null (target deleted) is stale_base, nothing inserted") {
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = emptyMap())
         val (svc, repo) = service(reader)
-        svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
+        svc.proposeEdit(grantForTests(), pageId, rooted(path), "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
             ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -253,6 +294,7 @@ class ProposalServiceTest : FunSpec({
         val outcome = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             TreePath.require("other.md"),
             "# New\n".toByteArray(),
@@ -267,7 +309,7 @@ class ProposalServiceTest : FunSpec({
         val (svc, repo) = service(FakeReader())
         val target = TreePath.require("guides/new.md")
         val blob = "# Brand New\n".toByteArray()
-        val outcome = svc.proposeCreate(createGrantForTests(), createPageId, target, blob, "r", author)
+        val outcome = svc.proposeCreate(createGrantForTests(), createPageId, rooted(target), blob, "r", author)
         outcome.shouldBeInstanceOf<ProposeOutcome.Created>()
         val row = (repo as MemRepo).rows.single()
         row.operation shouldBe ProposalOperation.CREATE
@@ -285,6 +327,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             proposed,
@@ -306,7 +349,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeCreate(
             createGrantForTests(),
             createPageId,
-            target,
+            rooted(target),
             "# X\n".toByteArray(),
             "r",
             author,
@@ -323,6 +366,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             "# New\n".toByteArray(),
@@ -341,6 +385,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             "# New\n".toByteArray(),
@@ -379,6 +424,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -473,7 +519,7 @@ class ProposalServiceTest : FunSpec({
                 svc.proposeCreate(
                     createGrantForTests(),
                     createPageId,
-                    TreePath.require("guides/new.md"),
+                    rooted(TreePath.require("guides/new.md")),
                     "# X\n".toByteArray(),
                     "r",
                     author,
@@ -594,6 +640,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -651,6 +698,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -684,7 +732,16 @@ class ProposalServiceTest : FunSpec({
         }
         val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
         val id = (
-            svc.proposeEdit(grantForTests(), pageId, citations.contentHash(current), null, proposed, "r", author) as ProposeOutcome.Created
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
             ).id
         svc.apply(
             approveGrantForTests(),
@@ -706,7 +763,7 @@ class ProposalServiceTest : FunSpec({
         val id = TestProposalIdProvider().next()
         repo.insert(
             ProposalRow(
-                id = id, operation = ProposalOperation.EDIT, pageId = pageId, baseHash = "sha256:" + "0".repeat(64),
+                id = id, operation = ProposalOperation.EDIT, pageId = pageId, root = RootName.MAIN, baseHash = "sha256:" + "0".repeat(64),
                 targetPath = path, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,
@@ -722,7 +779,7 @@ class ProposalServiceTest : FunSpec({
         repo.insert(
             ProposalRow(
                 // A CREATE APPLYING row carries a non-null page_id (minted at propose time) but NO base_hash.
-                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, baseHash = null,
+                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, root = RootName.MAIN, baseHash = null,
                 targetPath = targetPath, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,
@@ -759,7 +816,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeCreate(
                 createGrantForTests(),
                 createPageId,
-                TreePath.require("guides/new.md"),
+                rooted(TreePath.require("guides/new.md")),
                 "# X\n".toByteArray(),
                 "r",
                 author,

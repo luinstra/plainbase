@@ -10,7 +10,7 @@ import { splitFrontmatter } from "../lib/frontmatter";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * C3 formatting toolbar + keymap integration (acceptance #2/#3/#4/#5/#6). Mounts the `?mode=edit` editor,

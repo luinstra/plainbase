@@ -19,6 +19,20 @@ import kotlin.time.Clock
 import kotlin.time.Instant
 
 /**
+ * The role×action matrix is orthogonal to the per-root topology gate, so these rows exercise the UNROOTED arm —
+ * `RootedResource(null, resource)`, which is what an unknown page id resolves to and which SKIPS the editable check
+ * entirely. That keeps this suite about what it has always been about (roles), and it also pins the invariant the
+ * unrooted arm exists for: its audit string is the BARE resource, byte-identical to pre-C4. The ROOT dimension —
+ * editable, availability, the audit prefix, the deny-reason split — is [com.plainbase.frameworks.ktor
+ * .RootPolicyAuthzMatrixTest]'s subject.
+ */
+private fun PolicyService.checkEdit(principal: Principal, resource: String) =
+    checkEdit(principal, WriteClass.PageEdit, RootedResource(null, resource))
+
+private fun PolicyService.checkCreate(principal: Principal, resource: String) =
+    checkCreate(principal, WriteClass.PageCreate, RootedResource(null, resource))
+
+/**
  * The A3 authorization core (WI 2): the FULL role×action matrix over BOTH identity sources (a Human's
  * `subject_role` row and an Agent's token `mode`), the mint-on-allow / throw-on-deny grant contract, and the
  * pre-effect audit row (allowed AND denied, MUTATING only — reads are not audited). Runs ENFORCED (auth-on);
