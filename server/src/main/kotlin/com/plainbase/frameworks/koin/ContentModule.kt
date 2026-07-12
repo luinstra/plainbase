@@ -59,22 +59,22 @@ val contentModule = module {
         val config = get<PlainbaseConfig>()
         val registry = get<RootRegistry>()
         val availability = get<RootAvailability>()
+        val ignoreRules = get<IgnoreRules>()
+        // Main rides the backend-selected store (object mode included), taken EXPLICITLY - the fold sees ONLY extras,
+        // never re-selecting main by name (the C4 HistoryModule bug shape; `RootWiringArchitectureTest` pins it out).
+        // Extras are LOCAL-only in v1 (D10 keeps object mode single-root), and they inherit main's DATA_DIR exclusion
+        // so a legally-nested data dir is never walked as content.
         RootStores(
-            registry.roots.associate { root ->
-                root.name to if (root.name == registry.main.name) {
-                    get<ContentStore>() // main rides the backend-selected store, object mode included
-                } else {
-                    // Extras are LOCAL-only in v1 (D10 keeps object mode single-root), and they inherit main's
-                    // DATA_DIR exclusion so a legally-nested data dir is never walked as content.
-                    LocalContentStore(
+            mapOf(registry.main.name to get<ContentStore>()) +
+                registry.extras.associate { root ->
+                    root.name to LocalContentStore(
                         root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                        ignoreRules = get(),
+                        ignoreRules = ignoreRules,
                         exclusions = listOf(config.dataDir),
                         rootName = root.name,
                         onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
                     )
-                }
-            },
+                },
         )
     }
     single<ObjectContentStore> {

@@ -97,7 +97,7 @@ object AdoptCommand {
 
     private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver): Int {
         val registry = RootRegistry.of(config.roots.list)
-        val stores = LinkedHashMap<RootName, ContentStore>() // registry (D7) order: main first
+        val stores = LinkedHashMap<RootName, ContentStore>()
         try {
             val database = DatabaseFactory.createDatabase(driver)
             when (config.storage.backend) {
@@ -105,16 +105,16 @@ object AdoptCommand {
                 // the ONLY copy of it that survives a lost DATA_DIR - so a root this pass skips is a root whose
                 // permalinks and citations die with that directory, which is the exact disaster --write-ids exists
                 // to prevent. Extras are local-only in v1 (D10), so this is the whole local topology.
-                StorageBackend.LOCAL -> registry.roots.forEach { root ->
-                    stores[root.name] = LocalContentStore(
-                        root = if (root.name == registry.main.name) config.mainContentRoot() else requireNotNull(root.localPath),
-                        ignoreRules = IgnoreRules(),
-                        // The SAME DATA_DIR exclusion the server's store carries (ADR-0011): a legally-nested data
-                        // dir must never be walked as CONTENT, or the CLI indexes plainbase.db/search.db as pages and
-                        // assets. The server has always excluded it; these two never did, which is the scan-parity gap.
-                        exclusions = listOf(config.dataDir),
-                        rootName = root.name,
-                    )
+                //
+                // Main is EXPLICIT (its tree is `mainContentRoot()`, the env-sourced path, not `localPath`); the fold
+                // sees ONLY extras and never re-selects main by name. The report below iterates the REGISTRY, so this
+                // map's insertion order is nobody's contract.
+                StorageBackend.LOCAL -> {
+                    stores[registry.main.name] = localStore(config, config.mainContentRoot(), registry.main.name)
+                    registry.extras.forEach { root ->
+                        val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
+                        stores[root.name] = localStore(config, path, root.name)
+                    }
                 }
                 StorageBackend.OBJECT -> {
                     // Object mode is single-root by decision (D10 rejects an explicit roots block over a bucket), so
@@ -179,7 +179,11 @@ object AdoptCommand {
                 return abortStale(label(e.page, qualified), "could not be written: ${e.reason}$landed", wrote)
             }
 
-            stores.keys.forEach { root -> print(render(plan.report(root), root, adoptedTree(config, registry, root), qualified)) }
+            // D7 order, said out loud rather than inherited from a map's insertion order. The two key sets are equal:
+            // LOCAL registers every registry root above, and OBJECT is single-root by D10 (refused at parse).
+            registry.roots.forEach { root ->
+                print(render(plan.report(root.name), root.name, adoptedTree(config, registry, root.name), qualified))
+            }
             // ONE caveat for the whole run, not one per root (it is about the WRITE mechanism, not about a tree).
             if (mode != AdoptionPass.Mode.RECORD) println(NETWORK_FS_CAVEAT)
         } finally {
@@ -248,6 +252,14 @@ object AdoptCommand {
         )
         return true
     }
+
+    /**
+     * One root's offline tree, carrying the SAME DATA_DIR exclusion the server's store does (ADR-0011): a legally-
+     * nested data dir must never be walked as CONTENT, or the CLI indexes plainbase.db/search.db as pages and assets.
+     * The server has always excluded it; the two CLIs never did, which was the scan-parity gap.
+     */
+    private fun localStore(config: PlainbaseConfig, root: Path, name: RootName): LocalContentStore =
+        LocalContentStore(root = root, ignoreRules = IgnoreRules(), exclusions = listOf(config.dataDir), rootName = name)
 
     /** The tree a root's pass actually walked: its own directory locally, the DATA_DIR mirror for an object main. */
     private fun adoptedTree(config: PlainbaseConfig, registry: RootRegistry, root: RootName): Path =

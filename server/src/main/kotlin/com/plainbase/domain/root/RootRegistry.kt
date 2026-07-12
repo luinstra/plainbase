@@ -15,6 +15,14 @@ class RootRegistry private constructor(val roots: List<Root>) {
     /** The reserved primary root; guaranteed present by [of]. */
     val main: Root = roots.first { it.name == RootName.MAIN }
 
+    /**
+     * Every root except [main], in D7 order. A partition of [roots], NOT a reordering: [rank] still reads
+     * [roots], where main sits wherever config declared it. Exists so the per-root wiring folds over EXTRAS
+     * and main's entry is constructed explicitly, instead of a fold re-selecting main by name (the C4
+     * HistoryModule bug: main's arm short-circuited to a single that had drifted mode-blind).
+     */
+    val extras: List<Root> = roots.filter { it.name != RootName.MAIN }
+
     private val rootsByName: Map<RootName, Root> = roots.associateBy { it.name }
 
     fun byName(name: RootName): Root? = rootsByName[name]

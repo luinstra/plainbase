@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.WriteHistoryHook
@@ -71,7 +72,8 @@ val historyModule = module {
                 get<ObjectContentStore>().mirror.resolveRepoRelativePath(path)
             }
         }
-        // This single is MAIN's provider, and it OBEYS MAIN'S MODE - the same three-way selection every extra
+        // This single is MAIN's provider - and the per-root map's main entry below is THIS INSTANCE, not a second
+        // construction - and it OBEYS MAIN'S MODE - the same three-way selection every extra
         // gets, not a mode-blind legacy path. `off` really is off (an explicit `history = off` must not commit,
         // and the AUTO arm below commits whenever `git.enabled`/detection says so), and `native` really is
         // CLAIMED (it must run the strict four-check guard and never `git init`) - main is where an operator is
@@ -92,36 +94,21 @@ val historyModule = module {
             HistoryMode.AUTO -> autoHistoryProvider(config, repoPath, koin = this)
         }
     }
-    // The per-root history providers (ADR-0011 D4). `single<HistoryProvider>` above STAYS and is main's, so every
-    // main-only consumer (the object-mode warning) keeps resolving unchanged.
+    // The per-root history providers (ADR-0011 D4). Main's entry IS the single above - ONE construction of main's
+    // provider, from main's own `history` knob - so every main-only consumer (the object-mode warning) keeps
+    // resolving unchanged, and the two can never disagree. One instance, two keys: the alias idiom `ContentModule`
+    // already uses for the backend-selected `ContentStore`.
     //
-    // Selection per root:
-    //  - main: its own `history` knob, resolved by the single above (AUTO = today's behavior, `git.enabled`
-    //    tri-state and all; `off` = the no-op; `native` = the strict-guarded provider).
-    //  - extras: `off` -> no-op. `native` -> a guarded provider over the root's own declared path, which never inits
-    //    and refuses the boot on a linked worktree / submodule / foreign repo. `auto` is a boot VALIDATION error
-    //    (rejected at config parse): detect-and-maybe-init with lax worktree acceptance is precisely what D4 exists
-    //    to deny an extra root.
-    //
-    // Lazily constructed per the R9 discipline - a NoOp root builds no GitExecutor and touches no disk.
+    // Nothing re-selects main by NAME inside the fold, which sees ONLY extras. That short-circuit is the C4 bug
+    // shape: a map arm routing main back to a single that had drifted mode-blind, so `history = off` still committed
+    // and `history = native` skipped the strict guard. `RootWiringArchitectureTest` pins it out.
     single {
         val config = get<PlainbaseConfig>()
         val registry = get<RootRegistry>()
         val stores = get<RootStores>()
         HistoryProviders(
-            registry.roots.associate { root ->
-                root.name to when {
-                    root.name == registry.main.name -> get<HistoryProvider>()
-                    root.history == HistoryMode.NATIVE -> claimedRootProvider(
-                        config = config,
-                        root = requireNotNull(root.localPath) { "a native-history root must be local-backed" },
-                        // The RAW on-disk repo-relative path, resolved through THIS root's store - so an NFD-named
-                        // file is staged at its real path rather than at an NFC phantom that does not exist.
-                        repoPath = { path -> stores.localOrNull(root.name)?.resolveRepoRelativePath(path) ?: path.value },
-                    )
-                    else -> NoOpHistoryProvider
-                }
-            },
+            mapOf(registry.main.name to get<HistoryProvider>()) +
+                registry.extras.associate { root -> root.name to extraHistoryProvider(config, root, stores) },
         )
     }
     single<WriteHistoryHook> {
@@ -190,6 +177,25 @@ class HistoryProviders(private val byRoot: Map<RootName, HistoryProvider>) {
         "no history provider for root '$root': a per-root lookup ran on an unregistered root"
     }
 }
+
+/**
+ * An EXTRA root's provider (ADR-0011 D4): `native` CLAIMS the operator's repository under the strict four-check guard,
+ * anything else records nothing. `auto` never reaches here - it is a boot VALIDATION error on an extra
+ * (`PlainbaseConfig.parseRoot`): detect-and-maybe-init with lax worktree acceptance is precisely what D4 exists to
+ * deny an extra root. Lazy per the R9 discipline: a NoOp root builds no [GitExecutor] and touches no disk.
+ */
+private fun extraHistoryProvider(config: PlainbaseConfig, root: Root, stores: RootStores): HistoryProvider =
+    if (root.history == HistoryMode.NATIVE) {
+        claimedRootProvider(
+            config = config,
+            root = requireNotNull(root.localPath) { "a native-history root must be local-backed" },
+            // The RAW on-disk repo-relative path, resolved through THIS root's store - so an NFD-named file is staged
+            // at its real path rather than at an NFC phantom that does not exist.
+            repoPath = { path -> stores.localOrNull(root.name)?.resolveRepoRelativePath(path) ?: path.value },
+        )
+    } else {
+        NoOpHistoryProvider
+    }
 
 /**
  * A provider over a root whose repository the operator CLAIMED (`history = native`): it never `git init`s and its

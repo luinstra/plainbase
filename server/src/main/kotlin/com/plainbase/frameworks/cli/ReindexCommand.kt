@@ -182,10 +182,11 @@ object ReindexCommand {
     }
 
     /**
-     * One store per configured root, in registry (D7) order - the offline twin of `contentModule`'s `RootStores`:
-     * main rides the backend-selected store, and extras are LOCAL-only (D10 keeps object mode single-root).
-     * A failure part-way through closes whatever was already opened, so an unreachable bucket cannot leak the
-     * ktor transport.
+     * One store per configured root - the offline twin of `contentModule`'s `RootStores`: main rides the
+     * backend-selected store, and extras are LOCAL-only (D10 keeps object mode single-root). Name-keyed; its
+     * insertion order is nobody's contract (the source list is built from `registry.roots`, and `IndexBuilder`
+     * re-sorts by rank anyway). A failure part-way through closes whatever was already opened, so an unreachable
+     * bucket cannot leak the ktor transport.
      */
     private fun openStores(
         config: PlainbaseConfig,
@@ -195,18 +196,18 @@ object ReindexCommand {
     ): Map<RootName, ContentStore> {
         val stores = LinkedHashMap<RootName, ContentStore>()
         try {
-            registry.roots.forEach { root ->
-                val store = if (root.name == registry.main.name) {
-                    mainStore(config, database)
-                } else {
-                    LocalContentStore(
-                        root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                        ignoreRules = IgnoreRules(),
-                        // Extras inherit main's DATA_DIR exclusion: a legally-nested data dir is never walked as content.
-                        exclusions = listOf(config.dataDir),
-                        rootName = root.name,
-                    )
-                }
+            // Main is explicit (it rides the backend-selected store); the fold sees ONLY extras, never re-selecting
+            // main by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
+            // disappearance test drives, so dropping it here would disarm that test for main's own tree, silently.
+            stores[registry.main.name] = decorate(registry.main.name, mainStore(config, database))
+            registry.extras.forEach { root ->
+                val store = LocalContentStore(
+                    root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
+                    ignoreRules = IgnoreRules(),
+                    // Extras inherit main's DATA_DIR exclusion: a legally-nested data dir is never walked as content.
+                    exclusions = listOf(config.dataDir),
+                    rootName = root.name,
+                )
                 stores[root.name] = decorate(root.name, store)
             }
         } catch (e: Exception) {

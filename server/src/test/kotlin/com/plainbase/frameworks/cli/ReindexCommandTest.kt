@@ -147,6 +147,23 @@ class ReindexCommandTest : FunSpec({
         }
     }
 
+    test("main's store is decorated too: main vanishing MID-REBUILD aborts before the swap, exactly as an extra does") {
+        withTwoRootTree { config, _ ->
+            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
+
+            // `openStores` constructs main's entry EXPLICITLY, outside the extras fold - the one place `decorate` could
+            // be dropped without any other test noticing, since the test above only ever drives it through an EXTRA.
+            // Undecorated, main's store would be the real one: nothing vanishes, and this run returns 0.
+            val err = captureStderr { ReindexCommand.run(emptyList(), config, vanishAfterFirstProbe(RootName.MAIN)) shouldBe 1 }
+            err shouldContain "root 'main' went away while it was being indexed"
+            err shouldContain "nothing was written"
+
+            SearchDb(config.searchDatabasePath).use { db ->
+                Fts5SearchProvider(db).indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+            }
+        }
+    }
+
     test("criterion 14: a running server's DATA_DIR lock makes reindex refuse with exit 1 and write nothing") {
         withReindexTree { config ->
             DataDirLock.tryAcquire(config.dataDir)!!.use {
