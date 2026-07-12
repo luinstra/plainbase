@@ -33,7 +33,7 @@ class RootsValidationTest : FunSpec({
         }
     }
 
-    fun explicitRoots(vararg roots: Pair<String, Path>) = RootsConfig(
+    fun explicitRoots(vararg roots: Pair<String, Path>) = RootsConfig.of(
         list = roots.map { (name, path) ->
             Root(
                 name = RootName.require(name),

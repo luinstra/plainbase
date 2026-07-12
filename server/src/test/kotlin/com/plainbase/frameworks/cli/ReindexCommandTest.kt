@@ -230,7 +230,7 @@ private fun withTwoRootTree(block: (PlainbaseConfig, Path) -> Unit) {
             )
             block(
                 config.copy(
-                    roots = RootsConfig(
+                    roots = RootsConfig.of(
                         list = listOf(
                             Root(RootName.MAIN, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
                             Root(HANDBOOK, RootBackend.Local(handbook), editable = true, history = HistoryMode.OFF),

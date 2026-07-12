@@ -268,7 +268,7 @@ private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> U
             Files.writeString(handbook.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\n\n# Onboarding\n")
             block(
                 config.copy(
-                    roots = RootsConfig(
+                    roots = RootsConfig.of(
                         list = listOf(
                             Root(RootName.MAIN, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
                             Root(RootName.require("handbook"), RootBackend.Local(handbook), editable = true, history = HistoryMode.OFF),

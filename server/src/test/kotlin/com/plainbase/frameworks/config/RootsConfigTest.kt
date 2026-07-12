@@ -30,6 +30,13 @@ class RootsConfigTest : FunSpec({
         }
     }
 
+    fun root(name: String) = Root(
+        name = RootName.require(name),
+        backend = RootBackend.Local(Path.of("/roots", name)),
+        editable = true,
+        history = HistoryMode.OFF,
+    )
+
     // --- explicit-block parsing --------------------------------------------------------------------
 
     test("a full block round-trips: names, normalized absolute paths, explicit and defaulted knobs") {
@@ -273,5 +280,23 @@ class RootsConfigTest : FunSpec({
             ),
         )
         copied.mainContentRoot() shouldBe copied.contentDir
+    }
+
+    // --- the canonical snapshot ----------------------------------------------------------------------
+
+    test("of() snapshots the caller's list: mutating it afterwards cannot desync list, main or extras") {
+        val declared = mutableListOf(root("zeta"), root("main"))
+        val roots = RootsConfig.of(list = declared, origin = RootsOrigin.EXPLICIT)
+        declared.add(root("alpha"))
+        declared.removeAt(0)
+        roots.list.map { it.name.value } shouldBe listOf("zeta", "main")
+        roots.main.name shouldBe RootName.MAIN
+        roots.extras.map { it.name.value } shouldBe listOf("zeta")
+    }
+
+    test("a directly-constructed RootsConfig with no main is refused at construction, not at first access") {
+        shouldThrow<IllegalArgumentException> {
+            RootsConfig.of(list = listOf(root("zeta")), origin = RootsOrigin.EXPLICIT)
+        }.message shouldContain "no 'main' root"
     }
 })

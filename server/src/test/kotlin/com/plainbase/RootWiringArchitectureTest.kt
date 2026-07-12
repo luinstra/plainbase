@@ -59,8 +59,10 @@ class RootWiringArchitectureTest : FunSpec({
 
     // file -> exactly how many main-by-name comparisons it may contain, and why it may.
     val ledger = mapOf(
-        // DEFINES main and the extras partition. The ONE place the model may derive them - so that nobody else has to.
-        "RootRegistry.kt" to 3,
+        // DEFINES main and the extras partition. The ONE place the model may derive them - so that nobody else has to,
+        // and since `of` resolves main ONCE over the snapshot, one comparison is all it takes: `extras` partitions
+        // against the RESOLVED main, and nothing else searches.
+        "RootRegistry.kt" to 1,
         // PARSES and VALIDATES: main's path is fatal where an extra's degrades, the operator-facing required-main
         // refusal, and RootsConfig's own derivations - the config-side twin of the registry.
         "PlainbaseConfig.kt" to 5,

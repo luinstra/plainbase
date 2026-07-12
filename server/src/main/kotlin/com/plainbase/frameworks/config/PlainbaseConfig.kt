@@ -250,8 +250,7 @@ data class PlainbaseConfig(
         }
         // The C1 "extras are configured but unserved" and "editable/history are recorded but dormant" warnings are
         // RETIRED as of C4: extras ARE served, and editable/history ARE enforced.
-        val extras = roots.list.filter { it.name != RootName.MAIN }
-        extras.forEach { extra ->
+        roots.extras.forEach { extra ->
             val declared = requireNotNull(extra.localPath)
             if (canonicalRootPathOrNull(declared) == null) {
                 add(
@@ -621,10 +620,12 @@ data class PlainbaseConfig(
             val parsed = file.getObject("roots").entries
                 .sortedWith(compareBy({ it.value.origin().lineNumber() }, { it.key }))
                 .map { (key, value) -> parseRoot(key, value) }
+            // Redundant with RootsConfig.of's own check, deliberately: this one is OPERATOR-facing and names the
+            // config key. `of`'s is the type-level backstop for programmatic construction.
             require(parsed.any { it.name == RootName.MAIN }) {
                 "roots {} must declare a root named '${RootName.MAIN}' (the required, reserved primary): roots.main { path = ... }"
             }
-            return RootsConfig(parsed, RootsOrigin.EXPLICIT)
+            return RootsConfig.of(parsed, RootsOrigin.EXPLICIT)
         }
 
         private fun parseRoot(key: String, value: ConfigValue): Root {
@@ -674,7 +675,7 @@ data class PlainbaseConfig(
          * inside that arm. So this can only fire on a config that explicitly declares main's history non-auto.
          */
         private fun requireCoherentMainHistory(roots: RootsConfig, gitEnabled: Boolean?) {
-            val main = roots.list.first { it.name == RootName.MAIN }
+            val main = roots.main
             require(!(main.history == HistoryMode.NATIVE && gitEnabled == false)) {
                 "roots.main.history = native and git.enabled = false contradict each other: one claims main's git " +
                     "repository, the other turns git off. Set exactly one of them."
@@ -1000,15 +1001,35 @@ enum class RootsOrigin {
 /**
  * The root topology (multi-root C1): every configured root in origin-line-with-name-tiebreak order
  * (ADR-0011 D7 - the order `RootRegistry` preserves and C2's duplicate-id winner inherits).
+ *
+ * [of] takes a DEFENSIVE COPY, the same discipline `RootRegistry.of` has always had: [list], [main] and
+ * [extras] are three views of ONE snapshot and can never disagree, whatever the caller does afterwards with
+ * the list it handed in.
  */
-data class RootsConfig(val list: List<Root>, val origin: RootsOrigin) {
+@ConsistentCopyVisibility
+data class RootsConfig private constructor(val list: List<Root>, val origin: RootsOrigin) {
 
-    /** The reserved primary root; parse and synthesis both guarantee it exists. */
-    val main: Root get() = requireNotNull(list.firstOrNull { it.name == RootName.MAIN }) {
-        "no 'main' root in the roots list (parse and synthesis both guarantee one; a directly-constructed RootsConfig must include it)"
-    }
+    /**
+     * The reserved primary root; a construction-time guarantee from [of]. NOT necessarily `list.first()`:
+     * D7 order is preserved verbatim (`RootRegistry.rank` inherits it, and rank decides the cross-root
+     * duplicate-id winner).
+     */
+    val main: Root = list.first { it.name == RootName.MAIN }
+
+    /** Every root except [main], in D7 order. A partition of [list], NOT a reordering. */
+    val extras: List<Root> = list.filter { it.name != RootName.MAIN }
 
     companion object {
+
+        /** Snapshots [list] and validates it once, so nothing downstream has to search for main. */
+        fun of(list: List<Root>, origin: RootsOrigin): RootsConfig {
+            val snapshot = list.toList()
+            require(snapshot.any { it.name == RootName.MAIN }) {
+                "no 'main' root in the roots list (parse and synthesis both guarantee one; a directly-constructed " +
+                    "RootsConfig must include it)"
+            }
+            return RootsConfig(snapshot, origin)
+        }
 
         /**
          * The back-compat rule (ADR-0011): a config with no `roots {}` block IS a single-root
@@ -1021,7 +1042,7 @@ data class RootsConfig(val list: List<Root>, val origin: RootsOrigin) {
                 StorageBackend.LOCAL -> RootBackend.Local(contentDir)
                 StorageBackend.OBJECT -> RootBackend.Object(storage.bucket.orEmpty(), storage.prefix)
             }
-            return RootsConfig(
+            return of(
                 list = listOf(Root(name = RootName.MAIN, backend = backend, editable = true, history = HistoryMode.AUTO)),
                 origin = RootsOrigin.SYNTHESIZED,
             )

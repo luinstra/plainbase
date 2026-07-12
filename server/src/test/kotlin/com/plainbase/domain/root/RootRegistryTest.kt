@@ -54,4 +54,22 @@ class RootRegistryTest : FunSpec({
         registry.byName(RootName.require("extra"))?.name shouldBe RootName.require("extra")
         registry.byName(RootName.require("absent")).shouldBeNull()
     }
+
+    test("extras is a partition of roots in D7 order, never a reordering - main keeps its declared rank") {
+        val registry = RootRegistry.of(listOf(root("zeta"), root("main"), root("alpha")))
+        registry.extras.map { it.name.value } shouldBe listOf("zeta", "alpha")
+        registry.roots.map { it.name.value } shouldBe listOf("zeta", "main", "alpha")
+        registry.rank(RootName.MAIN) shouldBe 1 // NOT 0: main is a typed accessor, not a promotion
+    }
+
+    test("of() snapshots the caller's list: mutating it afterwards cannot desync roots, main, extras or rank") {
+        val declared = mutableListOf(root("zeta"), root("main"))
+        val registry = RootRegistry.of(declared)
+        declared.add(root("alpha"))
+        declared.removeAt(0)
+        registry.roots.map { it.name.value } shouldBe listOf("zeta", "main")
+        registry.main.name shouldBe RootName.MAIN
+        registry.extras.map { it.name.value } shouldBe listOf("zeta")
+        registry.rank(RootName.MAIN) shouldBe 1
+    }
 })

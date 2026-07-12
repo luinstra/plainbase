@@ -125,7 +125,7 @@ private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: 
             PlainbaseConfig.fromEnv(emptyMap()).copy(
                 contentDir = content,
                 dataDir = dataDir,
-                roots = RootsConfig(
+                roots = RootsConfig.of(
                     list = listOf(Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = history)),
                     origin = RootsOrigin.EXPLICIT,
                 ),

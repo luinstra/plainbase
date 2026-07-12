@@ -10,10 +10,16 @@ package com.plainbase.domain.root
  * inherits. It is NOT raw declaration order in the two documented edge cases (same-line declarations,
  * per-file line numbers under includes), so never label it that.
  */
-class RootRegistry private constructor(val roots: List<Root>) {
-
-    /** The reserved primary root; guaranteed present by [of]. */
-    val main: Root = roots.first { it.name == RootName.MAIN }
+class RootRegistry private constructor(
+    val roots: List<Root>,
+    /**
+     * The reserved primary root. A construction-time GUARANTEE, not a runtime search: [of] resolves and
+     * validates it once, over the same snapshot [roots] holds. NOT necessarily `roots[0]` - D7 order is
+     * preserved verbatim and main sits wherever config declared it, because [rank] (the cross-root
+     * duplicate-id winner) reads that order.
+     */
+    val main: Root,
+) {
 
     /**
      * Every root except [main], in D7 order. A partition of [roots], NOT a reordering: [rank] still reads
@@ -21,7 +27,7 @@ class RootRegistry private constructor(val roots: List<Root>) {
      * and main's entry is constructed explicitly, instead of a fold re-selecting main by name (the C4
      * HistoryModule bug: main's arm short-circuited to a single that had drifted mode-blind).
      */
-    val extras: List<Root> = roots.filter { it.name != RootName.MAIN }
+    val extras: List<Root> = roots.filter { it.name != main.name }
 
     private val rootsByName: Map<RootName, Root> = roots.associateBy { it.name }
 
@@ -37,7 +43,8 @@ class RootRegistry private constructor(val roots: List<Root>) {
     companion object {
 
         /**
-         * Builds a registry over a defensive copy of [roots]. The distinct-names check is defense for
+         * Builds a registry over a defensive copy of [roots], validated once: [main] is resolved HERE, so
+         * every accessor downstream reads one canonical snapshot. The distinct-names check is defense for
          * programmatic construction only - HOCON merges duplicate keys field-wise at parse, so the
          * config path can never produce duplicates.
          */
@@ -45,8 +52,10 @@ class RootRegistry private constructor(val roots: List<Root>) {
             val snapshot = roots.toList()
             val duplicates = snapshot.groupBy { it.name }.filterValues { it.size > 1 }.keys
             require(duplicates.isEmpty()) { "duplicate root name(s): ${duplicates.joinToString(", ") { it.value }}" }
-            require(snapshot.any { it.name == RootName.MAIN }) { "a root named '${RootName.MAIN}' is required (the reserved primary)" }
-            return RootRegistry(snapshot)
+            val main = requireNotNull(snapshot.firstOrNull { it.name == RootName.MAIN }) {
+                "a root named '${RootName.MAIN}' is required (the reserved primary)"
+            }
+            return RootRegistry(snapshot, main)
         }
     }
 }
