@@ -224,6 +224,137 @@ class ManagedRootsFileNativeTest {
         }
     }
 
+    /**
+     * **The states an INTERRUPTED promote can really leave on disk, and the boot each one must now get.**
+     *
+     * The hazard this closes is the quietest one in the feature: an absent-or-empty `roots.conf` used to parse to
+     * "no roots block", which the loader synthesized into a LEGACY, main-only config - so a promote killed at the
+     * wrong instant booted GREEN with every extra root gone. Nothing failed. The operator's next `root list` showed
+     * one root, and every page under the others 404'd - and a 404 does not read as an outage, it reads as deleted.
+     *
+     * Each case is a real residue of the copy-replace fallback (the only non-atomic promote path) or of a kill
+     * during it, and each asserts the OUTCOME - what `PlainbaseConfig.fromEnvAndFile`, the parser the next boot
+     * actually runs, does with the bytes on disk. `ABSENT_CLEAN` is the one legitimate absence: an install that
+     * never ran `plainbase root add`, with nothing beside it to say otherwise.
+     */
+    private enum class Residue(val roots: String?, val backup: Boolean, val boots: Boolean) {
+        ABSENT_CLEAN(roots = null, backup = false, boots = true),
+        ABSENT_WITH_BACKUP(roots = null, backup = true, boots = false),
+        ZERO_LENGTH(roots = "", backup = false, boots = false),
+        ZERO_LENGTH_WITH_BACKUP(roots = "", backup = true, boots = false),
+        HEADER_ONLY(roots = "# Managed by `plainbase root` - do not edit by hand.\n", backup = true, boots = false),
+        TRUNCATED_MID_BLOCK(roots = "roots {\n  \"alpha\" {\n    back", backup = true, boots = false),
+        WHOLE_WITH_STALE_BACKUP(roots = null, backup = true, boots = true), // roots is written for real below
+    }
+
+    @Test
+    fun `an interrupted promote refuses the boot rather than silently reverting the install to single-root`() {
+        Residue.entries.forEach { residue ->
+            val base = Files.createTempDirectory("pb-managed-native-residue")
+            try {
+                val data = Files.createDirectory(base.resolve("data"))
+                val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+                val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+                val whole = ManagedRootsFile.serialize(listOf(root("alpha", base.resolve("a").toString())))
+
+                if (residue == Residue.WHOLE_WITH_STALE_BACKUP) {
+                    ManagedRootsFile.writeAtomically(target, whole)
+                } else {
+                    residue.roots?.let { Files.writeString(target, it) }
+                }
+                if (residue.backup) {
+                    Files.writeString(data.resolve("${PlainbaseConfig.MANAGED_ROOTS_FILE}${ManagedRootsFile.BACKUP_SUFFIX}"), whole)
+                }
+
+                if (residue.boots) {
+                    val config = PlainbaseConfig.fromEnvAndFile(env)
+                    val expected = if (residue == Residue.WHOLE_WITH_STALE_BACKUP) setOf(RootName.require("alpha")) else emptySet()
+                    assertEquals(expected, config.roots.managed, "$residue must boot with exactly the topology on disk")
+                    if (residue.backup) {
+                        assertTrue(
+                            config.rootsWarnings().any { it.contains(ManagedRootsFile.BACKUP_SUFFIX) },
+                            "$residue boots, but the leftover backup is the only evidence a promote died - it must be named",
+                        )
+                    }
+                } else {
+                    // The REFUSAL, and it must be actionable: an operator staring at this needs to be told what is
+                    // wrong and both ways out, not handed a HOCON parse error against a file they never wrote.
+                    val failure = assertFailsWith<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                    val message = requireNotNull(failure.message)
+                    assertTrue(message.contains(PlainbaseConfig.MANAGED_ROOTS_FILE), "$residue: the refusal must name the file: $message")
+                    assertTrue(message.contains("delete"), "$residue: the refusal must offer the delete-and-re-add way out: $message")
+                    if (residue.backup) {
+                        assertTrue(message.contains("mv"), "$residue: with a .bak present the refusal must offer the restore: $message")
+                    }
+                }
+            } finally {
+                base.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    /**
+     * The other half of the fail-closed rule, and the reason it is a rule about DAMAGE rather than about EMPTINESS:
+     * an explicitly empty `roots {}` block is a file `plainbase root` could have written, it says "no extra roots",
+     * and it keeps its documented meaning (for the machine file, emptiness IS absence). Refusing it too would be a
+     * gate that fires on the one state it was never meant to catch.
+     */
+    @Test
+    fun `an explicitly EMPTY roots block is not damage - it returns the install to SYNTHESIZED`() {
+        val base = Files.createTempDirectory("pb-managed-native-empty-block")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            Files.writeString(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), "roots {\n}\n")
+
+            val config = PlainbaseConfig.fromEnvAndFile(
+                mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString()),
+            )
+
+            assertEquals(emptySet(), config.roots.managed)
+            assertEquals(RootsOrigin.SYNTHESIZED, config.roots.origin, "an empty machine file is absence, not an EXPLICIT topology")
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    /**
+     * The promote VALIDATES ITS OWN OUTCOME: a filesystem that reports a successful write and then holds different
+     * bytes is caught HERE, by re-reading what actually landed, rather than at the next boot's parse. The previous
+     * config must survive it - a promote that cannot be verified is a promote that did not happen.
+     */
+    @Test
+    fun `a copy fallback that lands the WRONG BYTES while reporting success is caught, and the previous file restored`() {
+        val base = Files.createTempDirectory("pb-managed-native-liar")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+
+            val good = ManagedRootsFile.serialize(listOf(root("alpha", base.resolve("a").toString())))
+            ManagedRootsFile.writeAtomically(target, good)
+            val before = Files.readAllBytes(target)
+
+            // The whole file parses, names a root, and is NOT what we promoted. Every precondition looks fine; only
+            // the outcome is wrong, which is exactly the class of failure a pre-write check cannot see.
+            val lyingCopy = object : FileAtomics by FileAtomics.Real {
+                override fun atomicMove(source: Path, target: Path) =
+                    throw AtomicMoveNotSupportedException(source.toString(), target.toString(), "test")
+
+                override fun copyReplace(source: Path, target: Path) {
+                    Files.writeString(target, ManagedRootsFile.serialize(listOf(root("wrong", base.resolve("w").toString()))))
+                }
+            }
+            val next = ManagedRootsFile.serialize(listOf(root("beta", base.resolve("b").toString())))
+
+            assertFailsWith<IOException> { ManagedRootsFile.writeAtomically(target, next, lyingCopy) }
+
+            assertContentEquals(before, Files.readAllBytes(target), "an unverifiable promote must leave the previous config in place")
+            assertEquals(setOf(RootName.require("alpha")), PlainbaseConfig.fromEnvAndFile(env).roots.managed)
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `delete unlinks the file, which is what remove of the LAST managed root promotes`() {
         val base = Files.createTempDirectory("pb-managed-native-delete")

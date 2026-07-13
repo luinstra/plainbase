@@ -185,15 +185,50 @@ class RootsValidationTest : FunSpec({
         }
     }
 
-    test("explicit: a root strictly inside DATA_DIR is refused") {
+    // A root strictly INSIDE DATA_DIR used to be REFUSED here and PERMITTED in the legacy arm, which is one condition
+    // with two answers, chosen by which arm the install happened to be in. It was not a stricter reading of a shared
+    // rule - it was a rule the other arm did not have, and it bricked `plainbase root add` on any legacy install whose
+    // CONTENT_DIR sat inside DATA_DIR (`DATA_DIR=/data CONTENT_DIR=/data/content` - a layout the legacy arm has always
+    // permitted, that boots fine, and that a single `root add` turned into a config the server refused to start: the
+    // baseline saw no fault, the explicit candidate saw one, so the CLI read it as a fault IT had introduced).
+    //
+    // It is now a WARN, in BOTH arms and for EVERY root. Nothing the app writes lands under such a root - app state
+    // sits directly in DATA_DIR, a sibling of it - so there is no rebuild loop and nothing is mis-served. What IS true
+    // is that ADR-0004 tells operators DATA_DIR holds derived state they may delete to rebuild, and here that would
+    // take the corpus: an operator trap, which is what rootsWarnings() is for.
+    test("explicit: a root strictly inside DATA_DIR boots with a WARN, symmetrically with the legacy arm") {
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(base.resolve("data"))
             val inside = Files.createDirectories(data.resolve("root"))
+            val cfg = config(data, base.resolve("legacy"), explicitRoots("main" to main, "extra" to inside))
+            cfg.requireContentDir() shouldBe main
+            cfg.rootsWarnings().any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
+        }
+    }
+
+    test("legacy: a CONTENT_DIR inside DATA_DIR gets the SAME warning, and main is not special about it") {
+        withBase { base ->
+            val data = Files.createDirectories(base.resolve("data"))
+            val content = Files.createDirectories(data.resolve("content"))
+            val cfg = legacyConfig(dataDir = data, contentDir = content)
+            cfg.requireContentDir() shouldBe content
+            cfg.rootsWarnings().any { it.contains("roots.main") && it.contains("is INSIDE DATA_DIR") } shouldBe true
+        }
+    }
+
+    // The half that IS still fatal, and the reason the demotion above is safe: DATA_DIR physically inside a root but
+    // DECLARED through an alias dodges the store's LEXICAL DATA_DIR exclusion, so the app's own state gets indexed and
+    // served as content. The legacy arm never had this guard - it does now, keyed identically.
+    test("legacy: DATA_DIR inside CONTENT_DIR only via a symlink-aliased declaration is refused, as in the explicit arm") {
+        withBase { base ->
+            val docs = Files.createDirectories(base.resolve("docs"))
+            val link = Files.createSymbolicLink(base.resolve("docs-link"), docs)
+            val data = Files.createDirectories(docs.resolve("data"))
             val failure = shouldThrow<IllegalArgumentException> {
-                config(data, base.resolve("legacy"), explicitRoots("main" to main, "extra" to inside)).requireContentDir()
+                legacyConfig(dataDir = data, contentDir = link).requireContentDir()
             }
-            failure.message shouldContain "is inside DATA_DIR"
+            failure.message shouldContain "declare CONTENT_DIR and DATA_DIR through consistent paths"
         }
     }
 
@@ -254,15 +289,16 @@ class RootsValidationTest : FunSpec({
         }
     }
 
-    test("explicit: a nonexistent extra nested inside DATA_DIR is still refused (D13 participation)") {
+    // D13 participation is what is actually pinned here, and it survives the demotion: an extra whose path does not
+    // exist still gets a comparable form, so it is still SEEN against DATA_DIR rather than silently skipped. The
+    // verdict it earns is now the WARN (see above), not a refusal - what must not happen is that it is not judged.
+    test("explicit: a nonexistent extra nested inside DATA_DIR still participates via the declared-form fallback (D13)") {
         withBase { base ->
             val main = Files.createDirectories(base.resolve("docs"))
             val data = Files.createDirectories(base.resolve("data"))
-            val failure = shouldThrow<IllegalArgumentException> {
-                config(data, base.resolve("legacy"), explicitRoots("main" to main, "extra" to data.resolve("gone")))
-                    .requireContentDir()
-            }
-            failure.message shouldContain "is inside DATA_DIR"
+            val cfg = config(data, base.resolve("legacy"), explicitRoots("main" to main, "extra" to data.resolve("gone")))
+            cfg.requireContentDir() shouldBe main
+            cfg.rootsWarnings().any { it.contains("roots.extra") && it.contains("is INSIDE DATA_DIR") } shouldBe true
         }
     }
 

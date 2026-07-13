@@ -142,11 +142,21 @@ internal class GracefulShutdown(
         const val FAST_STEP_BOUND_MILLIS = 5_000L
 
         /**
-         * Comfortably over the sub-second happy path and under Kubernetes' 30s default grace, so an operator on
-         * defaults hears about a long teardown BEFORE their runtime SIGKILLs it. Advisory only (see [awaitFinished]):
-         * the budget the wait actually honors is the steps' own, summed.
+         * Comfortably over the sub-second happy path and under the TIGHTEST default grace an operator is likely to
+         * be running - **`docker stop`'s 10 seconds, not Kubernetes' 30**. That choice is the whole point of the
+         * number: this WARN is the one line that tells an operator their runtime is about to SIGKILL a teardown that
+         * needed longer, and a threshold picked against the most GENEROUS grace is a diagnostic that arrives after
+         * the tightest one has already killed the process. It used to be 25s, so a `docker stop` on defaults killed
+         * the server 15 seconds before it would have said why.
+         *
+         * Advisory ONLY (see [awaitFinished]): the budget the wait actually honors is the steps' own, summed, and it
+         * is far larger than any grace period - a final DR bundle ship is bounded by a 10-minute transfer timeout,
+         * because that is how long shipping a large history over a slow link can honestly take. Cutting the WAIT
+         * short would not make the teardown faster; it would only make us SIGKILL ourselves earlier than the runtime
+         * would have. Fitting the two together is the OPERATOR's lever (`docker stop -t`,
+         * `terminationGracePeriodSeconds`), and `docs/operating-plainbase.md` gives them the arithmetic.
          */
-        const val WARN_AFTER_MILLIS = 25_000L
+        const val WARN_AFTER_MILLIS = 8_000L
         private const val WORKER_THREAD = "plainbase-shutdown"
         private const val HOOK_THREAD = "plainbase-shutdown-hook"
     }

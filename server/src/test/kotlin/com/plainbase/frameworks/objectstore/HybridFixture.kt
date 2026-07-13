@@ -85,6 +85,8 @@ class FailableFileAtomics(private val delegate: FileAtomics = FileAtomics.Real) 
         delegate.copyReplace(source, target)
     }
 
+    override fun fsync(path: Path) = delegate.fsync(path)
+
     /** Fails the first [times] attempts, then delegates normally - the "heals on reconcile" shape. */
     fun failFirst(times: Int) {
         val remaining = AtomicInteger(times)

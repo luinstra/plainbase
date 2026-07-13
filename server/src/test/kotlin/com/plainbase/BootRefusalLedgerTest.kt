@@ -86,15 +86,15 @@ class BootRefusalLedgerTest : FunSpec({
     // is what keeps a git refusal from swallowing the warnings that print before it today, and it is also what
     // would let a new kind fall through the cracks. So the stages must PARTITION the enum.
     test("serve()'s consumption stages partition BootRefusal.Kind - a new kind belongs to exactly one of them") {
-        val staged = TOPOLOGY_REFUSAL_KINDS + BIND_REFUSAL_KINDS + VERDICT_REFUSAL_KINDS
+        // DEGRADED is a disposition, not an exemption: `serve()` does not REFUSE on those kinds, it degrades the
+        // root to 503 through the verdict loop. A kind that is in NO set is one boot silently drops, which is what
+        // this partition exists to prevent - so the degrading kinds are stated, not left out.
+        val stages = listOf(TOPOLOGY_REFUSAL_KINDS, BIND_REFUSAL_KINDS, VERDICT_REFUSAL_KINDS, DEGRADED_REFUSAL_KINDS)
         withClue("a new BootRefusal.Kind must be added to one of serve()'s consumption stages, or boot will never print it") {
-            staged shouldBe BootRefusal.Kind.entries.toSet()
+            stages.flatten().toSet() shouldBe BootRefusal.Kind.entries.toSet()
         }
-        val overlap = TOPOLOGY_REFUSAL_KINDS.intersect(BIND_REFUSAL_KINDS) +
-            TOPOLOGY_REFUSAL_KINDS.intersect(VERDICT_REFUSAL_KINDS) +
-            BIND_REFUSAL_KINDS.intersect(VERDICT_REFUSAL_KINDS)
         withClue("a kind consumed by two stages would be printed twice, from the wrong place in the boot output") {
-            overlap shouldBe emptySet()
+            stages.flatten().size shouldBe stages.flatten().toSet().size
         }
     }
 })

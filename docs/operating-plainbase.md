@@ -591,18 +591,49 @@ You can see it in the log: a `shutting down: ...` line naming the steps, then `s
 **If you do not see those two lines, the process did not shut down gracefully** - it was SIGKILLed, either
 directly (`kill -9`, a `docker kill`) or by your orchestrator's grace period expiring.
 
-The whole teardown is bounded to **25 seconds**. If a step overruns that, the process logs a WARN naming the
-step it is stuck on and exits anyway - a shutdown that hangs is an outage of its own. Two consequences worth
-knowing:
+### The budget is DERIVED, and it is bigger than your grace period
 
-- **Give the process enough grace.** `docker stop` defaults to a **10-second** timeout, which is *tighter*
-  than Plainbase's own budget: on a large history the final DR bundle ship can need longer, and the container
-  is killed mid-flush. Use `docker stop -t 30` (or Kubernetes' `terminationGracePeriodSeconds: 30`, its
-  default) so the flush can finish. Nothing is lost if it can't - the next boot reconciles - but the DR
-  window stays wider than it needs to be (see [Backups](#backups)).
-- **Restarts are not a data-loss event either way.** Content lives in the content tree (or the bucket);
-  everything the teardown does is about *tightening* the recovery window, never about the durability of a
-  write that already returned 200.
+There is no fixed teardown deadline. Plainbase waits for the **sum of what its steps can honestly take**, each
+step declaring the bound its own collaborator honors. A fixed number in front of those collaborators would not
+bound them, it would *truncate* them - and the step it truncates first is the slowest one, the final DR bundle
+ship, which is the loss the graceful shutdown exists to prevent.
+
+So the budget is not a promise that shutdown is quick. It is a promise that nothing is cut short. On the happy
+path a teardown is **sub-second**; the numbers below are worst cases, reached only when a step is genuinely
+stuck:
+
+| Step | Worst case | Where it comes from |
+|---|---|---|
+| HTTP server | 8s | 3s drain grace + 5s hard stop |
+| Content watchers | 10s **per root** | one watcher close each |
+| Rebuild scheduler | 60s | two 30s executor drain awaits |
+| Git bundle DR (object mode + `git.enabled`) | ~21min | 60s ship drain + a 10min `git bundle create` + a 10min upload |
+| Object-store transport | 5s | |
+| `DATA_DIR` lock | 5s | |
+
+A local single-root install is therefore bounded at **~83 seconds**; an object-mode install shipping DR bundles
+is bounded in the **tens of minutes**, because that is how long a large history can honestly take to go up a
+slow link.
+
+**Set your grace period against the deployment you actually run, not against the defaults.** `docker stop`
+defaults to **10 seconds** and Kubernetes' `terminationGracePeriodSeconds` to **30** - both are *tighter* than
+even the local worst case, so on defaults a stuck teardown is SIGKILLed partway through:
+
+- **Local mode:** `docker stop -t 120`, or `terminationGracePeriodSeconds: 120`.
+- **Object mode with DR bundles:** give it minutes, not seconds - `terminationGracePeriodSeconds: 1500` covers
+  the full bundle bound. Size it against how long *your* history takes to ship (watch the `bundle ship` log
+  lines); the table's number is the ceiling, not the expectation.
+
+If a teardown is still running after **8 seconds**, Plainbase logs a WARN naming the step it is waiting on. That
+threshold sits deliberately *under* `docker stop`'s 10-second default so the warning reaches you **before** the
+tightest common grace period kills the process - it is the line that tells you which knob to turn. If a step
+overruns its own declared bound, the process logs a WARN naming it and exits anyway: at that point the step is
+wedged rather than slow, and a shutdown that hangs is an outage of its own.
+
+**Restarts are not a data-loss event either way.** Content lives in the content tree (or the bucket); everything
+the teardown does is about *tightening* the recovery window, never about the durability of a write that already
+returned 200. Nothing is lost if the flush is cut - the next boot reconciles - but the DR window stays wider
+than it needs to be (see [Backups](#backups)).
 
 ## Operator signals (object mode)
 

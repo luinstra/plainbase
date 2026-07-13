@@ -221,6 +221,8 @@ private class MiniFailableAtomics(private val delegate: FileAtomics = FileAtomic
         delegate.copyReplace(source, target)
     }
 
+    override fun fsync(path: Path) = delegate.fsync(path)
+
     fun failAlways() {
         shouldFailFor = { true }
     }

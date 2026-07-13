@@ -395,13 +395,27 @@ private fun serve() {
  * wrong stage. The entries exist in `refusals` for the CLI's key diff.)
  */
 val TOPOLOGY_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(
-    BootRefusal.Kind.MAIN_UNUSABLE,
     BootRefusal.Kind.ROOT_PAIR,
     BootRefusal.Kind.ROOT_VS_DATA_DIR,
     BootRefusal.Kind.OBJECT_KEYS,
 )
 
 val BIND_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.BIND_GUARD)
+
+/**
+ * The kinds `serve()` RECORDS and DEGRADES on rather than refusing - the fourth disposition, and the one that
+ * makes the partition honest instead of forcing an outage into a stage that exits.
+ *
+ * `MAIN_UNUSABLE` is an OUTAGE, not a config fault: the config is perfectly well-formed and a directory is late.
+ * So `serve()` treats main exactly as it treats an extra in the same state - Unavailable, a WARN, 503 for its
+ * pages - through [rootGateVerdicts], and this set is what says so out loud.
+ *
+ * It stays a [BootRefusal] for the two consumers that still need it, and both genuinely do: the OFFLINE commands
+ * refuse on it through `requireContentDir()` (a `plainbase reindex` over a content tree that is not there is a
+ * no-op pretending to be a rebuild), and `plainbase root`'s baseline diff is keyed on it - where it can only ever
+ * appear on BOTH sides, since no value `root` writes can move main.
+ */
+val DEGRADED_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.MAIN_UNUSABLE)
 
 /** Reached through [BootGate.verdicts] in rank order, so an earlier root's WARN still prints before it. */
 val VERDICT_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.GIT_GATE)
@@ -477,7 +491,14 @@ fun rootGateVerdicts(
     stores: RootStores,
     histories: HistoryProviders,
 ): List<RootGateVerdict> = registry.roots.map { root ->
-    if (root.name != RootName.MAIN && !stores[root.name].available()) {
+    // EVERY root, main included. main used to be exempt from the probe and refused the boot outright from the
+    // topology matrix instead - two behaviors for one condition, decided by which root it happened to be. A server
+    // that will not start because ONE volume is late is a server that cannot survive a reboot ordering race, and it
+    // takes every OTHER root down with it over a directory that is usually seconds away. So main degrades exactly as
+    // an extra does: 503 for its pages (never 404 - a 404 reads as deleted), its own WARN, and the same restart to
+    // recover once the mount is back (`RootAvailability` is sticky by design; a vanished root's identity state is
+    // not trustworthy afterwards).
+    if (!stores[root.name].available()) {
         RootGateVerdict.Unavailable(root.name, root.localPath)
     } else {
         try {

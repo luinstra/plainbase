@@ -3,6 +3,7 @@ package com.plainbase.frameworks.config
 import com.plainbase.domain.root.Root
 import com.plainbase.frameworks.filesystem.FileAtomics
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -67,9 +68,17 @@ object ManagedRootsFile {
     }
 
     /**
-     * Promotes [hocon] to [path] atomically: a sibling temp, then an `ATOMIC_MOVE`, so a reader (or a boot)
+     * Promotes [hocon] to [path] DURABLY: a sibling temp, fsynced, then an `ATOMIC_MOVE`, so a reader (or a boot)
      * racing the write sees either the whole old file or the whole new one, never a truncated husk. The temp
      * is removed on any outcome, so a failed promote leaves the previous file exactly as it was.
+     *
+     * **The rename is atomic against a killed PROCESS; the fsyncs are what make it atomic against a killed HOST**
+     * ([FileAtomics.fsync]). Without them the promote can survive exactly the kill it was designed for and come
+     * back as a zero-length file - and a zero-length `roots.conf` used to read as "this install has no extra
+     * roots", which boots GREEN, main-only, with every extra root's pages 404ing. The loader now refuses that
+     * file rather than believing it ([PlainbaseConfig] `loadManagedRoots`), and this end makes it far less likely
+     * to exist: two ends of one guarantee, because a fail-closed boot over an install that already lost its
+     * topology is a good last resort and a bad only resort.
      *
      * A DATA_DIR on a filesystem with no atomic rename (a network mount, an exotic FS) degrades to a BACKED-UP
      * copy-replace through the [FileAtomics] seam rather than throwing - the same fallback `LocalContentStore`
@@ -92,14 +101,46 @@ object ManagedRootsFile {
         val temp = Files.createTempFile(path.parent, "${path.fileName}.", ".tmp")
         try {
             Files.writeString(temp, hocon, Charsets.UTF_8)
+            atomics.fsync(temp)
+            // The ARTIFACT, checked before it is allowed anywhere near the target: a short write, a full disk or a
+            // lying mount fails HERE, where the previous file is still whole and untouched, rather than at the next
+            // boot's parse. Verifying only after the promote would be verifying the wreckage.
+            verifyLanded(temp, hocon)
             try {
                 atomics.atomicMove(temp, path)
+                verifyLanded(path, hocon)
             } catch (_: AtomicMoveNotSupportedException) {
                 logger.warn { "ATOMIC_MOVE unsupported for $path; falling back to a backed-up copy+delete (non-atomic)" }
-                copyPreservingPrevious(temp, path, atomics)
+                copyPreservingPrevious(temp, path, hocon, atomics)
             }
+            // The rename itself, made durable. Best-effort ALONE among these calls: the file is already present and
+            // visible, so a platform that cannot open a directory channel (Windows) has not lost anything we can
+            // still act on - it has only declined to promise the name survives a power cut.
+            runCatching { atomics.fsync(path.parent) }
+                .onFailure {
+                    logger.warn(it) { "could not fsync ${path.parent}: $path is written, but its directory entry is not flushed" }
+                }
         } finally {
             Files.deleteIfExists(temp)
+        }
+    }
+
+    /**
+     * Proves the bytes on disk ARE the artifact - the question this writer's whole design poses ([serialize]) and
+     * the last one a promote can still answer for itself.
+     *
+     * A byte compare, NOT a re-parse, and that is not a shortcut: the candidate TEXT has already been through the
+     * real loader and the real boot gate before it ever reaches this file ([PlainbaseConfig.fromEnvAndCandidateRoots]),
+     * so its MEANING is settled and the only thing left to establish is that the file says what was validated.
+     * Re-parsing here would also be the second parser of `roots.conf` this object exists not to have.
+     */
+    private fun verifyLanded(path: Path, expected: String) {
+        val landed = Files.readString(path, Charsets.UTF_8)
+        if (landed != expected) {
+            throw IOException(
+                "$path did not land as written (${landed.length} chars on disk, ${expected.length} promoted): " +
+                    "the write reported success and the filesystem disagrees, so the promote is not trustworthy",
+            )
         }
     }
 
@@ -113,12 +154,18 @@ object ManagedRootsFile {
      * morning. The backup is kept ONLY when it is still needed - a failed restore, or a process killed before it
      * could run one. On a first-ever promote there is nothing to keep: absence is that install's last-known-good,
      * so a partial file is removed instead.
+     *
+     * [verifyLanded] runs INSIDE the try, so a copy that lands the WRONG BYTES while reporting success is restored
+     * from exactly like a copy that threw. That is the whole reason the check sits here and not at the call site:
+     * past the `catch` the backup is already gone, and a verification whose only remedy has been deleted is a
+     * verification that can do nothing but print.
      */
-    private fun copyPreservingPrevious(temp: Path, path: Path, atomics: FileAtomics) {
+    private fun copyPreservingPrevious(temp: Path, path: Path, hocon: String, atomics: FileAtomics) {
         val backup = if (Files.isRegularFile(path)) path.resolveSibling("${path.fileName}$BACKUP_SUFFIX") else null
         backup?.let { Files.copy(path, it, StandardCopyOption.REPLACE_EXISTING) }
         try {
             atomics.copyReplace(temp, path)
+            verifyLanded(path, hocon)
         } catch (e: Exception) {
             if (backup == null) {
                 Files.deleteIfExists(path) // a partial FIRST write is not a config, and absence is what preceded it

@@ -190,10 +190,10 @@ data class PlainbaseConfig(
     }
 
     /**
-     * The two back-compat guards a SYNTHESIZED (legacy) config gets, and nothing else (ADR-0011 D9): the
-     * byte-identical mandate lives here. Both are keyed on `{main}` with the SAME kind the explicit matrix
-     * produces for the same fault, deliberately - the arms word a fault differently, they never key it
-     * differently ([mainFault] is the shared predicate that makes the MAIN_UNUSABLE half of that true).
+     * The back-compat guards a SYNTHESIZED (legacy) config gets (ADR-0011 D9): the byte-identical mandate lives
+     * here. Every one is keyed on `{main}` with the SAME kind AND the SAME condition the explicit matrix uses for
+     * the same fault - the arms word a fault differently, they never key it differently, and they never raise it on
+     * different evidence ([mainFault] and [dataDirFault] are the shared predicates that make that true).
      */
     private fun legacyRefusals(): List<BootRefusal> = buildList {
         mainFault(contentDir)?.let { fault ->
@@ -204,16 +204,19 @@ data class PlainbaseConfig(
             }
             add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
         }
-        if (dataDir.toAbsolutePath().normalize() == contentDir.toAbsolutePath().normalize()) {
-            add(
-                BootRefusal(
-                    BootRefusal.Kind.ROOT_VS_DATA_DIR,
-                    setOf(RootName.MAIN),
+        val declared = contentDir.toAbsolutePath().normalize()
+        dataDirFault(declared, comparableRootPath(declared))?.let { fault ->
+            val message = when (fault) {
+                DataDirFault.SAME_DIRECTORY ->
                     "DATA_DIR and CONTENT_DIR must be different directories (both are $contentDir): app-owned state " +
                         "(plainbase.db, search.db) inside the user-owned content root would re-trigger the watcher " +
-                        "after every rebuild - a self-sustaining rebuild loop (§4 separation)",
-                ),
-            )
+                        "after every rebuild - a self-sustaining rebuild loop (§4 separation)"
+                DataDirFault.ALIASED_NESTING ->
+                    "DATA_DIR (${dataDirDeclared()}) is inside CONTENT_DIR on disk but not by its declared path " +
+                        "($declared): declare CONTENT_DIR and DATA_DIR through consistent paths so the app-state " +
+                        "exclusion can apply"
+            }
+            add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(RootName.MAIN), message))
         }
     }
 
@@ -266,15 +269,6 @@ data class PlainbaseConfig(
             }
             Triple(root.name, declared, comparable)
         }
-        // First boot: DATA_DIR is only created later (DataDirLock.tryAcquire), so a missing one gets
-        // the same best-effort fallback as an unavailable extra - resolving EXISTING symlinked
-        // ancestors matters here, or a DATA_DIR declared through an alias into a root would pass
-        // validation and then be physically created inside the served tree.
-        val dataDirComparable = try {
-            dataDir.toRealPath()
-        } catch (_: IOException) {
-            bestEffortCanonical(dataDir)
-        }
         // Keyed by the PAIR as a SET, so a pre-existing violation between (a, b) cannot mask a new one between
         // (a, c). The `when` is the same short-circuit the require chain had: two roots at ONE path also
         // trivially "nest" both ways, and saying so three times helps nobody.
@@ -292,27 +286,80 @@ data class PlainbaseConfig(
                 }
             }
         }
-        val dataDirDeclared = dataDir.toAbsolutePath().normalize()
         canonical.forEach { (name, declared, comparable) ->
-            fun vsDataDir(message: String) = add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(name), message))
-            when {
-                comparable == dataDirComparable -> vsDataDir(
-                    "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): app-owned state " +
-                        "(plainbase.db, search.db) inside a docs root would re-trigger the watcher after every rebuild (§4 separation)",
-                )
-                comparable.startsWith(dataDirComparable) -> vsDataDir(
-                    "roots.${name.value} ($comparable) is inside DATA_DIR ($dataDirComparable): app-owned state must not contain a docs root",
-                )
-                // DATA_DIR strictly inside a root is legal ONLY when the DECLARED forms nest too: the store's
-                // DATA_DIR exclusion is lexical over the declared paths, so a symlink-aliased nesting would
-                // dodge it and index/serve app state as content.
-                dataDirComparable.startsWith(comparable) && !dataDirDeclared.startsWith(declared) -> vsDataDir(
-                    "DATA_DIR ($dataDirDeclared) is inside roots.${name.value} on disk but not by its declared path " +
-                        "($declared): declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply",
-                )
+            dataDirFault(declared, comparable)?.let { fault ->
+                val message = when (fault) {
+                    DataDirFault.SAME_DIRECTORY ->
+                        "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): app-owned " +
+                            "state (plainbase.db, search.db) inside a docs root would re-trigger the watcher after every " +
+                            "rebuild (§4 separation)"
+                    DataDirFault.ALIASED_NESTING ->
+                        "DATA_DIR (${dataDirDeclared()}) is inside roots.${name.value} on disk but not by its declared path " +
+                            "($declared): declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply"
+                }
+                add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(name), message))
             }
         }
     }
+
+    /**
+     * A root's FATAL relationship to DATA_DIR - **ONE predicate for BOTH topology arms**, and it exists as a value
+     * for the [mainFault] reason, one predicate lower down: an arm that RAISES a fault the other cannot even test
+     * puts a fault the operator ALREADY HAS on the candidate side of `plainbase root`'s baseline diff alone, and
+     * the CLI then refuses an `add` that introduced nothing. **main is not special here**; it is a root like any
+     * other, which is the same fact the rank contract turns on.
+     *
+     * The line between fatal and merely alarming is drawn at WHAT THE APP ITSELF WRITES:
+     * - [SAME_DIRECTORY]: plainbase.db/search.db (and their -wal/-journal siblings, none of them dotfiles) land
+     *   INSIDE the watched tree and no exclusion can save them - every checkpoint re-triggers the watcher, which
+     *   is a self-sustaining rebuild loop.
+     * - [ALIASED_NESTING]: DATA_DIR is physically inside the root but was DECLARED through an alias, so the store's
+     *   LEXICAL DATA_DIR exclusion never matches and the app's own state gets indexed and served as content. (A
+     *   nesting whose declared forms agree is fine, and stays legal - the exclusion applies.)
+     *
+     * **A root strictly INSIDE DATA_DIR is deliberately NOT fatal**, and its absence here is the load-bearing part.
+     * Nothing the app writes lands under such a root - app state sits directly in DATA_DIR, a SIBLING of it - so
+     * there is no loop and nothing is mis-served. The exposure is an operator one: DATA_DIR is app-owned scratch
+     * space whose contents ADR-0004 declares disposable PIECEMEAL (`search.db`, `mirror`, `mirror-state` - never
+     * the directory itself, which also holds the durable `plainbase.db`), and it is the directory an operator
+     * wipes and recreates without thinking twice. Content living inside it is content parked in the one place
+     * nobody treats as precious. That is a trap, not a config fault, so it is a loud WARN ([rootsWarnings])
+     * instead - named for EVERY root, in BOTH arms, which is more than the legacy arm has ever said about it.
+     *
+     * Refusing it in the explicit arm ALONE is what used to happen, and it was not a stricter version of the same
+     * rule - it was a different rule. It bricked `plainbase root add` on any legacy install whose CONTENT_DIR sat
+     * inside DATA_DIR (a single-volume `DATA_DIR=/data CONTENT_DIR=/data/content` deploy, which the legacy arm has
+     * always permitted and which boots fine): the baseline saw no fault, the explicit candidate saw one, so the CLI
+     * read a layout the operator has been running for months as a fault IT had just introduced, and refused. The
+     * install could never gain a root.
+     */
+    private enum class DataDirFault { SAME_DIRECTORY, ALIASED_NESTING }
+
+    private fun dataDirFault(declared: Path, comparable: Path): DataDirFault? {
+        val dataDirComparable = dataDirComparable()
+        return when {
+            comparable == dataDirComparable -> DataDirFault.SAME_DIRECTORY
+            dataDirComparable.startsWith(comparable) && !dataDirDeclared().startsWith(declared) -> DataDirFault.ALIASED_NESTING
+            else -> null
+        }
+    }
+
+    /**
+     * DATA_DIR's canonical form. First boot: DATA_DIR is only created later (DataDirLock.tryAcquire), so a missing
+     * one gets the same best-effort fallback an unavailable root does - resolving EXISTING symlinked ancestors
+     * matters here, or a DATA_DIR declared through an alias into a root would pass validation and then be
+     * physically created inside the served tree.
+     */
+    private fun dataDirComparable(): Path = try {
+        dataDir.toRealPath()
+    } catch (_: IOException) {
+        bestEffortCanonical(dataDir)
+    }
+
+    private fun dataDirDeclared(): Path = dataDir.toAbsolutePath().normalize()
+
+    /** A root path's comparable (canonical) form, with the D13 declared-form fallback when it cannot be resolved. */
+    private fun comparableRootPath(declared: Path): Path = canonicalRootPathOrNull(declared) ?: bestEffortCanonical(declared)
 
     /**
      * Operator-facing storage-config warnings (Q9/Q10), logged once by `serve()` (the [bindGuardRefusal]
@@ -348,6 +395,10 @@ data class PlainbaseConfig(
      * the other.
      */
     fun rootsWarnings(): List<String> = buildList {
+        // BOTH arms, main included - these two are the only warnings a LEGACY config can raise, and they are above
+        // the EXPLICIT guard for exactly that reason.
+        addAll(dataDirContainmentWarnings())
+        managedRootsBackupWarning()?.let { add(it) }
         if (roots.origin != RootsOrigin.EXPLICIT) return@buildList
         // Gated on main having actually been DECLARED (C5 D-C5-3), not merely on EXPLICIT. A `roots.conf`-only
         // topology is EXPLICIT with main SYNTHESIZED from contentDir, so CONTENT_DIR is the very thing main's
@@ -388,6 +439,43 @@ data class PlainbaseConfig(
                         "because the root refuses page writes outright. Set editable = true, or drop the globs.",
                 )
             }
+    }
+
+    /**
+     * The demoted half of [DataDirFault]: a root living strictly INSIDE DATA_DIR. It breaks nothing (nothing the
+     * app writes lands under it), so it is not a refusal - but DATA_DIR is app-owned scratch space, the directory
+     * an operator wipes and recreates without thinking twice, and a root inside it is a corpus parked where
+     * nothing is treated as precious. Every root, main included, in BOTH topology arms.
+     */
+    private fun dataDirContainmentWarnings(): List<String> = buildList {
+        if (storage.backend == StorageBackend.OBJECT) return@buildList // the bucket is the authority; no local root to contain
+        val dataDirComparable = dataDirComparable()
+        roots.list.forEach { root ->
+            val declared = root.localPath ?: return@forEach
+            val comparable = comparableRootPath(declared)
+            if (comparable != dataDirComparable && comparable.startsWith(dataDirComparable)) {
+                add(
+                    "roots.${root.name.value} ($comparable) is INSIDE DATA_DIR ($dataDirComparable). This serves correctly, " +
+                        "but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt (`search.db` and the " +
+                        "object mirror are explicitly disposable) - a wipe here takes this root's content with it. Move the " +
+                        "root outside DATA_DIR.",
+                )
+            }
+        }
+    }
+
+    /**
+     * A `roots.conf.bak` beside a `roots.conf` that IS intact: the copy-replace fallback leaves one behind only when
+     * a promote failed, so the restore worked and the topology is sound - but the operator has not been told a
+     * `plainbase root` command died on them, and the leftover is the only evidence left that it did. (A backup beside
+     * a MISSING or unparseable `roots.conf` is a different animal entirely and never reaches here: it refuses the
+     * boot outright - see `loadManagedRoots`.)
+     */
+    private fun managedRootsBackupWarning(): String? {
+        val backup = managedRootsPath.resolveSibling("${managedRootsPath.fileName}${ManagedRootsFile.BACKUP_SUFFIX}")
+        if (!Files.isRegularFile(backup)) return null
+        return "$backup is left over from an interrupted `plainbase root` promote. $managedRootsPath itself is intact and is " +
+            "the topology being served; remove the backup once you have satisfied yourself that is the topology you want."
     }
 
     /** Every root carrying at least one direct-commit glob, across BOTH homes (main's own key + the per-root block). */
@@ -578,8 +666,68 @@ data class PlainbaseConfig(
         private fun fromSources(env: Map<String, String>, managedOverride: Config?): PlainbaseConfig {
             val dataDir = dataDirFrom(env)
             val file = parseIfRegularFile(dataDir.resolve("plainbase.conf"))
-            val managed = managedOverride ?: parseIfRegularFile(dataDir.resolve(MANAGED_ROOTS_FILE))
+            val managed = managedOverride ?: loadManagedRoots(dataDir.resolve(MANAGED_ROOTS_FILE))
             return build(env, file, managed)
+        }
+
+        /**
+         * `roots.conf`, with the INTERRUPTED-PROMOTE gate in front of it - the one place an absent or damaged
+         * managed file is told apart from an install that never had one.
+         *
+         * **The synthesize arm below ([buildRoots]) turns an absent `roots {}` into a LEGACY, main-only config.**
+         * That is right for an install that never ran `plainbase root add`, and catastrophic for one whose
+         * `roots.conf` was destroyed mid-promote: the server would boot GREEN, serving main alone, with every extra
+         * root silently gone and every page under them returning 404 - and a 404 does not read as an outage, it
+         * reads as "deleted", which is what tells an agent to drop its citations. A 503 is a wait; a 404 is a
+         * tombstone. So absence is believed ONLY when nothing on disk contradicts it.
+         *
+         * Two things contradict it, and both are OUTCOMES rather than preconditions - what the directory actually
+         * holds, not what some earlier step reported:
+         * - a [ManagedRootsFile.BACKUP_SUFFIX] sibling with no readable `roots.conf` beside it. The copy-replace
+         *   fallback leaves that backup behind in exactly two cases, a failed restore or a process killed before it
+         *   could run one, and it survives the kill precisely so a dead process leaves the operator something.
+         * - a `roots.conf` that exists and carries NO `roots {}` block at all: zero-length, header-only, cut off in
+         *   the comments. `plainbase root` never writes such a file - it writes a header AND a block, or it unlinks
+         *   the file outright - so the file is not one of ours and we must not read a topology out of it.
+         *
+         * An explicitly EMPTY `roots {}` block is NOT damage and keeps its documented meaning ([buildRoots]:
+         * for the machine file, emptiness IS absence) - it is a file we could have written, and it says nothing.
+         */
+        private fun loadManagedRoots(path: Path): Config {
+            val backup = path.resolveSibling("${path.fileName}${ManagedRootsFile.BACKUP_SUFFIX}")
+            val hasBackup = Files.isRegularFile(backup)
+            if (!Files.isRegularFile(path)) {
+                if (hasBackup) throw IllegalArgumentException(damagedRootsMessage(path, backup, "it is MISSING"))
+                return ConfigFactory.empty()
+            }
+            val parsed = try {
+                ConfigFactory.parseFile(path.toFile()).resolve(ConfigResolveOptions.defaults())
+            } catch (e: ConfigException) {
+                throw IllegalArgumentException(damagedRootsMessage(path, backup.takeIf { hasBackup }, "it does not parse: ${e.message}"))
+            }
+            if (!parsed.hasPath("roots")) {
+                throw IllegalArgumentException(
+                    damagedRootsMessage(path, backup.takeIf { hasBackup }, "it carries no roots {} block (empty, or truncated)"),
+                )
+            }
+            // A backup beside a file that IS whole is litter from a promote that failed and restored: the topology is
+            // fine and boot proceeds. It is still a fact the operator has not been told, and [rootsWarnings] tells them
+            // (a WARN belongs in the accessor that probes for it, never in this loader - the file keeps no logger).
+            return parsed
+        }
+
+        /**
+         * The one wording for every damaged-`roots.conf` refusal: what is wrong, and the two ways out. The
+         * second remedy names whichever file is actually THERE - telling an operator to delete a `roots.conf`
+         * that is missing is the sort of instruction that makes them doubt the rest of the message.
+         */
+        private fun damagedRootsMessage(path: Path, backup: Path?, fault: String): String = buildString {
+            append("$path is the machine-managed roots file and $fault. ")
+            append("Refusing to start rather than serve a topology that may have lost roots: booting without them would ")
+            append("404 every page they hold, which reads as deleted rather than as an outage. Remedies: ")
+            append(if (backup != null) "restore the last-known-good with `mv $backup $path`" else "restore it from a backup")
+            append("; or, to accept a CONTENT_DIR-only topology and re-add roots with `plainbase root add`, delete ")
+            append(if (Files.exists(path)) "$path." else "$backup.")
         }
 
         /**

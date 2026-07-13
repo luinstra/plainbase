@@ -71,12 +71,14 @@ class RootWiringArchitectureTest : FunSpec({
         // a new rule needs its own operator-facing refusal. That refusal is the structural guarantee behind "the CLI
         // never manages main" - main's path keeps coming from CONTENT_DIR or from a block the operator wrote.
         "PlainbaseConfig.kt" to 6,
-        // GATES boot: main gate-checks unconditionally, an extra is probed and degrades to 503 (ADR-0011 D5-over-D4).
-        // Still ONE in C5: that loop MOVED into `evaluateBootGate` - in this same file, deliberately, since a new file
-        // would take the comparison with it (drifting this count to 0 AND landing unledgered elsewhere). The C5
-        // shadow warning folds `registry.extras` rather than re-filtering, precisely so it costs nothing here.
-        "Application.kt" to 1,
-        // PARSES OPERATOR ARGV - the fourth boundary, new in multi-root C5. `root add|remove main` must be refused at
+        // Application.kt is DELIBERATELY ABSENT, and its absence is a fix rather than an omission. The boot gate used
+        // to hold exactly one comparison - `root.name != RootName.MAIN` - which exempted main from the availability
+        // probe every other root took, so a late mount refused the whole boot for main and degraded to 503 for an
+        // extra: two behaviors for one condition, chosen by which root it happened to be. `rootGateVerdicts` now
+        // probes EVERY root, and the gate no longer knows main's name at all. A comparison reappearing here is that
+        // special case coming back, and it should fail this test.
+        //
+        // PARSES OPERATOR ARGV - the third boundary, new in multi-root C5. `root add|remove main` must be refused at
         // RUNTIME because argv is TEXT and text cannot be made to fail typecheck. Everywhere else main's protection is
         // structural: the CLI has no code path that can write main's name into any file.
         "RootCommand.kt" to 1,
