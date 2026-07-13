@@ -164,6 +164,16 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
 - **`--history auto`** - an extra root accepts only `off` or `native`; `auto` is always a boot error
   on an extra (it can `git init` a repository Plainbase does not own), so the CLI refuses it up front
   too.
+- **an empty path** - `plainbase root add docs "$DOCS_DIR"` with `DOCS_DIR` unset is a usage error
+  (exit 2), never a root pointing at the process's working directory.
+- **a main root it cannot read** - the shadow check needs to scan main, and a tree it cannot read
+  proves nothing about what the new name would shadow, so it refuses rather than accept the add
+  blind. Restore the path, or pass `--force` to add without the check.
+
+It does **not** refuse a path that is not there: an extra root may legitimately be a volume that is
+not mounted yet (the server marks it unavailable and serves 503 for it until it is restored and the
+server restarted). The CLI prints the same warning `serve` prints, and exits 0 - so a typo'd path is
+visible, not silent.
 
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 

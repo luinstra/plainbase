@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.bootGateFor
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -14,7 +15,6 @@ import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.filesystem.rootIsTraversable
 import com.plainbase.frameworks.markdown.FrontmatterReader
-import com.typesafe.config.ConfigFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Files
 import java.nio.file.Path
@@ -45,10 +45,12 @@ import java.nio.file.Path
  * rule the only command that can REPAIR a broken topology would decline to run because the topology is broken.
  *
  * What the CLI still OWNS, and must: the argv grammar, which makes some boot rules UNREACHABLE rather than
- * re-checked (`--history` has no `auto`, so nothing here can construct the AUTO extra that boot refuses); and
- * the policies boot has NO opinion on - a name already in `roots.conf` (HOCON would field-merge two entries
- * and silently repoint the path), a name that is not there, and the SHADOW refusal, which is the one place
- * this command is deliberately STRICTER than boot.
+ * re-checked (`--history` has no `auto`, so nothing here can construct the AUTO extra that boot refuses); the
+ * one boot rule it makes unreachable the OTHER way round - a BLANK path, which the loader refuses but would
+ * never see, because this command absolutizes before it serializes and `Path.of("")` is the CWD; and the
+ * policies boot has NO opinion on - a name already in `roots.conf` (HOCON would field-merge two entries and
+ * silently repoint the path), a name that is not there, and the SHADOW refusal, which is the one place this
+ * command is deliberately STRICTER than boot.
  */
 object RootCommand {
 
@@ -171,16 +173,31 @@ object RootCommand {
         // deterministic refusals fire before the corpus scan - and it MAY run after the gate because it can only
         // refuse HARDER: it never approves what the gate rejected, and it never touches the candidate bytes.
         if (!request.force) {
-            shadowedPaths(config, request.name)?.let { offenders ->
-                System.err.println(
-                    "root add: '${request.name.value}' is already a top-level segment of the main root " +
-                        "(${offenders.joinToString(", ")}). Adding it would silently re-point every circulating link " +
-                        "through /docs/${request.name.value}/... into the NEW root - main's own entries under that " +
-                        "segment would then be reachable only by permalink. Rename the main-root entry, pick another " +
-                        "root name, or pass --force to accept the collision. (This scan cannot see a `redirect_from` " +
-                        "alias row - the boot WARN is the backstop for those - nor a folder someone creates tomorrow.)",
-                )
-                return 1
+            when (val shadow = shadowScan(config, request.name)) {
+                is Shadow.Segments -> {
+                    System.err.println(
+                        "root add: '${request.name.value}' is already a top-level segment of the main root " +
+                            "(${shadow.paths.joinToString(", ")}). Adding it would silently re-point every circulating " +
+                            "link through /docs/${request.name.value}/... into the NEW root - main's own entries under " +
+                            "that segment would then be reachable only by permalink. Rename the main-root entry, pick " +
+                            "another root name, or pass --force to accept the collision. (This scan cannot see a " +
+                            "`redirect_from` alias row - the boot WARN is the backstop for those - nor a folder someone " +
+                            "creates tomorrow.)",
+                    )
+                    return 1
+                }
+                // Fail CLOSED. A main root that cannot be read says NOTHING about what the new name would shadow,
+                // and reporting "shadows nothing" from a tree we could not read is the root-down-as-absent lie the
+                // classified read exists to make unsayable.
+                Shadow.MainDown -> {
+                    System.err.println(
+                        "root add: the main root at ${config.roots.main.localPath} is not readable right now, so the " +
+                            "shadow check cannot run and this add would be accepted BLIND. Restore the path (a missing " +
+                            "mount, a permission drop), or pass --force to add without the check.",
+                    )
+                    return 1
+                }
+                Shadow.None -> Unit
             }
         }
         // An add always leaves at least one managed root, so the delete arm `remove` needs cannot arise here.
@@ -338,7 +355,7 @@ object RootCommand {
         val text = if (candidateRoots.isEmpty()) null else ManagedRootsFile.serialize(candidateRoots)
         val candidate = PlainbaseConfig.loadForCommand(
             "root $verb",
-            resolve = { PlainbaseConfig.fromEnvAndCandidateRoots(ConfigFactory.parseString(text.orEmpty()), env) },
+            resolve = { PlainbaseConfig.fromEnvAndCandidateRoots(text, env) },
         ) ?: return null
         val candidateRefusals = bootGateFor(candidate).refusals
         val baselineKeys = bootGateFor(config).refusals.map { it.key }.toSet()
@@ -354,15 +371,37 @@ object RootCommand {
         candidateRefusals.forEach {
             System.err.println("root $verb: WARNING: this config already refuses to boot, and this command did not cause it: ${it.message}")
         }
+        // The other half of what boot SAYS about a topology, and it is not optional: a mistyped path is not a
+        // refusal (an extra root may legitimately be an unmounted volume), so a `root add notes /srv/dosc` that
+        // printed only refusals would exit 0 with nothing but cheerful news about a root that will 503. `serve`
+        // prints these; a CLI that validated half the server's surface would be back to keeping its own list of
+        // which half matters.
+        candidate.rootsWarnings().forEach { System.err.println("root $verb: WARNING: $it") }
         return Artifact(text)
     }
 
+    /** The shadow scan's three outcomes - and [MainDown] is why it is not a nullable list (D5). */
+    private sealed interface Shadow {
+        data object None : Shadow
+
+        data class Segments(val paths: List<String>) : Shadow
+
+        /** Main is not readable, so NOTHING may be concluded about what the new name shadows. */
+        data object MainDown : Shadow
+    }
+
     /**
-     * Main's top-level segments that [name] would shadow, or null when it shadows nothing (D-C5-6).
+     * Main's top-level segments that [name] would shadow (D-C5-6).
      *
      * Fed from a plain content scan - no database, no DATA_DIR lock, no index build - through the SAME
      * composition the indexer uses, so no second slugification exists to drift. It sees exactly what the indexer
      * sees: the same ignore rules the server wires, and the same DATA_DIR exclusion.
+     *
+     * The frontmatter read is CLASSIFIED, and it is the reason [Shadow] has three arms: a bare null read cannot
+     * tell a page that was deleted mid-scan from a main root that vanished under us, and here the two are
+     * opposite answers - the first removes one slug from a set, the second invalidates the whole set. A downed
+     * main scanning as "shadows nothing" would let a shadowing topology through the ONE check boot does not
+     * repeat.
      *
      * **The gaps are real, and the refusal text names them rather than letting silence pass for a guarantee:** a
      * `redirect_from` alias row lives in the DB and outlives the frontmatter that minted it, so no filesystem
@@ -371,21 +410,21 @@ object RootCommand {
      * explicitly accepted tradeoff. An object-mode main has no local tree to scan, and is moot anyway: the gate
      * refuses an object-mode candidate at LOAD.
      */
-    private fun shadowedPaths(config: PlainbaseConfig, name: RootName): List<String>? {
-        val mainPath = config.roots.main.localPath ?: return null
+    private fun shadowScan(config: PlainbaseConfig, name: RootName): Shadow {
+        val mainPath = config.roots.main.localPath ?: return Shadow.None
         val store = LocalContentStore(root = mainPath, ignoreRules = IgnoreRules(), exclusions = listOf(config.dataDir))
         val scan = store.scan()
-        val urls = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
-            pages = scan.files.filter { it.path.name.endsWith(".md") }.map { file ->
-                CanonicalUrlBuilder.PageInput(
-                    path = file.path,
-                    rawName = file.rawName,
-                    slugOverride = store.read(file.path)?.let { FrontmatterReader().parse(it).scalar("slug") },
-                )
-            },
-            folders = scan.folders,
-        )
+        val pages = scan.files.filter { it.path.name.endsWith(".md") }.map { file ->
+            val slugOverride = when (val read = store.readClassified(file.path)) {
+                is ContentRead.Bytes -> FrontmatterReader().parse(read.bytes).scalar("slug")
+                // Deleted between the scan and this read: a page that is gone shadows nothing, and its filename
+                // segment is still in the set below - so an honest absence costs the scan nothing.
+                ContentRead.Absent -> null
+                ContentRead.RootDown -> return Shadow.MainDown
+            }
+            CanonicalUrlBuilder.PageInput(path = file.path, rawName = file.rawName, slugOverride = slugOverride)
+        }
+        val urls = CanonicalUrlBuilder.build(root = RootName.MAIN, pages = pages, folders = scan.folders)
         // A same-role slug-collision LOSER carries a null url path, but its WINNER carries the identical segment,
         // so no loser can remove a segment from the set. Ignoring them is correct, not a shortcut.
         val index = RootShadow.topLevelIndex(
@@ -393,7 +432,8 @@ object RootCommand {
                 CanonicalUrlBuilder.folderUrlPaths(scan.folders).values.filterNotNull(),
             contentPaths = scan.files.map { it.path } + scan.folders.map { it.path },
         )
-        return index[name.value]?.map { it.value }?.distinct()?.sorted()
+        val offenders = index[name.value]?.map { it.value }?.distinct()?.sorted()
+        return if (offenders == null) Shadow.None else Shadow.Segments(offenders)
     }
 
     /**
@@ -473,7 +513,16 @@ object RootCommand {
             System.err.println("root add: '${positional[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
             return null
         }
-        return RootArgs.Add(name = name, path = positional[1], editable = editable, history = history, force = force)
+        // BLANK is refused HERE, before anything absolutizes it - the loader's identical guard cannot save us,
+        // because by the time a path reaches roots.conf this command has already made it absolute. `Path.of("")`
+        // is the process working directory, so `root add docs "$DOCS_DIR"` with DOCS_DIR unset would otherwise
+        // serve and index whatever the CLI happened to be run from (under systemd, `/`) - and, with --editable,
+        // hand an agent write access to it.
+        val path = positional[1].takeIf { it.isNotBlank() } ?: run {
+            System.err.println("root add: the path is empty - an unset shell variable expands to nothing, and the CWD is not a root")
+            return usage()
+        }
+        return RootArgs.Add(name = name, path = path, editable = editable, history = history, force = force)
     }
 
     private fun parseRemove(argv: List<String>): RootArgs? {

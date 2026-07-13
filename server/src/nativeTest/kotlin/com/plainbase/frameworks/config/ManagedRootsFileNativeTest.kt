@@ -5,14 +5,15 @@ import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.FileAtomics
-import com.typesafe.config.ConfigFactory
 import org.junit.jupiter.api.Tag
+import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -73,7 +74,7 @@ class ManagedRootsFileNativeTest {
             val text = ManagedRootsFile.serialize(listOf(root("notes", awkward.toString())))
 
             // The CLI validates THIS - the string, in memory, before anything exists on disk...
-            val candidate = PlainbaseConfig.fromEnvAndCandidateRoots(ConfigFactory.parseString(text), env).roots
+            val candidate = PlainbaseConfig.fromEnvAndCandidateRoots(text, env).roots
 
             // ...and then writes exactly those bytes. The next boot parses the FILE.
             ManagedRootsFile.writeAtomically(data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE), text)
@@ -146,6 +147,78 @@ class ManagedRootsFileNativeTest {
                 mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString()),
             ).roots
             assertEquals(setOf(RootName.require("alpha")), loaded.managed)
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    /**
+     * **A copy that fails MIDWAY may not take `roots.conf` with it.** The fallback replaces the target in place,
+     * so the hazard is the same one `LocalContentStoreExoticFsTest` models for a page - a partially-written
+     * target - except that here the truncated file is the one the next boot has to parse, and the command has
+     * already exited 1 by the time anyone finds out. The seam writes a partial prefix and then throws, exactly as
+     * a real mid-copy I/O failure would leave things, and the previous config must come back byte-identical.
+     */
+    @Test
+    fun `a copy-fallback that fails mid-write restores the previous roots dot conf byte-identically`() {
+        val base = Files.createTempDirectory("pb-managed-native-midcopy")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to base.resolve("content").toString())
+
+            val good = ManagedRootsFile.serialize(listOf(root("alpha", base.resolve("a").toString())))
+            ManagedRootsFile.writeAtomically(target, good)
+            val before = Files.readAllBytes(target)
+
+            val truncatingCopy = object : FileAtomics by FileAtomics.Real {
+                override fun atomicMove(source: Path, target: Path) =
+                    throw AtomicMoveNotSupportedException(source.toString(), target.toString(), "test")
+
+                override fun copyReplace(source: Path, target: Path) {
+                    Files.writeString(target, "roots {\n  \"beta\" {\n    back") // the copy truncated the target...
+                    throw IOException("the copy failed midway") // ...and then died
+                }
+            }
+            val next = ManagedRootsFile.serialize(listOf(root("beta", base.resolve("b").toString())))
+            assertFailsWith<IOException> { ManagedRootsFile.writeAtomically(target, next, truncatingCopy) }
+
+            assertContentEquals(before, Files.readAllBytes(target), "the last-known-good config must survive a failed promote")
+            // And it is still a CONFIG, not just the right bytes: the loader the next boot runs still reads it.
+            assertEquals(setOf(RootName.require("alpha")), PlainbaseConfig.fromEnvAndFile(env).roots.managed)
+            val litter = Files.list(data).use { stream ->
+                stream.map { it.fileName.toString() }.filter { it.endsWith(".tmp") || it.endsWith(ManagedRootsFile.BACKUP_SUFFIX) }.toList()
+            }
+            assertTrue(litter.isEmpty(), "a RESTORED promote keeps no backup: the live file IS the last-known-good again. Found: $litter")
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
+
+    /**
+     * The other half: a FIRST-EVER promote that fails midway has no last-known-good to restore, and absence is
+     * what preceded it - so the partial file is taken away rather than left for the loader to choke on.
+     */
+    @Test
+    fun `a copy-fallback that fails on the FIRST promote leaves no partial roots dot conf behind`() {
+        val base = Files.createTempDirectory("pb-managed-native-midcopy-first")
+        try {
+            val data = Files.createDirectory(base.resolve("data"))
+            val target = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
+            val truncatingCopy = object : FileAtomics by FileAtomics.Real {
+                override fun atomicMove(source: Path, target: Path) =
+                    throw AtomicMoveNotSupportedException(source.toString(), target.toString(), "test")
+
+                override fun copyReplace(source: Path, target: Path) {
+                    Files.writeString(target, "roots {\n  \"alph")
+                    throw IOException("the copy failed midway")
+                }
+            }
+            val text = ManagedRootsFile.serialize(listOf(root("alpha", base.resolve("a").toString())))
+
+            assertFailsWith<IOException> { ManagedRootsFile.writeAtomically(target, text, truncatingCopy) }
+
+            assertTrue(!Files.exists(target), "a partial first write is not a config - the install stays SYNTHESIZED")
         } finally {
             base.toFile().deleteRecursively()
         }

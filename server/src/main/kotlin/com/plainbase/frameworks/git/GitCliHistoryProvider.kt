@@ -326,20 +326,22 @@ class GitCliHistoryProvider(
         // The read path (`log`/`lastCommits`) passes `--diff-merges=first-parent`, which git only learned in
         // 2.31.0; on an older-but-present git every read exits non-zero and Git-mode startup (`rebuild` →
         // `lastCommits`) aborts serve AFTER this gate passes. Validate the version floor here so it fails LOUD
-        // and actionable at the gate instead. An UNPARSEABLE `git version` line passes with a logged warning
-        // rather than false-failing a perfectly modern git whose banner we did not anticipate.
-        val parsed = parseGitVersion(version.stdoutText)
-        if (parsed == null) {
-            logger.warn { "could not parse git version from '${version.stdoutText.trim()}'; skipping the version-floor check" }
-        } else {
-            val (major, minor) = parsed
-            if (major < MIN_GIT_MAJOR || (major == MIN_GIT_MAJOR && minor < MIN_GIT_MINOR)) {
-                throw GitUnavailableException(
-                    "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
-                        "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
-                        "to run without history.",
-                )
-            }
+        // and actionable at the gate instead - INCLUDING when the banner does not parse. A gate that cannot
+        // establish the property it exists to establish must refuse, not shrug: an unrecognized banner is most
+        // likely a WRAPPER script standing where git should be, and passing it just moves the failure to the
+        // first rebuild, where it surfaces as a doomed command's exit code instead of an actionable message.
+        val (major, minor) = parseGitVersion(version.stdoutText) ?: throw GitUnavailableException(
+            "Git mode is on but the `git --version` banner is unrecognizable ('${version.stdoutText.trim()}'), so the " +
+                "required version (git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR, for --diff-merges=first-parent, used by " +
+                "Plainbase history reads) cannot be established. Point PATH at a real git, or set " +
+                "PLAINBASE_GIT_ENABLED=false to run without history.",
+        )
+        if (major < MIN_GIT_MAJOR || (major == MIN_GIT_MAJOR && minor < MIN_GIT_MINOR)) {
+            throw GitUnavailableException(
+                "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
+                    "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
+                    "to run without history.",
+            )
         }
         // The binary is present, but `--version` never opens the worktree. When a repo IS present, validate
         // ACCESS to it so an inaccessible repo (Docker uid-mismatch `fatal: detected dubious ownership`,
@@ -586,8 +588,8 @@ class GitCliHistoryProvider(
     /**
      * Extracts (major, minor) from a `git --version` banner, tolerant of vendor suffixes:
      * `git version 2.54.0` → (2, 54); `git version 2.39.5 (Apple Git-154)` → (2, 39); `git version 2.25.1`
-     * → (2, 25). Anything that does not match the `git version <major>.<minor>` shape → null (the caller
-     * then PASSES with a warning rather than false-failing an unexpected-but-modern banner).
+     * → (2, 25). Anything that does not match the `git version <major>.<minor>` shape → null, and the gate
+     * REFUSES on it: an unreadable version is an unestablished floor, not a passing grade.
      */
     private fun parseGitVersion(banner: String): Pair<Int, Int>? {
         val match = GIT_VERSION_LINE.find(banner) ?: return null
@@ -624,9 +626,9 @@ class GitCliHistoryProvider(
         private const val MIN_GIT_MAJOR = 2
         private const val MIN_GIT_MINOR = 31
 
-        // `git version <major>.<minor>...` — anchored at the banner head, vendor suffixes (`(Apple Git-154)`)
-        // and the patch component ignored. Tolerant: an unrecognized banner yields no match (gate then PASSES
-        // with a warning rather than false-failing).
+        // `git version <major>.<minor>...` — matched anywhere in the banner, vendor suffixes (`(Apple Git-154)`)
+        // and the patch component ignored. Tolerant of what real gits PRINT, and of nothing else: a banner it
+        // cannot read yields no match, and the gate refuses rather than assuming a modern git behind it.
         private val GIT_VERSION_LINE = Regex("""git version (\d+)\.(\d+)""")
 
         private const val COMMIT_FIELD_COUNT = 8

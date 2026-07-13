@@ -6,6 +6,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 /**
  * The writer for `DATA_DIR/roots.conf` (C5 D-C5-1) - the file `plainbase root` owns end to end.
@@ -24,6 +25,9 @@ import java.nio.file.Path
 object ManagedRootsFile {
 
     private val logger = KotlinLogging.logger {}
+
+    /** The last-known-good sibling the no-atomic-rename fallback leaves behind when it cannot restore one itself. */
+    const val BACKUP_SUFFIX: String = ".bak"
 
     private val HEADER = """
         # Managed by `plainbase root` - do not edit by hand.
@@ -67,11 +71,18 @@ object ManagedRootsFile {
      * racing the write sees either the whole old file or the whole new one, never a truncated husk. The temp
      * is removed on any outcome, so a failed promote leaves the previous file exactly as it was.
      *
-     * A DATA_DIR on a filesystem with no atomic rename (a network mount, an exotic FS) degrades to
-     * copy-replace through the [FileAtomics] seam rather than throwing - the SAME fallback `LocalContentStore`
-     * and `MirrorState` already make, warning included. The copy loses the atomicity, not the bytes; refusing
-     * outright would mean `plainbase root` simply does not run on that mount, which is a worse answer than a
-     * warned non-atomic write of a file the operator is explicitly rewriting.
+     * A DATA_DIR on a filesystem with no atomic rename (a network mount, an exotic FS) degrades to a BACKED-UP
+     * copy-replace through the [FileAtomics] seam rather than throwing - the same fallback `LocalContentStore`
+     * and `MirrorState` already make, warning included. Refusing outright would mean `plainbase root` simply
+     * does not run on that mount, which is a worse answer than a warned non-atomic write of a file the operator
+     * is explicitly rewriting.
+     *
+     * **The copy loses the atomicity, and WITHOUT THE BACKUP it would lose the BYTES too** - it replaces the
+     * target IN PLACE, so a failure midway through leaves `roots.conf` truncated, and a truncated `roots.conf`
+     * is an install that will not boot (the store's own copy-fallback models exactly that outcome, which is why
+     * `CasResult.Unreadable` carries `targetMutated`). So [copyPreservingPrevious] takes the last-known-good
+     * aside FIRST: an I/O failure puts it back, and a KILL mid-copy leaves it on disk next to the wreckage. A
+     * dead process cannot recover anything; the most it can do is leave the operator the file.
      *
      * ONE call, and it is the LAST thing a verb does: by the time it runs, the decision is already made and
      * the bytes are already validated.
@@ -84,12 +95,41 @@ object ManagedRootsFile {
             try {
                 atomics.atomicMove(temp, path)
             } catch (_: AtomicMoveNotSupportedException) {
-                logger.warn { "ATOMIC_MOVE unsupported for $path; falling back to copy+delete (non-atomic)" }
-                atomics.copyReplace(temp, path)
+                logger.warn { "ATOMIC_MOVE unsupported for $path; falling back to a backed-up copy+delete (non-atomic)" }
+                copyPreservingPrevious(temp, path, atomics)
             }
         } finally {
             Files.deleteIfExists(temp)
         }
+    }
+
+    /**
+     * The non-atomic promote, made RECOVERABLE: back the target up, copy over it, and on failure put the backup
+     * back. Backup and restore go through plain [Files.copy], never [FileAtomics] - the seam stands for the FS
+     * primitive whose availability varies, and the recovery is ours rather than the filesystem's.
+     *
+     * The worst state an operator can be left in is therefore never "a truncated roots.conf and nothing else":
+     * it is a truncated `roots.conf` with [BACKUP_SUFFIX] beside it, one `mv` from the config that booted this
+     * morning. The backup is kept ONLY when it is still needed - a failed restore, or a process killed before it
+     * could run one. On a first-ever promote there is nothing to keep: absence is that install's last-known-good,
+     * so a partial file is removed instead.
+     */
+    private fun copyPreservingPrevious(temp: Path, path: Path, atomics: FileAtomics) {
+        val backup = if (Files.isRegularFile(path)) path.resolveSibling("${path.fileName}$BACKUP_SUFFIX") else null
+        backup?.let { Files.copy(path, it, StandardCopyOption.REPLACE_EXISTING) }
+        try {
+            atomics.copyReplace(temp, path)
+        } catch (e: Exception) {
+            if (backup == null) {
+                Files.deleteIfExists(path) // a partial FIRST write is not a config, and absence is what preceded it
+            } else {
+                runCatching { Files.copy(backup, path, StandardCopyOption.REPLACE_EXISTING) }
+                    .onSuccess { Files.deleteIfExists(backup) }
+                    .onFailure { logger.error(it) { "could not restore $path after a failed write: the previous config is in $backup" } }
+            }
+            throw e
+        }
+        backup?.let { Files.deleteIfExists(it) }
     }
 
     /**

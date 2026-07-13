@@ -583,6 +583,17 @@ data class PlainbaseConfig(
             }
 
         /**
+         * The candidate `roots.conf` TEXT, through the same resolve as [parseIfRegularFile] - which is the
+         * whole reason this lives here rather than in the caller. The CLI validates a STRING and then writes
+         * that string to the file the next boot parses, so the two must go through ONE pipeline: an unresolved
+         * candidate and a resolved file are two parsers, and a divergence between them is a config the CLI
+         * certified and the server reads differently. Null is "there is no roots.conf" (the `remove`-the-last
+         * delete), which parses to the same empty config an absent file does.
+         */
+        private fun parseCandidate(text: String?): Config =
+            if (text == null) ConfigFactory.empty() else ConfigFactory.parseString(text).resolve(ConfigResolveOptions.defaults())
+
+        /**
          * Layered construction (ADR-0009): read `DATA_DIR/plainbase.conf` (HOCON) and the machine-managed
          * `DATA_DIR/roots.conf` THEN overlay env - **env always wins**, the file only supplies values env
          * omits. A missing file on either side is a clean no-op (identical to [fromEnv]).
@@ -596,9 +607,11 @@ data class PlainbaseConfig(
 
         /**
          * The CLI's candidate-validation seam (C5 D-C5-17): the `roots.conf` that is ABOUT to be written,
-         * supplied as an already-parsed [Config] instead of read from DATA_DIR. Everything else - the
-         * operator's `plainbase.conf`, env, the whole [build] chain and EVERY refusal it raises - is identical
-         * to [fromEnvAndFile], which is the entire point.
+         * supplied as the TEXT it will hold (null = the file will not exist) instead of read from DATA_DIR.
+         * Everything else - the parse, the resolve, the operator's `plainbase.conf`, env, the whole [build]
+         * chain and EVERY refusal it raises - is identical to [fromEnvAndFile], which is the entire point.
+         * TEXT rather than a parsed `Config`, because a caller that parses is a caller that chooses resolve
+         * options, and the CLI choosing them is how the validated artifact and the consumed one drift apart.
          *
          * The tempting shortcut, `config.copy(roots = candidate)`, is UNSOUND and must never be used: the
          * refusals that matter are raised INSIDE [build], from cross-field validation a field-wise copy skips.
@@ -607,9 +620,9 @@ data class PlainbaseConfig(
          * `auth.agentDirectCommit.roots.x` that still exists and write a config that bricks the next boot.
          */
         fun fromEnvAndCandidateRoots(
-            managedRoots: Config,
+            managedRootsText: String?,
             env: Map<String, String> = System.getenv(),
-        ): PlainbaseConfig = fromSources(env, managedRoots)
+        ): PlainbaseConfig = fromSources(env, parseCandidate(managedRootsText))
 
         /**
          * Resolves config for a `serve`/CLI entry point, funneling a bad config into a clean `<command>:`

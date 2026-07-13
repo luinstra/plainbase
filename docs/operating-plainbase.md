@@ -210,6 +210,12 @@ configured names looks like the wrong `DATA_DIR` or a wholesale-rewritten `roots
 closed rather than silently minting fresh identities for a corpus it can no longer place. Add the root
 back (or fix `roots.conf`), then restart.
 
+The rewrite of `roots.conf` is atomic (a temp file, then an atomic rename), so a `root add`/`remove`
+interrupted halfway leaves the previous file untouched. On a `DATA_DIR` whose filesystem has no atomic
+rename - an NFS/SMB mount - the CLI falls back to a copy, warns that it did, and copies the previous
+file to `roots.conf.bak` first. If you ever find that `.bak` sitting there, a write was interrupted
+mid-copy: it is the last config that booted, and `mv roots.conf.bak roots.conf` restores it.
+
 ## When to upgrade to Meilisearch
 
 Plainbase's default search is embedded SQLite FTS5 - zero containers, ranked and section-granular

@@ -117,6 +117,23 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("an EMPTY path is exit 2 - `root add docs \"\$DOCS_DIR\"` with the var unset must not serve the CWD") {
+        // The loader refuses a blank `roots.<x>.path` for exactly this reason, and it can never fire: this command
+        // ABSOLUTIZES before it serializes, and `Path.of("")` is the process working directory - which is a real,
+        // readable, non-nested directory, so the gate passes it happily. Under systemd's default WorkingDirectory
+        // that is `/`, indexed and served, and writable through the API with --editable. So the argv grammar owns
+        // it: refused before anything resolves a Path at all.
+        world { w ->
+            val err = captureStderr {
+                w.root("add", "docs", "") shouldBe 2
+                w.root("add", "docs", "   ") shouldBe 2 // whitespace-only absolutizes just as silently
+            }
+            err shouldContain "the path is empty"
+            err shouldContain "usage: plainbase root"
+            withClue("nothing was written, and no root points at the CWD") { Files.exists(w.rootsConf) shouldBe false }
+        }
+    }
+
     // --- T-CLI-3b / T-CLI-6 / T-CLI-7: the refusals the CLI DERIVES rather than writes -------------------
 
     test("T-CLI-3b: adding a name plainbase.conf already declares fails with the LOADER's overlap message") {
@@ -259,6 +276,53 @@ class RootCommandTest : FunSpec({
                 Files.writeString(w.content.resolve("readme.md"), "---\ntitle: R\n---\n\n# R\n")
                 captureStdout { w.root("add", "unrelated", w.tmp("u").toString()) shouldBe 0 }
                 Files.exists(w.rootsConf) shouldBe true
+            }
+        }
+
+        test("(d) a main root it cannot READ fails the check CLOSED - an unscannable tree proves nothing") {
+            // The classified-read boundary, at the one decision site left that did not use it. A page read on a
+            // root that has gone away returns no bytes, and a scan that reads no frontmatter finds no `slug:`
+            // shadow - so a raw read would report "shadows nothing" from a tree it never actually read, and a
+            // shadowing topology would be written on the strength of it. RootDown is not Absent.
+            //
+            // main is DECLARED here so the unreadable-path refusal sits in the BASELINE as well as the candidate:
+            // it is then the operator's pre-existing fault (warned, not refused), and the add runs on to the
+            // shadow check, which is the code under test.
+            world(plainbaseConf = """roots { main { path = "CONTENT" } }""") { w ->
+                w.rewriteMain()
+                Files.writeString(w.content.resolve("anything.md"), "---\ntitle: A\nslug: guides\n---\n\n# A\n")
+                if (!w.data.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
+                // r-- : the names still list (the read bit), but nothing under them can be opened (no search bit)
+                // - which is exactly what `rootIsTraversable` calls a downed root.
+                Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
+                try {
+                    if (Files.isExecutable(w.content)) return@world // running as root: the permission drop is inert
+                    val err = captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 } }
+                    err shouldContain "not readable right now"
+                    Files.exists(w.rootsConf) shouldBe false
+                    // --force is still the escape: it declines the check outright rather than trusting a bad answer.
+                    captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString(), "--force") shouldBe 0 } }
+                    Files.exists(w.rootsConf) shouldBe true
+                } finally {
+                    Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("rwxr-xr-x"))
+                }
+            }
+        }
+    }
+
+    // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
+
+    test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {
+        // `serve` prints rootsWarnings(); the CLI read only the refusals, so `root add notes /srv/dosc` exited 0
+        // with nothing but cheerful news about a root that will 503 on every request. Same principle as the gate:
+        // call the server's own check, do not keep half a list of it.
+        world { w ->
+            val err = captureStderr { captureStdout { w.root("add", "notes", "/srv/dosc") shouldBe 0 } }
+            err shouldContain "WARNING"
+            err shouldContain "/srv/dosc"
+            err shouldContain "503"
+            withClue("a warning is not a refusal - a not-yet-mounted volume is a legitimate add") {
+                w.config().roots.extras.single().localPath shouldBe Path.of("/srv/dosc")
             }
         }
     }

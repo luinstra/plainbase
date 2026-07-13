@@ -17,11 +17,17 @@ import kotlin.io.path.readText
  * code FORCES rather than a reason somebody chose. A tenth appears -> this goes RED -> somebody decides. That
  * decision is the whole point.
  *
- * **Assert a CEILING, not an equality.** The drift that matters is somebody ADDING an unledgered refusal. An
- * `==` would also go red when someone DELETES one, which is backwards: deleting special cases is the goal, and a
- * guard that punishes it teaches people to route around the guard. (`RootWiringArchitectureTest`'s Tier-2 ledger
- * has the `==` polarity and should become a ceiling too; C5 only bumps its counts, but the next person in that
- * file should fix it.)
+ * **Assert a CEILING, not an equality** - but a ceiling that is TIGHT, or it is not a guard at all. The drift
+ * that matters is somebody ADDING an unledgered refusal. An `==` would also go red when someone DELETES one,
+ * which is backwards: deleting special cases is the goal, and a guard that punishes it teaches people to route
+ * around the guard. (`RootWiringArchitectureTest`'s Tier-2 ledger has the `==` polarity and should become a
+ * ceiling too; C5 only bumps its counts, but the next person in that file should fix it.)
+ *
+ * The tightness is the subtle half, and it went wrong once already: `ledger.size` is NOT the site count, because
+ * one textual `exitProcess(1)` (the `refuse(kinds)` helper) is called from two consumption stages and so backs
+ * two ledger entries. A ceiling of `ledger.size` therefore left a FREE SLOT - a ninth, unledgered exit fit
+ * inside the slack and this test stayed green, which is precisely the drift it exists to catch. The ceiling is
+ * the ledger MINUS the entries that share a site.
  */
 class BootRefusalLedgerTest : FunSpec({
 
@@ -51,6 +57,10 @@ class BootRefusalLedgerTest : FunSpec({
             "path that can write main's name or path into any file, so no value it writes can change the verdict",
     )
 
+    // `refuse(kinds)` is ONE textual exitProcess(1), called from the topology stage AND the bind stage - so those
+    // two ledger entries are backed by a single site. Nothing else in Application.kt shares one.
+    val entriesSharingASite = 1
+
     test("every exitProcess(1) on the boot path is ledgered with a CLI disposition") {
         val application = mainSourceRoot().resolve("Application.kt").readText()
         val sites = Regex("""exitProcess\(1\)""").findAll(stripComments(application)).count()
@@ -59,7 +69,7 @@ class BootRefusalLedgerTest : FunSpec({
                 "Either the shared gate produces it (add a COVERED line) or it cannot (add an EXCLUDED line with the " +
                 "reason the CODE forces). A silent exclusion is how the CLI writes a config that will not boot.",
         ) {
-            sites shouldBeLessThanOrEqual ledger.size
+            sites shouldBeLessThanOrEqual ledger.size - entriesSharingASite
         }
     }
 
