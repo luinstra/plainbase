@@ -17,6 +17,7 @@ import com.plainbase.domain.service.CommitGlob
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -313,6 +314,45 @@ class RootPolicyAuthzMatrixTest : FunSpec({
             withClue("the shell arm is PUBLIC; a 503 here would leak topology, and the deny->null->shell contract must survive") {
                 client.get("/docs/open/notes/rollback").status shouldBe HttpStatusCode.OK
             }
+        }
+    }
+
+    // Row 11 held for the ONE principal whose read `checkRead` denies FIRST - the facade returns null and the
+    // route falls through to the shell before availability is ever consulted. For every OTHER principal the gate
+    // passed and the facade's `requireAvailable` fired, so a canonical page URL in a down root answered 503
+    // application/json: a bookmark or a refresh rendered `{"error":…}` as literal text in the browser, and the
+    // SPA's own full-page outage view (which it renders from the tree's `available:false`, needing no 503 at all)
+    // was unreachable on a cold load - while the bare `/docs/{root}` landing URL of the SAME root served the shell
+    // correctly. `/docs` is the browser surface: its answer is the shell. The honest 503 stays on the API surfaces
+    // the SPA and the agents consume, which rows 9 and 13-17 pin.
+
+    test("11b. an AUTHENTICATED reader gets the SHELL on /docs/{unavailable-root}/{path}, never raw 503 JSON") {
+        withRoots(human, role = Role.VIEWER) { harness ->
+            harness.availability.markUnavailable(RootName.require("open"), UnavailableCause.VANISHED)
+
+            val docs = client.get("/docs/open/notes/rollback")
+
+            docs.status shouldBe HttpStatusCode.OK
+            withClue("a browser navigating to a page URL must get HTML - the SPA renders the outage from the tree") {
+                docs.headers[HttpHeaders.ContentType] shouldContain "text/html"
+            }
+            withClue("the API surface the SPA fetches from is where the honest 503 belongs, and it is untouched") {
+                client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
+            }
+        }
+    }
+
+    test("11c. the SAME under auth.mode = off (what CI boots) - the shell, at the landing URL and one level deeper alike") {
+        withRoots(Principal.Anonymous, enforced = false) { harness ->
+            harness.availability.markUnavailable(RootName.require("open"), UnavailableCause.VANISHED)
+
+            withClue("auth-off Anonymous passes checkRead, so this is the arm the enforced-anonymous row cannot reach") {
+                client.get("/docs/open/notes/rollback").status shouldBe HttpStatusCode.OK
+            }
+            withClue("the same root must not show an outage page at one URL and raw JSON one segment deeper") {
+                client.get("/docs/open").status shouldBe HttpStatusCode.OK
+            }
+            client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
         }
     }
 

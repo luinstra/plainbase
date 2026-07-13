@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.RouteContext
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -19,9 +20,18 @@ import io.ktor.server.routing.get
  *    same fallback `/browse` uses, because the permalink IS the loser's one durable URL. One hop
  *    from a canonical-era alias; a LEGACY-prefix hit chains two hops (the legacy 301 above, then
  *    the alias 301 - ADR-0011 D3, accepted).
- *  - Everything else - canonical page URLs, bare `/docs/{root}`, unknown paths, even undecodable
- *    ones - serves the SPA shell (**200**, per the matrix: the SPA fetches via `by-path` and owns
- *    its own not-found UI).
+ *  - Everything else - canonical page URLs, bare `/docs/{root}`, unknown paths, undecodable ones,
+ *    and pages under a root that is NOT SERVING - serves the SPA shell (**200**, per the matrix: the
+ *    SPA fetches via `by-path` and owns its own not-found AND its own root-outage UI).
+ *
+ * **`/docs` is the BROWSER surface, and its answer is the shell - a downed root is not an exception.** An HTML
+ * navigation to a canonical page URL is a bookmark, a refresh, a link in a chat: answering it with a 503 JSON
+ * body renders `{"error":…}` as literal text in the tab, and the SPA's own full-page outage view - which it
+ * renders from the tree's `available:false`, needing no 503 at all - becomes unreachable on a cold load. The bare
+ * `/docs/{root}` landing URL already serves the shell, so a 503 one segment deeper made the SAME root show the
+ * right outage page at one URL and raw JSON at another. The honest 503 belongs on the surfaces the SPA and the
+ * agents CONSUME - `by-path`, `pages/{id}`, `/assets`, MCP - and it is untouched there. Here, `RootUnavailable`
+ * is contained and the shell is served.
  *
  * A live canonical path always shadows an alias; the indexer's shadow sweep drops such rows at
  * rebuild, and the belt-and-suspenders check here keeps the invariant even mid-rebuild.
@@ -56,14 +66,18 @@ fun Route.docsRoutes(ctx: RouteContext) {
         // The legacy 301 stays OUTSIDE the wrap: it is pure config topology, calls no facade, and can throw nothing.
         val (root, remainder) = splitRootTail(path, ctx.roots)
             ?: return@get call.respondRedirectPreservingQuery("/docs/${RootName.MAIN}/$raw", permanent = true)
-        // The alias arm IS wrapped, which is what makes `guarded {}` the one 503 mapping site literally rather than
-        // by convention: this handler had no wrap at all, so a RootUnavailable would have escaped it as a 500. The
-        // facade keeps its deny->null->shell contract for AccessDenied (it swallows it internally), so the wrap's 401
-        // arm is simply never reached from here - anonymous still gets the shell - while an AUTHORIZED caller under an
-        // unavailable root gets the honest 503 and never the miss-to-shell fallthrough (a 503 must not degrade into
-        // "SPA not-found", which is the whole point).
+        // The alias arm stays wrapped: `guarded {}` is the one facade-exception mapping site, and a handler with no
+        // wrap would surface a facade throw as a 500. What it does NOT do here is answer a downed root with JSON -
+        // the facade's availability gate fires before the alias lookup for EVERY page URL under the root, so that
+        // 503 would be the answer to an ordinary browser navigation. It is contained to the shell instead (see the
+        // file doc); the facade keeps its deny->null->shell contract for AccessDenied, so anonymous still gets the
+        // shell, and now so does everybody else.
         call.guarded {
-            val target = remainder?.let { ctx.read.resolveDocsRedirect(principal, root, it) }
+            val target = try {
+                remainder?.let { ctx.read.resolveDocsRedirect(principal, root, it) }
+            } catch (_: RootUnavailable) {
+                null // no alias answer is available from a root that is not serving - fall through to the shell
+            }
             if (target != null) call.respondRedirectPreservingQuery(target, permanent = true) else call.respondSpaShell()
         }
     }

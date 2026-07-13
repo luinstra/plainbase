@@ -63,7 +63,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"New Page","body":"# New\n\nx\n"}""")
+                setBody("""{"root":"main","folder":"guides","title":"New Page","body":"# New\n\nx\n"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.obj()
@@ -85,7 +85,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { _ ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Read Me","body":"# Read Me\n\nthe body.\n"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Read Me","body":"# Read Me\n\nthe body.\n"}""")
             }.status shouldBe HttpStatusCode.Created
 
             val got = client.get("/api/v1/pages/$firstId")
@@ -122,6 +122,7 @@ class WriteRouteCreateTest : FunSpec({
                 val request = Json.encodeToString(
                     kotlinx.serialization.json.JsonObject.serializer(),
                     kotlinx.serialization.json.buildJsonObject {
+                        put("root", kotlinx.serialization.json.JsonPrimitive("main"))
                         put("folder", kotlinx.serialization.json.JsonPrimitive("titles"))
                         put("title", kotlinx.serialization.json.JsonPrimitive(title))
                         // A unique slug per case so the on-disk filename never collides across cases.
@@ -147,7 +148,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { _ ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Sentinel Page","body":"# Sentinel\n\n$sentinel here.\n"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Sentinel Page","body":"# Sentinel\n\n$sentinel here.\n"}""")
             }.status shouldBe HttpStatusCode.Created
 
             val search = client.get("/api/v1/search?q=$sentinel")
@@ -171,7 +172,7 @@ class WriteRouteCreateTest : FunSpec({
                     val resp = kotlinx.coroutines.runBlocking {
                         client.post("/api/v1/pages") {
                             contentType(json())
-                            setBody("""{"folder":"guides","title":"Racer","slug":"racer"}""")
+                            setBody("""{"root":"main","folder":"guides","title":"Racer","slug":"racer"}""")
                         }
                     }
                     statuses[n].set(resp.status)
@@ -199,7 +200,7 @@ class WriteRouteCreateTest : FunSpec({
             val before = harness.diskBytes("guides/deploy-guide.md")
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","slug":"deploy-guide","title":"Collide"}""")
+                setBody("""{"root":"main","folder":"guides","slug":"deploy-guide","title":"Collide"}""")
             }
             post.status shouldBe HttpStatusCode.Conflict
             val error = post.errorJson()
@@ -215,7 +216,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Off Git"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Off Git"}""")
             }.status shouldBe HttpStatusCode.Created
             java.nio.file.Files.exists(harness.root.resolve("guides/off-git.md")) shouldBe true
         }
@@ -229,7 +230,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider(), historyHook = recording) { harness ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"On Git"}""")
+                setBody("""{"root":"main","folder":"guides","title":"On Git"}""")
             }.status shouldBe HttpStatusCode.Created
             val (path, bytes) = recorded.get()
             path shouldBe "guides/on-git.md"
@@ -243,7 +244,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider(), historyHook = throwingHook) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Deferred"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Deferred"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.obj()
@@ -260,21 +261,21 @@ class WriteRouteCreateTest : FunSpec({
 
             val blank = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"   "}""")
+                setBody("""{"root":"main","folder":"guides","title":"   "}""")
             }
             blank.status shouldBe HttpStatusCode.BadRequest
             blank.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
 
             val traversal = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"../x","title":"Escape"}""")
+                setBody("""{"root":"main","folder":"../x","title":"Escape"}""")
             }
             traversal.status shouldBe HttpStatusCode.BadRequest
             traversal.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
 
             val malformed = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":""")
+                setBody("""{"root":"main","folder":"guides","title":""")
             }
             malformed.status shouldBe HttpStatusCode.BadRequest
             malformed.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -288,7 +289,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Long Title","slug":"short"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Long Title","slug":"short"}""")
             }.status shouldBe HttpStatusCode.Created
             java.nio.file.Files.exists(harness.root.resolve("guides/short.md")) shouldBe true
 
@@ -303,7 +304,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"brand/new","title":"x"}""")
+                setBody("""{"root":"main","folder":"brand/new","title":"x"}""")
             }.status shouldBe HttpStatusCode.Created
             java.nio.file.Files.exists(harness.root.resolve("brand/new/x.md")) shouldBe true
 
@@ -329,7 +330,7 @@ class WriteRouteCreateTest : FunSpec({
                 // (a) A create at that path is refused — the reservation is honored, the 0 bytes survive.
                 val post = client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"","slug":"residue","title":"Clobber Me"}""")
+                    setBody("""{"root":"main","folder":"","slug":"residue","title":"Clobber Me"}""")
                 }
                 post.status shouldBe HttpStatusCode.Conflict
                 val error = post.errorJson()
@@ -353,7 +354,7 @@ class WriteRouteCreateTest : FunSpec({
                 Files.createSymbolicLink(harness.root.resolve("escape"), outside)
                 val post = client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"escape","title":"Pwned"}""")
+                    setBody("""{"root":"main","folder":"escape","title":"Pwned"}""")
                 }
                 post.status shouldBe HttpStatusCode.BadRequest
                 post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -369,7 +370,7 @@ class WriteRouteCreateTest : FunSpec({
             val before = countFiles(harness.root)
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":".secret","title":"Ghost"}""")
+                setBody("""{"root":"main","folder":".secret","title":"Ghost"}""")
             }
             post.status shouldBe HttpStatusCode.BadRequest
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -485,7 +486,7 @@ class WriteRouteCreateTest : FunSpec({
             val before = harness.diskBytes("guides/deploy-guide.md")
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides/deploy-guide.md","title":"Under A File"}""")
+                setBody("""{"root":"main","folder":"guides/deploy-guide.md","title":"Under A File"}""")
             }
             post.status shouldBe HttpStatusCode.BadRequest
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -506,7 +507,7 @@ class WriteRouteCreateTest : FunSpec({
             // The slug "café" slugifies to the NFC leaf "café.md" — the NFC-equivalent of the NFD sibling.
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"","slug":"café","title":"Cafe Page"}""")
+                setBody("""{"root":"main","folder":"","slug":"café","title":"Cafe Page"}""")
             }
             post.status shouldBe HttpStatusCode.Conflict
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_exists"
@@ -560,7 +561,7 @@ class WriteRouteCreateTest : FunSpec({
             // POST into folder "café" (NFC) — the parent must resolve to the EXISTING dir, never a new one.
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"café","title":"In Cafe"}""")
+                setBody("""{"root":"main","folder":"café","title":"In Cafe"}""")
             }
             post.status shouldBe HttpStatusCode.Created
 
@@ -587,7 +588,7 @@ class WriteRouteCreateTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"guides","title":"Atomic","body":"# Atomic\n\nfull content here.\n"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Atomic","body":"# Atomic\n\nfull content here.\n"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val onDisk = harness.diskBytes("guides/atomic.md")
@@ -604,7 +605,7 @@ class WriteRouteCreateTest : FunSpec({
     test("a POST without application/json is 415 unsupported_media_type; application/json (+charset) works") {
         writeRestTest(Fixtures.demoDocs, idProvider = idProvider()) { harness ->
             val before = countFiles(harness.root)
-            val jsonBody = """{"folder":"guides","title":"Typed"}"""
+            val jsonBody = """{"root":"main","folder":"guides","title":"Typed"}"""
 
             // text/plain with a JSON-looking body → 415, nothing written.
             val textPlain = client.post("/api/v1/pages") {
@@ -662,7 +663,7 @@ class WriteRouteCreateTest : FunSpec({
 
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"café","title":"Collided Parent"}""")
+                setBody("""{"root":"main","folder":"café","title":"Collided Parent"}""")
             }
             post.status shouldBe HttpStatusCode.Created
 
@@ -693,7 +694,7 @@ class WriteRouteCreateTest : FunSpec({
                 // A POST whose canonical slug resolves to `foo` (explicit slug here; title "Foo" would too).
                 val post = client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"","slug":"foo","title":"Foo"}""")
+                    setBody("""{"root":"main","folder":"","slug":"foo","title":"Foo"}""")
                 }
                 post.status shouldBe HttpStatusCode.Conflict
                 val error = post.errorJson()
@@ -710,7 +711,7 @@ class WriteRouteCreateTest : FunSpec({
                 // A NON-colliding slug still creates normally.
                 client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"","slug":"bar","title":"Bar"}""")
+                    setBody("""{"root":"main","folder":"","slug":"bar","title":"Bar"}""")
                 }.status shouldBe HttpStatusCode.Created
                 Files.exists(harness.root.resolve("bar.md")) shouldBe true
             }
@@ -730,11 +731,11 @@ class WriteRouteCreateTest : FunSpec({
             // (which swaps the JSON envelope for the larger frontmatter block) is > cap. The composed
             // frontmatter (`---`, `id: <36-char uuid>`, `title: "Big"`, `---`, blank line) is bigger than
             // the JSON envelope, so such a window exists; compute both envelopes exactly and aim into it.
-            val jsonEnvelope = """{"folder":"guides","title":"Big","body":""}""".toByteArray(Charsets.UTF_8).size
+            val jsonEnvelope = """{"root":"main","folder":"guides","title":"Big","body":""}""".toByteArray(Charsets.UTF_8).size
             val frontmatter = "---\nid: 01900000-0000-7000-8000-000000000001\ntitle: \"Big\"\n---\n\n".toByteArray(Charsets.UTF_8).size
             // body so request == cap (the max under-or-equal), which makes composed == cap - jsonEnvelope + frontmatter > cap.
             val body = "x".repeat(cap - jsonEnvelope)
-            val requestJson = """{"folder":"guides","title":"Big","body":"$body"}"""
+            val requestJson = """{"root":"main","folder":"guides","title":"Big","body":"$body"}"""
             (requestJson.toByteArray(Charsets.UTF_8).size <= cap) shouldBe true // request is within the cap
             (body.length + frontmatter > cap) shouldBe true // but the composed document overflows it
             val post = client.post("/api/v1/pages") {
@@ -759,7 +760,7 @@ class WriteRouteCreateTest : FunSpec({
             for (folder in listOf("_folder.yaml", "a/_folder.yaml")) {
                 val post = client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"$folder","title":"Ghost"}""")
+                    setBody("""{"root":"main","folder":"$folder","title":"Ghost"}""")
                 }
                 post.status shouldBe HttpStatusCode.BadRequest
                 post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -798,7 +799,7 @@ class WriteRouteCreateTest : FunSpec({
                     val before = countFiles(harness.root)
                     val post = client.post("/api/v1/pages") {
                         contentType(json())
-                        setBody("""{"folder":"Foo","title":"Intruder"}""")
+                        setBody("""{"root":"main","folder":"Foo","title":"Intruder"}""")
                     }
                     post.status shouldBe HttpStatusCode.Conflict
                     post.errorJson().getValue("code").jsonPrimitive.content shouldBe "slug_conflict"
@@ -813,7 +814,7 @@ class WriteRouteCreateTest : FunSpec({
                 // A genuinely NON-colliding new folder still creates normally (no false positive).
                 client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"fresh","title":"Fresh"}""")
+                    setBody("""{"root":"main","folder":"fresh","title":"Fresh"}""")
                 }.status shouldBe HttpStatusCode.Created
             }
         } finally {
@@ -832,7 +833,7 @@ class WriteRouteCreateTest : FunSpec({
                 val before = countFiles(harness.root)
                 val post = client.post("/api/v1/pages") {
                     contentType(json())
-                    setBody("""{"folder":"","slug":"bar","title":"Bar"}""")
+                    setBody("""{"root":"main","folder":"","slug":"bar","title":"Bar"}""")
                 }
                 post.status shouldBe HttpStatusCode.Conflict
                 post.errorJson().getValue("code").jsonPrimitive.content shouldBe "slug_conflict"
@@ -861,7 +862,7 @@ class WriteRouteCreateTest : FunSpec({
 
             val post = client.post("/api/v1/pages") {
                 contentType(json())
-                setBody("""{"folder":"","slug":"dangling","title":"Dangling"}""")
+                setBody("""{"root":"main","folder":"","slug":"dangling","title":"Dangling"}""")
             }
             post.status shouldBe HttpStatusCode.Created // the dead alias did not wedge the URL
             Files.exists(harness.root.resolve("dangling.md")) shouldBe true
@@ -893,7 +894,7 @@ class WriteRouteCreateTest : FunSpec({
                     val resp = kotlinx.coroutines.runBlocking {
                         client.post("/api/v1/pages") {
                             contentType(json())
-                            setBody("""{"folder":"${folders[n]}","title":"Racer $n"}""")
+                            setBody("""{"root":"main","folder":"${folders[n]}","title":"Racer $n"}""")
                         }
                     }
                     statuses[n].set(resp.status)

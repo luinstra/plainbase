@@ -26,8 +26,8 @@ import io.mockk.mockk
  */
 class SearchServiceTest : FunSpec({
 
-    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0) =
-        SearchHit(pageId = pageId, headingId = headingId, snippet = "…body…", highlights = emptyList(), score = score)
+    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0, root: RootName = RootName.MAIN) =
+        SearchHit(pageId = pageId, root = root, headingId = headingId, snippet = "…body…", highlights = emptyList(), score = score)
 
     fun providerReturning(vararg hits: SearchHit): SearchProvider = mockk {
         every { search(any()) } returns SearchResults(total = hits.size.toLong(), hits = hits.toList())
@@ -69,6 +69,26 @@ class SearchServiceTest : FunSpec({
                 val payload = resultsOf(service.search("shared"))
                 payload.hits shouldBe emptyList()
                 payload.total shouldBe 1L // the engine's count is untouched - the documented §A2 short-page shape
+            }
+        }
+    }
+
+    test("a hit the engine indexed under ANOTHER root is dropped - one root's snippet is never served as another's") {
+        withTempTree(seed = { root -> writePage(root, "alpha.md", "# Alpha\n\nshared body text.\n") }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val alpha = harness.builder.current.pages.single() // root = main in the snapshot
+                // The engine still holds this id under a DIFFERENT root: exactly what a rebuild that re-awarded the id
+                // across roots leaves behind between the snapshot publish and the search sync that follows it. Joining
+                // on the id alone would pair the OLD root's snippet with main's url, main's citation and main's
+                // availability check - and, when the old root is the unavailable one, walk straight past the liveness
+                // filter, which reads the page's CURRENT root.
+                val service = SearchService(providerReturning(hit(alpha.id, "alpha", root = RootName.require("archive"))), harness.builder)
+
+                val payload = resultsOf(service.search("shared"))
+
+                payload.hits shouldBe emptyList()
+                payload.total shouldBe 1L // engine-truth count, the same §A2 short-page shape a departed page produces
             }
         }
     }

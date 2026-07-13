@@ -25,8 +25,18 @@ interface SearchProvider {
     /** Runs [query] against the engine; hits and total come from one engine snapshot (§B5). */
     fun search(query: SearchQuery): SearchResults
 
-    /** Full-corpus replacement under a generation/atomic swap; safe under concurrent [search]. */
-    fun rebuild(pages: Sequence<PageDocuments>)
+    /**
+     * Full-corpus replacement under a generation/atomic swap; safe under concurrent [search].
+     *
+     * [deleteAuthority] is the D5 rule at the engine boundary (ADR-0011): a row whose root lies OUTSIDE the set
+     * rides the swap into the new generation UNCHANGED, because a root this pass never walked is a root it has no
+     * authority to purge. It is not a nicety - a root unavailable since boot has no section in the snapshot, so it
+     * contributes no [PageDocuments] here, and an unrestricted swap would read that absence as a full-corpus
+     * delete and destroy its whole index behind an unplugged disk. `null` is UNRESTRICTED (this corpus IS the
+     * engine): the shape the engine's own contract tests and the single-root spike want, and the one no D5 caller
+     * may use.
+     */
+    fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>? = null)
 
     /**
      * The engine's OWN record of what it has indexed — the diff base for `SearchIndexer.sync`

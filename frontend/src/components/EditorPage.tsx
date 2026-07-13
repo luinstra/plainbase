@@ -487,8 +487,10 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
  * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
  *
  * [root] is the document root the page lands in (multi-root C4), carried from the `/docs/{root}/…` location
- * the "New" action was started from (the route's `?root=` search param). Undefined = the server's `main`
- * default, which is right for a create started outside any root's URL space.
+ * the "New" action was started from (the route's `?root=` search param). It is absent for a create started
+ * outside any root's URL space (`/new` from the home view), and THIS component resolves that to the reserved
+ * `main` — the wire has no default, because a server-side one would let any client's omission decide whose
+ * tree a page joins. The choice is the client's to make, explicitly, and it is made here.
  */
 export function NewPage({ root }: { root?: string }) {
   const router = useRouter();
@@ -512,7 +514,7 @@ export function NewPage({ root }: { root?: string }) {
   const create = useMutation({
     mutationFn: () =>
       createPage({
-        root,
+        root: root ?? "main", // no `?root=` means the create started outside any root's URL space (D1's reserved name)
         folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the

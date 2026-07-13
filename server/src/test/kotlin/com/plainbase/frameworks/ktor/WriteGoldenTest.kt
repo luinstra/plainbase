@@ -15,7 +15,8 @@ import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WriteWarningCode
-import com.plainbase.frameworks.ktor.routes.createUrl
+import com.plainbase.frameworks.ktor.routes.createdIdentity
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -83,7 +84,7 @@ class WriteGoldenTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"folder":"guides","title":"Golden Create"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Golden Create"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             // The 201 GAINS the minted `id` + the SERVER-AUTHORITATIVE canonical `url` (W6, additive
@@ -104,7 +105,7 @@ class WriteGoldenTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"folder":"guides","title":"Report","slug":"Café Ω"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Report","slug":"Café Ω"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
@@ -114,16 +115,17 @@ class WriteGoldenTest : FunSpec({
         }
     }
 
-    test("createUrl falls back to the /p/{id} permalink for a path-space loser (no fabricated /docs/<raw path>)") {
+    test("the 201 identity falls back to the /p/{id} permalink for a path-space loser (no fabricated /docs/<raw path>)") {
         // A published page whose canonical url is null (a same-slug collision loser) is reachable ONLY via
-        // its permalink. createUrl must return that permalink — NEVER a fabricated `/docs/<raw path>` that
-        // points at a 404. Both `a b.md` (0x20 wins on raw-byte order) and `a-b.md` slugify to `a-b`, so the
+        // its permalink. The create's identity must return that permalink — NEVER a fabricated `/docs/<raw path>`
+        // that points at a 404. Both `a b.md` (0x20 wins on raw-byte order) and `a-b.md` slugify to `a-b`, so the
         // latter is the loser (url = null) — the same induction RestRedirectTest uses.
         val winnerId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d1"
         val loserId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d2"
+        val loserPath = RootedPath(RootName.MAIN, TreePath.require("a-b.md"))
         val seedCollision: (IdMapRepository) -> Unit = { idMap ->
             idMap.bind(RootedPath(RootName.MAIN, TreePath.require("a b.md")), PageId.require(winnerId), materialized = true)
-            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("a-b.md")), PageId.require(loserId), materialized = true)
+            idMap.bind(loserPath, PageId.require(loserId), materialized = true)
         }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-loser")
         try {
@@ -133,12 +135,48 @@ class WriteGoldenTest : FunSpec({
                 val loser = PageId.require(loserId)
                 // The induction held: the loser really has a null canonical url.
                 harness.builder.current.byId[loser]?.url shouldBe null
-                // So createUrl serves the permalink — the SAME `/p/{id}` shape PermalinkRoute resolves and
+                // So the 201 serves the permalink — the SAME `/p/{id}` shape PermalinkRoute resolves and
                 // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication.
-                createUrl(loser, harness.builder.current) shouldBe "/p/$loserId"
+                val identity = createdIdentity(loserPath, minted = loser, snapshot = harness.builder.current)
+                identity.id shouldBe loser
+                identity.url shouldBe "/p/$loserId"
             }
         } finally {
             tree.toFile().deleteRecursively()
+        }
+    }
+
+    test("the 201 resolves by the WRITTEN LOCATION, so a cross-root id re-award can never leak another root's url") {
+        // `byId` is GLOBAL across roots. A rebuild racing the create can award the minted id to a HIGHER-RANKED
+        // root's page (the D17 duplicate-id contest), and an id-keyed lookup would then answer with THAT page:
+        // the 201 would hand the client another root's url for bytes we wrote here. Induced directly: the id the
+        // create minted now belongs to a page in `extra`, while OUR bytes sit at main/guides/ours.md.
+        val minted = PageId.require("0190aaaa-bbbb-7ccc-8ddd-0000000000e1")
+        val main = java.nio.file.Files.createTempDirectory("plainbase-award-main")
+        val extra = java.nio.file.Files.createTempDirectory("plainbase-award-extra")
+        try {
+            java.nio.file.Files.createDirectories(main.resolve("guides"))
+            java.nio.file.Files.createDirectories(extra.resolve("notes"))
+            java.nio.file.Files.write(main.resolve("guides/ours.md"), "---\ntitle: Ours\n---\n\n# Ours\n".toByteArray())
+            java.nio.file.Files.write(
+                extra.resolve("notes/theirs.md"),
+                "---\nid: ${minted.value}\ntitle: Theirs\n---\n\n# T\n".toByteArray(),
+            )
+            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+                harness.boot()
+                val snapshot = harness.builder.current
+                val ours = RootedPath(RootName.MAIN, TreePath.require("guides/ours.md"))
+                withClue("the induction: the minted id really does belong to the OTHER root's page now") {
+                    snapshot.byId[minted]?.root shouldBe RootName.require("extra")
+                }
+
+                val identity = createdIdentity(ours, minted = minted, snapshot = snapshot)
+
+                identity.id shouldBe snapshot.byPath.getValue(ours).id
+                identity.url shouldBe "/docs/main/guides/ours"
+            }
+        } finally {
+            listOf(main, extra).forEach { it.toFile().deleteRecursively() }
         }
     }
 

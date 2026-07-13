@@ -39,7 +39,7 @@ describe("write client network-error handling", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const result = await createPage({ title: "X" });
+    const result = await createPage({ root: "main", title: "X" });
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -89,7 +89,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(409)),
     );
-    const result = await createPage({ title: "X" });
+    const result = await createPage({ root: "main", title: "X" });
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(409);
@@ -238,7 +238,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       sentCsrf = csrf;
       return createdResponse();
     });
-    const result = await createPage({ title: "X" });
+    const result = await createPage({ root: "main", title: "X" });
     expect(result.kind).toBe("created");
     expect(sentCsrf).toBe("tok-1");
   });

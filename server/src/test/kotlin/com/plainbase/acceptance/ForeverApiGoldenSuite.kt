@@ -53,6 +53,15 @@ import io.kotest.core.spec.style.FunSpec
  * FixtureIndexStub emitter, kept matching production emission), and the frontend
  * `wire-golden.json` twin were regenerated once, under diff review, for this amendment.
  *
+ * Multi-root C4, same amendment window: `root` is REQUIRED on the two CREATE REQUESTS - `CreatePageRequest`
+ * (`POST /api/v1/pages`) and a `ProposeChangeRequest` whose operation is `create` (REST + the MCP tool). It
+ * shipped defaulted to `main` and that default was the bug: which root a create names decides whose disk the
+ * bytes land on AND whose `editable` bit + agent globs authorize it, so an omitted field was an authorization
+ * decision. A missing root is now a 400 (`invalid_create_request` on the REST create, whose body no longer
+ * decodes; `invalid_root` on either propose surface), never permission to write into `main`. REQUEST shapes are
+ * pinned by the native decode round-trip + the route tests, not by the response goldens; an EDIT proposal still
+ * declares no root at all.
+ *
  * PB-SEARCH-1 freeze-tier notes (phase-2 §A6 — what these goldens do and do NOT freeze):
  *   - `score` VALUES are deliberately NOT frozen (§A4: engine-scaled, never comparable across
  *     engines or releases) — the comparison normalizes each hit's `score` to the `{{score}}`

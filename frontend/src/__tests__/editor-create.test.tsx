@@ -208,13 +208,13 @@ describe("W6 new-page creation", () => {
       expect(call).not.toBeUndefined();
       return call!;
     });
-    expect(JSON.parse(post[1]!.body as string)).toEqual({ folder: "runbooks", title: "Runbooks", slug: "index" });
+    expect(JSON.parse(post[1]!.body as string)).toEqual({ root: "main", folder: "runbooks", title: "Runbooks", slug: "index" });
   });
 
   it("a create started from an EXTRA root's URL lands in THAT root — never silently in main", async () => {
-    // The gap this pins: `root` is optional on the wire and the server defaults it to `main`. So a create
-    // that forgets to send it does not fail — it writes the page into the WRONG TREE, silently. The root has
-    // to survive the whole chain: the docs URL the reader is on → the "New" link's `?root=` → the POST body.
+    // The root has to survive the whole chain: the docs URL the reader is on → the "New" link's `?root=` →
+    // the POST body. (The wire now REQUIRES `root`, so a lost one is a 400 rather than a silent write into
+    // the wrong tree — but a 400 on every extra-root create would be its own outage, so the chain is pinned.)
     const EXTRA_ID = "01900000-0000-7000-8000-0000000000ee";
     const EXTRA_URL = "/docs/extra/notes/rollback";
     const extraPage: PageResponse = {
@@ -283,7 +283,7 @@ describe("W6 new-page creation", () => {
     expect(JSON.parse(post[1]!.body as string).root).toBe("extra");
   });
 
-  it("a create started OUTSIDE any root's URL space sends no root — the server's `main` default is the honest answer", async () => {
+  it("a create started OUTSIDE any root's URL space names `main` EXPLICITLY — the wire has no default to fall back on", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
       qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
@@ -297,8 +297,10 @@ describe("W6 new-page creation", () => {
       expect(call).not.toBeUndefined();
       return call!;
     });
-    // `/new` reached with no `?root=` (the header link off the docs routes): the key is absent, not guessed.
-    expect("root" in JSON.parse(post[1]!.body as string)).toBe(false);
+    // `/new` reached with no `?root=` (the header link off the docs routes). The server used to read an
+    // omitted root as `main`, which made any client's omission an authorization decision; now the CLIENT
+    // says `main` out loud, and a request that says nothing is a 400.
+    expect(JSON.parse(post[1]!.body as string).root).toBe("main");
   });
 
   it("the new-section checkbox with a blank folder leaves Create disabled and does NOT POST", async () => {

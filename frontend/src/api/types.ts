@@ -205,12 +205,12 @@ export interface PageExistsEnvelope {
 /** `POST /api/v1/pages` request — the server mints the id and derives the path/slug; the client never does. */
 export interface CreatePageRequest {
   /**
-   * WHICH document root the page lands in (multi-root C4). The server defaults it to `main`, so omitting it
-   * is not a syntax error — it is a SILENT relocation: a create started from `/docs/{root}/...` would write
-   * into `main` instead. Every call site therefore threads the root it is creating in. An unknown name is a
-   * 400 `invalid_root`.
+   * WHICH document root the page lands in (multi-root C4) — REQUIRED, with no server-side default. It decides
+   * whose disk the bytes land on and whose editable/glob policy authorizes the write, so omitting it is a 400
+   * `invalid_create_request`, never a quiet relocation into `main`. Every call site threads the root it is
+   * creating in. An unknown name is a 400 `invalid_root`.
    */
-  root?: string;
+  root: string;
   folder?: string;
   title: string;
   slug?: string | null;

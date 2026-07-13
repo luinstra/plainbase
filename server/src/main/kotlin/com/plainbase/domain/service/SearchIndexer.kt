@@ -82,17 +82,16 @@ class SearchIndexer(
      * the snapshot and calls this under the same monitor a watcher [sync] runs under — so the two
      * can never interleave to regress the engine to a stale generation (§B4 / the S8 atomicity fix).
      *
-     * It deliberately takes NO `scannedRoots` (ADR-0011 D5, recorded scope): a generation swap re-derives the
-     * engine FROM THE SNAPSHOT, and a root unavailable SINCE BOOT has no section there, so its rows cannot ride
-     * the swap without new machinery. An explicit reindex during such an episode therefore PURGES that root's
-     * SEARCH rows - accepted degradation, because search.db is derived, deletable state by doctrine; the
-     * episode's hits are assembly-filtered out regardless, so nothing user-visible changes during it; the first
-     * post-restore rebuild's engine-truth diff re-upserts everything; and this path fires NO checkpoint
-     * listener, so DURABLE state is untouched either way. A mid-run vanished root is naturally immune - its
-     * carried section IS in the snapshot, so the swap regenerates its rows.
+     * [scannedRoots] is the SAME delete authority [sync] takes, and the swap needs it just as badly (ADR-0011
+     * D5): a root unavailable SINCE BOOT has no section in [snapshot], so it contributes no document here, and a
+     * swap that re-derived the engine from the snapshot ALONE would read that absence as a full-corpus delete
+     * and purge the root's whole index - a mass delete an admin `reindex` (or the `plainbase reindex` CLI)
+     * performed on behalf of an unplugged disk. The engine carries those rows across the swap instead, keyed off
+     * the ROW's own root. A mid-run vanished root was already immune - its carried section IS in the snapshot,
+     * so the swap regenerates its rows - and a DETACHED root's rows are retained exactly as [sync] retains them.
      */
-    fun rebuild(snapshot: PageIndex) {
-        provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
+    fun rebuild(snapshot: PageIndex, scannedRoots: Set<RootName>) {
+        provider.rebuild(snapshot.pages.asSequence().map(splitter::split), deleteAuthority = scannedRoots)
         logger.info { "search reindex: rebuilt the engine for ${snapshot.pages.size} page(s)" }
     }
 

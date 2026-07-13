@@ -499,7 +499,9 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, _, _ ->
             val created = app.client.post("/api/v1/changes") {
                 contentType(json)
-                setBody("""{"operation":"create","target_path":"guides/brand-new.md","proposed_content":"# New\n","rationale":"r"}""")
+                setBody(
+                    """{"operation":"create","root":"main","target_path":"guides/brand-new.md","proposed_content":"# New\n","rationale":"r"}""",
+                )
             }
             withClue(created.bodyAsText()) { created.status shouldBe HttpStatusCode.Created }
             val detail0 = Json.parseToJsonElement(created.bodyAsText()).jsonObject
@@ -521,7 +523,9 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Human("builtin", "admin"), role = Role.ADMIN) { app, harness, store, ctx, _ ->
             val created = app.client.post("/api/v1/changes") {
                 contentType(json)
-                setBody("""{"operation":"create","target_path":"guides/race.md","proposed_content":"# Race\n","rationale":"r"}""")
+                setBody(
+                    """{"operation":"create","root":"main","target_path":"guides/race.md","proposed_content":"# Race\n","rationale":"r"}""",
+                )
             }
             val pid = com.plainbase.domain.page.ProposalId.require(
                 Json.parseToJsonElement(created.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content,
@@ -549,7 +553,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
             val resp = app.client.post("/api/v1/pages") {
                 contentType(json)
-                setBody("""{"folder":"guides","title":"Degraded"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Degraded"}""")
             }
             withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
             val body = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
@@ -565,7 +569,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.READ_ONLY) { app, harness, _, _, _ ->
             val resp = app.client.post("/api/v1/pages") {
                 contentType(json)
-                setBody("""{"folder":"guides","title":"Nope"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Nope"}""")
             }
             resp.status shouldBe HttpStatusCode.Forbidden
             harness.proposalRepository.all() shouldHaveSize 0
@@ -673,7 +677,9 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             suspend fun proposeCreate() = Json.parseToJsonElement(
                 app.client.post("/api/v1/changes") {
                     contentType(json)
-                    setBody("""{"operation":"create","target_path":"guides/dup.md","proposed_content":"# Dup\n","rationale":"r"}""")
+                    setBody(
+                        """{"operation":"create","root":"main","target_path":"guides/dup.md","proposed_content":"# Dup\n","rationale":"r"}""",
+                    )
                 }.bodyAsText(),
             ).jsonObject.getValue("id").jsonPrimitive.content
             val first = proposeCreate()
@@ -698,7 +704,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val malformed = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","target_path":"guides/bad.md","proposed_content":${
+                    """{"operation":"create","root":"main","target_path":"guides/bad.md","proposed_content":${
                         Json.encodeToString("---\n\"quoted key\": v\n---\n\nbody\n")
                     },"rationale":"r"}""",
                 )
@@ -710,7 +716,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val suppliedId = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","target_path":"guides/own-id.md","proposed_content":${
+                    """{"operation":"create","root":"main","target_path":"guides/own-id.md","proposed_content":${
                         Json.encodeToString("---\nid: 0190ffff-ffff-7fff-8fff-ffffffffffff\n---\n\nbody\n")
                     },"rationale":"r"}""",
                 )
@@ -720,7 +726,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val plain = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","target_path":"guides/plain.md","proposed_content":"# Just a heading\n","rationale":"r"}""",
+                    """{"operation":"create","root":"main","target_path":"guides/plain.md","proposed_content":"# Just a heading\n","rationale":"r"}""",
                 )
             }
             plain.status shouldBe HttpStatusCode.Created

@@ -41,7 +41,7 @@ class WriteRouteCreateNativeTest {
 
                 val post = client.post("/api/v1/pages") {
                     contentType(json)
-                    setBody("""{"folder":"guides","title":"Native Create","body":"# n\n\nx\n"}""")
+                    setBody("""{"root":"main","folder":"guides","title":"Native Create","body":"# n\n\nx\n"}""")
                 }
                 assertEquals(HttpStatusCode.Created, post.status)
                 val body = Json.parseToJsonElement(post.bodyAsText()).jsonObject

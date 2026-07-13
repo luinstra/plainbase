@@ -20,8 +20,9 @@ import java.sql.Statement
  *
  *  - [index]/[delete]: one transaction PER PAGE against the active generation — a concurrent query
  *    sees a page's document set entirely old or entirely new, never half (§B4 per-page atomicity).
- *  - [rebuild]: generation swap as ONE write transaction — insert every generation-N+1 row, flip
- *    `active_generation`, GC, commit. Under WAL, readers never observe uncommitted writer rows,
+ *  - [rebuild]: generation swap as ONE write transaction — insert every generation-N+1 row, carry
+ *    the rows no caller has authority to delete ([carryRootsOutside]), flip `active_generation`, GC,
+ *    commit. Under WAL, readers never observe uncommitted writer rows,
  *    which buys three §B4 guarantees at once: an in-progress rebuild is invisible even to FTS5's
  *    TABLE-WIDE bm25 statistics (concurrent scores cannot drift while a rebuild runs); a rebuild
  *    that dies anywhere rolls back to nothing, so the next rebuild repairs for free (never a
@@ -61,7 +62,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         }
     }
 
-    override fun rebuild(pages: Sequence<PageDocuments>) = db.write { connection ->
+    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>?) = db.write { connection ->
         val published = connection.transaction {
             val active = connection.activeGeneration()
             // Belt-and-braces: rows outside the active generation can only be debris (a crash
@@ -70,6 +71,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             connection.deleteGenerations("!= ?", active)
             val next = active + 1
             pages.forEach { page -> connection.insertPage(next, page) }
+            if (deleteAuthority != null) connection.carryRootsOutside(deleteAuthority, from = active, to = next)
             connection.prepareStatement("UPDATE search_meta SET value = ? WHERE key = 'active_generation'").use { statement ->
                 statement.setString(1, next.toString())
                 statement.executeUpdate()
@@ -81,6 +83,34 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             next
         }
         logger.debug { "search rebuild published generation $published" }
+    }
+
+    /**
+     * Carries the rows of every root OUTSIDE [deleteAuthority] into the swap's new generation - the D5 half of
+     * [rebuild]. A carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so the
+     * `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its own)
+     * follow their document for free and the GC that runs after the flip no longer sees them. It is all inside the
+     * swap's ONE transaction, so a concurrent reader still observes one complete generation, old or new.
+     *
+     * ORDER MATTERS: `section_doc` re-stamps BEFORE `search_page`, because both ask "is this page already in the
+     * new generation?" of `search_page@to` - which, until the second statement runs, holds exactly the pages the
+     * swap inserted from the snapshot. A page whose section WAS carried into the snapshot is therefore skipped
+     * here (the freshly inserted rows are the newer truth) and its stale generation is GC'd as usual.
+     */
+    private fun Connection.carryRootsOutside(deleteAuthority: Set<RootName>, from: Long, to: Long) {
+        // An EMPTY authority deletes for no root at all, so the root predicate simply vanishes: every row rides.
+        val retained = if (deleteAuthority.isEmpty()) "" else " AND root NOT IN (${deleteAuthority.joinToString(", ") { "?" }})"
+        val notSuperseded = " AND page_id NOT IN (SELECT page_id FROM search_page WHERE generation = ?)"
+        listOf("section_doc", "search_page").forEach { table ->
+            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$retained$notSuperseded").use { statement ->
+                var p = 1
+                statement.setLong(p++, to)
+                statement.setLong(p++, from)
+                deleteAuthority.forEach { statement.setString(p++, it.value) }
+                statement.setLong(p, to)
+                statement.executeUpdate()
+            }
+        }
     }
 
     override fun indexedState(): Map<PageId, PageSearchState> = db.write { connection ->
@@ -127,11 +157,14 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
               $statusPredicate
         """.trimIndent()
 
+        // `d.root` is part of the hit, not decoration: the row says which root's bytes produced this snippet, and
+        // assembly can only tell a re-awarded page id from an honest one by comparing it to the snapshot (§B7).
         val hits = prepareStatement(
             """
             SELECT d.page_id, d.heading_id,
                    -bm25(${index.table}, ${index.weights}) AS score,
-                   snippet(${index.table}, -1, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip
+                   snippet(${index.table}, -1, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip,
+                   d.root
             $from
             $where
             ORDER BY score DESC, d.page_id, d.heading_id
@@ -148,6 +181,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
                         add(
                             SearchHit(
                                 pageId = PageId.fromByteArray(rows.getBytes(1)),
+                                root = RootName.require(rows.getString(5)),
                                 headingId = rows.getString(2),
                                 snippet = snippet,
                                 highlights = highlights,

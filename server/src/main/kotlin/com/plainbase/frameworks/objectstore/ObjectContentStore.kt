@@ -15,6 +15,7 @@ import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.rootLivenessProbe
 import com.plainbase.frameworks.filesystem.withDirectoryStream
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.network.sockets.ConnectTimeoutException
@@ -33,6 +34,7 @@ import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The hybrid object-backend [ContentStore] (plan C4): the bucket is the AUTHORITY, the local
@@ -94,27 +96,49 @@ class ObjectContentStore(
     // ---- Reads: pure delegation to the mirror ------------------------------------------------
 
     /**
-     * Always available: the BUCKET is the authority, and its transport failures have their own error paths.
-     * Root availability is a LOCAL-path concept in v1 (ADR-0011 D10 keeps object mode single-root), so there
-     * is no root to probe here and nothing to mark. This is an IMPLEMENTATION of the port, not a consumer of it.
+     * The BUCKET is the authority and its transport failures have their own error paths - but the tree this store
+     * SERVES is the local mirror, and every read answers from it. So availability is the MIRROR's liveness, and a
+     * mirror that is missing (or is no longer the directory we hydrated - DATA_DIR can sit on a mounted volume too)
+     * is UNAVAILABLE, never "available and empty". The distinction is the whole of ADR-0011 D5: an empty scan on an
+     * available root is a full-corpus DELETE instruction, and a rebuild acting on it purges the checkpoints and the
+     * search rows of a corpus the bucket still holds in full.
+     *
+     * [mirrorProbe] is null until [hydrate] materializes the mirror, and that arm answers `true`: a store that has
+     * never hydrated has claimed no tree and holds nothing anyone could lose (PREVIEW adopt, which never hydrates,
+     * never mkdirs, and reads whatever mirror is there, point-in-time). Once hydrated, liveness is the probe
+     * `LocalContentStore` uses on its own root - the tree's IDENTITY, not the path's - so this store and the local
+     * store answer the same question the same way.
      */
-    override fun available(): Boolean = true
+    override fun available(): Boolean = mirrorProbe.get()?.invoke(mirrorRoot) ?: true
 
-    // An absent mirror scans to an empty tree (seam c): PREVIEW adopt never hydrates and never mkdirs,
-    // so a fresh install with no mirror yet previews cleanly instead of throwing NoSuchFileException.
+    /**
+     * The mirror's liveness probe, bound to the tree [hydrate] materialized. Null until then - the only state in
+     * which an absent mirror is an honest empty corpus rather than a lost one (seam c).
+     */
+    private val mirrorProbe = AtomicReference<((Path) -> Boolean)?>(null)
+
+    // A never-hydrated store with no mirror on disk scans to an empty tree (seam c): a fresh install previews
+    // cleanly instead of throwing NoSuchFileException. Once hydrated, the mirror IS the corpus - so a mirror that
+    // has gone away is NOT an empty scan here, it is the store's NIO failure, which the rebuild's root-loss
+    // classifier turns into skip-and-carry (never the mass delete an empty ScanResult would authorize).
     override fun scan(): ScanResult =
-        if (Files.isDirectory(mirrorRoot)) mirror.scan() else ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList())
+        if (mirrorProbe.get() == null && !Files.isDirectory(mirrorRoot)) {
+            ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList())
+        } else {
+            mirror.scan()
+        }
 
     override fun read(path: TreePath): ByteArray? = mirror.read(path)
 
     /**
-     * Read-or-[ContentRead.Absent], and a read THROW propagates exactly as it does today - there is no root to
-     * re-probe and nothing to mark, so `RootDown` is a state this store can never be in. Deliberately NOT
-     * delegated to `mirror.readClassified`: the mirror is a `LocalContentStore` whose classifier would answer
-     * `RootDown` for an ABSENT mirror, which is object mode's legitimate fresh-install state.
+     * Read-or-[ContentRead.Absent], with the same D5 classification every rooted read owes: a read that comes back
+     * empty-handed on a mirror that is GONE is `RootDown` (503, "the page still exists"), never `Absent` (404, "drop
+     * your citations"). The probe fires only on that empty-handed path, so the hot read is untouched. Deliberately
+     * NOT delegated to `mirror.readClassified`: the mirror is a `LocalContentStore` bound to a root it did not
+     * choose, and its classifier would answer `RootDown` for the never-hydrated mirror this store answers for.
      */
     override fun readClassified(path: TreePath): ContentRead =
-        read(path)?.let(ContentRead::Bytes) ?: ContentRead.Absent
+        read(path)?.let(ContentRead::Bytes) ?: if (available()) ContentRead.Absent else ContentRead.RootDown
 
     override fun list(dir: TreePath?): List<ContentEntry> = mirror.list(dir)
 
@@ -294,9 +318,13 @@ class ObjectContentStore(
      * dirty-journaled key is never overwritten or deleted (R3). A LIST/GET failure mutates NOTHING
      * (Q13): WARN and retry next cycle.
      *
-     * The change diff is ETAG-ONLY (`before[path] != entry.etag`); unlike [hydrate] it does NOT also check
-     * `!mirrorHasRaw`, so a mirror file deleted at RUNTIME (DATA_DIR/mirror is deletable derived state)
-     * self-heals only on the NEXT boot's hydrate, not mid-poll - a chosen bound, not an oversight.
+     * The change diff is the SAME one [hydrate] runs - a bucket etag the state does not have, OR a listed key
+     * whose mirror FILE is missing. The etag-only version left a mirror file deleted at RUNTIME (DATA_DIR/mirror
+     * is deletable derived state) absent until the next boot, and absent from the mirror means absent from the
+     * next rebuild's scan: the page leaves the snapshot, and with the root scanned and available its checkpoint
+     * and search rows are DELETED for a page the bucket still holds. The mirror is derived state; a poll that
+     * cannot re-derive it is not a poll. The extra cost is one local `exists` per listed key, against a LIST that
+     * already crossed the network.
      */
     internal fun pollOnce(onChange: (TreePath) -> Unit = {}) {
         val before = state.snapshot()
@@ -306,7 +334,7 @@ class ObjectContentStore(
             logger.warn { "poll LIST failed (${causeOf(e)}); nothing mutated, retrying next cycle" }
             return
         }
-        val changed = listed.filter { (path, entry) -> before[path] != entry.etag }
+        val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
         val fetched = changed.mapNotNull { (path, entry) ->
             try {
                 // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
@@ -386,6 +414,9 @@ class ObjectContentStore(
      */
     fun hydrate(strict: Boolean = false) {
         Files.createDirectories(mirrorRoot) // deferred out of the factory so PREVIEW (no hydrate) never mkdirs
+        // The mirror we are about to fill is the tree this store now answers for: bind liveness to THAT directory
+        // (see [available]). Re-bound on every hydrate, because every hydrate re-materializes the mirror.
+        mirrorProbe.set(rootLivenessProbe(mirrorRoot))
         val before = state.snapshot()
         val listed = try {
             listBucket()

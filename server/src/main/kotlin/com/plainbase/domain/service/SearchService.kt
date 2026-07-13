@@ -74,6 +74,7 @@ class SearchService(
                 total = results.total,
                 hits = results.hits.mapNotNull { hit ->
                     snapshot.byId[hit.pageId]
+                        ?.takeIf { it.root == hit.root } // the page id is not enough - see [assemble]'s root rule
                         ?.takeIf { available.isAvailable(it.root) }
                         ?.let { page -> assemble(hit, page) }
                 },
@@ -90,6 +91,15 @@ class SearchService(
      * ranking but never citations"); the citation still verifies against the concurrent
      * `GET /pages/{id}`, and the §B4 listener seam closes the window at the next sync. Engine
      * visibility is always absent-or-old-or-new, never torn (the Appendix G rule).
+     *
+     * **The one lag that is NOT adjudicated is a CROSS-ROOT one, and the caller drops it before we get here.**
+     * A page id is global across roots and a rebuild can re-award it (the D17 rank contest); the snapshot
+     * publishes BEFORE the search sync that follows it, so a query landing in that window can return a hit the
+     * engine still holds under root A for an id the snapshot has just moved to root B. Joining on the id alone
+     * would then pair root A's snippet with root B's url, root B's citation and root B's availability check -
+     * serving one root's content under another's name, and slipping past the stale-content filter entirely when
+     * A is the root that is unavailable. Same id, different root = a different page, and the hit is dropped
+     * (the §A2 short-page race, again). It returns at the next sync, correctly attributed.
      */
     private fun assemble(hit: SearchHit, page: IndexedPage): SearchHitPayload {
         // §B7: null breadcrumb = the heading left the snapshot since the engine indexed — degrade

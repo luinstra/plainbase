@@ -130,14 +130,18 @@ data class BodyTooLargeBody(val code: String, val message: String, @SerialName("
  * the content-relative parent (`""`/omitted = root); `title` is required non-blank; `slug` is the
  * optional author slug intent; `body` is the optional Markdown body (the server adds the frontmatter).
  *
- * `root` names WHICH document directory the page lands in, EXPLICITLY - additive, defaulted `main`, so every
- * existing client and golden stays byte-compatible. It is never inferred from `folder`'s first segment: the read
- * surface's one-segment convenience grammar is one thing, but silently retargeting a WRITE because a folder name
- * happens to match a root name is not acceptable where bytes land. An unknown name is a 400 `invalid_root`.
+ * `root` names WHICH document directory the page lands in, and it is REQUIRED - never defaulted. A default is
+ * fine for a field whose wrong value is a cosmetic miss; this one decides WHOSE DISK the bytes land on, and it
+ * is the value the editable check and the agent's commit globs are then evaluated against. A client that forgets
+ * it would have its create silently relocated into `main` AND authorized against main's policy - so a missing
+ * root is a 400, never permission to write to `main`. It is likewise never inferred from `folder`'s first
+ * segment: the read surface's one-segment convenience grammar is one thing, but silently retargeting a WRITE
+ * because a folder name happens to match a root name is not acceptable where bytes land. An unknown name is a
+ * 400 `invalid_root`.
  */
 @Serializable
 data class CreatePageRequest(
-    val root: String = "main",
+    val root: String,
     val folder: String = "",
     val title: String,
     val slug: String? = null,

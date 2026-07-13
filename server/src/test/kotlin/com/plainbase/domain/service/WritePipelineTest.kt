@@ -365,7 +365,7 @@ private class TogglingSearchProvider : SearchProvider {
 
     override fun delete(ids: Collection<PageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>) = pages.forEach { indexedPageIds += it.pageId }
+    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>?) = pages.forEach { indexedPageIds += it.pageId }
     override fun indexedState(): Map<PageId, PageSearchState> = emptyMap()
 }
 

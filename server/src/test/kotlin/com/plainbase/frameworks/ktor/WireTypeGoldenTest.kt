@@ -49,9 +49,11 @@ import com.plainbase.frameworks.ktor.dto.WriteConflictEnvelope
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WrittenButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.WrittenResponse
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.add
@@ -447,8 +449,13 @@ class WireTypeGoldenTest : FunSpec({
             CreatePageRequest(root = "extra", folder = "", title = "Deploy Guide", slug = null, body = null)
     }
 
-    test("an omitted root still defaults to main - the back-compat pin every pre-multi-root client relies on") {
-        RestJson.decodeFromString(CreatePageRequest.serializer(), """{"title":"Deploy Guide"}""").root shouldBe "main"
+    test("an omitted root does NOT decode - a create must SAY where the bytes land, and never be read as 'main'") {
+        // The field has no default, so an omitted root is a decode failure, which the route answers 400
+        // `invalid_create_request`. A default would have made forgetting it a silent relocation into main - and an
+        // authorization decision (main's editable bit, main's globs) reachable by leaving a field out.
+        shouldThrow<SerializationException> {
+            RestJson.decodeFromString(CreatePageRequest.serializer(), """{"title":"Deploy Guide"}""")
+        }
     }
 
     test("rejectChangeRequest decodes with the omitted comment null") {

@@ -151,8 +151,14 @@ expect_status 200 "$(status_of "$BASE/api/v1/pages/by-path/main/guides/deploy-gu
 expect_status 503 "$(status_of "$BASE/api/v1/pages/by-path/extra/notes/extra-note" "$tmp/down.json")" "read into the missing root"
 jq -e '.error.code == "root_unavailable"' "$tmp/down.json" >/dev/null \
   || fail "read into the missing root: expected root_unavailable, got: $(cat "$tmp/down.json")"
+# The BROWSER surface answers with the shell, at the landing URL and at a canonical page URL alike: a
+# bookmark or a refresh into a down root must render the SPA's outage view (which it draws from the tree's
+# available:false), never a 503 JSON body as literal text in the tab. The honest 503 lives on the API above,
+# which is where the SPA and the agents read it. CI boots auth.mode=off, so this is the authorized arm.
+expect_status 200 "$(status_of "$BASE/docs/extra")" "/docs/{down-root} landing shell"
+expect_status 200 "$(status_of "$BASE/docs/extra/notes/extra-note")" "/docs/{down-root}/{path} page shell"
 stop
-pass "missing root -> healthz available:false/missing_at_boot, read -> 503 root_unavailable, main still serves"
+pass "missing root -> healthz available:false/missing_at_boot, API read -> 503 root_unavailable, /docs -> shell, main still serves"
 
 # --- 7. The detached WARN boot: a dropped root DEGRADES, it does not explode. --------------------
 mv "$tmp/extra-away" "$tmp/extra"

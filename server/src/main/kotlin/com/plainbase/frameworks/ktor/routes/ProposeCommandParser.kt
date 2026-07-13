@@ -36,7 +36,9 @@ sealed interface ProposeCommandParse {
  * BOTH propose surfaces reuse it. It is why the declared-root check lives here rather than in a route: a
  * create-PROPOSAL never goes near `POST /pages`, so a route-side check would have left the two propose surfaces
  * falling through to the facade's fail-closed `editableOf` and answering 403 `root_not_editable` for a root that
- * does not exist. An EDIT needs no check at all - its root is never declared, it is resolved from the page id.
+ * does not exist. It is also why a create's root is REQUIRED here rather than in a schema: the MCP tool's flat
+ * input schema cannot demand a field for one operation and forbid it for the other, so the rule lives in the one
+ * place both surfaces pass through. An EDIT needs no root at all - it is resolved from the page id.
  */
 internal fun parseProposeCommand(request: ProposeChangeRequest, roots: Set<RootName>): ProposeCommandParse {
     // Shared field validation.
@@ -74,10 +76,14 @@ private fun parseEditCommand(request: ProposeChangeRequest): ProposeCommandParse
 private fun parseCreateCommand(request: ProposeChangeRequest, roots: Set<RootName>): ProposeCommandParse {
     if (request.pageId != null) return ProposeCommandParse.Invalid("a create has no existing page; page_id is contradictory")
     if (request.baseHash != null) return ProposeCommandParse.Invalid("a new page has no base; base_hash is contradictory")
+    // A create says WHERE, always. An omitted root used to mean `main`, which made forgetting the field a silent
+    // relocation into main - and a proposal judged against MAIN's editable bit and MAIN's globs, which is an
+    // authorization decision no client should be able to reach by leaving a field out.
+    val rawRoot = request.root ?: return ProposeCommandParse.Invalid("a create requires root", ErrorCodes.INVALID_ROOT)
     // ONE total resolution for a wire root string: it can fail two ways - not a legal slug, or a legal slug naming
     // no registered root - and both are the same 400 `invalid_root`, on every surface that can name a root.
-    val root = RootName.registered(request.root, roots)
-        ?: return ProposeCommandParse.Invalid("Unknown root: '${request.root}'", ErrorCodes.INVALID_ROOT)
+    val root = RootName.registered(rawRoot, roots)
+        ?: return ProposeCommandParse.Invalid("Unknown root: '$rawRoot'", ErrorCodes.INVALID_ROOT)
     val rawTargetPath = request.targetPath
     if (rawTargetPath.isNullOrBlank()) return ProposeCommandParse.Invalid("a create requires target_path")
     // SECURITY: the wire target_path goes through TreePath.of — a `..`/absolute/empty/NUL is structurally

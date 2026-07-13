@@ -119,6 +119,9 @@ private fun noopSearchProvider() = object : com.plainbase.domain.search.SearchPr
     override fun index(pages: List<com.plainbase.domain.search.PageDocuments>) = Unit
     override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
     override fun search(query: com.plainbase.domain.search.SearchQuery) = com.plainbase.domain.search.SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<com.plainbase.domain.search.PageDocuments>) = Unit
+    override fun rebuild(
+        pages: Sequence<com.plainbase.domain.search.PageDocuments>,
+        deleteAuthority: Set<com.plainbase.domain.root.RootName>?,
+    ) = Unit
     override fun indexedState() = emptyMap<com.plainbase.domain.page.PageId, com.plainbase.domain.search.PageSearchState>()
 }

@@ -1,6 +1,7 @@
 package com.plainbase.domain.search
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
 
 /**
  * One engine query (§B4): plain-text [text] (the engine adapter owns turning it into engine
@@ -32,6 +33,14 @@ data class SearchResults(
  */
 data class SearchHit(
     val pageId: PageId,
+    /**
+     * The root the engine INDEXED this document under - part of the hit's IDENTITY, not a display field, and the
+     * one thing a page id cannot carry: ids are global across roots and a rebuild can re-award one (the D17
+     * cross-root rank contest). Assembly compares it against the root the page has in the CURRENT snapshot and
+     * DROPS the hit if they differ, so one root's snippet can never be served under another root's name, url and
+     * availability check (ADR-0011 D5/D17).
+     */
+    val root: RootName,
     /** The matched section's PB-SLUG-1 anchor; null for a page-level hit. */
     val headingId: String?,
     /** §A3: plain text — no HTML, no markup, no marker characters. */

@@ -79,7 +79,7 @@ class AuthMatrixTest : FunSpec({
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.Forbidden
             app.client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"title":"X"}""")
+                setBody("""{"root":"main","title":"X"}""")
             }.status shouldBe HttpStatusCode.Forbidden
         }
     }
@@ -89,7 +89,7 @@ class AuthMatrixTest : FunSpec({
             app.client.get("/api/v1/pages/by-path/doc").status shouldBe HttpStatusCode.OK
             app.client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"title":"New Editor Page"}""")
+                setBody("""{"root":"main","title":"New Editor Page"}""")
             }.status shouldBe HttpStatusCode.Created
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.Forbidden
         }
@@ -131,7 +131,7 @@ class AuthMatrixTest : FunSpec({
 
                     client.post("/api/v1/pages") {
                         contentType(ContentType.Application.Json)
-                        setBody("""{"title":"Denied Create"}""")
+                        setBody("""{"root":"main","title":"Denied Create"}""")
                     }.status shouldBe HttpStatusCode.Forbidden
 
                     client.post("/api/v1/pages/$pageId/assets?filename=x.bin") {

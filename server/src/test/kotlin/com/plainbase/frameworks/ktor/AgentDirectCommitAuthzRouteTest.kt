@@ -136,7 +136,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
     suspend fun ApplicationTestBuilder.postCreate(folder: String, title: String = "newpage"): HttpResponse =
         client.post("/api/v1/pages") {
             contentType(ContentType.Application.Json)
-            setBody("""{"folder":"$folder","title":"$title"}""")
+            setBody("""{"root":"main","folder":"$folder","title":"$title"}""")
         }
 
     fun List<AuditEntry>.edits() = filter { it.action == "EDIT" }

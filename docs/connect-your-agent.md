@@ -84,8 +84,10 @@ A typical search → read → propose flow:
 
 The response is a **proposal id** in `PENDING` - a human reviews and approves it in the web UI. Agents cannot
 approve their own (or any) proposals. To create a NEW page instead of editing, use
-`{ "operation": "create", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
-(no `page_id`/`base_hash`).
+`{ "operation": "create", "root": "main", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
+(no `page_id`/`base_hash`). A create must name its `root` - there is no default, and an omitted one is
+`invalid_root`: which root a page lands in decides whose tree it joins and whose policy accepts it. An edit
+declares no root at all (it comes from the page).
 
 Track the review queue with `list_changes` (all proposals, newest-first) and `get_change` (one proposal's full
 detail + diff + decision state).

@@ -49,9 +49,19 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * dropped section would purge that root's search rows AND its `page_checkpoint` rows (durable state) in one
  * publish, i.e. a mass delete caused by an unplugged disk. A never-scanned root simply contributes no
  * section, and the listeners' authority set ([PublicationListener.published]'s `scannedRoots`) is what keeps
- * its rows safe there. A scan that THROWS is CLASSIFIED, never blanket-absorbed: root gone -> mark, skip,
- * carry; root still live -> RETHROW, so a parser or DB bug fails the rebuild exactly as it does today instead
- * of being laundered into permanent sticky unavailability over stale data.
+ * its rows safe there.
+ *
+ * **What is classified is the COMPLETED SCAN, never the precondition** ([scanIfAvailable]). The entry probe
+ * says the root was there when the walk STARTED; the artifact that gets DELETE AUTHORITY is the scan that came
+ * back, and a root can vanish in between - a directory iteration whose tree disappears mid-walk can return
+ * SHORT (or empty) without throwing anything, and a short scan admitted to `scannedRoots` authorizes exactly
+ * the checkpoint/search deletions and binding supersessions D5 exists to prevent. So the root is re-probed at
+ * HANDOFF, and a scan whose root is gone by then is skipped and carried like any other loss. A scan that
+ * THROWS is classified the same way; what a LIVE-root failure costs is THAT root's pass, never the whole
+ * rebuild - one unreadable subdirectory in one extra root must not take the other roots (or, at boot, the
+ * server) down with it. It is not marked unavailable either: a chmod is fixed in place, and sticky
+ * unavailability would prescribe a restart nobody needs. It skips, carries, WARNs loudly, and the next pass
+ * retries it.
  *
  * **One pass:** each file's bytes are read exactly once ([ContentStore.read]), each page's
  * frontmatter values are parsed exactly once ([FrontmatterParser], over the already-read bytes —
@@ -166,15 +176,24 @@ class IndexBuilder(
     /** The shared root-loss rule (probe → mark), over the SAME holder this builder reads and writes. */
     private val rootLoss = RootLossClassifier(availability)
 
-    private val holder = AtomicReference(PageIndex.EMPTY)
+    /**
+     * What a pass PUBLISHES: the snapshot, and the authority set of the pass that produced it - swapped as ONE
+     * value, because they are one fact. A listener is handed both at publish time; [rebuildSearchIndex] reads
+     * them back LATER, and reading the snapshot from one field and the authority from another could pair a fresh
+     * snapshot with a stale authority - i.e. hand the engine permission to delete rows for a root the pass that
+     * produced that snapshot had skipped.
+     */
+    private data class Published(val snapshot: PageIndex, val scannedRoots: Set<RootName>)
+
+    private val holder = AtomicReference(Published(PageIndex.EMPTY, emptySet()))
 
     /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
-    val current: PageIndex get() = holder.load()
+    val current: PageIndex get() = holder.load().snapshot
 
     /** Runs the full pass and atomically publishes (and returns) the new snapshot (serialized — see class doc). */
     @Synchronized
     fun rebuild(): PageIndex {
-        val previous = holder.load()
+        val previous = holder.load().snapshot
         // §B3 checkpoint-as-previous: the first rebuild after startup (holder still the EMPTY
         // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
         // move performed while the server was down still records its alias. Every later rebuild
@@ -252,7 +271,7 @@ class IndexBuilder(
 
         val snapshot = PageIndex(sections)
         recordAliases(previousUrlPaths, snapshot)
-        holder.store(snapshot)
+        holder.store(Published(snapshot, scannedRoots))
         logger.info {
             val breakdown = if (snapshot.sections.size > 1) {
                 snapshot.sections.joinToString(prefix = " [", postfix = "]") { "${it.root}: ${it.pages.size} page(s)" }
@@ -286,13 +305,18 @@ class IndexBuilder(
      * checkpoint listener re-fire — just a clean generation swap of the engine over the snapshot
      * already published. Both the reindex endpoint and the `plainbase reindex` CLI route through
      * here. Returns the page count rebuilt into the engine (the §C4 reindex-response figure).
+     *
+     * It swaps the engine under the SAME delete authority the pass that published this snapshot ran under, which
+     * is why the two travel together in [Published]. Without it the swap is a mass delete for any root the pass
+     * skipped: an unavailable root has no section in the snapshot, so the engine would re-derive the corpus
+     * WITHOUT it and drop its rows - the D5 lie, performed by a reindex nobody meant as a deletion.
      */
     @Synchronized
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
-        val snapshot = holder.load()
-        indexer.rebuild(snapshot)
-        return snapshot.pages.size
+        val published = holder.load()
+        indexer.rebuild(published.snapshot, published.scannedRoots)
+        return published.snapshot.pages.size
     }
 
     /**
@@ -344,7 +368,8 @@ class IndexBuilder(
      */
     @Synchronized
     fun reindex(target: RootedPath): PageIndex {
-        val previous = holder.load()
+        val published = holder.load()
+        val previous = published.snapshot
         val page = previous.byPath[target]
             ?: error("reindex($target): page not in the published snapshot — a save-path invariant violation")
         val source = sourcesByRoot[target.root]
@@ -398,7 +423,10 @@ class IndexBuilder(
                 }
             },
         )
-        holder.store(snapshot)
+        // The authority set rides through unchanged: this republishes ONE page of an already-scanned root, so it
+        // says nothing new about which roots a pass has walked - and a search reindex racing it must still be
+        // told what the last full pass knew.
+        holder.store(published.copy(snapshot = snapshot))
         logger.info {
             "reindexed page ${reindexed.id.value} (${target.path.value} in '${target.root}'); ${snapshot.pages.size} page(s) published"
         }
@@ -487,6 +515,13 @@ class IndexBuilder(
      * [scan]s ONE source unless its root is not there - in which case it is MARKED (if the probe is what
      * discovered it), SKIPPED, and its last-good section carried forward by the caller. Null means skipped.
      *
+     * **The scan is classified where it is HANDED OVER, not where it is started.** The entry probe below is a
+     * cheap fail-fast, and it is all it is: what the pass grants delete authority to is the SourceScan that
+     * came back, so that is what gets re-probed. A tree that vanishes DURING the walk does not have to throw -
+     * a directory stream can simply run out of entries - and a short scan that reached `scannedRoots` would
+     * take a live root's checkpoint rows, its search rows and its id_map bindings with it. Probing the
+     * artifact instead of the precondition makes that structural rather than lucky.
+     *
      * The classifier's carrier set is DERIVED from what `scan(source)` actually COLLABORATES with, not from
      * the NIO ladder - because this is a COMPOSITE rooted operation, not a store call:
      *  - `store.scan()` / `store.readClassified()` -> `IOException` (total over the store's NIO surface, once
@@ -495,10 +530,11 @@ class IndexBuilder(
      *  - `history.lastCommits()` -> every git call is `git -C <workTree>`, so a gone work tree exits non-zero
      *    and raises a [HistoryCommandException];
      *  - `idMap.record`/`bind` (a DB in DATA_DIR, a different tree) and the pure parser/URL builder -> nothing
-     *    a vanished root can do. A throw from those is a GENUINE fault and takes the rethrow arm.
+     *    a vanished root can do. A throw from those is a GENUINE fault and takes the live-root arm.
      *
-     * So it is those three and NOT `catch (Exception)`: widening is exactly what would launder a parser bug
-     * into permanent sticky unavailability over stale data, which is the rethrow arm this exists to preserve.
+     * So it is those three and NOT `catch (Exception)`: a widened catch would swallow a programming error into
+     * a skipped root, and the whole point of [skipOnLiveFailure]'s WARN is that a live root's failure stays
+     * visible instead of being laundered into "the disk is gone".
      */
     private fun scanIfAvailable(source: Source): SourceScan? {
         val root = source.root.name
@@ -507,33 +543,61 @@ class IndexBuilder(
             return null
         }
         if (rootLoss.markIfGone(root, source.store)) return skipAndCarry(root, "its backing tree is not traversable")
-        return try {
+        val scan = try {
             scan(source)
         } catch (_: RootUnavailable) {
             // Only ever raised by the mark-then-throw rule, so the root is ALREADY marked and there is nothing
             // left to decide: skip and carry, unconditionally. Re-probing here would be worse than redundant -
-            // a root that vanished and whose path has since REAPPEARED would probe PASS and rethrow, failing
-            // the whole rebuild for a root the sticky rule says stays Unavailable until restart.
+            // a root that vanished and whose path has since REAPPEARED would probe PASS, and the pass would
+            // then trust a scan the store already refused to answer for.
             logger.warn { "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward" }
-            null
+            return null
         } catch (e: IOException) {
-            probeOrRethrow(source, e)
+            return classifyScanFailure(source, e)
         } catch (e: HistoryCommandException) {
-            probeOrRethrow(source, e)
+            return classifyScanFailure(source, e)
         }
+        // The handoff probe: the ONE thing standing between a silently-truncated walk and full delete authority.
+        if (rootLoss.markIfGone(root, source.store)) {
+            return skipAndCarry(root, "it vanished while being scanned, so the tree it handed back is not a corpus")
+        }
+        return scan
     }
 
     /**
      * The rebuild's arm of the shared [RootLossClassifier] rule: a failure whose re-probe FAILS means the root
      * vanished mid-operation - the same hazard class, since a half-scanned section is a partial mass-delete - so
-     * mark, skip and carry; a failure whose re-probe still PASSES is NOT a disappearance (a parser bug, a corrupt
-     * repo, an unknown git flag, a DB fault) and RETHROWS, failing the rebuild exactly as it does today rather
-     * than converting a bug into permanent sticky unavailability. A request-serving surface wants the classifier's
-     * `guarding` (mark and 503); a rebuild wants to keep going over the roots that ARE there, which is this.
+     * mark, skip and carry. A failure whose re-probe still PASSES is NOT a disappearance (a parser bug, a corrupt
+     * repo, an unknown git flag, a `chmod 000` subdirectory) and takes [skipOnLiveFailure]. A request-serving
+     * surface wants the classifier's `guarding` (mark and 503); a rebuild wants to keep going over the roots
+     * that ARE there, which is this.
      */
-    private fun probeOrRethrow(source: Source, failure: Exception): SourceScan? {
-        if (!rootLoss.markIfGone(source.root.name, source.store)) throw failure
-        return skipAndCarry(source.root.name, "it vanished while being scanned (${failure.message})")
+    private fun classifyScanFailure(source: Source, failure: Exception): SourceScan? {
+        val root = source.root.name
+        if (rootLoss.markIfGone(root, source.store)) {
+            return skipAndCarry(root, "it vanished while being scanned (${failure.message})")
+        }
+        return skipOnLiveFailure(source, failure)
+    }
+
+    /**
+     * A LIVE root whose scan failed: fail THAT root's pass, not the whole rebuild. The old rethrow escaped the
+     * per-root loop, so one unreadable subdirectory in one extra root failed every root's pass - and at boot,
+     * where `serve()` calls [rebuild] uncaught, it killed the server outright with a stack trace instead of
+     * serving the roots that were perfectly fine. The root is deliberately NOT marked unavailable: it is THERE,
+     * a permission or a corrupt repo is fixed in place, and sticky-until-restart would prescribe a restart
+     * nobody needs. So it keeps its last-good section (nothing is deleted for it - it is not in `scannedRoots`),
+     * it keeps serving, and the next pass retries it. The WARN carries the DIRECTORY, because that is the datum
+     * an operator acts on.
+     */
+    private fun skipOnLiveFailure(source: Source, failure: Exception): SourceScan? {
+        val where = source.root.localPath?.let { " at $it" }.orEmpty()
+        logger.warn(failure) {
+            "root '${source.root.name}'$where is still there but its scan FAILED (${failure.message}); skipping it and " +
+                "carrying its last-good section forward - NOTHING is deleted for it, the other roots still index, and the " +
+                "next pass retries it"
+        }
+        return null
     }
 
     /** The loss is already published; this is the skip. Marking is what stops the carried section from being SERVED as live. */

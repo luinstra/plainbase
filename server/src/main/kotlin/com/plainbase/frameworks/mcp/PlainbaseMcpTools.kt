@@ -98,14 +98,19 @@ internal val listChangesSchema = ToolSchema(
 
 // propose_change: the property names + the lowercase operation enum MUST match ProposeChangeRequest's @SerialNames
 // verbatim (ProposalDtos.kt) so the shared decode validates identically to REST.
+//
+// `root` is REQUIRED for a create and forbidden-by-irrelevance for an edit, which a flat `required` list cannot
+// say (it would force every edit to name a root it does not have). The DESCRIPTION says it and the shared parser
+// ENFORCES it - a create without a root is `invalid_root`, exactly as on REST. It is never defaulted to `main`:
+// that would let an agent's omission choose which root's disk it writes to and whose globs authorize it.
 internal val proposeChangeSchema = ToolSchema(
     properties = buildJsonObject {
         put("operation", enumProperty(listOf("edit", "create"), "edit an existing page or create a new one."))
         put(
             "root",
             stringProperty(
-                "Which document directory a CREATE lands in (default 'main'). Ignored for an edit - an edit's root " +
-                    "comes from the page itself. Use the names `list` shows on the tree.",
+                "Which document directory a CREATE lands in - REQUIRED for a create, there is no default. Omit it " +
+                    "for an edit: an edit's root comes from the page itself. Use the names `list` shows on the tree.",
             ),
         )
         put("page_id", stringProperty("The page to edit (an edit requires it; a create omits it)."))

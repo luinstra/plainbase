@@ -22,7 +22,7 @@ class ProposeCommandParserTest : FunSpec({
 
     fun req(
         operation: String = "edit",
-        root: String = "main",
+        root: String? = "main",
         pageId: String? = null,
         baseHash: String? = null,
         targetPath: String? = null,
@@ -53,6 +53,20 @@ class ProposeCommandParserTest : FunSpec({
         val invalid = parse.shouldBeInstanceOf<ProposeCommandParse.Invalid>()
         invalid.code shouldBe ErrorCodes.INVALID_ROOT
         invalid.message shouldContain "nosuchroot"
+    }
+
+    test("an OMITTED root on a CREATE is invalid_root - never a silent proposal into main") {
+        // The old default was `main`, so an agent that never learned about roots proposed INTO main - and had its
+        // proposal judged against MAIN's editable bit and MAIN's globs. A create says where, or it is a 400.
+        val invalid = parse(req(operation = "create", root = null, targetPath = "notes/new.md"))
+            .shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+        invalid.code shouldBe ErrorCodes.INVALID_ROOT
+        invalid.message shouldBe "a create requires root"
+    }
+
+    test("an EDIT with NO root still parses - only a create declares one") {
+        parse(req(root = null, pageId = validPageId, baseHash = validBaseHash))
+            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
     }
 
     test("an ILLEGAL-SLUG root is the SAME invalid_root, never a 500 - a wire string can fail two ways, one answer") {
