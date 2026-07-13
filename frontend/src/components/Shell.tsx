@@ -3,7 +3,7 @@ import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router"
 import type { MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import { interceptableHref } from "../lib/links";
-import { rootOfUrl } from "../lib/tree";
+import { rootIsEditable, rootOfUrl } from "../lib/tree";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
 import { ThemeToggle } from "./ThemeToggle";
@@ -65,6 +65,12 @@ export function Shell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const roots = tree.data?.roots;
   const currentRoot = roots ? rootOfUrl(roots, pathname) : null;
+  // WHETHER a new page can land there at all. Off the docs routes the create has no root of its own and the server
+  // defaults it to `main` - so that is the root whose `editable` decides, not "none". A read-only target gets the
+  // same DISABLED twin the tree-pending window gets, for the same reason: an enabled action that can only 403 is a
+  // reader taken into the editor to lose their keystrokes at save. (`plainbase root add` defaults an extra root to
+  // `editable = false`, so this is the ordinary state of a CLI-added root, not a corner.)
+  const canCreate = rootIsEditable(roots, currentRoot ?? "main");
 
   const onClick = (event: MouseEvent) => {
     const href = interceptableHref(event.nativeEvent);
@@ -96,7 +102,7 @@ export function Shell() {
               <span className="max-sm:hidden">Review</span>
             </Link>
           )}
-          {roots ? (
+          {canCreate ? (
             <Link
               to="/new"
               search={currentRoot ? { root: currentRoot } : {}}
@@ -107,7 +113,14 @@ export function Shell() {
               <NewPageLabel />
             </Link>
           ) : (
-            <button type="button" disabled className={`${NEW_PAGE_CLASS} cursor-not-allowed opacity-60`} data-pb-new-page aria-label="New page">
+            <button
+              type="button"
+              disabled
+              className={`${NEW_PAGE_CLASS} cursor-not-allowed opacity-60`}
+              data-pb-new-page
+              aria-label="New page"
+              title={roots ? "This root is read-only" : undefined}
+            >
               <NewPageLabel />
             </button>
           )}

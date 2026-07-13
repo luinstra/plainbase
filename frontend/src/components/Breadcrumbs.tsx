@@ -28,11 +28,20 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   // With 2+ roots the crumb names THIS page's root and links to that root's own url - taken from the tree
   // entry (server-issued, consumed verbatim like every other crumb), NEVER string-built from the name. A
   // hardcoded `/docs` crumb would name the wrong tree AND, since `/docs` resolves to main, walk the reader
-  // out of the root they were reading. Inert until the tree loads (no url to link to yet).
-  const multiRoot = (data?.roots.length ?? 1) > 1;
-  const rootCrumb = multiRoot
-    ? { key: `root:${root}`, label: root, url: entryTree?.url ?? null }
-    : { key: "/docs", label: "docs", url: "/docs" };
+  // out of the root they were reading.
+  //
+  // **Until the tree RESOLVES, the COUNT is unknown - so the crumb is inert rather than wrong.** The root's
+  // NAME is in hand (the page response carries it), but the single-root `docs` -> `/docs` form is only correct
+  // if there IS one root, and on a multi-root install `/docs` resolves to MAIN: a reader on an extra root's page
+  // who clicks that crumb in the pending window is walked out of the tree they are reading and into a different
+  // one. `Shell` makes the same call for "New" in the same window (disabled beats wrong); here the crumb still
+  // renders - the trail must not reflow - it simply does not link anywhere.
+  const roots = data?.roots;
+  const rootCrumb = !roots
+    ? { key: "/docs", label: "docs", url: null }
+    : roots.length > 1
+      ? { key: `root:${root}`, label: root, url: entryTree?.url ?? null }
+      : { key: "/docs", label: "docs", url: "/docs" };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
     const folder = folders.get(folderPath);

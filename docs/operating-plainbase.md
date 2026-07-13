@@ -9,6 +9,45 @@ For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
 reference stack under `deploy/proxy/`.
 
+## Upgrading from v0.1.0: page URLs move, and one corpus shape refuses to boot
+
+**Read this before upgrading a running install, even if you never intend to configure a second root.**
+Multi-root ([ADR-0011](decisions/0011-multi-root-document-directories.md)) changed the URL grammar for
+every install: your `CONTENT_DIR` is now a root, its name is `main`, and page URLs carry it.
+
+```
+/docs/welcome            →  /docs/main/welcome            301 (permanent), query preserved
+/docs/guides/deploy      →  /docs/main/guides/deploy      301
+/assets/img/logo.png     →  /assets/main/img/logo.png     301
+```
+
+**1. Every circulating `/docs/...` link becomes a redirect, not a break.** The old shape keeps
+working: any first segment under `/docs/` that does not name a configured root is treated as a legacy
+main-relative path and **301**s to its canonical `/docs/main/...` form, preserving the query string.
+Bookmarks, wiki links, chat links and search-engine results all still land on the page. What changes
+is the URL your users end up on, what they copy out of the address bar, and what any link-checker or
+analytics you run now reports as moved. A legacy link that *also* hits a `redirect_from` alias chains
+two hops (legacy 301, then the alias 301) - accepted, and still lands.
+
+**The agent/API surfaces are NOT redirected**, deliberately: `GET /api/v1/pages/by-path/{path}` and
+`GET /browse/{path}` resolve a legacy tail under `main` directly, so no agent client pays a redirect
+hop. Their responses' `url` fields carry the new canonical form. `/p/{id}` permalinks are unchanged.
+
+**2. A corpus with a top-level `main` entry will REFUSE to boot.** `main` is now a reserved URL
+segment, so a `content/main/` directory (or a top-level `main.md`, or a `slug: main`) makes an old
+`/docs/main/...` link indistinguishable from a root-qualified URL. `serve` exits 1 rather than
+silently re-resolve those links to the wrong page. **This is the one upgrade that can turn a working
+server into a failed start, so check for it first:**
+
+```
+ls -d "$CONTENT_DIR"/main "$CONTENT_DIR"/main.md 2>/dev/null   # anything printed here refuses to boot
+grep -rl '^slug: *main$' "$CONTENT_DIR" --include='*.md'       # and so does any of these
+```
+
+The remedy is to rename the offending entry; there is no config key to disable the reservation. The
+full rule (every shape that trips it, and the deep-link consequence of renaming) is in
+[Configuration: `main` is a reserved URL segment](configuration.md#main-is-a-reserved-url-segment---in-every-install).
+
 ## The content tree is plain Markdown on disk
 
 Plainbase's canonical content tree is **plain Markdown on disk** - the tree *is* the product. Because
@@ -120,7 +159,24 @@ copy, so the on-disk file only reappears on restart. On a *running* server, use
 
 ## Multiple roots: what happens when one is not there
 
-A root that is missing at boot, or whose directory vanishes while the server runs, is marked
+**First, the exception that is not in the table below: a `main` that is not there AT BOOT does not
+degrade - the server REFUSES TO START.**
+
+```
+serve: roots.main.path does not exist or is not a directory: /srv/docs
+serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
+```
+
+Main is the root the URL grammar, the SPA shell and every legacy redirect are anchored on, so `serve`
+fails closed rather than come up serving an empty corpus. The same refusal covers a main it cannot
+read and traverse (`... is not readable/searchable: /srv/docs`). **So unmounting the volume that
+holds `main` does not buy you a degraded server with 503s - it buys you no server.** Restore the path
+or the permissions, then start. (Main vanishing while the server is already *running* is different:
+that is the sticky 503 behavior below, and the *next* boot is what refuses.)
+
+Everything else in this section is about the **extra** roots.
+
+An extra root that is missing at boot, or whose directory vanishes while the server runs, is marked
 **unavailable**. Two things matter operationally.
 
 **1. It answers 503, never 404 - and that distinction is for your agents.**
@@ -202,7 +258,24 @@ runtime API to talk to a live process, and the server does not hot-reload topolo
 `root remove <name>` does not touch the root's content or its database rows. Its pages keep their
 `id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
 **detached**, because the name no longer names a configured root. `root add` of the same name later
-**revives** them - a detached row binds again the moment its root reappears in the topology.
+binds them again - **but "again" is not "unchanged", and remove/re-add is not a no-op for
+permalinks.** Two things can move an id across the gap:
+
+- **A detached row is not an owner.** While the root is out of the topology, a live page in another
+  root carrying the same frontmatter `id:` simply **takes that id**, and the bind sweeps the stale
+  row. Nothing contests it, because the removed root is not there to contest. Re-adding the name
+  cannot take the id back: the page comes home as a duplicate-id loser and is minted a **fresh id**,
+  so its old `/p/{id}` permalink now answers with the other root's page.
+- **A re-added root ranks LAST.** `root add` appends to `roots.conf`, so a root that wins a
+  cross-root duplicate-`id:` contest today can lose the same contest after a remove/re-add - rank
+  decides, and its rank changed (see
+  [Configuration: the order of the block](configuration.md#the-order-of-the-block-is-a-contract-it-decides-who-keeps-a-permalink)).
+  `root remove` prints this consequence when you run it.
+
+A root with no ids shared with any other root is unaffected by either: its pages come back with the
+same ids and the same permalinks. **If your roots do share `id:` values, treat remove/re-add as a
+permalink-affecting operation** - and prefer fixing the topology in one edit over a remove now and an
+add later.
 
 **If the removed root held every page binding in `DATA_DIR`, the next boot refuses to serve.** This is
 the 100%-detached guard (ADR-0011 D15): a nonempty `id_map` whose roots are entirely disjoint from the
@@ -435,10 +508,13 @@ bucket on the next boot). The authoritative content is the source of truth, so m
   tokens, or proposals matter.
 - on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
   reconstructable from the content trees: they're the only record of *which* directories are roots,
-  under what names, with what `editable`/`history` settings and what rank order (rank decides which
-  root keeps a permalink when two roots share a frontmatter id - see
-  [ADR-0011 D-C5-4](decisions/0011-multi-root-document-directories.md)). Lose them without a backup and
-  a restore has the pages back but not the topology that made them a multi-root install.
+  under what names, with what `editable`/`history` settings, and **in what ORDER** - and the order is
+  not cosmetic. A root's rank is its line in the `roots {}` block, and rank decides which root keeps
+  the `/p/{id}` permalink when two roots share a frontmatter `id:`, so a restore that guesses the
+  order back wrong reassigns those permalinks silently (see
+  [Configuration: the order of the block is a contract](configuration.md#the-order-of-the-block-is-a-contract-it-decides-who-keeps-a-permalink)).
+  Lose these files without a backup and a restore has the pages back but not the topology that made
+  them a multi-root install.
 
 Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
 `search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and

@@ -63,6 +63,7 @@ const treeResponse: TreeResponse = {
     {
       root: "main",
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",

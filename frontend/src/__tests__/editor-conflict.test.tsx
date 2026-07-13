@@ -7,7 +7,7 @@ import { pageByPathQuery, pageHtmlQuery, treeQuery } from "../api/queries";
 import type { PageHtmlResponse, PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 conflict UX (D-5 acceptance #2, #3). Core principle: a 409 NEVER discards the user's buffer.

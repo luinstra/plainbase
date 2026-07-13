@@ -57,7 +57,10 @@ class TreeJsonCache(
                     // An unavailable root emits the bare synthetic root folder - never its carried-forward listing,
                     // which would be exactly the stale serve the availability rule exists to prevent.
                     val tree = TreeBuilder.build(if (serving) snapshot else PageIndex.EMPTY, root.name)
-                    RootTreeDto(root = root.name.value, available = serving, tree = tree.toDto())
+                    // `editable` is pure CONFIG (the registry's, not the availability holder's): a root that is down
+                    // is still a read-only or a writable root, and conflating the two would tell the SPA that every
+                    // unmounted disk had become editable.
+                    RootTreeDto(root = root.name.value, available = serving, editable = root.editable, tree = tree.toDto())
                 },
             ),
         )

@@ -148,6 +148,12 @@ data class PlainbaseConfig(
      * DIFFERENT PROSE for one unchanged fault, so a diff over messages would call it NEW and refuse an add
      * that introduced nothing. Both arms emit `ROOT_VS_DATA_DIR` on `{main}`, so the KEY is stable across the
      * arm switch (C5 D-C5-17.3, misclassification 2).
+     *
+     * **Different prose is safe; a different CONDITION is not.** Both arms probe main through the ONE
+     * [mainFault] predicate for the same reason: an arm that raised `MAIN_UNUSABLE` on a condition the other
+     * arm cannot even test would put a fault the operator ALREADY HAS on the candidate side of the CLI's diff
+     * alone, and `plainbase root` would refuse an add that introduced nothing - the failure mode the key diff
+     * was built to make impossible, reintroduced one predicate lower down.
      */
     private fun topologyRefusals(): List<BootRefusal> = when {
         storage.backend == StorageBackend.OBJECT -> objectKeyRefusals()
@@ -173,18 +179,18 @@ data class PlainbaseConfig(
 
     /**
      * The two back-compat guards a SYNTHESIZED (legacy) config gets, and nothing else (ADR-0011 D9): the
-     * byte-identical mandate lives here. The DATA_DIR guard is keyed `ROOT_VS_DATA_DIR` on `{main}` - the
-     * SAME key the explicit matrix produces for the same fault, deliberately.
+     * byte-identical mandate lives here. Both are keyed on `{main}` with the SAME kind the explicit matrix
+     * produces for the same fault, deliberately - the arms word a fault differently, they never key it
+     * differently ([mainFault] is the shared predicate that makes the MAIN_UNUSABLE half of that true).
      */
     private fun legacyRefusals(): List<BootRefusal> = buildList {
-        if (!Files.isDirectory(contentDir)) {
-            add(
-                BootRefusal(
-                    BootRefusal.Kind.MAIN_UNUSABLE,
-                    setOf(RootName.MAIN),
-                    "CONTENT_DIR does not exist or is not a directory: $contentDir",
-                ),
-            )
+        mainFault(contentDir)?.let { fault ->
+            val message = when (fault) {
+                MainFault.NOT_A_DIRECTORY -> "CONTENT_DIR does not exist or is not a directory: $contentDir"
+                MainFault.NOT_TRAVERSABLE ->
+                    "CONTENT_DIR is not readable/searchable: $contentDir (fix its permissions so the server can serve it)"
+            }
+            add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
         }
         if (dataDir.toAbsolutePath().normalize() == contentDir.toAbsolutePath().normalize()) {
             add(
@@ -223,18 +229,14 @@ data class PlainbaseConfig(
     private fun explicitRootRefusals(): List<BootRefusal> = buildList {
         val mainPath = requireNotNull(roots.main.localPath) // parse rejects non-local backends in an explicit block
         fun mainUnusable(message: String) = add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
-        // A SHORT-CIRCUIT chain, exactly like the `require` chain it replaces: one fault, one message. The
-        // readable/searchable probe is not a second opinion on a missing directory - it is the check that a
-        // main which EXISTS but lacks the read bit (execute-only) or the execute bit (read-only, and
-        // directories need x to be traversed) fails at the controlled `serve:` refusal rather than in the
-        // first scan.
-        val mainFault = when {
-            !Files.isDirectory(mainPath) -> "roots.main.path does not exist or is not a directory: $mainPath"
-            !(Files.isReadable(mainPath) && Files.isExecutable(mainPath)) ->
-                "roots.main.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)"
-            else -> null
+        val fault = mainFault(mainPath)
+        when (fault) {
+            MainFault.NOT_A_DIRECTORY -> mainUnusable("roots.main.path does not exist or is not a directory: $mainPath")
+            MainFault.NOT_TRAVERSABLE -> mainUnusable(
+                "roots.main.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)",
+            )
+            null -> Unit
         }
-        mainFault?.let { mainUnusable(it) }
         val canonical = roots.list.map { root ->
             val declared = requireNotNull(root.localPath)
             val comparable = if (root.name == RootName.MAIN) {
@@ -243,7 +245,7 @@ data class PlainbaseConfig(
                 } catch (e: IOException) {
                     // Only worth reporting when main OTHERWISE looked fine (a race, an exotic filesystem): a
                     // main that is simply not there is already named above, and saying it twice says nothing more.
-                    if (mainFault == null) mainUnusable("roots.main.path cannot be resolved: $declared (${e.message})")
+                    if (fault == null) mainUnusable("roots.main.path cannot be resolved: $declared (${e.message})")
                     bestEffortCanonical(declared)
                 }
             } else {
@@ -930,6 +932,31 @@ data class PlainbaseConfig(
                 ?: throw IllegalArgumentException(
                     "Unknown $key '$token' - legal values: ${HistoryMode.entries.joinToString(", ") { it.name.lowercase() }}",
                 )
+        }
+
+        /**
+         * Main's fatal filesystem fault, or null when main is usable. **ONE predicate for BOTH topology arms**,
+         * and that is the whole reason it exists as a value rather than as two inline `when`s.
+         *
+         * The arms word this fault differently on purpose (`CONTENT_DIR ...` vs `roots.main.path ...`), and
+         * `BootRefusal` is built to absorb exactly that - diff the KEY, print the MESSAGE. But a key is only
+         * stable across the arm switch if both arms RAISE the fault on the same condition. They did not: the
+         * legacy arm probed `isDirectory` alone, so a readable-but-not-searchable main was silently fine there
+         * and `MAIN_UNUSABLE` in the explicit matrix. `plainbase root add` then read a fault the operator
+         * already had as one IT had introduced, and refused an add it should permit - the exact hostage-taking
+         * the structured diff exists to prevent.
+         *
+         * The order is the same short-circuit both arms want: one fault, one message. The traversability probe
+         * is not a second opinion on a missing directory - it is the check that a main which EXISTS but lacks
+         * the read bit (execute-only) or the execute bit (read-only, and a directory needs `x` to be traversed)
+         * fails at the controlled `serve:` refusal rather than in the first scan.
+         */
+        private enum class MainFault { NOT_A_DIRECTORY, NOT_TRAVERSABLE }
+
+        private fun mainFault(path: Path): MainFault? = when {
+            !Files.isDirectory(path) -> MainFault.NOT_A_DIRECTORY
+            !(Files.isReadable(path) && Files.isExecutable(path)) -> MainFault.NOT_TRAVERSABLE
+            else -> null
         }
 
         /**

@@ -71,6 +71,27 @@ class RootsValidationTest : FunSpec({
         }
     }
 
+    test("synthesized: a CONTENT_DIR that exists but cannot be traversed is fatal, like the explicit main it mirrors") {
+        // The one guard the synthesized arm did NOT inherit, and the omission was not conservative: it made the two
+        // arms raise MAIN_UNUSABLE on DIFFERENT conditions, so `plainbase root add` on a legacy install read this
+        // permission fault (which its baseline could not see, and its explicit candidate could) as one IT had caused,
+        // and refused. Same fault, same key, both arms - the prose is all that differs.
+        withBase { base ->
+            if (!base.fileSystem.supportedFileAttributeViews().contains("posix")) return@withBase
+            val content = Files.createDirectories(base.resolve("content"))
+            Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("r--r--r--"))
+            try {
+                if (Files.isExecutable(content)) return@withBase // running as root: the permission drop is inert
+                val failure = shouldThrow<IllegalArgumentException> {
+                    legacyConfig(dataDir = base.resolve("data"), contentDir = content).requireContentDir()
+                }
+                failure.message shouldContain "CONTENT_DIR is not readable/searchable"
+            } finally {
+                Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("rwxr-xr-x"))
+            }
+        }
+    }
+
     test("synthesized: DATA_DIR == CONTENT_DIR keeps today's exact message") {
         withBase { base ->
             val failure = shouldThrow<IllegalArgumentException> {

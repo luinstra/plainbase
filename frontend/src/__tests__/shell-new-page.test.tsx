@@ -18,17 +18,22 @@ const HANDBOOK_PAGE = "/docs/handbook/guides/onboarding";
 
 const tree: TreeResponse = {
   roots: [
-    { root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
-    { root: "handbook", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
+    { root: "handbook", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
   ],
 };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
 
+/** The same topology with `handbook` READ-ONLY — the default `plainbase root add` produces. */
+const readOnlyHandbook: TreeResponse = {
+  roots: [tree.roots[0], { ...tree.roots[1], editable: false }],
+};
+
 /** [primeTree] false leaves the tree query in flight forever — the window under test. */
-function renderShell(primeTree: boolean) {
+function renderShell(primeTree: boolean, seeded: TreeResponse = tree) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(sessionQuery.queryKey, AUTHED);
-  if (primeTree) queryClient.setQueryData(treeQuery.queryKey, tree);
+  if (primeTree) queryClient.setQueryData(treeQuery.queryKey, seeded);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -70,5 +75,20 @@ describe("the chrome New action", () => {
     expect(action.hasAttribute("disabled")).toBe(true);
     // The failure this guards: an anchor to a rootless /new, from a page that lives in `handbook`.
     expect(action.getAttribute("href")).toBeNull();
+  });
+
+  it("is DISABLED on a READ-ONLY root — the create could only ever answer 403 root_not_editable", async () => {
+    // `plainbase root add` defaults an extra root to `editable = false`, so this is the DEFAULT state of a
+    // CLI-added root, not an exotic one. An enabled action here walks the reader into the editor, takes the
+    // title they type, and fails at save. Same call as the pending window: disabled beats wrong.
+    const view = renderShell(true, readOnlyHandbook);
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action.hasAttribute("disabled")).toBe(true);
+    expect(action.getAttribute("title")).toBe("This root is read-only");
   });
 });

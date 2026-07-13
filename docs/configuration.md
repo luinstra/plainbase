@@ -69,6 +69,39 @@ migration, platform support), [operating-plainbase.md](operating-plainbase.md#ba
 object-mode backup guidance, and [ADR-0010](decisions/0010-object-storage-backend.md) for the design
 record.
 
+## `main` is a reserved URL segment - in EVERY install
+
+**This applies whether or not you configure roots at all.** Page URLs are `/docs/{root}/{path}`, and
+`main` is the name of the root your `CONTENT_DIR` becomes. So a top-level URL segment `main` inside
+that tree is ambiguous with the root segment itself, and **`serve` refuses to start** while one
+exists:
+
+```
+serve: REFUSING TO SERVE: the main root contains top-level URL segment 'main' - since multi-root
+(ADR-0011 D1/D3) 'main' is the RESERVED root segment, so an old /docs/main/... deep link is
+indistinguishable from a root-qualified URL and would silently re-resolve to the wrong page.
+Colliding entries: main/
+```
+
+It is the **top-level segment** that is reserved, not the word: any of these trips it, and only in
+the main root (an extra root's `main/` folder is harmless - its URLs are `/docs/{extra}/main/...`).
+
+- a top-level directory `main/` (or `Main/`, or anything else that slugifies to `main`),
+- a top-level page file `main.md` (its URL is `/docs/main/main`),
+- a top-level page whose frontmatter says `slug: main`,
+- a top-level folder whose `_folder.yaml` says `slug: main`,
+- a top-level asset path under `main/` (assets mirror the URL grammar).
+
+Nested ones are fine: `guides/main/` is `/docs/main/guides/main/...`, unambiguous.
+
+**The remedy is to rename the offending entry** - the directory, or the `slug:` that mints the
+segment - so no top-level URL segment is `main`. There is no config key to disable this: the
+reservation is deterministic, and a fresh corpus is refused exactly like an upgraded one.
+**Renaming permanently forfeits any circulating `/docs/main/...` deep links into that entry** (and
+their recorded aliases): after the rename those old links answer not-found instead of redirecting.
+`plainbase root add` applies a stricter, `--force`-able version of the same rule to the names you
+give extra roots (see [the CLI](#the-cli-and-the-two-files) below).
+
 ## Multiple document roots - the `roots {}` block
 
 A top-level `roots {}` block in `plainbase.conf` declares the server's document directories
@@ -93,6 +126,55 @@ Per-root keys:
 | `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
 | `history` | `off` \| `auto` \| `native` git history mode | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
 
+### The ORDER of the block is a contract: it decides who keeps a permalink
+
+**A root's rank is its line number in this block, and the lowest rank wins.** Two roots may hold two
+different pages carrying the same frontmatter `id:` - a copied file, a forked runbook, a page moved
+by hand between trees. Exactly one of them can answer that id's `/p/{id}` permalink, and the winner
+is the one whose root is declared **first**. The other page is a duplicate-id loser: it is minted a
+fresh id, and its old permalink now points at the winner's page.
+
+So **reordering the block reassigns permalinks, even though you changed no value.** Alphabetizing
+your roots, or tidying `main` up to the top, is enough:
+
+```hocon
+# BEFORE - `runbooks` is rank 0, so ITS page answers /p/{a-shared-id}
+roots {
+  runbooks { path = "/srv/runbooks" }
+  main     { path = "/srv/docs" }
+  archive  { path = "/srv/archive" }
+}
+
+# AFTER - the same three roots, alphabetized with main first. No value changed.
+# `main` is rank 0 now, so MAIN's page answers /p/{a-shared-id} and the runbooks
+# page has been minted a fresh id: the circulating permalink now opens a different page.
+roots {
+  main     { path = "/srv/docs" }
+  archive  { path = "/srv/archive" }
+  runbooks { path = "/srv/runbooks" }
+}
+```
+
+**Nothing refuses and nothing warns.** Both orders are valid topologies, and Plainbase cannot tell a
+deliberate re-rank from a tidy-up; each contest is recorded as a `cross_root_duplicate_id` issue
+(`plainbase adopt --write-ids --dry-run` previews them without writing a byte, which is the cheapest
+way to learn whether you have any shared ids at all *before* you touch the order), but nothing
+announces that a reorder just moved a permalink. **Treat the line order of `roots {}` the way you
+treat the ids themselves.**
+
+Two consequences worth stating outright:
+
+- **`main` is not automatically rank 0.** It ranks where you declared it, so `roots { zeta {…} main
+  {…} }` really does let `zeta` outrank `main` - that is the point of honoring the order you wrote.
+- **`roots.conf` (the CLI's file) always ranks after `plainbase.conf`'s block**, and `plainbase root
+  add` **appends**, so a newly added root ranks last and can never take an id away from a root that
+  was already serving it. `root remove` + `root add` of the same name (the rename path) therefore
+  re-ranks it to LAST - the CLI prints that consequence when you remove.
+
+Rank is also why `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` are worth backing up: they are
+the only record of the order (see
+[operating-plainbase.md](operating-plainbase.md#losing-data_dir-what-recovers-and-what-doesnt)).
+
 ### `history` on an extra root: `native` or `off`, never `auto`
 
 `auto` on an EXTRA root is a **boot error**. Auto detects a repository and may `git init` one - which
@@ -114,8 +196,12 @@ Validation at boot (each failure is an actionable `serve:` refusal naming the of
 
 - a root named `main` is **required** (it is the reserved primary);
 - names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars);
-- `main`'s path must exist and be readable; a missing/unreadable EXTRA path is a startup **warning**,
-  never a boot error - the root serves 503 until it is restored AND the server is restarted;
+- `main`'s path must exist and be a **readable and searchable** (`r-x`) directory - a missing or
+  unreadable `main` is a boot **refusal**, never a degraded 503 root (see
+  [When a root is not there](#when-a-root-is-not-there) below). The identical rule applies to
+  `CONTENT_DIR` when there is no `roots {}` block at all: it is the same root, under the same name;
+- a missing/unreadable EXTRA path is a startup **warning**, never a boot error - the root serves 503
+  until it is restored AND the server is restarted;
 - `history = auto` on an extra root is refused (see above);
 - no two roots may resolve to the same directory (symlinks are resolved for this check), no root may
   nest inside another, and no root may equal or live inside `DATA_DIR`;
@@ -243,7 +329,24 @@ Rules:
 
 ## When a root is not there
 
-A root that is missing at boot, or whose directory vanishes while the server runs, is marked
+**`main` is the exception, and it is not a small one: a `main` that is not there at boot REFUSES to
+start.** There is no degraded mode for it - main is the root the whole URL grammar, the SPA shell and
+every legacy redirect are anchored on, so `serve` fails closed instead of coming up with an empty
+corpus:
+
+```
+serve: roots.main.path does not exist or is not a directory: /srv/docs
+serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
+```
+
+The same refusal covers a `main` that exists but the server cannot **read and traverse** (`r-x`):
+`... is not readable/searchable: /srv/docs`. Restore the path (remount the volume, fix the
+permissions) and start again. If main vanishes while the server is already *running*, it behaves like
+any other root below - 503, sticky until restart - but the *next* boot will refuse until it is back.
+
+Everything below is about the **extra** roots.
+
+An extra root that is missing at boot, or whose directory vanishes while the server runs, is marked
 **unavailable** and:
 
 - every read and write of it answers **503 `root_unavailable`** with a `Retry-After`, **never a 404**.

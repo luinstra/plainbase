@@ -5,7 +5,17 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
-import { folderByUrl, folderForLanding, folderTitle, landingPage, mainEntry, pageHref, rootEntryOfUrl, type FolderEntry } from "../lib/tree";
+import {
+  folderByUrl,
+  folderForLanding,
+  folderTitle,
+  landingPage,
+  mainEntry,
+  pageHref,
+  rootEntryOfUrl,
+  rootIsEditable,
+  type FolderEntry,
+} from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
@@ -306,6 +316,11 @@ function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) 
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
   const page = seeded ?? fetched.data;
+  // The page names its own root; the TREE is what says whether that root takes writes. Read-only (and
+  // not-yet-known) roots get no Edit affordance - the same call Shell makes for "New", and for the same
+  // reason: the alternative is an editor session that can only end in a 403 at save.
+  const tree = useQuery(treeQuery);
+  const editable = rootIsEditable(tree.data?.roots, html.data?.root ?? null);
 
   const title = html.data?.title;
   useEffect(() => {
@@ -324,7 +339,12 @@ function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) 
         <div className="mx-auto max-w-[72ch]">
           <Breadcrumbs root={html.data.root} path={html.data.path} title={html.data.title} />
           <Prose html={html.data.html} />
-          <DocFooter frontmatter={frontmatter} url={page?.url ?? null} hasHistory={(page?.commit ?? null) !== null} />
+          <DocFooter
+            frontmatter={frontmatter}
+            url={page?.url ?? null}
+            editable={editable}
+            hasHistory={(page?.commit ?? null) !== null}
+          />
         </div>
       </div>
       <aside
@@ -458,15 +478,31 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
  * (no canonical url) gets no Edit/History link (it has no `/docs` address). The History link gates on
  * `hasHistory` (W7/MF-1: `PageResponse.commit != null` — git-on with ≥1 commit — a ZERO-extra-fetch signal;
  * NoOp git always yields null so git-off never false-positives, and a zero-commit page correctly shows none).
+ *
+ * [editable] is the root's topology bit (`RootTree.editable`), not a permission: a READ-ONLY root's pages
+ * offer no Edit link at all, because every write into one answers 403 `root_not_editable` in every auth mode.
+ * History is NOT gated on it - a read-only root's history is perfectly readable.
  */
-function DocFooter({ frontmatter, url, hasHistory }: { frontmatter?: Record<string, unknown>; url: string | null; hasHistory: boolean }) {
+function DocFooter({
+  frontmatter,
+  url,
+  editable,
+  hasHistory,
+}: {
+  frontmatter?: Record<string, unknown>;
+  url: string | null;
+  editable: boolean;
+  hasHistory: boolean;
+}) {
   const updated = asString(frontmatter?.updated);
   const owner = asString(frontmatter?.owner);
   const splat = url?.startsWith("/docs/") ? url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/") : null;
-  if (!splat && !updated) return null;
+  // A read-only page with no `updated` and no history has nothing to put in the footer - render no footer at
+  // all rather than an empty frame (a `splat` alone no longer implies an Edit link).
+  if (!(splat && (editable || hasHistory)) && !updated) return null;
   return (
     <div className="pb-docfoot" data-pb-docfoot>
-      {splat && (
+      {splat && editable && (
         <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
           Edit this page
         </Link>

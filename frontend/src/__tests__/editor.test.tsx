@@ -7,7 +7,7 @@ import { pageByPathQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 editor (D-1/D-4/D-5 acceptance #1, #1b, #5). The `?mode=edit` dispatch reaches `<EditorPage>`,

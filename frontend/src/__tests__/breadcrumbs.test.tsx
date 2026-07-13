@@ -17,6 +17,7 @@ const tree: TreeResponse = {
     {
       root: "main",
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",
@@ -46,6 +47,7 @@ const tree: TreeResponse = {
     {
       root: "extra",
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",
@@ -79,6 +81,17 @@ function renderCrumbs(path: string, title: string, root = "main") {
   return render(
     <QueryClientProvider client={queryClient}>
       <Breadcrumbs root={root} path={path} title={title} />
+    </QueryClientProvider>,
+  );
+}
+
+/** The SINGLE-root install - the shape every legacy `CONTENT_DIR` deployment actually runs. */
+function renderSoloCrumbs(path: string, title: string) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient.setQueryData(treeQuery.queryKey, { roots: [tree.roots[0]] } satisfies TreeResponse);
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <Breadcrumbs root="main" path={path} title={title} />
     </QueryClientProvider>,
   );
 }
@@ -134,31 +147,42 @@ describe("Breadcrumbs", () => {
     // "main" is an internal name leaking into the UI where a meaningful word used to be. Naming it
     // unconditionally would be a UX regression for essentially every current user, shipped as a side
     // effect of a multi-root refactor.
-    const soloTree: TreeResponse = { roots: [tree.roots[0]] };
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(treeQuery.queryKey, soloTree);
-    const { container } = render(
-      <QueryClientProvider client={queryClient}>
-        <Breadcrumbs root="main" path="runbooks/deploy.md" title="Deploy" />
-      </QueryClientProvider>,
-    );
+    const { container } = renderSoloCrumbs("runbooks/deploy.md", "Deploy");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks", "Deploy"]);
     expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("docs");
     expect(container.querySelector('a[href="/docs/main"]')).toBeNull();
   });
 
-  it("falls back to the `docs` crumb while the tree is still loading - never a flash of the root's name", () => {
-    // The root COUNT is not known until the tree arrives, so the loading state renders what a single-root
-    // install renders, which is also exactly what shipped before multi-root. `/docs` is always a valid
-    // link (it legacy-redirects to main), so this is a safe default rather than a guess.
+  it("SINGLE root × index landing: the trail collapses to `docs / Runbooks`", () => {
+    // The combination every existing single-root install actually runs, and it was pinned by NOTHING: the
+    // collapse test above runs against the MULTI-root fixture (so it asserts `main / Runbooks`), and the
+    // single-root test covers only a normal page. Either half can regress without the other noticing.
+    const { container } = renderSoloCrumbs("runbooks/index.md", "Runbooks");
+    const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks"]);
+    expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("docs");
+    // No ancestor crumb links to the page being viewed.
+    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
+    expect(container.querySelector('[aria-current="page"]')?.textContent).toBe("Runbooks");
+  });
+
+  it("while the tree is still loading the `docs` crumb is INERT - a link there could walk the reader into main", () => {
+    // The root COUNT is unknown until the tree arrives, and the crumb's two forms disagree about where it
+    // POINTS: on a single-root install `/docs` is this page's own tree, and on a multi-root one `/docs`
+    // resolves to MAIN. So a linked `docs` crumb rendered in this window takes a reader who is on an EXTRA
+    // root's page and, on click, walks them out of the tree they are reading and into a different one.
+    // The label still renders (the trail must not reflow); it simply does not link anywhere until we know.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { container } = render(
       <QueryClientProvider client={queryClient}>
         <Breadcrumbs root="extra" path="runbooks/deploy.md" title="Extra Deploy" />
       </QueryClientProvider>,
     );
-    expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("docs");
-    expect(container.textContent).not.toContain("extra");
+    const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "runbooks", "Extra Deploy"]);
+    expect(container.querySelector('a[href="/docs"]')).toBeNull();
+    // No crumb links anywhere in this window: the ancestor has no server-issued url yet either.
+    expect(container.querySelectorAll("a")).toHaveLength(0);
   });
 });

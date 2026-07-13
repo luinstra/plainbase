@@ -260,18 +260,25 @@ data class HeadingDto(val id: String, val level: Int, val text: String)
 data class TreeResponse(val roots: List<RootTreeDto>)
 
 /**
- * One root's tree entry: the validated root-name slug, whether it is currently SERVING, and its synthetic root
- * folder node. [tree] is always a folder node, but it is DECLARED as the sealed interface so the polymorphic
- * serializer emits the `type` discriminator on the root exactly like on every child (the pre-C3 TreeResponse
- * rule, unchanged).
+ * One root's tree entry: the validated root-name slug, whether it is currently SERVING, whether it accepts
+ * WRITES, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
+ * interface so the polymorphic serializer emits the `type` discriminator on the root exactly like on every child
+ * (the pre-C3 TreeResponse rule, unchanged).
  *
  * [available] `false` means the root is configured but not serving: its subtree is EMPTY here (never its stale
  * carried-forward listing) and every read of it answers 503. It is listed rather than omitted so a client can tell
  * "this root is down" from "this root does not exist" - and so the client's known-root set matches the server's,
  * which is what lets it route `/docs/{root}/...` without guessing.
+ *
+ * [editable] is the root's CONFIGURED write disposition (ADR-0011 `roots.<name>.editable`), and it is on the wire
+ * for the same reason [available] is: without it the SPA cannot tell a writable root from a read-only one, so it
+ * offers Edit/New on every page of a root whose every write answers 403 `root_not_editable` - and `plainbase root
+ * add` defaults an extra root to `editable = false`, which makes that the DEFAULT experience of a CLI-added root,
+ * not an exotic one. Config, not authorization: it says what the TOPOLOGY allows, never what this principal may do
+ * (the 403 remains the authority, and the client's buffer-preserving 403 path remains the backstop).
  */
 @Serializable
-data class RootTreeDto(val root: String, val available: Boolean, val tree: TreeNodeDto)
+data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable

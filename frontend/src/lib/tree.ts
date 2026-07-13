@@ -30,9 +30,14 @@ function* walk(nodes: TreeNode[]): Generator<TreeNode> {
   }
 }
 
+/** The named entry, or null when the roots are not loaded / the name is not one of them. */
+export function entryFor(roots: RootTree[], root: string): RootTree | null {
+  return roots.find((entry) => entry.root === root) ?? null;
+}
+
 /** The named entry's tree, if served. `"main"` is the one legal client-side root literal (D1). */
 export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
-  return roots.find((entry) => entry.root === root)?.tree ?? null;
+  return entryFor(roots, root)?.tree ?? null;
 }
 
 /**
@@ -41,7 +46,23 @@ export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
  * CONTENT_DIR), so the home view needs its `available` for exactly the reason [FolderEntry] does.
  */
 export function mainEntry(roots: RootTree[]): RootTree | null {
-  return roots.find((entry) => entry.root === "main") ?? null;
+  return entryFor(roots, "main");
+}
+
+/**
+ * Whether [root] accepts page writes at all (`RootTree.editable`) - the gate on every write AFFORDANCE
+ * (Shell's "New", PageView's "Edit this page").
+ *
+ * **Unknown is NOT editable**, and that is the point of the default: a root name the tree does not carry, or a
+ * tree that has not loaded, means we do not know the topology - and offering an action we cannot honor walks a
+ * reader into the editor, takes their keystrokes and fails at save. `plainbase root add` defaults an extra root
+ * to `editable = false`, so guessing `true` would be wrong for the DEFAULT CLI-added root.
+ *
+ * It gates the affordance ONLY. The server's 403 `root_not_editable` is the authority and the editor's
+ * buffer-preserving 403 path is the backstop - this never becomes the thing that decides a write.
+ */
+export function rootIsEditable(roots: RootTree[] | undefined, root: string | null): boolean {
+  return roots && root ? (entryFor(roots, root)?.editable ?? false) : false;
 }
 
 /**

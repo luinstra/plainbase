@@ -405,6 +405,32 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("T-CLI-12 sibling: a LEGACY install whose CONTENT_DIR lost its search bit is warned, not held hostage") {
+        // The arm-switch trap, end to end. The baseline is SYNTHESIZED (no roots block anywhere); the candidate
+        // carries a roots.conf and is therefore EXPLICIT. Both must key the operator's own broken permissions the
+        // same way, or the CLI reads a pre-existing fault as one it introduced and refuses. --force isolates the
+        // gate: the shadow scan cannot read this tree either, and fails closed on its own (test (d) above).
+        world { w ->
+            if (!w.content.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
+            Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
+            if (Files.isExecutable(w.content)) return@world // running as root: the permission drop is inert
+            try {
+                val extra = Files.createDirectory(w.tmp("notes"))
+                val err = captureStderr {
+                    captureStdout { w.root("add", "notes", extra.toString(), "--force") shouldBe 0 }
+                }
+                withClue("the permission fault is the operator's - warned, naming it, and blocking nothing") {
+                    err shouldContain "WARNING"
+                    err shouldContain "did not cause it"
+                    err shouldContain "readable/searchable"
+                }
+                w.config().roots.extras.single().localPath shouldBe extra
+            } finally {
+                Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("rwxr-xr-x"))
+            }
+        }
+    }
+
     test("T-CLI-12 sibling: on that SAME broken install, an add that introduces a NEW fault is still REFUSED") {
         // Inherit a fault, get warned. INTRODUCE one, get refused. The two cases together are the policy; either
         // alone is a half-test - and the message must name the NEW fault, not the old one.

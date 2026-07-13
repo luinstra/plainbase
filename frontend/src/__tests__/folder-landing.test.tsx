@@ -31,6 +31,7 @@ function tree(guidesChildren: TreeFolder["children"]): TreeResponse {
       {
         root: "main",
         available: true,
+        editable: true,
         tree: {
           type: "folder",
           name: "",
@@ -277,6 +278,7 @@ describe("folder landing views (ADR-0003)", () => {
         {
           root: "handbook",
           available: false,
+          editable: true,
           tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] },
         },
       ],
@@ -306,6 +308,7 @@ describe("folder landing views (ADR-0003)", () => {
         {
           root: "main",
           available: true,
+          editable: true,
           tree: {
             type: "folder",
             name: "",
@@ -362,6 +365,7 @@ describe("folder landing views (ADR-0003)", () => {
         {
           root: "main",
           available: true,
+          editable: true,
           tree: {
             type: "folder",
             name: "",
@@ -436,6 +440,7 @@ describe("folder landing views (ADR-0003)", () => {
     const entry = (root: string, title: string): TreeResponse["roots"][number] => ({
       root,
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",

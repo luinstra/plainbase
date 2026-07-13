@@ -85,6 +85,7 @@ class WireTypeGoldenTest : FunSpec({
                     RootTreeDto(
                         root = "main",
                         available = true,
+                        editable = true,
                         tree = TreeNodeDto.Folder(
                             name = "",
                             title = null,

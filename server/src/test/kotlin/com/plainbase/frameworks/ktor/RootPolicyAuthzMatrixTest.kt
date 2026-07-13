@@ -30,6 +30,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
@@ -468,6 +469,22 @@ class RootPolicyAuthzMatrixTest : FunSpec({
                 response.status shouldBe HttpStatusCode.Forbidden
                 response.errorCode() shouldBe "root_not_editable"
             }
+        }
+    }
+
+    test("... and it is ON THE WIRE, per root: without it the SPA offers Edit/New on a root whose every write 403s") {
+        // The 403 above is the AUTHORITY, and it stays the backstop. But a client that can only learn the bit by
+        // trying the write has to walk the reader into the editor, take their keystrokes, and fail at save - and
+        // `plainbase root add` defaults an extra to `editable = false`, so that is the DEFAULT experience of a
+        // CLI-added root, not an exotic one. The tree is where the SPA learns the topology; the flag belongs there,
+        // beside `available`, for the same reason.
+        withRoots(Principal.Anonymous, enforced = false) {
+            val entries = Json.parseToJsonElement(client.get("/api/v1/tree").bodyAsText()).jsonObject.getValue("roots").jsonArray
+            val editableByRoot = entries.associate { entry ->
+                fun field(name: String) = entry.jsonObject.getValue(name).jsonPrimitive.content
+                field("root") to field("editable")
+            }
+            editableByRoot shouldBe mapOf("main" to "true", "open" to "true", "locked" to "false")
         }
     }
 })

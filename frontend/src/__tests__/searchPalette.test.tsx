@@ -19,6 +19,7 @@ const tree: TreeResponse = {
     {
       root: "main",
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",
@@ -75,6 +76,7 @@ const twoRootTree: TreeResponse = {
     {
       root: "handbook",
       available: true,
+      editable: true,
       tree: {
         type: "folder",
         name: "",

@@ -12,6 +12,7 @@ import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 
 /**
  * **The CONFIG + FILESYSTEM half of the shared boot gate (multi-root C5, D-C5-17): COMPLETE, and STRUCTURED.**
@@ -183,6 +184,45 @@ class BootGateTest : FunSpec({
             }
         } finally {
             Files.walk(data).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    test("T-GATE-3b: a READABLE-BUT-NOT-SEARCHABLE main keys the same across the arm switch, in BOTH arms") {
+        // The other half of T-GATE-3b, and the half that was WRONG: equal KINDS are only equal KEYS if both arms
+        // raise the fault on the same CONDITION. The legacy arm probed `isDirectory` alone, so a main with no
+        // search bit was silently fine there and MAIN_UNUSABLE in the explicit matrix - and `root add` on a
+        // synthesized-main install then saw a key its baseline structurally could not produce, called the
+        // operator's own broken permissions a fault IT had introduced, and refused an add that introduced nothing.
+        val data = Files.createTempDirectory("pb-gate-perm-data")
+        val content = tempDir("pb-gate-perm-content")
+        if (!content.fileSystem.supportedFileAttributeViews().contains("posix")) return@test
+        // r-- : the directory lists but nothing under it can be opened - a directory needs `x` to be traversed.
+        Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("r--r--r--"))
+        if (Files.isExecutable(content)) return@test // running as root: the permission drop is inert
+        try {
+            val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
+            val legacy = PlainbaseConfig.fromEnvAndFile(env)
+            Files.writeString(
+                data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE),
+                """roots { notes { path = "/roots/notes" } }""",
+            )
+            val explicit = PlainbaseConfig.fromEnvAndFile(env)
+
+            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
+            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
+
+            withClue("equal KEYS: one unchanged fault, so `root add` warns and proceeds instead of taking a hostage") {
+                legacyRefusal.key shouldBe explicitRefusal.key
+                legacyRefusal.key shouldBe (BootRefusal.Kind.MAIN_UNUSABLE to setOf(RootName.MAIN))
+            }
+            withClue("DIFFERENT prose: each arm still names the key the operator actually wrote") {
+                legacyRefusal.message shouldContain "CONTENT_DIR is not readable/searchable"
+                explicitRefusal.message shouldContain "roots.main.path is not readable/searchable"
+            }
+        } finally {
+            Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("rwxr-xr-x"))
+            content.toFile().deleteRecursively()
+            data.toFile().deleteRecursively()
         }
     }
 

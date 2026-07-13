@@ -48,6 +48,14 @@ export interface RootTree {
    * does not exist", and so the client's known-root set matches the server's exactly.
    */
   available: boolean;
+  /**
+   * The root's CONFIGURED write disposition (`roots.<name>.editable`). `false` means every page write into this
+   * root answers 403 `root_not_editable`, in EVERY auth mode - so the Edit/New affordances are not offered for it.
+   * Topology, not authorization: `true` says the ROOT accepts writes, never that THIS reader may make one (the
+   * server's 403 remains the authority, and the editor's buffer-preserving 403 path remains the backstop).
+   * `plainbase root add` defaults an extra root to `false`, so a read-only root is the common case, not the odd one.
+   */
+  editable: boolean;
   tree: TreeFolder;
 }
 

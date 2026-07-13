@@ -3,6 +3,7 @@
     {
       "root": "main",
       "available": true,
+      "editable": true,
       "tree": {
         "type": "folder",
         "name": "",

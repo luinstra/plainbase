@@ -292,12 +292,13 @@ function entryTree(root: string, pageId: string, title: string): TreeFolder {
   };
 }
 
-const MAIN: RootTree = { root: "main", available: true, tree: entryTree("main", "id-main-intro", "Main Intro") };
-const EXTRA: RootTree = { root: "extra", available: true, tree: entryTree("extra", "id-extra-intro", "Extra Intro") };
+const MAIN: RootTree = { root: "main", available: true, editable: true, tree: entryTree("main", "id-main-intro", "Main Intro") };
+const EXTRA: RootTree = { root: "extra", available: true, editable: true, tree: entryTree("extra", "id-extra-intro", "Extra Intro") };
 /** What a DOWN root actually ships: listed (it is configured) with an EMPTY subtree - see tree.ts FolderEntry. */
 const DOWN: RootTree = {
   root: "handbook",
   available: false,
+  editable: true,
   tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] },
 };
 
