@@ -885,6 +885,12 @@ internal fun rootIsTraversable(root: Path): Boolean =
  * empty answers `true` here. That question needs state that outlives the process (the durable rows), which is
  * where `IndexBuilder`'s corpus-loss tripwire asks it. Liveness is about the TREE; the corpus is the index's.
  *
+ * And the identity half is a HINT for a second reason, which is why the tripwire has to exist: **an inode is a
+ * REUSABLE number.** On ext4, deleting a directory and immediately recreating it at the same path hands back the
+ * SAME `(st_dev, st_ino)` - so a tree that was replaced can be indistinguishable from one that never moved, and
+ * this probe will call it live. It is not a bug to fix here; no `stat` over the path can see that. It is the
+ * reason nothing downstream may treat `available()` as proof that a zero-page scan is a real delete.
+ *
  * Where the filesystem cannot key a directory (Windows) the key is null and the probe is the three predicates
  * alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there AT
  * CONSTRUCTION keys null too, and binds to whatever tree turns up at the path.
@@ -927,8 +933,11 @@ internal fun rootFileKey(root: Path): Any? =
  *
  * A directory that cannot be opened is NOT blank: it is unreadable, which the traversability predicates and the
  * scan's own live-root failure arm already answer for, and calling it a lost root would be the mirror-image lie.
+ *
+ * Internal, not private: `ObjectContentStore` asks it too, because a blank tree means something STRONGER for a
+ * mirror than it does for a content root (see its `available`).
  */
-private fun isBlank(path: Path): Boolean =
+internal fun isBlank(path: Path): Boolean =
     try {
         Files.newDirectoryStream(path).use { !it.iterator().hasNext() }
     } catch (_: IOException) {

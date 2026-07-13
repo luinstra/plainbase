@@ -45,6 +45,38 @@ class ObjectMirrorLossTest : FunSpec({
         }
     }
 
+    test("a mirror EMPTIED IN PLACE is unavailable - an inode is reusable, so the tree's identity cannot see this") {
+        HybridFixture().use { hybrid ->
+            hybrid.seedExisting(deploy, "# Deploy\n\nbody\n".toByteArray())
+            hybrid.store.hydrate()
+
+            // The SAME directory, emptied - which is also what an ext4 delete-and-recreate looks like from a `stat`,
+            // because ext4 hands the recreated directory the SAME inode. So this is the replacement case with its one
+            // escape hatch taken away: identity says "never moved", and identity is wrong. The mirror is app-owned
+            // state that this store materialized every byte of - nobody empties it on purpose - so a mirror that HELD
+            // pages and now holds none is lost, and it must 503 rather than authorize the delete of a corpus the
+            // bucket still holds in full.
+            Files.newDirectoryStream(hybrid.mirrorRoot).use { it.toList() }.forEach { it.toFile().deleteRecursively() }
+
+            withClue("the inode is unchanged, so ONLY the blank-mirror check can catch this") {
+                hybrid.store.available() shouldBe false
+            }
+            withClue("404 tells an agent to drop its citations - for a page the BUCKET still holds") {
+                hybrid.store.readClassified(deploy) shouldBe ContentRead.RootDown
+            }
+        }
+    }
+
+    test("an EMPTY bucket hydrates to an empty mirror and stays available - only a mirror that LOST pages is lost") {
+        HybridFixture().use { hybrid ->
+            hybrid.store.hydrate() // nothing seeded: the bucket is legitimately empty
+
+            withClue("an empty corpus must be allowed to be empty; blankness is only a loss if it HELD pages") {
+                hybrid.store.available() shouldBe true
+            }
+        }
+    }
+
     test("a mirror REPLACED by a different directory is unavailable too - liveness is the tree's identity, not the path's") {
         HybridFixture().use { hybrid ->
             hybrid.seedExisting(deploy, "# Deploy\n\nbody\n".toByteArray())

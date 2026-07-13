@@ -16,6 +16,7 @@ import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.filesystem.isBlank
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
 import com.plainbase.frameworks.filesystem.withDirectoryStream
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -110,8 +111,30 @@ class ObjectContentStore(
      * never mkdirs, and reads whatever mirror is there, point-in-time). Once hydrated, liveness is the probe
      * `LocalContentStore` uses on its own root - the tree's IDENTITY, not the path's - so this store and the local
      * store answer the same question the same way.
+     *
+     * **And then it asks the one question the identity CANNOT answer: is the mirror BLANK?** `fileKey` is
+     * `(st_dev, st_ino)`, and an inode is a REUSABLE number - on ext4, deleting a directory and recreating it at
+     * the same path hands back the SAME inode, so the tree is replaced and the identity says it never moved. The
+     * probe therefore cannot see this class of loss at all, and no probe over the path can.
+     *
+     * What makes the mirror answerable anyway is that it is not a content root: it is APP-OWNED derived state,
+     * this store materialized every byte in it, and nobody empties it on purpose. So a mirror that HELD pages and
+     * now holds nothing is lost, whatever the inode says - unavailable (503, "the page still exists"), never
+     * available-and-empty (404 + a full-corpus delete, of a corpus the bucket still holds in full). The
+     * corresponding blank LOCAL root is the opposite case and must stay AVAILABLE: an operator may legitimately
+     * empty a content tree, and adjudicating THAT is the corpus-loss tripwire's job, not a `stat`'s.
      */
-    override fun available(): Boolean = mirrorProbe.get()?.invoke(mirrorRoot) ?: true
+    override fun available(): Boolean {
+        val probe = mirrorProbe.get() ?: return true
+        return probe(mirrorRoot) && !(hydratedPages.get() && isBlank(mirrorRoot))
+    }
+
+    /**
+     * Did the last [hydrate] materialize any page AT ALL? The exoneration [available]'s blank-mirror check needs: a
+     * bucket that is legitimately empty hydrates to an empty mirror, and an empty mirror is the honest answer for
+     * it - only a mirror that HAD pages and lost them is a loss.
+     */
+    private val hydratedPages = AtomicBoolean(false)
 
     /**
      * The mirror's liveness probe, bound to the tree [hydrate] materialized. Null until then - the only state in
@@ -547,6 +570,9 @@ class ObjectContentStore(
         // is the honest answer until the bucket (or the disk) is fixed.
         val deferred = changed.size - healed
         hydrationDeferred.set(deferred > 0)
+        // What the bucket HAS, not what this pass fetched: a hydrate that healed nothing because the mirror was
+        // already whole still stands behind every page in it (see [available]).
+        hydratedPages.set(listed.isNotEmpty())
         logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $deferred deferred" }
         if (deferred > 0) {
             logger.warn {
