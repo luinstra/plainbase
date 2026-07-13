@@ -2,43 +2,86 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import { treeQuery } from "../api/queries";
-import type { TreeFolder, TreeNode, TreePage } from "../api/types";
+import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
 import { folderTitle, landingPage, nonLandingChildren, pageHref } from "../lib/tree";
+import { ROOT_UNAVAILABLE } from "./ErrorView";
 
 /**
- * Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim. One
- * [SidebarNav] per root entry (multi-root C3) - visually identical to pre-C3 with the one
- * runtime root; per-root section headers are C5 cosmetics.
+ * Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim.
+ *
+ * ONE `<aside>` however many roots are configured, with one `<section>` per root entry inside it: the
+ * aside is the layout column (a fixed `w-[clamp(...)]` slice of the Shell's flex row), so a second one
+ * is a second column and N roots would squeeze `<main>` off the screen. `.pb-sidebar`, `data-pb-sidebar`,
+ * `data-pb-root-section` and `data-pb-root-label` are stable selectors (public customization API).
+ *
+ * Section headers appear only with 2+ roots: with the single root every legacy install has, a header
+ * reading "main" is noise. A root that is not SERVING gets the outage notice instead of its tree, never
+ * an empty list - see [RootSection].
  */
 export function Sidebar() {
   const { data } = useQuery(treeQuery);
   const currentPathname = useRouterState({ select: (s) => s.location.pathname });
   if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
-  return data.roots.map((entry) => <SidebarNav key={entry.root} root={entry.tree} currentPathname={currentPathname} />);
+  return (
+    <aside
+      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
+      data-pb-sidebar
+    >
+      {data.roots.map((entry) => (
+        <RootSection key={entry.root} entry={entry} labeled={data.roots.length > 1} currentPathname={currentPathname} />
+      ))}
+    </aside>
+  );
+}
+
+/** One root's slice of the sidebar: its label (multi-root only) over its tree — or over the outage
+ *  notice, because the server EMPTIES a down root's subtree (tree.ts [FolderEntry]) and rendering
+ *  those absent children would tell the reader their docs are gone. */
+function RootSection({ entry, labeled, currentPathname }: { entry: RootTree; labeled: boolean; currentPathname: string }) {
+  return (
+    <section data-pb-root-section={entry.root}>
+      {labeled && (
+        <h2 className="px-4 pt-5 font-mono text-xs font-medium uppercase tracking-wide text-faint" data-pb-root-label={entry.root}>
+          {entry.root}
+        </h2>
+      )}
+      {entry.available ? (
+        <SidebarNav root={entry.tree} currentPathname={currentPathname} />
+      ) : (
+        <RootUnavailableNotice root={entry.root} />
+      )}
+    </section>
+  );
+}
+
+/** The COMPACT renderer of the shared outage vocabulary ([ROOT_UNAVAILABLE]): the full-page
+ *  `RootUnavailableView` is a centered `<h1>` block, which is wrong markup and worse layout inside a
+ *  nav. Same words, nav-sized. */
+function RootUnavailableNotice({ root }: { root: string }) {
+  return (
+    <div className="px-4 py-5 text-sm" data-pb-root-section-unavailable={root}>
+      <p className="text-xs font-semibold uppercase tracking-wide text-faint">{ROOT_UNAVAILABLE.eyebrow}</p>
+      <p className="mt-1 font-medium text-ink">{ROOT_UNAVAILABLE.headline(root)}</p>
+      <p className="mt-1 text-xs text-muted">{ROOT_UNAVAILABLE.body}</p>
+    </div>
+  );
 }
 
 /**
- * Presentational tree nav. `.pb-sidebar` and the `data-pb-*` attributes are stable
- * selectors (public customization API) — guarded by the snapshot test.
+ * Presentational tree nav — one root's rows. The `data-pb-*` attributes are stable selectors
+ * (public customization API) — guarded by the snapshot test.
  */
 export function SidebarNav({ root, currentPathname }: { root: TreeFolder; currentPathname: string }) {
   // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
   // home link AT THE TOP — pointing at the folder URL (`/docs/{root}` since C3), never the page's bare URL.
   const home = landingPage(root);
   return (
-    <aside
-      className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
-      data-pb-sidebar
-    >
-      <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
-        <ul className="space-y-0.5">
-          {home && root.url && (
-            <PageRow href={root.url} status={home.status} label={home.title} currentPathname={currentPathname} />
-          )}
-          <NodeRows nodes={nonLandingChildren(root)} currentPathname={currentPathname} />
-        </ul>
-      </nav>
-    </aside>
+    <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
+      <ul className="space-y-0.5">
+        {home && root.url && <PageRow href={root.url} status={home.status} label={home.title} currentPathname={currentPathname} />}
+        <NodeRows nodes={nonLandingChildren(root)} currentPathname={currentPathname} />
+      </ul>
+    </nav>
   );
 }
 

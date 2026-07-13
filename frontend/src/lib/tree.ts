@@ -44,12 +44,23 @@ export function mainEntry(roots: RootTree[]): RootTree | null {
   return roots.find((entry) => entry.root === "main") ?? null;
 }
 
-/** Every page node across all entries, in wire (D7) order - the quick-switcher's candidate set. */
-export function pages(roots: RootTree[]): TreePage[] {
-  const result: TreePage[] = [];
+/**
+ * A page WITH its entry's root, for the same reason [FolderEntry] carries one: a page's `path` is
+ * ROOT-RELATIVE, so two roots holding `guides/deploy.md` yield two pages that are indistinguishable
+ * once the root is dropped. Navigation still works (the `url` carries the root), which is what makes
+ * dropping it insidious - the reader only learns they opened the wrong tree after reading it.
+ */
+export interface PageEntry {
+  root: string;
+  page: TreePage;
+}
+
+/** Every page across all entries, in wire (D7) order - the quick-switcher's candidate set. */
+export function pages(roots: RootTree[]): PageEntry[] {
+  const result: PageEntry[] = [];
   for (const entry of roots) {
     for (const node of walk(entry.tree.children)) {
-      if (node.type === "page") result.push(node);
+      if (node.type === "page") result.push({ root: entry.root, page: node });
     }
   }
   return result;

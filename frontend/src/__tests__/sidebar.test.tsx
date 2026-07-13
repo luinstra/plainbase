@@ -3,7 +3,8 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { sessionQuery, treeQuery } from "../api/queries";
-import type { TreeFolder } from "../api/types";
+import type { RootTree, TreeFolder } from "../api/types";
+import { ROOT_UNAVAILABLE } from "../components/ErrorView";
 import { SidebarNav } from "../components/Sidebar";
 import { createAppRouter } from "../router";
 
@@ -72,9 +73,11 @@ describe("SidebarNav", () => {
   it("emits the stable selectors and links from node urls", () => {
     const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
 
-    const sidebar = container.querySelector(".pb-sidebar");
-    expect(sidebar).not.toBeNull();
-    expect(sidebar!.hasAttribute("data-pb-sidebar")).toBe(true);
+    // `.pb-sidebar`/`data-pb-sidebar` moved UP to the wrapper's single `<aside>` (multi-root C5) - a nav
+    // per root, one aside for all of them. The count guard lives with the wrapper's tests below.
+    const nav = container.querySelector("nav");
+    expect(nav).not.toBeNull();
+    expect(nav!.getAttribute("aria-label")).toBe("Documentation tree");
     expect(container.querySelectorAll('[data-pb-nav-item="folder"]')).toHaveLength(2);
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(2);
 
@@ -270,38 +273,92 @@ describe("SidebarNav", () => {
   });
 });
 
-describe("Sidebar (the tree-fed parent)", () => {
-  it("renders one SidebarNav PER root entry, in wire order (the C3 map-per-entry shape)", async () => {
-    const entryTree = (root: string, pageId: string, title: string): TreeFolder => ({
-      type: "folder",
-      name: "",
-      title: null,
-      description: null,
-      path: "",
-      url: `/docs/${root}`,
-      page_count: 1,
-      children: [
-        { type: "page", id: pageId, title, slug: "intro", path: "intro.md", url: `/docs/${root}/intro`, status: "active", updated: null },
-      ],
-    });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(treeQuery.queryKey, {
-      roots: [
-        { root: "main", available: true, tree: entryTree("main", "id-main-intro", "Main Intro") },
-        { root: "extra", available: true, tree: entryTree("extra", "id-extra-intro", "Extra Intro") },
-      ],
-    });
-    queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
-    const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ["/docs"] }));
-    const { container } = render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
+/**
+ * The tree-fed WRAPPER - the seam every test above misses, because they all render `SidebarNav`
+ * directly. The wrapper is where the roots are mapped, so it is where a multi-root install first
+ * goes wrong: it once mapped each root to its OWN full-width `<aside>`, and N of those squeeze the
+ * document off-screen. These tests render it through the real Shell for that reason.
+ */
+function entryTree(root: string, pageId: string, title: string): TreeFolder {
+  return {
+    type: "folder",
+    name: "",
+    title: null,
+    description: null,
+    path: "",
+    url: `/docs/${root}`,
+    page_count: 1,
+    children: [{ type: "page", id: pageId, title, slug: "intro", path: "intro.md", url: `/docs/${root}/intro`, status: "active", updated: null }],
+  };
+}
 
-    await waitFor(() => expect(container.querySelectorAll(".pb-sidebar")).toHaveLength(2));
-    const [main, extra] = [...container.querySelectorAll(".pb-sidebar")];
+const MAIN: RootTree = { root: "main", available: true, tree: entryTree("main", "id-main-intro", "Main Intro") };
+const EXTRA: RootTree = { root: "extra", available: true, tree: entryTree("extra", "id-extra-intro", "Extra Intro") };
+/** What a DOWN root actually ships: listed (it is configured) with an EMPTY subtree - see tree.ts FolderEntry. */
+const DOWN: RootTree = {
+  root: "handbook",
+  available: false,
+  tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] },
+};
+
+function renderShell(roots: RootTree[]) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient.setQueryData(treeQuery.queryKey, { roots });
+  queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
+  const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ["/docs"] }));
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+describe("Sidebar (the tree-fed parent)", () => {
+  it("renders ONE aside for N roots, with a section per entry in wire order", async () => {
+    const { container } = renderShell([MAIN, EXTRA]);
+
+    // DELIBERATELY INVERTED (multi-root C5). This assertion used to read `toHaveLength(2)` and pass:
+    // it pinned the very bug it should have caught - one full-width `<aside>` PER root, so two roots
+    // shoved the document off-screen. The sidebar is ONE aside; the roots are SECTIONS inside it.
+    // Do not "restore" the 2.
+    await waitFor(() => expect(container.querySelectorAll("[data-pb-sidebar]")).toHaveLength(1));
+    expect(container.querySelectorAll(".pb-sidebar")).toHaveLength(1);
+
+    const sections = [...container.querySelectorAll("[data-pb-root-section]")];
+    expect(sections.map((section) => section.getAttribute("data-pb-root-section"))).toEqual(["main", "extra"]);
+    const [main, extra] = sections;
     expect(main.querySelector('a[href="/docs/main/intro"]')).not.toBeNull();
     expect(extra.querySelector('a[href="/docs/extra/intro"]')).not.toBeNull();
+  });
+
+  it("labels each section when there are 2+ roots, and labels nothing when there is one", async () => {
+    const many = renderShell([MAIN, EXTRA]);
+    await waitFor(() => expect(many.container.querySelectorAll("[data-pb-root-label]")).toHaveLength(2));
+    const labels = [...many.container.querySelectorAll("[data-pb-root-label]")];
+    expect(labels.map((label) => label.textContent)).toEqual(["main", "extra"]);
+
+    // One root (every legacy install): a header reading "main" is pure noise, so there is none.
+    const one = renderShell([MAIN]);
+    await waitFor(() => expect(one.container.querySelector("[data-pb-root-section]")).not.toBeNull());
+    expect(one.container.querySelectorAll("[data-pb-root-label]")).toHaveLength(0);
+  });
+
+  it("shows a DOWN root's section as an outage, never as an empty tree", async () => {
+    const { container } = renderShell([MAIN, DOWN]);
+
+    await waitFor(() => expect(container.querySelectorAll("[data-pb-root-section]")).toHaveLength(2));
+    const down = container.querySelector('[data-pb-root-section="handbook"]')!;
+    const notice = down.querySelector("[data-pb-root-section-unavailable]")!;
+    expect(notice).not.toBeNull();
+    // Asserted against the SHARED copy, so the compact notice and the full-page view cannot drift apart.
+    expect(notice.textContent).toContain(ROOT_UNAVAILABLE.eyebrow);
+    expect(notice.textContent).toContain(ROOT_UNAVAILABLE.headline("handbook"));
+    expect(notice.textContent).toContain(ROOT_UNAVAILABLE.body);
+    // The server empties a down root's subtree; rendering those (absent) children would say "this root
+    // has no pages" - i.e. "my docs are gone" - over what is an outage.
+    expect(down.querySelector("nav")).toBeNull();
+    expect(down.querySelector("[data-pb-nav-item]")).toBeNull();
+    // The serving root next to it is untouched.
+    expect(container.querySelector('[data-pb-root-section="main"] a[href="/docs/main/intro"]')).not.toBeNull();
   });
 });

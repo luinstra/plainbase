@@ -90,6 +90,38 @@ approve their own (or any) proposals. To create a NEW page instead of editing, u
 Track the review queue with `list_changes` (all proposals, newest-first) and `get_change` (one proposal's full
 detail + diff + decision state).
 
+## 4. Roots: what a page lives under, and what its errors mean
+
+Every page lives under a named **root** - a document directory the server is configured to serve
+([ADR-0011](decisions/0011-multi-root-document-directories.md)). A single-root install has exactly
+one, named `main`; a multi-root install can have more (`memoria`, `handbook`, whatever the operator
+named them). `search` and `read_page` already carry the root in their responses (see the worked
+session above); the URL grammar is always `/docs/{root}/{path}`, and a `create` (or a REST direct
+commit) **names its root explicitly** - `propose_change`'s `root` field on a `create` operation (default
+`main` if you omit it), or `CreatePageRequest.root` over REST.
+
+A root can be unavailable or read-only, and the server tells you which with a code, not a guess. Three
+wire shapes to recognize:
+
+| code | status | what it means | what you must do |
+|---|---|---|---|
+| `root_unavailable` | **503** + `Retry-After: 300` | The root's disk is unmounted, missing at boot, or its watcher died. **The page is NOT gone.** Nothing was written. | **Keep your citations.** Retry after an operator restores the root and restarts the server - the `Retry-After` (seconds) is how long to wait before trying again. |
+| `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
+| `invalid_root` | **400** | The named root is not a legal slug, or names no root the server has configured. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
+
+**The distinction that matters most is `root_unavailable` (503) versus a plain `404 page_not_found` -
+and it is deliberate, not incidental:**
+
+- **`404` still means exactly what it always meant: the page is gone.** Drop your citations to it.
+- **`503 root_unavailable` means the opposite: the page still exists.** A disk is unmounted, not a page
+  deleted, and the content is coming back once an operator restores it. **An agent that treats a 503
+  as a 404 destroys citations for a page that is still there** - that is the one failure this section
+  exists to prevent, because from the wire alone the two look like "I couldn't get the page" unless you
+  know to look at the status code and the error code together.
+
+Nothing is ever written on a `root_unavailable` or `root_not_editable` response, so retrying a read is
+always safe; retrying a write into either is not going to change the outcome until an operator acts.
+
 ## Parity with the REST API
 
 Every MCP tool is a thin transport adapter over the same guarded service the REST routes use - there is no

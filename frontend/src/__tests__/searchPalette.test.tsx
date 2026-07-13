@@ -65,9 +65,45 @@ function searchResponse(query: string): SearchResponse {
   };
 }
 
-function setup(initialPath = "/docs") {
+/**
+ * Two roots each holding the SAME relative path with the SAME title - the ambiguity a root-blind palette
+ * cannot survive: `path` is root-relative, so "Deploy Guide · guides/deploy-guide.md" describes both.
+ */
+const twoRootTree: TreeResponse = {
+  roots: [
+    tree.roots[0],
+    {
+      root: "handbook",
+      available: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/handbook",
+        page_count: 1,
+        children: [
+          { type: "page", id: "h-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/handbook/guides/deploy-guide", status: "active", updated: null },
+        ],
+      },
+    },
+  ],
+};
+
+/** The same hit shape, one per root - what a corpus-wide query routinely returns once there are two roots. */
+function crossRootSearchResponse(query: string): SearchResponse {
+  const [hit] = searchResponse(query).hits;
+  return {
+    ...searchResponse(query),
+    total: 2,
+    hits: [hit, { ...hit, page_id: "h-deploy", root: "handbook", url: "/docs/handbook/guides/deploy-guide" }],
+  };
+}
+
+function setup(initialPath = "/docs", treeData: TreeResponse = tree) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  queryClient.setQueryData(treeQuery.queryKey, tree);
+  queryClient.setQueryData(treeQuery.queryKey, treeData);
   // The Shell gates its "Review" nav on a session read — prime it (unauthenticated) so it serves from cache
   // and the no-fetch assertions stay honest.
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
@@ -455,5 +491,68 @@ describe("two-stage search palette", () => {
     const active = document.querySelectorAll("[data-pb-search-active]");
     expect(active).toHaveLength(1);
     expect(active[0].id).toBe("pb-search-opt-jump-0");
+  });
+});
+
+/**
+ * A page is named by its ROOT-RELATIVE path on both search surfaces, so with two roots the same file
+ * renders the same row twice - same title, same hint - and the reader picks one at random. Navigation
+ * still lands correctly (the url carries the root), which is what makes it insidious: they only learn
+ * they opened the wrong tree after they read it. Both assertions are on the RENDERED rows, so carrying
+ * the root in the data without ever showing it still fails.
+ */
+describe("the palette with more than one root", () => {
+  it("makes two roots' same-titled, same-path quick-switcher rows distinguishable", async () => {
+    setup("/docs", twoRootTree);
+    await openPalette();
+    await waitFor(() => expect(getInput()).not.toBeNull());
+    fireEvent.change(getInput(), { target: { value: "deploy guide" } });
+    await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="jump"]')).toHaveLength(2));
+
+    const rows = [...document.querySelectorAll('[data-pb-search-item="jump"]')];
+    // Both rows are the same page, in name and in path...
+    expect(rows.map((row) => row.querySelector("[data-pb-root-badge]")?.getAttribute("data-pb-root-badge"))).toEqual(["main", "handbook"]);
+    // ...and the ONE thing that tells them apart is on screen, not just in the props.
+    expect(rows.map((row) => row.textContent)).toEqual(["Deploy Guidemainguides/deploy-guide.md", "Deploy Guidehandbookguides/deploy-guide.md"]);
+  });
+
+  it("badges each full-text hit with the root it came from", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => new Response(JSON.stringify(crossRootSearchResponse(new URL(url, "http://x").searchParams.get("q") ?? "")), { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    try {
+      setup("/docs", twoRootTree);
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="hit"]')).toHaveLength(2));
+
+      const badges = [...document.querySelectorAll('[data-pb-search-item="hit"] [data-pb-root-badge]')];
+      expect(badges.map((badge) => badge.textContent)).toEqual(["main", "handbook"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("badges nothing with a single root (no gratuitous 'main' on every row)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => new Response(JSON.stringify(searchResponse(new URL(url, "http://x").searchParams.get("q") ?? "")), { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    try {
+      setup(); // the one-root fixture — every legacy install
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 1
+
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 2
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

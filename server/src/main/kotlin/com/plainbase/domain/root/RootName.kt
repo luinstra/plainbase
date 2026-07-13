@@ -5,9 +5,13 @@ package com.plainbase.domain.root
  * its `/docs/{root}/...` URL segment.
  *
  * The slug is deliberately tight - `[a-z0-9][a-z0-9-]*`, max 32 chars - so a name is always a clean
- * URL segment and a clean HOCON key with no quoting or encoding concerns. No names beyond [MAIN] are
- * reserved: every root URL lives under the `/docs/` prefix, so a name can never collide with `/api`,
- * `/p`, or `/assets`.
+ * URL segment with no encoding concerns. No names beyond [MAIN] are reserved: every root URL lives under
+ * the `/docs/` prefix, so a name can never collide with `/api`, `/p`, or `/assets`.
+ *
+ * A tight slug is NOT the same thing as an inert HOCON key, and the difference is a real bug we shipped
+ * into review: `include` satisfies this regex and is also a HOCON directive. The writer therefore QUOTES
+ * the key (`ManagedRootsFile.serialize`) rather than the name banning a reserved word, because the ban
+ * list is the format's, it can grow, and it is not this type's business to track it.
  */
 @JvmInline
 value class RootName private constructor(val value: String) {

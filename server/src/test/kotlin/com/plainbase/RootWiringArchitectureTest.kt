@@ -13,9 +13,10 @@ import kotlin.io.path.readText
 
 /**
  * **Main is chosen by the ROOT MODEL and never re-derived by its consumers.** No source may ask whether a `Root` is
- * main by comparing names, except in the three boundary files that DEFINE main (`RootRegistry`), PARSE and VALIDATE it
- * (`PlainbaseConfig`) and GATE boot on it (`Application`). Per-root wiring takes main from `registry.main` and folds
- * `registry.extras`.
+ * main by comparing names, except in the four boundary files that DEFINE main (`RootRegistry`), PARSE and VALIDATE it
+ * (`PlainbaseConfig`), GATE boot on it (`Application`) and PARSE OPERATOR ARGV (`RootCommand` - text from a command
+ * line cannot be made to fail typecheck, so main's protection there is a runtime refusal). Per-root wiring takes main
+ * from `registry.main` and folds `registry.extras`.
  *
  * The bug this is a regression guard for SHIPPED in C4: `HistoryModule`'s per-root provider map had a
  * `root.name == registry.main.name -> get<HistoryProvider>()` arm that short-circuited main back to a `single` which
@@ -65,9 +66,20 @@ class RootWiringArchitectureTest : FunSpec({
         "RootRegistry.kt" to 1,
         // PARSES and VALIDATES: main's path is fatal where an extra's degrades, the operator-facing required-main
         // refusal, and RootsConfig's own derivations - the config-side twin of the registry.
-        "PlainbaseConfig.kt" to 5,
+        //
+        // 5 -> 6 in multi-root C5: the machine-managed roots.conf MUST NOT declare main (D-C5-2), and a new file with
+        // a new rule needs its own operator-facing refusal. That refusal is the structural guarantee behind "the CLI
+        // never manages main" - main's path keeps coming from CONTENT_DIR or from a block the operator wrote.
+        "PlainbaseConfig.kt" to 6,
         // GATES boot: main gate-checks unconditionally, an extra is probed and degrades to 503 (ADR-0011 D5-over-D4).
+        // Still ONE in C5: that loop MOVED into `evaluateBootGate` - in this same file, deliberately, since a new file
+        // would take the comparison with it (drifting this count to 0 AND landing unledgered elsewhere). The C5
+        // shadow warning folds `registry.extras` rather than re-filtering, precisely so it costs nothing here.
         "Application.kt" to 1,
+        // PARSES OPERATOR ARGV - the fourth boundary, new in multi-root C5. `root add|remove main` must be refused at
+        // RUNTIME because argv is TEXT and text cannot be made to fail typecheck. Everywhere else main's protection is
+        // structural: the CLI has no code path that can write main's name into any file.
+        "RootCommand.kt" to 1,
     )
 
     test("the scan sees the whole main source tree, the four wiring files included (anti-vacuous floor)") {
@@ -87,6 +99,28 @@ class RootWiringArchitectureTest : FunSpec({
                         "`registry.main` and fold `registry.extras` - a map arm that short-circuits main by name is " +
                         "the C4 HistoryModule bug, where main silently ignored its own `history` knob."
                 }
+        }
+        violations.shouldBeEmpty()
+    }
+
+    // TIER 3 - the banned HOIST (multi-root C5, D-C5-4). `listOf(main) + extras` forces main to rank 0, and rank is
+    // the cross-root duplicate-id winner (LOWEST index wins - PageIdentityService), i.e. WHICH ROOT'S PAGE KEEPS A
+    // PERMALINK. So the hoist is a silent permalink reassignment: no error, no log line, the wrong page just answers.
+    // An operator who deliberately declared `roots { zeta {…} main {…} }` - zeta first, because zeta's copy of a page
+    // is the one that should keep the permalink - would have zeta demoted by a change that never touched zeta.
+    //
+    // ZERO exemptions: `main` is a typed ACCESSOR, never a promotion. Matched over COMMENT-STRIPPED code, because the
+    // only correct place for this literal is a comment WARNING against it - which the merge in `PlainbaseConfig` and
+    // the candidate build in `RootCommand` both carry. A plain grep for the pattern would eat its own teaching.
+    val bannedHoist = Regex("""listOf\(\s*\w+(\.\w+)*\.main\s*\)\s*\+|listOf\(\s*main\s*\)\s*\+""")
+
+    test("no source builds a root list by hoisting main to the front: `listOf(main) + extras` reassigns permalinks") {
+        val violations = files.flatMap { file ->
+            bannedHoist.findAll(stripComments(file.readText())).map {
+                "${mainRoot.relativize(file)}: '${it.value}' hoists main to rank 0. Rank decides which root's page keeps " +
+                    "a permalink on a cross-root duplicate id, so this silently reassigns every shared id to main's " +
+                    "page. Preserve the declared order - main sits wherever config put it."
+            }
         }
         violations.shouldBeEmpty()
     }

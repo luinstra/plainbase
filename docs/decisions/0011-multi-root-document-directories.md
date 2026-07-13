@@ -1,6 +1,7 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted (frozen at C2 merge)
+- **Status:** Accepted (D1-D18 frozen at C4 merge; C5 appends implementation notes only, below - no
+  decision here is re-opened)
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -295,3 +296,56 @@ in ONE plan (D19) and refuses to run at all if it cannot see one of them, the `r
 identical). From C2 on, the composite-key migration is the point of no return for downgrades
 (backup-restore only); the URL grammar (C3) is reversible in code but not in the wild once links
 circulate.
+
+## C5 implementation notes
+
+D1-D18 above are frozen. C5 built the `plainbase root add/remove/list` CLI against them; the notes
+below record how three of those decisions were operationalized, and one place where the ADR's own
+prose has to be corrected against what was actually built. None of this reopens a D1-D18 decision.
+
+**D-C5-1 - the two-file mechanism, not the "machine-managed include" this ADR's context section
+describes.** The context section above (and `multi-root-design.md`) call the CLI's write path "a
+machine-managed include." That was never built, and C5 deliberately rejected it: the CLI instead
+writes its own second file, `DATA_DIR/roots.conf`, which the loader parses alongside
+`plainbase.conf` and merges. `plainbase.conf` is never opened for writing by any CLI verb - not a
+best-effort round-trip, an absence of code, so every hand-written comment, key order and value
+survives by construction. An `include` line would have required editing the operator's file (the
+exact thing this ADR says never to do), and in HOCON the include's **position** decides who wins a
+key conflict - a line the operator could move at any time. A second file with one fixed merge rule
+has no such dependency.
+
+**D-C5-4 - the cross-file `(line, name)` tiebreak this ADR's own D7 aside sketched (above,
+"line numbers reset per file across includes ... where the tiebreak again decides") is REJECTED.**
+Taken literally, it merges both files' entries and sorts by `(line, name)` globally - which lets a
+CLI-added root at `roots.conf` line 4 outrank a hand-declared incumbent at `plainbase.conf` line 8,
+taking over its permalinks in a cross-root duplicate-id contest (D2/D17). It is also unstable: every
+`root add` rewrites `roots.conf` and shifts the line numbers of the roots already in it, re-ranking
+roots the operator never touched. Both violate **Invariant R**: adding or removing a root in
+`roots.conf` never changes the relative rank of any other root, a newly added root always ranks
+last (so it always loses a duplicate-id contest against an incumbent), and a hand-declared root
+always outranks every CLI-added one. The rule that replaces the sketch: sort each file's `roots {}`
+block independently by `(line, name)` - D7 unchanged, applied per file, never compared across
+files - then concatenate whole blocks in fixed file order (`plainbase.conf`'s block, then
+`roots.conf`'s extras). **`main` is never hoisted to rank 0** - it keeps whatever rank its own
+declaration gave it, exactly like every other root in `plainbase.conf`'s block.
+
+**D-C5-6 - the shadow check's split between CLI and boot, and what each half can and cannot see.**
+`root add` REFUSES a name that shadows an existing top-level entry of main - a page, folder, asset,
+or a URL a `slug:`/`_folder.yaml slug:` mints - computed from a plain filesystem scan of main
+(`--force` overrides). Boot **never refuses** on a shadow, only **WARNs**, computed from the built
+index snapshot plus the main-root alias registry. The split exists because the two sides can see
+different things: the CLI opens no database, so it structurally cannot see a `redirect_from` alias
+row (those live in `url_alias`, not on disk, and outlive the frontmatter that minted them) - that is
+the one case the boot WARN backstops. Neither side can see a folder created through Plainbase's own
+UI after the `add` ran; that residual edge is this ADR's D3 accepted tradeoff, not a gap C5 left
+open.
+
+**D3(a) correction: the reserved-`main` collision check now reads the raw content-path space too,
+not only the URL space.** D3 above describes the reserved-`main` collision as a URL-grammar
+question (a legacy corpus whose main root has a top-level directory literally named `main`). The
+shared `topLevelIndex` helper C5 introduced for the shadow check (D-C5-6) is keyed on **two**
+grammars at once - the slugified `/docs` + alias URL space, and the raw (NFC, never slugified)
+`/browse` + `/assets` content-path space - because a root name can shadow a segment in either. Both
+the reserved-`main` collision detector and the new `root add`/boot shadow checks share this one
+index, so the reserved-`main` refusal is precise against content paths as well as URLs, not just the
+URL grammar D3's prose describes.

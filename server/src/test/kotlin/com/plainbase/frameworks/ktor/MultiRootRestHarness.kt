@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.RootGateVerdict
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.HistoryProvider
@@ -21,9 +22,12 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.koin.HistoryProviders
+import com.plainbase.frameworks.koin.RootStores
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
+import com.plainbase.rootGateVerdicts
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import java.nio.file.Files
@@ -138,15 +142,18 @@ class MultiRootRestHarness(
     }
 
     /**
-     * serve()'s gate loop, exactly: probe each EXTRA (main is fail-fast at `requireContentDir`, so it never degrades
-     * here) and mark an unavailable one MISSING_AT_BOOT. Pure seeding — no exit paths, no process.
+     * serve()'s gate loop — literally, now: [rootGateVerdicts] IS the loop `serve()` walks, so this harness cannot
+     * drift from it. (It used to say "serve()'s gate loop, exactly" and then re-implement the probe half. A test-only
+     * copy cannot brick production, but it can make a multi-root REST test pass while `serve` diverges.)
+     *
+     * Seeding only: the gate DECIDES, the caller ACTS. `markUnavailable` mutates a runtime singleton, which is why it
+     * lives out here and not inside the gate — `plainbase root` calls the same gate and must not mutate anything.
      */
     fun seedBootAvailability() {
-        roots.filter { it.name != RootName.MAIN }.forEach { root ->
-            if (!storesByRoot.getValue(root.name).available()) {
-                availability.markUnavailable(root.name, UnavailableCause.MISSING_AT_BOOT)
-            }
-        }
+        val providers = HistoryProviders(roots.associate { it.name to (histories?.invoke(it.name) ?: NoOpHistoryProvider) })
+        rootGateVerdicts(registry, RootStores(storesByRoot), providers)
+            .filterIsInstance<RootGateVerdict.Unavailable>()
+            .forEach { availability.markUnavailable(it.root, UnavailableCause.MISSING_AT_BOOT) }
     }
 
     /**

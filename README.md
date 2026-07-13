@@ -23,10 +23,12 @@ files.
   away with, and Plainbase never keeps a second copy of them. Local deploy: the
   `CONTENT_DIR` directory IS the authority - or, with a `roots {}` block, *every*
   configured root's directory is (each is a plain tree in its own right, and each
-  one is content you back up). Cloud deploy: an S3-compatible bucket IS the
-  authority (a plain tree of objects any S3 tool can read). Git is an optional
-  layer, every index is derived and rebuildable. Leaving Plainbase is copying
-  those directories or syncing the bucket.
+  one is content you back up) - manage them with `plainbase root add/remove/list`
+  (see [Configuration](docs/configuration.md#the-cli-and-the-two-files)). Cloud
+  deploy: an S3-compatible bucket IS the authority (a plain tree of objects any
+  S3 tool can read). Git is an optional layer, every index is derived and
+  rebuildable. Leaving Plainbase is copying those directories or syncing the
+  bucket.
 - **One binary, no fleet.** A single native executable (no JRE, no database
   server, no Node) with embedded SQLite + FTS5 search and sub-second cold
   start. `docker compose up` if you'd rather run a container.

@@ -11,8 +11,8 @@ import { folderTitle, foldersByPath, landingPage, treeFor } from "../lib/tree";
  * borrow each other's titles/urls. An ancestor crumb links to its folder landing view
  * (ADR-0003) - server-issued `url`s consumed verbatim; a folder without one
  * (collision-loser subtree, or tree not loaded yet) stays inert text. Every trail opens
- * with the root crumb linking to `/docs`; on the root landing itself (path "") the trail
- * collapses to just the non-link current crumb.
+ * with the root crumb; on the root landing itself (path "") the trail collapses to just
+ * the non-link current crumb.
  */
 export function Breadcrumbs({ root, path, title }: { root: string; path: string; title: string }) {
   const { data } = useQuery(treeQuery);
@@ -20,8 +20,19 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   const folders = entryTree ? foldersByPath(entryTree) : new Map<string, TreeFolder>();
 
   const segments = path.split("/").slice(0, -1);
-  // The root label is deliberately the literal "docs" (URL-truthful); a site-title override is a future plainbase.yaml concern.
-  const rootCrumb = { key: "/docs", label: "docs", url: "/docs" };
+  // The root crumb is NAMED only when there is more than one root - the same `roots.length > 1` rule the
+  // sidebar section headers and the search root badges follow, and for the same reason: with the single
+  // root every legacy install has, "main" is an internal name leaking into the UI where a meaningful word
+  // used to be. One root keeps the URL-truthful `docs` -> `/docs` crumb it has always had.
+  //
+  // With 2+ roots the crumb names THIS page's root and links to that root's own url - taken from the tree
+  // entry (server-issued, consumed verbatim like every other crumb), NEVER string-built from the name. A
+  // hardcoded `/docs` crumb would name the wrong tree AND, since `/docs` resolves to main, walk the reader
+  // out of the root they were reading. Inert until the tree loads (no url to link to yet).
+  const multiRoot = (data?.roots.length ?? 1) > 1;
+  const rootCrumb = multiRoot
+    ? { key: `root:${root}`, label: root, url: entryTree?.url ?? null }
+    : { key: "/docs", label: "docs", url: "/docs" };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
     const folder = folders.get(folderPath);
@@ -29,8 +40,8 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   });
   // When the page IS its parent folder's landing (index/README), the parent ancestor crumb and the
   // leaf crumb are the same place: `folderTitle` resolves to the index title and the parent's url is
-  // this very page's URL. Drop the redundant ancestor so the trail reads `docs / <Title>`, not
-  // `docs / <Title> / <Title>` with the ancestor self-linking to the page being viewed (Phase 5.5).
+  // this very page's URL. Drop the redundant ancestor so the trail reads `<root> / <Title>`, not
+  // `<root> / <Title> / <Title>` with the ancestor self-linking to the page being viewed (Phase 5.5).
   const parent = folders.get(segments.join("/"));
   const pageIsLanding = parent ? landingPage(parent)?.path === path : false;
   const crumbs = path === "" ? [] : [rootCrumb, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];

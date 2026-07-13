@@ -170,6 +170,12 @@ jobs:
       - name: Native startup bound (regression tripwire, 2 s on shared runner; <1 s target is local)
         run: bash scripts/ci/native-startup-bound.sh ./server/build/native/nativeCompile/plainbase 8082 2000
 
+      # The multi-root topology, end to end against the real binary: both config provenances, the
+      # `plainbase root` refusals, a missing root's 503, and the detached-root WARN boot. Port 8083 —
+      # every earlier server in this job (8080/8081/8082) has been killed by the time this one binds.
+      - name: Multi-root topology smoke (native binary)
+        run: bash scripts/ci/multi-root-smoke.sh ./server/build/native/nativeCompile/plainbase 8083
+
       - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
@@ -178,10 +184,12 @@ jobs:
 
   # ---- Playwright smoke (C1c): deliberately OUTSIDE `./gradlew build` (hermetic-floor rationale,
   # frontend/build.gradle.kts) and a separate job so a browser-download/flake never paints the JAR
-  # floor red. Boots BOTH webServers — auth-off AND enforced-builtin (review.spec.ts approval flow)
-  # — and carries the C1a CSP zero-violation gate (csp.spec.ts) into CI. ----
+  # floor red. Boots ALL FOUR webServers (playwright.config.ts) — auth-off, enforced-builtin
+  # (review.spec.ts approval flow), and the two multi-root installs: both-serving, and one whose
+  # extra root's path is gone (the 503/outage surfaces) — and carries the C1a CSP zero-violation
+  # gate (csp.spec.ts) into CI. ----
   frontend-smoke:
-    name: Playwright smoke (open + enforced-builtin, CSP gate)
+    name: Playwright smoke (open + enforced-builtin + multi-root, CSP gate)
     runs-on: ubuntu-latest
     needs: build-test
     steps:

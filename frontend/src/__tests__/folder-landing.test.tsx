@@ -235,6 +235,8 @@ describe("folder landing views (ADR-0003)", () => {
     expect(view.container.querySelector('a[href="/docs/main/guides/advanced"]')).not.toBeNull();
     expect(view.container.querySelector(`a[href="/p/${LOSER_ID}"]`)).not.toBeNull(); // loser via permalink
     // The folder trail is "docs / Guides" — the root crumb links home, the current crumb stays inert.
+    // SINGLE-root fixture, so the crumb stays the URL-truthful "docs" (multi-root C5 names the root only
+    // when there IS more than one — the same rule the sidebar headers and search badges follow).
     expect(view.container.querySelector('.pb-breadcrumbs a[href="/docs"]')?.textContent).toBe("docs");
   });
 
@@ -483,6 +485,7 @@ describe("folder landing views (ADR-0003)", () => {
     expect(crumb).not.toBeNull();
     expect(crumb!.textContent).toBe("Guides");
     // The trail opens with the root crumb — "docs / Guides / Deploy Guide", both ancestors clickable.
+    // SINGLE-root fixture, so the crumb keeps its URL-truthful "docs" (see the note above).
     const rootCrumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs"]');
     expect(rootCrumb).not.toBeNull();
     expect(rootCrumb!.textContent).toBe("docs");

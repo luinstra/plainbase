@@ -16,6 +16,7 @@ frontend/.smoke-data/
 frontend/.smoke-content/
 frontend/.smoke-data-*/
 frontend/.smoke-content-*/
+frontend/.smoke-extra-*/
 frontend/test-results/
 frontend/playwright-report/
 

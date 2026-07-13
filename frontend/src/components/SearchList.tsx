@@ -1,4 +1,5 @@
-import type { SearchHit, TreePage } from "../api/types";
+import type { SearchHit } from "../api/types";
+import type { PageEntry } from "../lib/tree";
 import { JumpToItem } from "./JumpToItem";
 import { SearchResultItem } from "./SearchResultItem";
 
@@ -13,6 +14,9 @@ export function optionId(stage: "jump" | "search", index: number): string {
  * The single visible list for the active stage (`role="listbox"`). Stage 1 renders jump
  * rows + the bridge; Stage 2 renders hit rows + non-selectable status rows. Only one list
  * exists at a time, so selection is a plain per-stage integer (ADR-0005).
+ *
+ * `showRoots` (2+ configured roots) badges both kinds of row with their root — one gate, so the two
+ * stages can never disagree about whether the corpus is multi-root.
  */
 export function SearchList({
   stage,
@@ -27,13 +31,14 @@ export function SearchList({
   searchedQuery,
   errorMessage,
   // shared
+  showRoots,
   selectedIndex,
   onSelect,
   onActivate,
   onActivateBridge,
 }: {
   stage: "jump" | "search";
-  jumpPages?: TreePage[];
+  jumpPages?: PageEntry[];
   query?: string;
   bridgeEnabled?: boolean;
   bridgeIndex?: number;
@@ -43,6 +48,7 @@ export function SearchList({
    *  input, which can run ahead during the debounce window. Used only for the no-match copy. */
   searchedQuery?: string;
   errorMessage?: string;
+  showRoots?: boolean;
   selectedIndex: number;
   onSelect: (index: number) => void;
   onActivate: (index: number) => void;
@@ -59,10 +65,11 @@ export function SearchList({
               Recent
             </li>
           )}
-          {(jumpPages ?? []).map((page, index) => (
+          {(jumpPages ?? []).map((entry, index) => (
             <JumpToItem
-              key={page.id}
-              page={page}
+              key={`${entry.root}:${entry.page.id}`}
+              entry={entry}
+              showRoot={showRoots}
               id={optionId("jump", index)}
               active={index === selectedIndex}
               onActivate={() => onActivate(index)}
@@ -115,6 +122,7 @@ export function SearchList({
             <SearchResultItem
               key={`${hit.page_id}:${hit.heading_id ?? ""}:${index}`}
               hit={hit}
+              showRoot={showRoots}
               id={optionId("search", index)}
               active={index === selectedIndex}
               onActivate={() => onActivate(index)}

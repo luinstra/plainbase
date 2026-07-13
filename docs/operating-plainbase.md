@@ -192,6 +192,24 @@ and restart re-indexes it completely. Its `page_checkpoint` rows - durable state
 reindex. A root that vanished MID-RUN is unaffected either way (its carried section is still in the
 snapshot).
 
+### Adding or removing a root: a config edit plus a restart
+
+`plainbase root add`/`remove`
+(see [Configuration: the CLI and the two files](configuration.md#the-cli-and-the-two-files)) writes
+`DATA_DIR/roots.conf`; nothing changes for a running server until you restart it - the CLI has no
+runtime API to talk to a live process, and the server does not hot-reload topology.
+
+`root remove <name>` does not touch the root's content or its database rows. Its pages keep their
+`id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
+**detached**, because the name no longer names a configured root. `root add` of the same name later
+**revives** them - a detached row binds again the moment its root reappears in the topology.
+
+**If the removed root held every page binding in `DATA_DIR`, the next boot refuses to serve.** This is
+the 100%-detached guard (ADR-0011 D15): a nonempty `id_map` whose roots are entirely disjoint from the
+configured names looks like the wrong `DATA_DIR` or a wholesale-rewritten `roots.conf`, so `serve` fails
+closed rather than silently minting fresh identities for a corpus it can no longer place. Add the root
+back (or fix `roots.conf`), then restart.
+
 ## When to upgrade to Meilisearch
 
 Plainbase's default search is embedded SQLite FTS5 - zero containers, ranked and section-granular
@@ -409,6 +427,12 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - back up **every configured root's directory** (`CONTENT_DIR` with no `roots {}` block; otherwise
   `roots.main.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too if users,
   tokens, or proposals matter.
+- on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
+  reconstructable from the content trees: they're the only record of *which* directories are roots,
+  under what names, with what `editable`/`history` settings and what rank order (rank decides which
+  root keeps a permalink when two roots share a frontmatter id - see
+  [ADR-0011 D-C5-4](decisions/0011-multi-root-document-directories.md)). Lose them without a backup and
+  a restore has the pages back but not the topology that made them a multi-root install.
 
 Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
 `search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and

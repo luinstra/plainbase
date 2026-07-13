@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { TreeResponse } from "../api/types";
 import { ErrorView } from "../components/ErrorView";
@@ -56,6 +57,17 @@ describe("error boundary", () => {
 
   it("is registered as the router's defaultErrorComponent", () => {
     expect(createAppRouter(new QueryClient()).options.defaultErrorComponent).toBe(ErrorView);
+  });
+
+  it("hands an outage to the SAME renderer every other surface uses, root name and all", () => {
+    // The boundary used to compose the outage vocabulary itself, and worded the headline WITHOUT the root
+    // name - so the one fact a reader needs (which docs are down) reached them only if they read the detail
+    // line. One outage, one renderer: this asserts the boundary DELEGATES rather than re-spelling it.
+    const view = render(<ErrorView error={new ApiError(503, "root_unavailable", 'the "handbook" root is not serving')} reset={() => {}} />);
+
+    expect(view.container.querySelector("[data-pb-root-unavailable]")).not.toBeNull();
+    expect(view.container.textContent).toContain("handbook");
+    expect(view.container.textContent).not.toContain("Something went wrong");
   });
 
   it("keeps the Shell mounted when a route's render crashes", async () => {

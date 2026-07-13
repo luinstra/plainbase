@@ -73,8 +73,9 @@ record.
 
 A top-level `roots {}` block in `plainbase.conf` declares the server's document directories
 ([ADR-0011](decisions/0011-multi-root-document-directories.md)). It is **file-only** - there is no
-env-var grammar for it (a `root add/remove/list` CLI arrives in a later release) - and like every
-key it is restart-only.
+env-var grammar for it (a `plainbase root add/remove/list` CLI manages a second, machine-owned file
+instead - see [The CLI and the two files](#the-cli-and-the-two-files) below) - and like every key it
+is restart-only.
 
 ```hocon
 roots {
@@ -123,6 +124,77 @@ Validation at boot (each failure is an actionable `serve:` refusal naming the of
 
 When a `roots {}` block is present, an explicitly set `CONTENT_DIR`/`contentDir` is **ignored** with
 a startup warning: `roots.main.path` is main's directory.
+
+### The CLI and the two files
+
+```
+plainbase root add <name> <path> [--editable] [--history off|native] [--force]
+plainbase root remove <name>
+plainbase root list
+```
+
+Exit codes: `0` success, `1` runtime failure, `2` usage error (the same convention as
+`reindex`/`adopt`, [operating-plainbase.md](operating-plainbase.md#manual-reindex-the-two-paths)).
+
+**Two files, one merge, one owner each:**
+
+- `plainbase.conf`'s `roots {}` block is yours, by hand. `plainbase root` never opens it for
+  writing - not a best-effort round-trip, an absence of code. Comments, formatting, key order and
+  every hand-written value survive by construction.
+- `DATA_DIR/roots.conf` is the CLI's. Every `add` or `remove` **rewrites it in full**. Do not
+  hand-edit it - a hand edit is lost on the next `add`/`remove`.
+- At boot the two files **merge**. A root name declared in both is a **boot error** naming the
+  file - never a silent winner, never a merge of the two declarations.
+- **`main` is never CLI-managed.** `plainbase root add main` and `plainbase root remove main` are
+  usage errors (exit 2), and `roots.conf` declaring `main` is a boot error. Main's path keeps coming
+  from a hand-written `roots {}` block in `plainbase.conf`, or from `CONTENT_DIR` when there is none.
+- **Restart to apply.** `root add`/`remove` edit a file; they do not talk to a running server, and the
+  server does not hot-reload topology. Nothing changes until the next restart.
+
+`root add` refuses outright (an error message, not a silent skip) on:
+
+- **a name that shadows an existing top-level entry of main** - a page, a folder, an asset, or a URL
+  minted by a `slug:`/`_folder.yaml slug:` - overridable with `--force`. See below for exactly what
+  this check does and does not catch.
+- **nesting** - the new path may not sit inside another configured root or inside `DATA_DIR`, and may
+  not equal one already configured.
+- **a duplicate declaration** - the name is already in `roots.conf` or in `plainbase.conf`'s block.
+- **object mode** - `roots {}` cannot be combined with `storage.backend=object` in this release, so
+  there is no local tree for a root to add.
+- **`--history auto`** - an extra root accepts only `off` or `native`; `auto` is always a boot error
+  on an extra (it can `git init` a repository Plainbase does not own), so the CLI refuses it up front
+  too.
+
+`--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
+
+`root remove` of the **last** managed root deletes `roots.conf` outright, so the topology is then
+whatever `plainbase.conf` alone says: main from its `roots {}` block or from `CONTENT_DIR`, plus any
+**other** roots you declared there by hand. `plainbase root` never writes that file, so it cannot
+remove those - deleting `roots.conf` returns the install to single-root behavior only if
+`plainbase.conf` declares no extra roots of its own.
+
+`root list` prints, per root: name, path, `editable`, `history`, **provenance**
+(`plainbase.conf` / `roots.conf` / `CONTENT_DIR`), and whether the path is a readable directory
+**right now**. It does not report live serving state - a separate process cannot know what a running
+server has marked unavailable in memory - so it points at `GET /healthz` for that instead (see
+[When a root is not there](#when-a-root-is-not-there) above).
+
+#### What the shadow check does not catch
+
+`root add`'s shadow refusal scans main's content tree at add time: every page, folder and asset
+path, plus every URL a page's `slug:`/a `_folder.yaml slug:` mints. Two things it structurally cannot
+see - and an operator who reads "refuses shadows" as "shadows are impossible" will be wrong in
+exactly these two ways:
+
+1. **A `redirect_from` alias.** Alias rows live in the database, not on disk, and they outlive the
+   frontmatter that minted them; the CLI opens no database (it is a plain filesystem scan), so it
+   cannot see them. This one has a backstop: **boot WARNs** on it, because boot builds the real index
+   and reads the alias registry - which is exactly why the boot warn exists, not as "the CLI check
+   again, later."
+2. **A folder created tomorrow through Plainbase's own UI.** The check runs once, at `add` time, and
+   nothing re-checks it afterward. This is [ADR-0011 D3](decisions/0011-multi-root-document-directories.md)'s
+   explicitly accepted tradeoff, not an oversight - and nothing is a backstop for it. A runtime shadow
+   resolves that one segment to the root, not to main's directory, until an operator renames one side.
 
 ## Per-root agent direct-commit globs
 

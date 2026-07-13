@@ -17,6 +17,11 @@
 // SYNCHRONOUSLY (execFileSync) with the SAME env as `serve` and BEFORE it, so each releases the
 // DataDirLock before the next acquires it and before the server starts. The tokens land in
 // DATA_DIR/seed.json for the spec to read.
+//
+// C5 adds SMOKE_ROOTS, and it takes TWO servers rather than one parameterized one: root availability is
+// decided at BOOT and is sticky until restart, so "both roots serving" and "one root unavailable" are two
+// different PROCESSES by construction. `multi` copies a second fixture tree and declares it; `multi-missing`
+// declares the same root and never creates the tree, so the server boots with it MISSING_AT_BOOT.
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -33,8 +38,9 @@ if (!existsSync(binary)) {
 
 const port = process.env.SMOKE_PORT ?? "4378";
 const authMode = process.env.SMOKE_AUTH ?? "off";
+const roots = process.env.SMOKE_ROOTS ?? "single";
 
-// Distinct dirs per port so the two smoke servers never contend for the same DataDirLock.
+// Distinct dirs per port so the smoke servers never contend for the same DataDirLock.
 const dataDir = path.join(frontendDir, `.smoke-data-${port}`);
 rmSync(dataDir, { recursive: true, force: true });
 mkdirSync(dataDir, { recursive: true });
@@ -44,6 +50,21 @@ mkdirSync(dataDir, { recursive: true });
 const contentDir = path.join(frontendDir, `.smoke-content-${port}`);
 rmSync(contentDir, { recursive: true, force: true });
 cpSync(path.join(repoRoot, "fixtures", "demo-docs"), contentDir, { recursive: true });
+
+// The second root, declared in DATA_DIR/plainbase.conf (the operator's file — the roots {} block must
+// declare `main` too, so CONTENT_DIR's tree is re-declared here rather than inherited). Its tree is
+// created for `multi` and deliberately NOT for `multi-missing`, which is the whole difference.
+const extraDir = path.join(frontendDir, `.smoke-extra-${port}`);
+if (roots !== "single") {
+  rmSync(extraDir, { recursive: true, force: true });
+  if (roots === "multi") {
+    cpSync(path.join(repoRoot, "fixtures", "demo-docs", "guides"), path.join(extraDir, "guides"), { recursive: true });
+  }
+  writeFileSync(
+    path.join(dataDir, "plainbase.conf"),
+    `roots {\n  main { path = "${contentDir}" }\n  extra { path = "${extraDir}" }\n}\n`,
+  );
+}
 
 const env = {
   ...process.env,

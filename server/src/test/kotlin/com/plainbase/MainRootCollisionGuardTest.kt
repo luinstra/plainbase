@@ -82,10 +82,27 @@ class MainRootCollisionGuardTest : FunSpec({
         val files = (1..11).map { "main/page-%02d.md".format(it) to "---\ntitle: P$it\n---\n\n# P\n" }
         val refusal = refusalFor(*files.toTypedArray())
         refusal.shouldNotBeNull()
-        // 12 offenders total: the folder URL `main` sorts first, then the first 9 pages; 2 overflow.
+        // C5 widened the guard to the RAW CONTENT-PATH space as well as the URL space (see the slug-override row
+        // below for why), so each page now contributes BOTH `main/page-01` (its URL) and `main/page-01.md` (the file
+        // to rename). 23 offenders: the `main` folder, deduped across both grammars, then 11 URLs + 11 files.
         refusal shouldContain
-            "main, main/page-01, main/page-02, main/page-03, main/page-04, main/page-05, main/page-06, " +
-            "main/page-07, main/page-08, main/page-09 (+2 more)"
+            "main, main/page-01, main/page-01.md, main/page-02, main/page-02.md, main/page-03, main/page-03.md, " +
+            "main/page-04, main/page-04.md, main/page-05 (+13 more)"
+    }
+
+    test("a main/ folder whose _folder.yaml slug: moves it OUT of the URL space still refuses (the C5 widening)") {
+        // THE HOLE C5 CLOSED. The old guard read the URL space + assets only. A folder literally named `main/` that
+        // carries a `_folder.yaml` `slug:` override leaves the URL space entirely - so the guard saw nothing - while
+        // `/browse/main/...` and `/assets/main/...` stay ambiguous: BrowseRedirectRoute splits that tail as root
+        // `main` plus a remainder naming no file, and a link that used to 302 to the page now 404s. Feeding the
+        // refusal the raw content paths too is what catches it.
+        val refusal = refusalFor(
+            "main/_folder.yaml" to "slug: handbook\n",
+            "main/setup.md" to "---\ntitle: Setup\n---\n\n# Setup\n",
+        )
+        refusal.shouldNotBeNull()
+        refusal shouldContain "REFUSING TO SERVE"
+        refusal shouldContain "main/setup.md" // the raw content path - it is NOT in the URL space any more
     }
 
     test("an EXTRA root's top-level main directory is harmless: its URLs carry the root segment first") {

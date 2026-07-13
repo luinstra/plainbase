@@ -2,6 +2,7 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.BuildInfo
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -76,6 +77,14 @@ data class PlainbaseConfig(
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
 
     /**
+     * Path of the MACHINE-MANAGED roots file (C5 D-C5-1): `plainbase root add|remove` rewrites it wholesale,
+     * and the loader merges it with the operator's own `roots {}` block. Declared here so the CLI never
+     * re-derives it. The operator's `plainbase.conf` is NEVER opened for writing - that guarantee is an
+     * absence of code, not a best-effort round trip.
+     */
+    val managedRootsPath: Path get() = dataDir.resolve(MANAGED_ROOTS_FILE)
+
+    /**
      * Path of the derived-state search database (§B5/ADR-0004): rebuildable from the published
      * snapshot at any time, deletable with zero data loss - always a separate file from
      * [appDatabasePath] (§4 hard rule).
@@ -102,31 +111,92 @@ data class PlainbaseConfig(
      * [contentDir].
      */
     fun requireContentDir(): Path {
-        // Backend-aware (Q9/Q10): object mode IGNORES CONTENT_DIR (the bucket is the authority; the local
-        // mirror is DATA_DIR-owned derived state), so the startup guard validates the object required-key
-        // matrix instead. fromEnv/fromEnvAndFile already fail fast at load with the same messages; this
-        // re-assert covers directly-constructed configs (tests/embedded) through the one funnel serve() runs.
-        if (storage.backend == StorageBackend.OBJECT) {
-            // Object mode ignores CONTENT_DIR (Q10); the DATA_DIR!=CONTENT_DIR guard is N/A (the mirror is
-            // DATA_DIR-owned derived state). fromEnv/fromEnvAndFile already fail fast at load with the same
-            // messages; this arm re-asserts the Q9 required keys for a directly-constructed object config
-            // (tests/embedded) through the one funnel serve() runs.
-            require(roots.origin != RootsOrigin.EXPLICIT) {
-                "roots {} cannot be combined with storage.backend=object in this release (ADR-0011 D10)"
-            }
-            requireNotNull(storage.endpoint) { "storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)" }
-            requireNotNull(storage.bucket) { "storage.object.bucket is required when storage.backend=object" }
-            require(storage.accessKeyId != null && storage.secretAccessKey != null) { MISSING_S3_CREDENTIALS_MESSAGE }
-            return contentDir
-        }
-        if (roots.origin == RootsOrigin.EXPLICIT) return validateExplicitRoots()
-        require(Files.isDirectory(contentDir)) { "CONTENT_DIR does not exist or is not a directory: $contentDir" }
-        require(dataDir.toAbsolutePath().normalize() != contentDir.toAbsolutePath().normalize()) {
-            "DATA_DIR and CONTENT_DIR must be different directories (both are $contentDir): app-owned state " +
-                "(plainbase.db, search.db) inside the user-owned content root would re-trigger the watcher " +
-                "after every rebuild - a self-sustaining rebuild loop (§4 separation)"
-        }
+        // ONE implementation, TWO shapes (C5 S1.4): the matrix below COLLECTS every failure as a value, and
+        // this throws the FIRST of them - so boot's operator-facing message is byte-identical to what it has
+        // always been (RootsValidationTest's message assertions are the proof), while [bootRefusals] hands the
+        // shared boot gate a COMPLETE set. A complete set is not a nicety: the CLI diffs the candidate's
+        // refusals against the current config's, and a validator that stops at its first failure lets a
+        // pre-existing fault MASK a new one - so `root add` would write a fresh nesting violation and report
+        // success (C5 D-C5-17.3).
+        topologyRefusals().firstOrNull()?.let { throw IllegalArgumentException(it.message) }
+        // Object mode IGNORES CONTENT_DIR (Q10 - the bucket is the authority), but the local mirror/CLI seams
+        // still need a defined Path, so the legacy field is what it returns.
+        if (storage.backend == StorageBackend.OBJECT) return contentDir
+        if (roots.origin == RootsOrigin.EXPLICIT) return requireNotNull(roots.main.localPath)
         return contentDir
+    }
+
+    /**
+     * Every refusal `serve()` raises from CONFIG + FILESYSTEM, as VALUES (C5 D-C5-17): the topology matrix
+     * [requireContentDir] throws from, plus the ADR-0008 bind guard. COMPLETE - no short-circuit - because
+     * the CLI's baseline diff needs to know whether the candidate introduced a SECOND fault behind a first.
+     *
+     * The per-root git gate is NOT here: it needs the wired stores and history providers, so it is folded in
+     * by `evaluateBootGate`, which is the one thing both `serve()` and `plainbase root` call.
+     */
+    internal fun bootRefusals(): List<BootRefusal> =
+        topologyRefusals() +
+            listOfNotNull(bindGuardRefusal()?.let { BootRefusal(BootRefusal.Kind.BIND_GUARD, emptySet(), it) })
+
+    /**
+     * The CONFIG+FILESYSTEM topology matrix, by the same backend/origin dispatch [requireContentDir] has
+     * always done: the object required-key matrix, the strict explicit-roots matrix (ADR-0011 D9), or the two
+     * legacy guards. Never throws.
+     *
+     * The legacy and explicit arms word the SAME faults differently - and that is exactly why a refusal
+     * carries a KIND. A legacy `DATA_DIR == CONTENT_DIR` and the same install after one `root add` produce
+     * DIFFERENT PROSE for one unchanged fault, so a diff over messages would call it NEW and refuse an add
+     * that introduced nothing. Both arms emit `ROOT_VS_DATA_DIR` on `{main}`, so the KEY is stable across the
+     * arm switch (C5 D-C5-17.3, misclassification 2).
+     */
+    private fun topologyRefusals(): List<BootRefusal> = when {
+        storage.backend == StorageBackend.OBJECT -> objectKeyRefusals()
+        roots.origin == RootsOrigin.EXPLICIT -> explicitRootRefusals()
+        else -> legacyRefusals()
+    }
+
+    /**
+     * The Q9 object required-key matrix. fromEnv/fromEnvAndFile already fail fast at LOAD with these same
+     * messages; this arm re-asserts them for a directly-constructed object config (tests/embedded) through
+     * the one funnel `serve()` runs. Unreachable from `plainbase root`: an explicit `roots {}` plus object
+     * storage does not load at all, and the CLI's candidate always carries a roots block.
+     */
+    private fun objectKeyRefusals(): List<BootRefusal> = buildList {
+        fun refuse(message: String) = add(BootRefusal(BootRefusal.Kind.OBJECT_KEYS, emptySet(), message))
+        if (roots.origin == RootsOrigin.EXPLICIT) {
+            refuse("roots {} cannot be combined with storage.backend=object in this release (ADR-0011 D10)")
+        }
+        if (storage.endpoint == null) refuse("storage.object.endpoint is required when storage.backend=object (the R2/S3 endpoint URL)")
+        if (storage.bucket == null) refuse("storage.object.bucket is required when storage.backend=object")
+        if (storage.accessKeyId == null || storage.secretAccessKey == null) refuse(MISSING_S3_CREDENTIALS_MESSAGE)
+    }
+
+    /**
+     * The two back-compat guards a SYNTHESIZED (legacy) config gets, and nothing else (ADR-0011 D9): the
+     * byte-identical mandate lives here. The DATA_DIR guard is keyed `ROOT_VS_DATA_DIR` on `{main}` - the
+     * SAME key the explicit matrix produces for the same fault, deliberately.
+     */
+    private fun legacyRefusals(): List<BootRefusal> = buildList {
+        if (!Files.isDirectory(contentDir)) {
+            add(
+                BootRefusal(
+                    BootRefusal.Kind.MAIN_UNUSABLE,
+                    setOf(RootName.MAIN),
+                    "CONTENT_DIR does not exist or is not a directory: $contentDir",
+                ),
+            )
+        }
+        if (dataDir.toAbsolutePath().normalize() == contentDir.toAbsolutePath().normalize()) {
+            add(
+                BootRefusal(
+                    BootRefusal.Kind.ROOT_VS_DATA_DIR,
+                    setOf(RootName.MAIN),
+                    "DATA_DIR and CONTENT_DIR must be different directories (both are $contentDir): app-owned state " +
+                        "(plainbase.db, search.db) inside the user-owned content root would re-trigger the watcher " +
+                        "after every rebuild - a self-sustaining rebuild loop (§4 separation)",
+                ),
+            )
+        }
     }
 
     /**
@@ -139,24 +209,42 @@ data class PlainbaseConfig(
      * a directory, or any I/O failure while canonicalizing) is fatal for main but keeps an EXTRA
      * participating in every comparison via its best-effort canonical form
      * ([bestEffortCanonical] - the deepest existing ancestor resolved, remainder appended; D13,
-     * [rootsWarnings] names it - never a throw here).
+     * [rootsWarnings] names it).
+     *
+     * **Every failure, in matrix order, NEVER throwing** (C5 S1.4). The order is load-bearing twice:
+     * [requireContentDir] throws the FIRST, so it is what an operator sees at boot and what
+     * `RootsValidationTest` already pins; and a stable order makes the CLI's WARN output stable. Main's
+     * canonicalization failure records `MAIN_UNUSABLE` and falls back to [bestEffortCanonical] rather than
+     * throwing, so the pairwise and DATA_DIR checks below it still run and still report - which is exactly
+     * the completeness the baseline diff needs. (The rethrow in [requireContentDir] drops the IOException
+     * `cause` the old throw carried; nothing asserts on it, and a nullable cause on [BootRefusal] would be a
+     * field one caller reads.)
      */
-    private fun validateExplicitRoots(): Path {
+    private fun explicitRootRefusals(): List<BootRefusal> = buildList {
         val mainPath = requireNotNull(roots.main.localPath) // parse rejects non-local backends in an explicit block
-        require(Files.isDirectory(mainPath)) { "roots.main.path does not exist or is not a directory: $mainPath" }
-        // Fail fast here, not later: a main directory missing the read bit (execute-only) OR the
-        // execute bit (read-only, unsearchable - directories need x to be traversed) would pass the
-        // check above and then die in the first scan, outside the controlled `serve:` startup refusal.
-        require(Files.isReadable(mainPath) && Files.isExecutable(mainPath)) {
-            "roots.main.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)"
+        fun mainUnusable(message: String) = add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
+        // A SHORT-CIRCUIT chain, exactly like the `require` chain it replaces: one fault, one message. The
+        // readable/searchable probe is not a second opinion on a missing directory - it is the check that a
+        // main which EXISTS but lacks the read bit (execute-only) or the execute bit (read-only, and
+        // directories need x to be traversed) fails at the controlled `serve:` refusal rather than in the
+        // first scan.
+        val mainFault = when {
+            !Files.isDirectory(mainPath) -> "roots.main.path does not exist or is not a directory: $mainPath"
+            !(Files.isReadable(mainPath) && Files.isExecutable(mainPath)) ->
+                "roots.main.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)"
+            else -> null
         }
+        mainFault?.let { mainUnusable(it) }
         val canonical = roots.list.map { root ->
             val declared = requireNotNull(root.localPath)
             val comparable = if (root.name == RootName.MAIN) {
                 try {
                     declared.toRealPath()
                 } catch (e: IOException) {
-                    throw IllegalArgumentException("roots.main.path cannot be resolved: $declared (${e.message})", e)
+                    // Only worth reporting when main OTHERWISE looked fine (a race, an exotic filesystem): a
+                    // main that is simply not there is already named above, and saying it twice says nothing more.
+                    if (mainFault == null) mainUnusable("roots.main.path cannot be resolved: $declared (${e.message})")
+                    bestEffortCanonical(declared)
                 }
             } else {
                 // D13: an unavailable extra still participates via its best-effort canonical form.
@@ -173,37 +261,43 @@ data class PlainbaseConfig(
         } catch (_: IOException) {
             bestEffortCanonical(dataDir)
         }
+        // Keyed by the PAIR as a SET, so a pre-existing violation between (a, b) cannot mask a new one between
+        // (a, c). The `when` is the same short-circuit the require chain had: two roots at ONE path also
+        // trivially "nest" both ways, and saying so three times helps nobody.
         canonical.forEachIndexed { i, (aName, _, aPath) ->
             canonical.drop(i + 1).forEach { (bName, _, bPath) ->
-                require(aPath != bPath) { "roots.${aName.value} and roots.${bName.value} resolve to the same directory: $aPath" }
-                require(!aPath.startsWith(bPath)) {
-                    "roots.${aName.value} ($aPath) is nested inside roots.${bName.value} ($bPath): roots must be disjoint directories"
-                }
-                require(!bPath.startsWith(aPath)) {
-                    "roots.${bName.value} ($bPath) is nested inside roots.${aName.value} ($aPath): roots must be disjoint directories"
+                fun pair(message: String) = add(BootRefusal(BootRefusal.Kind.ROOT_PAIR, setOf(aName, bName), message))
+                when {
+                    aPath == bPath -> pair("roots.${aName.value} and roots.${bName.value} resolve to the same directory: $aPath")
+                    aPath.startsWith(bPath) -> pair(
+                        "roots.${aName.value} ($aPath) is nested inside roots.${bName.value} ($bPath): roots must be disjoint directories",
+                    )
+                    bPath.startsWith(aPath) -> pair(
+                        "roots.${bName.value} ($bPath) is nested inside roots.${aName.value} ($aPath): roots must be disjoint directories",
+                    )
                 }
             }
         }
         val dataDirDeclared = dataDir.toAbsolutePath().normalize()
         canonical.forEach { (name, declared, comparable) ->
-            require(comparable != dataDirComparable) {
-                "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): app-owned state " +
-                    "(plainbase.db, search.db) inside a docs root would re-trigger the watcher after every rebuild (§4 separation)"
-            }
-            require(!comparable.startsWith(dataDirComparable)) {
-                "roots.${name.value} ($comparable) is inside DATA_DIR ($dataDirComparable): app-owned state must not contain a docs root"
-            }
-            // DATA_DIR strictly inside a root is legal ONLY when the DECLARED forms nest too: the
-            // store's DATA_DIR exclusion is lexical over the declared paths, so a symlink-aliased
-            // nesting would dodge it and index/serve app state as content.
-            if (dataDirComparable.startsWith(comparable)) {
-                require(dataDirDeclared.startsWith(declared)) {
+            fun vsDataDir(message: String) = add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(name), message))
+            when {
+                comparable == dataDirComparable -> vsDataDir(
+                    "roots.${name.value} and DATA_DIR must be different directories (both are $comparable): app-owned state " +
+                        "(plainbase.db, search.db) inside a docs root would re-trigger the watcher after every rebuild (§4 separation)",
+                )
+                comparable.startsWith(dataDirComparable) -> vsDataDir(
+                    "roots.${name.value} ($comparable) is inside DATA_DIR ($dataDirComparable): app-owned state must not contain a docs root",
+                )
+                // DATA_DIR strictly inside a root is legal ONLY when the DECLARED forms nest too: the store's
+                // DATA_DIR exclusion is lexical over the declared paths, so a symlink-aliased nesting would
+                // dodge it and index/serve app state as content.
+                dataDirComparable.startsWith(comparable) && !dataDirDeclared.startsWith(declared) -> vsDataDir(
                     "DATA_DIR ($dataDirDeclared) is inside roots.${name.value} on disk but not by its declared path " +
-                        "($declared): declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply"
-                }
+                        "($declared): declare the root and DATA_DIR through consistent paths so the app-state exclusion can apply",
+                )
             }
         }
-        return mainPath
     }
 
     /**
@@ -232,8 +326,7 @@ data class PlainbaseConfig(
     }
 
     /**
-     * Operator-facing multi-root warnings (ADR-0011 D11-D13, plus the dormant per-root knobs),
-     * logged once by `serve()` like
+     * Operator-facing multi-root warnings (ADR-0011 D11-D13), logged once by `serve()` like
      * [storageWarnings] (same pure-accessor idiom, kept SEPARATE so the storage warnings and their
      * tests stay untouched). Empty for every synthesized (legacy) config. Unlike [storageWarnings]
      * this probes the filesystem for extra-root availability - through the SAME probe the validation
@@ -242,7 +335,11 @@ data class PlainbaseConfig(
      */
     fun rootsWarnings(): List<String> = buildList {
         if (roots.origin != RootsOrigin.EXPLICIT) return@buildList
-        if (contentDirSource != ConfigSource.DEFAULT) {
+        // Gated on main having actually been DECLARED (C5 D-C5-3), not merely on EXPLICIT. A `roots.conf`-only
+        // topology is EXPLICIT with main SYNTHESIZED from contentDir, so CONTENT_DIR is the very thing main's
+        // path comes from - telling a docker/systemd operator it is ignored would be a LIE whose natural
+        // remedy (delete the "ignored" env var) silently repoints main at ./content.
+        if (roots.mainDeclared && contentDirSource != ConfigSource.DEFAULT) {
             add(
                 "roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via ${contentDirSource.name.lowercase()}) " +
                     "is ignored - main's path comes from roots.main.path",
@@ -381,6 +478,15 @@ data class PlainbaseConfig(
         const val DEFAULT_PORT: Int = 8080
 
         /**
+         * The machine-managed roots file (C5 D-C5-1), in DATA_DIR beside `plainbase.conf`. Owned end-to-end by
+         * `plainbase root`: rewritten in full by every `add`/`remove`, deleted when its last root goes. It
+         * declares EXTRAS ONLY - `main` is never CLI-managed (D-C5-2), because CONTENT_DIR is routinely an
+         * environment variable and freezing the value one `root add` happened to see would silently repoint
+         * main on every container that boots with a different one.
+         */
+        const val MANAGED_ROOTS_FILE: String = "roots.conf"
+
+        /**
          * Default bind host: loopback (§ADR-0008). Out-of-the-box `serve` is dev/off-safe on `127.0.0.1`;
          * exposing the server requires an EXPLICIT non-loopback `PLAINBASE_HOST`, which trips the bind guard
          * unless TLS/trusted-proxy or `PLAINBASE_INSECURE_HTTP` is configured. (Docker/compose host handling
@@ -438,25 +544,72 @@ data class PlainbaseConfig(
             build(env, ConfigFactory.empty())
 
         /**
-         * Layered construction (ADR-0009): read `DATA_DIR/plainbase.conf` (HOCON) THEN overlay env -
-         * **env always wins**, the file only supplies values env omits. A missing `plainbase.conf` is a clean
-         * no-op (identical to [fromEnv]). [dataDir] locates the file and so is the one field that can never
-         * come from it: it is resolved from env/default exactly as [fromEnv] does, never file-derived.
+         * Where DATA_DIR comes from, in ONE spelling (C5 D-C5-9). [dataDir] locates every config file and so is
+         * the one field that can never come from one: it is resolved from env/default exactly as [fromEnv]
+         * does, never file-derived. `plainbase root` needs it BEFORE the lock - and therefore before any config
+         * - and this is the same value `config.dataDir` will hold, by construction rather than by luck.
          */
-        fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig {
-            val dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()
-            val confPath = dataDir.resolve("plainbase.conf")
-            // `.resolve()` so the ADR-0009 `${?…}` substitution the docs advertise actually resolves instead of
-            // throwing ConfigException.NotResolved at the first typed getter (B3). ConfigResolveOptions.defaults()
-            // resolves within-file refs then falls back to the JVM system ENV (not system properties); the optional
-            // `${?…}` form drops silently when its var is unset (a bare `${…}` still throws by design).
-            val file = if (Files.isRegularFile(confPath)) {
-                ConfigFactory.parseFile(confPath.toFile()).resolve(ConfigResolveOptions.defaults())
+        internal fun dataDirFrom(env: Map<String, String> = System.getenv()): Path =
+            Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize()
+
+        /**
+         * [fromEnvAndFile]'s body, over the TWO files the roots topology now merges (C5 D-C5-1).
+         * [managedOverride] non-null is the CLI's in-memory CANDIDATE `roots.conf` - the bytes it is ABOUT to
+         * write; null reads `DATA_DIR/roots.conf` from disk, which is what boot does.
+         *
+         * ONE [build], so a refusal the real loader raises is a refusal the candidate load raises. There is no
+         * second loader to drift, which is the entire point: the CLI does not know what those refusals ARE, and
+         * must not (D-C5-17).
+         */
+        private fun fromSources(env: Map<String, String>, managedOverride: Config?): PlainbaseConfig {
+            val dataDir = dataDirFrom(env)
+            val file = parseIfRegularFile(dataDir.resolve("plainbase.conf"))
+            val managed = managedOverride ?: parseIfRegularFile(dataDir.resolve(MANAGED_ROOTS_FILE))
+            return build(env, file, managed)
+        }
+
+        /**
+         * `.resolve()` so the ADR-0009 `${?…}` substitution the docs advertise actually resolves instead of
+         * throwing ConfigException.NotResolved at the first typed getter (B3). ConfigResolveOptions.defaults()
+         * resolves within-file refs then falls back to the JVM system ENV (not system properties); the optional
+         * `${?…}` form drops silently when its var is unset (a bare `${…}` still throws by design). Shared by
+         * both files: a file the loader parses must be parsed ONE way, not two.
+         */
+        private fun parseIfRegularFile(path: Path): Config =
+            if (Files.isRegularFile(path)) {
+                ConfigFactory.parseFile(path.toFile()).resolve(ConfigResolveOptions.defaults())
             } else {
                 ConfigFactory.empty()
             }
-            return build(env, file)
-        }
+
+        /**
+         * Layered construction (ADR-0009): read `DATA_DIR/plainbase.conf` (HOCON) and the machine-managed
+         * `DATA_DIR/roots.conf` THEN overlay env - **env always wins**, the file only supplies values env
+         * omits. A missing file on either side is a clean no-op (identical to [fromEnv]).
+         *
+         * **This is the ONLY code in the repository that parses `roots.conf`** (C5 D-C5-10, criterion 22).
+         * `plainbase root list` and the mutating verbs read the managed roots off the [RootsConfig] snapshot
+         * this produces, never from a second parse: `root add` replaces that file atomically, so two reads of
+         * it are two OBSERVATIONS of a changing file, not one snapshot of it.
+         */
+        fun fromEnvAndFile(env: Map<String, String> = System.getenv()): PlainbaseConfig = fromSources(env, null)
+
+        /**
+         * The CLI's candidate-validation seam (C5 D-C5-17): the `roots.conf` that is ABOUT to be written,
+         * supplied as an already-parsed [Config] instead of read from DATA_DIR. Everything else - the
+         * operator's `plainbase.conf`, env, the whole [build] chain and EVERY refusal it raises - is identical
+         * to [fromEnvAndFile], which is the entire point.
+         *
+         * The tempting shortcut, `config.copy(roots = candidate)`, is UNSOUND and must never be used: the
+         * refusals that matter are raised INSIDE [build], from cross-field validation a field-wise copy skips.
+         * [buildDirectCommitGlobsByRoot] refuses when a glob key names no configured root, and its verdict is
+         * BAKED INTO the constructed config - so a copy-based candidate would sail `root remove x` past an
+         * `auth.agentDirectCommit.roots.x` that still exists and write a config that bricks the next boot.
+         */
+        fun fromEnvAndCandidateRoots(
+            managedRoots: Config,
+            env: Map<String, String> = System.getenv(),
+        ): PlainbaseConfig = fromSources(env, managedRoots)
 
         /**
          * Resolves config for a `serve`/CLI entry point, funneling a bad config into a clean `<command>:`
@@ -487,7 +640,7 @@ data class PlainbaseConfig(
          * getters only (no `unwrapped()` reflection, no serialized data class) - that is what keeps it
          * native-safe.
          */
-        private fun build(env: Map<String, String>, file: Config): PlainbaseConfig {
+        private fun build(env: Map<String, String>, file: Config, managed: Config = ConfigFactory.empty()): PlainbaseConfig {
             // The one place the env/file/default arms are still distinguishable (Q10 source tracking):
             // capture the source BEFORE the chain collapses into a normalized Path.
             val contentDirEnv = env["CONTENT_DIR"]
@@ -502,7 +655,7 @@ data class PlainbaseConfig(
             // `roots` and `auth` are SIBLING named arguments of the one constructor call below, so `auth` cannot see
             // the parsed roots from in there - and the per-root glob block has to validate its keys against them.
             // Hoist.
-            val roots = buildRoots(file, contentDir, storage)
+            val roots = buildRoots(file, managed, contentDir, storage)
             requireCoherentMainHistory(roots, env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"))
             return PlainbaseConfig(
                 contentDir = contentDir,
@@ -513,7 +666,7 @@ data class PlainbaseConfig(
                 },
                 storage = storage,
                 roots = roots,
-                dataDir = Path.of(env["DATA_DIR"] ?: "./data").toAbsolutePath().normalize(),
+                dataDir = dataDirFrom(env),
                 host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
                 port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,
                 maxWriteBodyBytes = env.positiveLongStrict("PLAINBASE_MAX_WRITE_BODY_BYTES")
@@ -597,36 +750,103 @@ data class PlainbaseConfig(
         }
 
         /**
-         * The multi-root C1 parse (ADR-0011), the [buildStorage] sibling: no `roots {}` block
-         * synthesizes the back-compat main ([RootsConfig.synthesized] - today's defaults,
-         * byte-identical); an explicit block is parsed with the same hand-rolled primitives as every
-         * other key. Roots are FILE-ONLY in v1 (no env grammar; the CLI-managed include arrives in
-         * C5). Duplicate `roots.x {}` blocks never reach here: HOCON merges duplicate keys
-         * FIELD-WISE (later value wins per field, earlier-only fields survive, and the merged
-         * value's origin line may match neither declaration - still deterministic under the name
-         * tiebreak), so per-name uniqueness is structural, not a check to add.
+         * The multi-root roots parse (ADR-0011), the [buildStorage] sibling, over the TWO sources C5 merges:
+         * the operator's `roots {}` block in `plainbase.conf` ([file]) and the machine-managed `roots.conf`
+         * ([managed]). Neither present synthesizes the back-compat main ([RootsConfig.synthesized] - today's
+         * defaults, byte-identical). Roots stay FILE-ONLY (no env grammar).
          *
-         * Entry order is origin-line-with-name-tiebreak (D7): `ConfigObject` is map-backed and does
-         * NOT preserve insertion order, but every value carries its origin line. NOT raw declaration
-         * order in two edge cases (two roots on one line order by name; line numbers reset per file
-         * under includes) - deterministic either way, which is all C2's duplicate-id winner needs.
+         * **BLOCK PRESENCE IS THE DISPATCH KEY FOR THE OPERATOR FILE, NEVER LIST EMPTINESS.** An operator who
+         * writes an explicitly EMPTY `roots {}` block must keep hitting the required-main refusal (and, with
+         * `storage.backend=object`, the object refusal) exactly as they do today - and an `isEmpty()` dispatch
+         * cannot tell an ABSENT block from an EMPTY one, so it would route the empty block into the synthesize
+         * arm and SILENTLY REVERT the install to legacy CONTENT_DIR mode, dropping both refusals.
+         *
+         * The MANAGED file needs no such care, and the asymmetry is the point: no refusal hangs off ITS
+         * presence (its one rule, "must not declare main", is vacuous when empty), so for `roots.conf`
+         * emptiness IS absence - a leftover empty machine file returns the install to SYNTHESIZED rather than
+         * forcing it into the strict EXPLICIT matrix for no reason.
+         *
+         * Entry order is origin-line-with-name-tiebreak (D7), applied PER FILE ([parseRootBlock]). `ConfigObject`
+         * is map-backed and does NOT preserve insertion order, but every value carries its origin line.
          */
-        private fun buildRoots(file: Config, contentDir: Path, storage: StorageConfig): RootsConfig {
-            if (!file.hasPath("roots")) return RootsConfig.synthesized(contentDir, storage)
+        private fun buildRoots(file: Config, managed: Config, contentDir: Path, storage: StorageConfig): RootsConfig {
+            val declaredPresent = file.hasPath("roots")
+            val declared = parseRootBlock(file)
+            val managedRoots = parseRootBlock(managed)
+            if (!declaredPresent && managedRoots.isEmpty()) return RootsConfig.synthesized(contentDir, storage)
             require(storage.backend != StorageBackend.OBJECT) {
                 "roots {} cannot be combined with storage.backend=object in this release: the bucket is main's content " +
                     "authority and a roots block cannot describe it - remove the roots block to keep the object deployment"
             }
-            val parsed = file.getObject("roots").entries
-                .sortedWith(compareBy({ it.value.origin().lineNumber() }, { it.key }))
-                .map { (key, value) -> parseRoot(key, value) }
             // Redundant with RootsConfig.of's own check, deliberately: this one is OPERATOR-facing and names the
-            // config key. `of`'s is the type-level backstop for programmatic construction.
-            require(parsed.any { it.name == RootName.MAIN }) {
-                "roots {} must declare a root named '${RootName.MAIN}' (the required, reserved primary): roots.main { path = ... }"
+            // config key. `of`'s is the type-level backstop for programmatic construction. NARROWED to a PRESENT
+            // operator block - only the machine file is allowed to omit main, and D-C5-3's synthesis is what
+            // makes a roots.conf-only topology legal.
+            if (declaredPresent) {
+                require(declared.any { it.name == RootName.MAIN }) {
+                    "roots {} must declare a root named '${RootName.MAIN}' (the required, reserved primary): roots.main { path = ... }"
+                }
             }
-            return RootsConfig.of(parsed, RootsOrigin.EXPLICIT)
+            require(managedRoots.none { it.name == RootName.MAIN }) {
+                "$MANAGED_ROOTS_FILE must not declare 'main': main's directory comes from CONTENT_DIR, or from a roots {} " +
+                    "block you wrote yourself in plainbase.conf. `plainbase root` never manages main."
+            }
+            // The house idiom, copied from mainDirectCommitGlobs: two spellings of ONE thing refuse the boot rather
+            // than guess a winner. Merging two declarations field-wise could silently take `editable` from one file
+            // and `path` from the other; picking a winner drops a declaration the operator wrote.
+            val overlap = declared.map { it.name }.intersect(managedRoots.map { it.name }.toSet())
+            require(overlap.isEmpty()) {
+                "root(s) ${overlap.joinToString(", ") { it.value }} are declared BOTH in plainbase.conf and in " +
+                    "$MANAGED_ROOTS_FILE. Declare each root ONCE - Plainbase will not guess which declaration you meant, and " +
+                    "merging them field-wise could silently take `editable` from one file and `path` from the other. Remove " +
+                    "the duplicate from plainbase.conf, or run `plainbase root remove <name>`."
+            }
+            // D-C5-4: FILE ORDER, each block whole and in its own D7 order. main sits WHERE IT WAS DECLARED and is
+            // NEVER hoisted. Rank decides the cross-root duplicate-id winner (lowest index wins -
+            // PageIdentityService), i.e. WHICH ROOT'S PAGE KEEPS A PERMALINK - so `listOf(main) + extras` would force
+            // main to rank 0 and silently reassign every shared id to main's page, with no error and no log line. An
+            // operator who deliberately declared `roots { zeta {…} main {…} }` would have had zeta demoted by a CLI
+            // change that never touched zeta. When no block was written, the synthesized main is the SOLE file-1
+            // entry and so ranks first by arithmetic, not by policy - which is byte-identical legacy behavior.
+            val fromDeclaredFile = if (declaredPresent) declared else listOf(RootsConfig.synthesized(contentDir, storage).main)
+            return RootsConfig.of(
+                list = fromDeclaredFile + managedRoots,
+                origin = RootsOrigin.EXPLICIT,
+                // Gates the CONTENT_DIR-is-ignored warning: under a roots.conf-only topology main is SYNTHESIZED
+                // FROM contentDir, so that warning would be a lie (D-C5-3 consequence 2).
+                mainDeclared = declaredPresent,
+                // Provenance, captured at the ONE moment both files are in hand - which is the only moment they
+                // ever are. A caller that re-reads roots.conf to answer "where did this root come from" is making a
+                // SECOND observation of a file `root add` replaces atomically, and two observations are not one
+                // snapshot (D-C5-10).
+                managed = managedRoots.map { it.name }.toSet(),
+            )
         }
+
+        /**
+         * The D7 origin-line-with-name-tiebreak parse of ONE file's `roots {}` block; empty when absent. Each
+         * file is sorted INDEPENDENTLY, which is what makes the per-file line-number reset a non-issue: the two
+         * files' line numbers are never compared with each other, so there is no collision for a tiebreak to
+         * resolve. (ADR-0011 D7's aside sketches a cross-file `(line, name)` sort. It is REJECTED: it would let a
+         * CLI-added root at `roots.conf` line 4 outrank a hand-declared incumbent at `plainbase.conf` line 8 and
+         * take its permalinks - and it is not even stable, since `root add aardvark` shifts the line numbers of
+         * roots the operator never touched.)
+         *
+         * Duplicate `roots.x {}` blocks WITHIN one file never reach here: HOCON merges duplicate keys FIELD-WISE,
+         * so per-name uniqueness is structural. The TWO-file merge is the first way to produce a duplicate name,
+         * and [buildRoots]'s overlap refusal is where that is caught.
+         *
+         * PRIVATE, and it stays private: [fromEnvAndFile] is the only thing in the repository that parses
+         * `roots.conf`, so there is no second parser to keep in step (D-C5-10).
+         */
+        private fun parseRootBlock(file: Config): List<Root> =
+            if (!file.hasPath("roots")) {
+                emptyList()
+            } else {
+                file.getObject("roots").entries
+                    .sortedWith(compareBy({ it.value.origin().lineNumber() }, { it.key }))
+                    .map { (key, value) -> parseRoot(key, value) }
+            }
 
         private fun parseRoot(key: String, value: ConfigValue): Root {
             val name = RootName.of(key) ?: throw IllegalArgumentException(
@@ -1007,12 +1227,30 @@ enum class RootsOrigin {
  * the list it handed in.
  */
 @ConsistentCopyVisibility
-data class RootsConfig private constructor(val list: List<Root>, val origin: RootsOrigin) {
+data class RootsConfig private constructor(
+    val list: List<Root>,
+    val origin: RootsOrigin,
+    /**
+     * Did main come from a hand-written `roots {}` block? False when it was SYNTHESIZED from CONTENT_DIR -
+     * which a `roots.conf`-only topology is, despite being EXPLICIT (C5 D-C5-3). The distinction is not
+     * cosmetic: it is what stops [PlainbaseConfig.rootsWarnings] telling a docker operator their CONTENT_DIR
+     * is ignored while it is still the thing main's path comes from.
+     */
+    val mainDeclared: Boolean,
+    /**
+     * The roots that came from `DATA_DIR/roots.conf` (C5 D-C5-10). Captured HERE, where both files are in
+     * hand, because it is the only place they ever are: a caller that re-reads `roots.conf` to answer "where
+     * did this root come from" is making a second observation of a file `root add` replaces atomically, and
+     * two atomic reads of a mutating file are not one atomic read. `plainbase root list` reads provenance off
+     * THIS snapshot, and `add`/`remove` take the managed subset off it too.
+     */
+    val managed: Set<RootName>,
+) {
 
     /**
      * The reserved primary root; a construction-time guarantee from [of]. NOT necessarily `list.first()`:
      * D7 order is preserved verbatim (`RootRegistry.rank` inherits it, and rank decides the cross-root
-     * duplicate-id winner).
+     * duplicate-id winner). A typed ACCESSOR, never a promotion.
      */
     val main: Root = list.first { it.name == RootName.MAIN }
 
@@ -1022,13 +1260,23 @@ data class RootsConfig private constructor(val list: List<Root>, val origin: Roo
     companion object {
 
         /** Snapshots [list] and validates it once, so nothing downstream has to search for main. */
-        fun of(list: List<Root>, origin: RootsOrigin): RootsConfig {
+        fun of(
+            list: List<Root>,
+            origin: RootsOrigin,
+            mainDeclared: Boolean = origin == RootsOrigin.EXPLICIT,
+            managed: Set<RootName> = emptySet(),
+        ): RootsConfig {
             val snapshot = list.toList()
             require(snapshot.any { it.name == RootName.MAIN }) {
                 "no 'main' root in the roots list (parse and synthesis both guarantee one; a directly-constructed " +
                     "RootsConfig must include it)"
             }
-            return RootsConfig(snapshot, origin)
+            // The type-level backstop, mirroring RootRegistry.of. Within ONE file HOCON merges duplicate keys
+            // field-wise, so a duplicate name was structurally impossible - the C5 TWO-file merge is the first way
+            // to produce one, and buildRoots' operator-facing overlap refusal is the message that should fire first.
+            val duplicates = snapshot.groupBy { it.name }.filterValues { it.size > 1 }.keys
+            require(duplicates.isEmpty()) { "duplicate root name(s): ${duplicates.joinToString(", ") { it.value }}" }
+            return RootsConfig(snapshot, origin, mainDeclared, managed)
         }
 
         /**
