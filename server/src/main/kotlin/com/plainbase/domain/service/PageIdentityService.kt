@@ -194,3 +194,23 @@ class PageIdentityService(
         )
     }
 }
+
+/**
+ * The precondition BOTH resolve-then-bind passes (`IndexBuilder`, `AdoptionPass`) check immediately before they
+ * make a plan DURABLE: one id, one page. Every rule above is meant to guarantee it, and the point of checking is
+ * that a rule can be wrong - `duplicate()` reused a `mappedId` blind for a whole release, and nothing between
+ * there and the disk would have noticed.
+ *
+ * It has to run BEFORE the binds because a durable duplicate cannot be walked back: `id_map.bind` is key-complete,
+ * so the second bind of an id DELETES the first page's row, and the only existing check ([PageIndex]'s `byId`) runs
+ * AFTER the whole loop - it throws on a snapshot whose rows are already rewritten, and it throws again on every
+ * boot that follows. Failing HERE aborts a pass that has changed nothing: the last-good snapshot stands, the rows
+ * stand, and the fault is loud, named, and fixable.
+ */
+internal fun requireDistinctIds(plan: Map<RootedPath, PageId>) {
+    val duplicates = plan.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
+    check(duplicates.isEmpty()) {
+        "identity resolution produced ONE id for SEVERAL pages, which no bind may make durable: " +
+            duplicates.entries.joinToString("; ") { (id, paths) -> "${id.value} -> ${paths.joinToString { it.path.value }}" }
+    }
+}

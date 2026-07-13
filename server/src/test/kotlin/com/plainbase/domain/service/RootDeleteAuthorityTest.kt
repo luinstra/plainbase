@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
@@ -22,6 +23,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -44,7 +46,12 @@ import kotlin.time.Clock
  *    rebuild, which at boot would take the server down over one unreadable folder in one extra root;
  *  - the search REINDEX, which re-derives the engine from the snapshot alone and therefore says nothing at all
  *    about a root unavailable since boot - unless it is told what the pass that published that snapshot was
- *    allowed to delete.
+ *    allowed to delete;
+ *  - and the CORPUS-LOSS TRIPWIRE, the last check and the only one anchored in state that survives a restart: a
+ *    root that scans to ZERO pages while its durable rows say otherwise, on a corpus this process has never seen,
+ *    is a broken view rather than a delete. Its three siblings are here too, because a tripwire is only as good as
+ *    the cases it lets THROUGH: the control (a corpus we watched drain still deletes), the operator override, and
+ *    the fresh empty root that must be allowed to be empty.
  */
 class RootDeleteAuthorityTest : FunSpec({
 
@@ -106,6 +113,148 @@ class RootDeleteAuthorityTest : FunSpec({
 
                 // ...and the next pass retries it, so a fixed directory heals with no restart.
                 failing.armed = false
+                builder.rebuild().section(extra).pages.map { it.path.value } shouldContainExactly listOf("notes/rollback.md")
+            }
+        }
+    }
+
+    // ---- the CORPUS-LOSS TRIPWIRE: a zero-page scan is not, on its own, a delete instruction ---------
+    //
+    // Every probe upstream of the pass is a PROXY for "is the corpus there", and each has a hole at BOOT - where
+    // the tree an identity check would compare against is the broken one, and the remedy it prescribes (restart)
+    // is the trigger. What they all come out as is a root that scans to ZERO pages, which is also exactly what a
+    // genuine full-corpus delete looks like. Durable rows are the one oracle that outlives the process, so they
+    // are what decides - and the operator gets the override, because no row can tell a wipe-while-down from an
+    // outage either.
+
+    test("a root that scans to ZERO pages with durable rows, whose corpus we never saw, is a BROKEN VIEW: nothing is deleted") {
+        withAuthorityTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
+            AuthorityWorld(mainDir, extraDir).use { world ->
+                // Run 1: the corpus is there, and its rows go durable.
+                val warm = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
+                val rollback = warm.rebuild().byPath.getValue(rollbackPath).id
+                world.checkpoints.load().keys shouldContain rollback
+
+                // The outage, and the shape that matters: the volume is unmounted while the server is DOWN, so what
+                // the next boot finds at the path is an EMPTY DIRECTORY (a mount point, a bind mount the container
+                // runtime created for it, a restore that has not run). Every path predicate passes; the tree
+                // identity has nothing to be compared against, because this process captured it after the loss. The
+                // ONLY thing left that knows the corpus existed is the durable rows.
+                Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
+                val cold = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
+                cold.rebuild()
+
+                withClue("the checkpoint replace would have purged the whole root - it must have had NO authority here") {
+                    world.checkpoints.load().keys shouldContain rollback
+                }
+                withClue("the id_map binding is the permalink: losing it re-mints /p/{id} for a page that still exists") {
+                    world.idMap.pathOf(rollback) shouldBe rollbackPath
+                }
+                withClue("and the search rows, which the sync listener deletes off the same authority set") {
+                    world.engine.indexedState().keys shouldContain rollback
+                }
+                val down = world.availability.current().unavailable[extra]
+                withClue("an empty VIEW must not be SERVED as a live corpus: 503 (the pages exist), never 404") {
+                    down?.cause shouldBe UnavailableCause.CORPUS_MISSING
+                }
+                withClue("the other roots are untouched - one broken mount is not a corpus-wide outage") {
+                    cold.current.section(RootName.MAIN).pages.map { it.path.value } shouldContainExactly listOf("guides/deploy.md")
+                }
+            }
+        }
+    }
+
+    test("the CONTROL: a corpus this process SCANNED and then watched drain is a real delete, and its rows DO delete") {
+        withAuthorityTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
+            AuthorityWorld(mainDir, extraDir).use { world ->
+                // The case the whole tripwire is balanced against: an `rm -rf` under a RUNNING server. The pass saw
+                // the corpus with its own eyes and then saw it go, which is precisely the evidence a cold boot into
+                // an outage does not have. It is a full-corpus delete, and it must still land - a tripwire that
+                // refuses this one is not conservative, it is broken.
+                val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
+                val rollback = builder.rebuild().byPath.getValue(rollbackPath).id
+                world.engine.indexedState().keys shouldContain rollback
+
+                Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
+                builder.rebuild()
+
+                world.availability.current().isAvailable(extra) shouldBe true
+                withClue("the two pipelines delete authority actually governs: the checkpoint replace and the search sync") {
+                    world.checkpoints.load().keys.contains(rollback) shouldBe false
+                    world.engine.indexedState().keys.contains(rollback) shouldBe false
+                }
+            }
+        }
+    }
+
+    test("the OPERATOR OVERRIDE: PLAINBASE_ACCEPT_EMPTY_ROOTS restores delete authority for a wipe performed while DOWN") {
+        withAuthorityTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain body\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nextra body\n")
+            AuthorityWorld(mainDir, extraDir).use { world ->
+                val rollback = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
+                    .rebuild().byPath.getValue(rollbackPath).id
+
+                // The wipe was REAL, and it happened while the server was down - the one case no probe and no row
+                // can distinguish from an outage. So the operator says so, by name, and the pass believes them.
+                Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
+                val cold = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, acceptEmptyRoots = setOf(extra))
+                cold.rebuild()
+
+                withClue("the operator declared the emptiness real: the pass must perform the deletion they ran it for") {
+                    world.checkpoints.load().keys.contains(rollback) shouldBe false
+                    world.engine.indexedState().keys.contains(rollback) shouldBe false
+                }
+                world.availability.current().isAvailable(extra) shouldBe true
+            }
+        }
+    }
+
+    test("a page that MOVED to another root while we were DOWN exonerates the row it left behind - a move is not a loss") {
+        withAuthorityTrees { mainDir, extraDir ->
+            val moved = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain body\n")
+            writePage(extraDir, "notes/rollback.md", "---\nid: ${moved.value}\ntitle: Rollback\n---\n\n# Rollback\n\nbody\n")
+            AuthorityWorld(mainDir, extraDir).use { world ->
+                world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
+
+                // The one-page root is emptied not by an unmount but by a MOVE: the page is in main now, carrying
+                // its id in its own file. The row extra leaves behind is exactly the row a lost corpus leaves - and
+                // the tripwire must not read it as one, because the pass is HOLDING the page it names. Firing here
+                // would refuse extra's scan, which makes its stale binding unsupersedable (D16), which costs the
+                // moved page the permalink it carried with it - on a pass that can see perfectly well where it went.
+                Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
+                writePage(mainDir, "notes/arrived.md", "---\nid: ${moved.value}\ntitle: Rollback\n---\n\n# Rollback\n\nbody\n")
+                val cold = world.builder(mainDir, LocalContentStore(extraDir))
+                val snapshot = cold.rebuild()
+
+                world.availability.current().isAvailable(extra) shouldBe true
+                withClue("the page KEEPS its id - that is the permalink, and it travelled in the file") {
+                    snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))).id shouldBe moved
+                }
+                world.idMap.pathOf(moved) shouldBe RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))
+            }
+        }
+    }
+
+    test("a FRESH empty root trips nothing: with no durable rows there is no corpus to lose, and empty must be allowed") {
+        withAuthorityTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain body\n")
+            AuthorityWorld(mainDir, extraDir).use { world ->
+                // A newly added root, or a fresh install. The tripwire keys on DURABLE ROWS, not on emptiness -
+                // an empty root that has never held a page is simply empty, and must index (and delete) normally.
+                val builder = world.builder(mainDir, LocalContentStore(extraDir))
+                builder.rebuild()
+
+                world.availability.current().isAvailable(extra) shouldBe true
+                builder.current.section(extra).pages.shouldBeEmpty()
+
+                // ...and it is a full member of the pass, not a quarantined one: a page dropped into it indexes.
+                writePage(extraDir, "notes/rollback.md", "# Rollback\n\nextra body\n")
                 builder.rebuild().section(extra).pages.map { it.path.value } shouldContainExactly listOf("notes/rollback.md")
             }
         }
@@ -206,7 +355,12 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
     val indexer = SearchIndexer(engine, SectionSplitter())
 
-    fun builder(mainDir: Path, extraStore: ContentStore, searchIndexer: SearchIndexer? = null): IndexBuilder = IndexBuilder(
+    fun builder(
+        mainDir: Path,
+        extraStore: ContentStore,
+        searchIndexer: SearchIndexer? = null,
+        acceptEmptyRoots: Set<RootName> = emptySet(),
+    ): IndexBuilder = IndexBuilder(
         sources = listOf(
             IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
             IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, NoOpHistoryProvider),
@@ -221,6 +375,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         citations = CitationFactory(),
         rootRank = registry::rank,
         registeredRoots = registry.roots.map { it.name }.toSet(),
+        acceptEmptyRoots = acceptEmptyRoots,
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer -> IndexBuilder.PublicationListener(indexer::sync) },

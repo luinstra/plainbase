@@ -290,6 +290,43 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
+    // ---- DEGRADED CONVERGENCE is not an OUTAGE ----------------------------------------------------
+
+    test("a root whose watcher cannot see its whole tree is AVAILABLE and honest - coverage partial, pages still 200") {
+        twoRoots { main, extra ->
+            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), liveWatchers = true) { harness ->
+                // The fact a real watcher reports when a subtree will not register (the inotify watch limit; a
+                // `chmod 000` directory), recorded through the SAME holder `serve()` wires the callback into. The
+                // watcher's own end of that wire - PARTIAL on a tree it cannot cover, WHOLE again on a retry that
+                // can, and never an `onFailure` - is proven against a real WatchService in `MultiWatcherNativeTest`;
+                // a chmod'd subtree HERE would also fail the root's SCAN, which is a different (pre-existing)
+                // condition and would prove the wrong thing about the wire.
+                harness.convergence.record(RootName.require("extra"), whole = false)
+
+                val entry = healthRoots().single { it.jsonObject.getValue("root").jsonPrimitive.content == "extra" }.jsonObject
+                withClue("a kernel watch limit is not an outage: the root is there and serves every byte it holds") {
+                    entry.getValue("available").jsonPrimitive.content shouldBe "true"
+                    entry["reason"] shouldBe null
+                    client.get("/api/v1/pages/by-path/extra/notes/rollback").status shouldBe HttpStatusCode.OK
+                    harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
+                }
+                withClue("...but the wire must SAY its convergence is degraded, or the operator never learns of it") {
+                    entry.getValue("coverage").jsonPrimitive.content shouldBe "partial"
+                }
+                withClue("a fully-watched root says nothing at all - silence is whole coverage") {
+                    healthRoots().single { it.jsonObject.getValue("root").jsonPrimitive.content == "main" }
+                        .jsonObject["coverage"] shouldBe null
+                }
+
+                // NOT sticky, which is the whole difference from availability: the retry that re-registers the tree
+                // clears it, with no restart - and a restart is precisely what could not fix it.
+                harness.convergence.record(RootName.require("extra"), whole = true)
+                healthRoots().single { it.jsonObject.getValue("root").jsonPrimitive.content == "extra" }
+                    .jsonObject["coverage"] shouldBe null
+            }
+        }
+    }
+
     // ---- EMPTY is not GONE, and GONE can look EMPTY -----------------------------------------------
     //
     // These two are the same wire-level input - an available root with no files in it - reached from opposite

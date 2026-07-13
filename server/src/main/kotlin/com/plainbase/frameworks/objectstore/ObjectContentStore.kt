@@ -10,6 +10,7 @@ import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
@@ -33,6 +34,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -117,15 +119,32 @@ class ObjectContentStore(
      */
     private val mirrorProbe = AtomicReference<((Path) -> Boolean)?>(null)
 
-    // A never-hydrated store with no mirror on disk scans to an empty tree (seam c): a fresh install previews
-    // cleanly instead of throwing NoSuchFileException. Once hydrated, the mirror IS the corpus - so a mirror that
-    // has gone away is NOT an empty scan here, it is the store's NIO failure, which the rebuild's root-loss
-    // classifier turns into skip-and-carry (never the mass delete an empty ScanResult would authorize).
+    /**
+     * Did the last [hydrate] leave an object BEHIND? A non-strict boot DEFERS a key whose GET or mirror write
+     * failed (sites (a) and (b) there) and returns successfully anyway - the bucket is still the authority and a
+     * transient fault must not stop the server - so the mirror it hands the rebuild is missing pages the bucket
+     * still holds. Published as ONE value at the end of the hydrate that computed it, never mutated per key.
+     */
+    private val hydrationDeferred = AtomicBoolean(false)
+
+    /**
+     * A never-hydrated store with no mirror on disk scans to an empty tree (seam c): a fresh install previews
+     * cleanly instead of throwing NoSuchFileException. Once hydrated, the mirror IS the corpus - so a mirror that
+     * has gone away is NOT an empty scan here, it is the store's NIO failure, which the rebuild's root-loss
+     * classifier turns into skip-and-carry (never the mass delete an empty ScanResult would authorize).
+     *
+     * **A hydrate that DEFERRED an object answers `complete = false`, and this is the one backend that ever does.**
+     * A walk cannot tell a page whose GET failed at boot from a page the operator deleted - both are simply not in
+     * the mirror - so the pass is refused DELETE AUTHORITY for this root ([ScanResult.complete]) until a hydrate
+     * comes back clean. Nothing is withheld from the READ path by that: every page the mirror DID hydrate still
+     * publishes and still serves, which is the whole point of the split - a transient GET failure must never blank
+     * a site, and it must never delete its rows either.
+     */
     override fun scan(): ScanResult =
         if (mirrorProbe.get() == null && !Files.isDirectory(mirrorRoot)) {
             ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList())
         } else {
-            mirror.scan()
+            mirror.scan().copy(complete = !hydrationDeferred.get())
         }
 
     override fun read(path: TreePath): ByteArray? = mirror.read(path)
@@ -275,7 +294,16 @@ class ObjectContentStore(
     // [onFailure] is accepted and IGNORED beyond the existing retry/logging below: a poll fault is transient by
     // design (the next tick re-reconciles), and availability is not an object-mode concept (D10) - there is no
     // root to mark unavailable.
-    override fun watch(onChange: (TreePath) -> Unit, onFailure: (Throwable) -> Unit): AutoCloseable {
+    //
+    // [onCoverage] is accepted and NEVER INVOKED, which is the honest answer rather than a stub: there is no
+    // registration to lose here. Every poll LISTs the whole bucket, so coverage is whole by construction - and the
+    // one incompleteness this backend DOES have (an object a boot hydrate deferred) is not a watch fact at all, so
+    // it is reported where it belongs, on the scan ([scan]'s `complete`).
+    override fun watch(
+        onChange: (TreePath) -> Unit,
+        onFailure: (Throwable) -> Unit,
+        onCoverage: (WatchCoverage) -> Unit,
+    ): AutoCloseable {
         val stop = CountDownLatch(1)
         val thread = Thread {
             while (true) {
@@ -513,7 +541,20 @@ class ObjectContentStore(
             }
         }
         state.persist()
-        logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, ${changed.size - healed} deferred" }
+        // Published ONCE, from the accounting the log line already keeps: a hydrate that left ANY object behind
+        // hands the rebuild a mirror with holes in it, and a view with holes is not a corpus (see [scan]). A later
+        // hydrate that comes back clean clears it; a root that stays deferred simply stays unauthoritative, which
+        // is the honest answer until the bucket (or the disk) is fixed.
+        val deferred = changed.size - healed
+        hydrationDeferred.set(deferred > 0)
+        logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $deferred deferred" }
+        if (deferred > 0) {
+            logger.warn {
+                "$deferred object(s) could not be hydrated into the mirror: this root serves the pages it DID hydrate " +
+                    "but is refused delete authority until a hydrate completes cleanly - nothing of its is deleted, and " +
+                    "the poll keeps retrying"
+            }
+        }
     }
 
     // ---- Internals -----------------------------------------------------------------------------

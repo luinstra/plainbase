@@ -320,6 +320,49 @@ class LocalContentStoreRootLossNativeTest {
         Files.createDirectory(root)
     }
 
+    // ---- ...and the OTHER tree that is not the one we started on: a DEPLOY ------------------------
+    //
+    // `fileKey()` is `(st_dev, st_ino)`, and an unmount, a remount, an atomic-rename content release and a fresh
+    // `git clone` into place ALL change it. It says a tree was REPLACED; it does not say by what. So the identity is
+    // a HINT and what is THERE decides: a different tree that is BLANK is the mount point an unmount left behind; a
+    // different tree WITH CONTENT is a deploy, and answering "vanished" for it would 503 a live, fully-readable root
+    // - stickily, until a restart nobody should need - on the strength of an inode number.
+
+    @Test
+    fun `a REPLACED tree WITH CONTENT is a DEPLOY, not a loss - the probe rebinds and the root keeps serving`() {
+        withRoot { root, store, marks ->
+            // `mv site.new site` - the shape every atomic content release takes. Same path, different inode, full of
+            // pages: nothing about it is an outage.
+            Files.move(root, root.resolveSibling("${root.fileName}-volume"))
+            Files.createDirectory(root)
+            Files.writeString(root.resolve("page.md"), "# Page, redeployed\n")
+
+            assertTrue(store.available(), "a fully-readable tree full of pages was called GONE over an inode number")
+            assertTrue(marks.isEmpty(), "the mark is sticky until restart: a deploy must never demand one")
+            assertTrue(store.readClassified(page) is ContentRead.Bytes, "and it serves the NEW tree's bytes, converged")
+        }
+    }
+
+    @Test
+    fun `the rebind STICKS - the redeployed tree can then be emptied in place, and that is a live empty root, not a loss`() {
+        withRoot { root, store, marks ->
+            Files.move(root, root.resolveSibling("${root.fileName}-volume"))
+            Files.createDirectory(root)
+            Files.writeString(root.resolve("page.md"), "# Page, redeployed\n")
+            assertTrue(store.available())
+
+            // The distinguishing case, and the only one that can prove the probe REBOUND rather than merely waving
+            // the deploy through: an operator now deletes every page from the NEW tree. That is a genuine
+            // full-corpus delete on a root that is right there - and a probe still comparing against the OLD tree's
+            // key would find a different, EMPTY tree and cry unmount, refusing the deletion the operator asked for.
+            // Whether an empty corpus is a delete is not liveness's question; it is the index's tripwire's.
+            Files.delete(root.resolve("page.md"))
+
+            assertTrue(store.available(), "an emptied-but-present tree is LIVE - the probe answers about the TREE, never the corpus")
+            assertTrue(marks.isEmpty())
+        }
+    }
+
     // ---- the negative half: a LIVE root's genuine faults are UNCHANGED ----------------------------
 
     @Test

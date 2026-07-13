@@ -271,6 +271,9 @@ class AdoptionPass(
      */
     fun apply(plan: Plan, logIntent: (RootedPath, PageId) -> Unit = { _, _ -> }) {
         check(plan.mode != Mode.PREVIEW) { "PREVIEW's contract is zero writes; it is rendered from the plan, never applied" }
+        // One id, one page - checked before the first bind, never after the last (see [requireDistinctIds]). PREVIEW
+        // renders the same plan and writes nothing, so the check belongs on the arm that makes it durable.
+        requireDistinctIds(plan.pages.associate { RootedPath(it.root, it.path) to it.id })
         sources.forEach { source ->
             if (rootLoss.markIfGone(source.root, source.store)) throw RootUnavailable(source.root, UnavailableCause.VANISHED)
         }

@@ -144,6 +144,7 @@ val restModule = module {
             writePipeline = get(),
             registry = get(),
             availability = get(),
+            convergence = get(),
             resolver = get(),
             stores = get<RootStores>()::get,
             histories = get<HistoryProviders>()::get,

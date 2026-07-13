@@ -4,6 +4,7 @@ package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.ClosedWatchServiceException
@@ -23,6 +24,7 @@ import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -49,6 +51,13 @@ import kotlin.time.Duration.Companion.seconds
  * idempotent, since registering an already-watched directory returns its existing key — before
  * forwarding [ContentStore.OVERFLOW].
  *
+ * **A subtree the OS will not register at all** (the inotify watch limit, a `chmod 000` directory) is the other
+ * half of that concern, and it is a CONVERGENCE fact, not an availability one: the root is there and serves every
+ * byte, so it is reported as [WatchCoverage.PARTIAL] ([onCoverage]) and the tree keeps converging the slow way -
+ * the worker retries the registration on a coarse cadence and drives the same synthetic [ContentStore.OVERFLOW]
+ * pass meanwhile, so an edit under the unwatched subtree lands LATE rather than NEVER, and a raised limit or a
+ * fixed permission returns the tree to [WatchCoverage.WHOLE] with no restart.
+ *
  * **The ROOT ITSELF is watched, and that is what BOUNDS the D5 detection lag.** Every other root-loss
  * detector in the system is driven by TRAFFIC — a write's probe, a rebuild's probe — so a root nobody
  * writes to has none, and an unmount or a root rename produces no child event to notice either (it may
@@ -70,18 +79,29 @@ class FileWatcher(
     excluded: Collection<Path>,
     private val onChange: (TreePath) -> Unit,
     /**
-     * Invoked at most ONCE when this watcher can no longer converge its tree, from either detector: the worker
-     * exiting NON-gracefully (a `WatchService` fault, not a close or an interrupt), or REGISTRATION COVERAGE
-     * being lost ([WatchCoverageLost]). Without it either failure is SILENT: the server keeps serving, looks
-     * healthy, and simply stops converging on this tree forever. The one-per-event catch below is a different
-     * thing entirely - it absorbs a bad event and keeps the loop alive.
+     * Invoked at most ONCE when the WORKER dies - it exits NON-gracefully (a `WatchService` fault, not a close or
+     * an interrupt) and this tree therefore stops converging on events forever. Without it that death is SILENT:
+     * the server keeps serving, looks healthy, and quietly never sees another edit. The one-per-event catch below
+     * is a different thing entirely - it absorbs a bad event and keeps the loop alive.
      *
      * Strictly the WATCHER-broke-while-the-root-is-FINE condition, which is why it is not [onRootLost]: the two
      * carry different causes on the health wire (`watcher_failed` vs `vanished`) and prescribe different operator
      * actions (restart the server vs bring the disk back), so a root that GOES AWAY must never be reported as a
      * thread that died.
+     *
+     * It is NOT the coverage detector (that is [onCoverage]): a subtree this watcher cannot register leaves a tree
+     * that still converges, slowly, and belongs nowhere near a sticky failure.
      */
     private val onFailure: (Throwable) -> Unit = {},
+    /**
+     * Reports how much of the tree this watcher can actually SEE, in BOTH directions ([WatchCoverage]) - a
+     * CONVERGENCE fact, never an availability one. A subtree the OS refuses to register (the inotify watch limit,
+     * a permission-denied directory) leaves the root THERE and every byte of it readable; what it costs is EVENTS
+     * under that subtree, so those edits converge on the periodic full pass this watcher drives ([retryCoverage])
+     * instead of on their own event. Reporting it as a root FAULT would 503 a healthy root over a host-wide kernel
+     * limit, stickily, until a restart that only re-registers, re-fails and re-marks.
+     */
+    private val onCoverage: (WatchCoverage) -> Unit = {},
     /**
      * Is the watched tree still THERE? The store's own probe ([ContentStore.available]) when the production
      * wiring passes it, so the watcher and every other root-loss detector share ONE notion of gone. The default
@@ -97,6 +117,8 @@ class FileWatcher(
     private val onRootLost: () -> Unit = {},
     /** How long the worker blocks on one poll - and therefore the BOUND on root-loss detection for an idle root. */
     private val livenessInterval: Duration = LIVENESS_INTERVAL,
+    /** How often a PARTIALLY-covered tree retries its registration and drives a converging pass ([retryCoverage]). */
+    private val coverageRetryInterval: Duration = COVERAGE_RETRY_INTERVAL,
 ) : AutoCloseable {
 
     private val root: Path = root.toAbsolutePath().normalize()
@@ -109,8 +131,11 @@ class FileWatcher(
     private val watchService = this.root.fileSystem.newWatchService()
     private val keys = ConcurrentHashMap<WatchKey, Path>()
 
-    /** [onFailure]'s at-most-once contract, over BOTH detectors (a worker death, lost coverage). */
+    /** [onFailure]'s at-most-once contract, over its ONE detector: a worker that died. */
     private val failed = AtomicBoolean(false)
+
+    /** The coverage this watcher last REPORTED - so only TRANSITIONS are published (see [reportCoverage]). */
+    private val partial = AtomicBoolean(false)
     private val worker: Thread
 
     init {
@@ -123,10 +148,10 @@ class FileWatcher(
         val uncovered = registerTree(this.root)
         worker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
         logger.info { "watching ${this.root} (${keys.size} directories)" }
-        // Reported AFTER the worker starts, so what coverage we DO have is live either way - but reported, not
-        // merely logged: a watcher that registered part of its tree and then answered "watching" is a server
-        // that serves this root's stale bytes as fresh, forever, with no event, no rebuild and no 503.
-        failIfUncovered(uncovered)
+        // Reported AFTER the worker starts, because the worker is what MAKES the report true: a PARTIAL tree
+        // converges on the periodic pass that loop drives, so the consumer must never learn "partial" from a
+        // watcher that is not yet driving one.
+        reportCoverage(uncovered)
     }
 
     override fun close() {
@@ -134,8 +159,22 @@ class FileWatcher(
         worker.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS) // the port's close bound, which the shutdown budget counts
     }
 
-    /** Registers [start]'s subtree, and FAILS this watcher if any of it could not be covered ([failIfUncovered]). */
-    private fun register(start: Path) = failIfUncovered(registerTree(start))
+    /**
+     * Registers a NEW subtree (a directory created on sight). It can only ever LOSE coverage, never restore it:
+     * what it walked is one branch, and the tree's other branches are not its to answer for - a `registerTree`
+     * that came back clean HERE says nothing about the `chmod 000` directory two levels over.
+     */
+    private fun registerSubtree(start: Path) {
+        val uncovered = registerTree(start)
+        if (uncovered.isNotEmpty()) reportCoverage(uncovered)
+    }
+
+    /**
+     * Re-walks the WHOLE tree (idempotent - a watched dir keeps its key) and reports the coverage it actually
+     * achieved. The only call that can report [WatchCoverage.WHOLE], because it is the only one that looked
+     * everywhere.
+     */
+    private fun registerWholeTree() = reportCoverage(registerTree(root))
 
     /**
      * Registers [start] and every non-ignored, non-excluded directory below it. Idempotent — a watched dir keeps
@@ -185,19 +224,51 @@ class FileWatcher(
     }
 
     /**
-     * Lost coverage FAILS this watcher, exactly like a dead worker - because it IS one, from where the operator
-     * stands: the tree stops converging, silently, behind a server that keeps answering 200. The inotify watch
-     * limit and a permission-denied subtree were previously a WARN in a log nobody reads, and nothing else in the
-     * system can notice them (the idle tick only asks whether the root still EXISTS, and it does).
+     * Lost coverage is REPORTED, never FAILED. The inotify watch limit is a host-wide kernel resource and a
+     * permission-denied subtree is fixed in place: both leave a root that exists, reads correctly and serves every
+     * byte it is asked for, so what they cost is CONVERGENCE SPEED, not availability. Answering them with
+     * [onFailure] - sticky until a restart that would only re-register, re-fail and re-mark - would be a permanent,
+     * restart-proof 503 the server inflicts on itself and cannot leave.
      *
-     * Per-root by construction - one watcher, one root, one signal - so a sibling root's watcher runs on.
+     * BOTH transitions are reported, and only TRANSITIONS: the retry tick re-registers on a cadence, so a consumer
+     * handed one report per tick would be told a condition it already knows. A raised limit or a fixed permission
+     * clears the flag on the next retry, with no restart.
+     *
+     * Per-root by construction - one watcher, one root, one signal - so a sibling root is untouched.
      */
-    private fun failIfUncovered(uncovered: List<Path>) {
-        if (uncovered.isEmpty()) return
-        fail(WatchCoverageLost(root, uncovered))
+    private fun reportCoverage(uncovered: List<Path>) {
+        val whole = uncovered.isEmpty()
+        if (!partial.compareAndSet(expectedValue = whole, newValue = !whole)) return // no transition, nothing to say
+        if (whole) {
+            // INFO, not WARN: the condition is OVER, and the state an operator acts on lives on the health wire.
+            logger.info { "watch coverage for $root is WHOLE again: its edits converge on their own events, as normal" }
+        } else {
+            logger.warn {
+                "watch coverage for $root is PARTIAL: could not register ${bounded(uncovered)} - edits under them raise " +
+                    "NO event, so this root converges on a full pass every $coverageRetryInterval until the registration " +
+                    "succeeds (the tree is otherwise healthy and serves normally). Raise the inotify watch limit " +
+                    "(fs.inotify.max_user_watches), or fix the directory permissions"
+            }
+        }
+        onCoverage(if (whole) WatchCoverage.WHOLE else WatchCoverage.PARTIAL)
     }
 
-    /** [onFailure], at most once, whichever detector got there first. */
+    /**
+     * The PARTIAL-coverage recovery, driven on [coverageRetryInterval] by the worker loop: re-register the tree
+     * (idempotent) and deliver the synthetic [ContentStore.OVERFLOW] - the SAME full-pass contract the overflow
+     * branch already uses, so a consumer needs no new concept and an edit under an unwatched subtree lands LATE
+     * rather than NEVER.
+     *
+     * The pass runs on the retry that CLEARS the flag too, and that is the point of doing it here rather than
+     * conditionally: the edits made under the subtree while it was unwatched are exactly the ones no event will
+     * ever arrive for, and this is the last pass that goes looking for them.
+     */
+    private fun retryCoverage() {
+        registerWholeTree()
+        onChange(ContentStore.OVERFLOW)
+    }
+
+    /** [onFailure], at most once - the worker can only die once, but `close()` racing a death must not double-report. */
     private fun fail(cause: Throwable) {
         if (failed.compareAndSet(expectedValue = false, newValue = true)) onFailure(cause)
     }
@@ -217,6 +288,9 @@ class FileWatcher(
     }
 
     private fun pollLoop() {
+        // The retry deadline is the WORKER's own, a plain local: nothing else reads it, and hanging the cadence on
+        // a shared field would be a race to invent for no reason.
+        var nextRetry = System.nanoTime() + coverageRetryInterval.inWholeNanoseconds
         while (true) {
             val key = try {
                 // NOT take(): a poll TIMEOUT is the root's heartbeat (see the class doc), and it is also what
@@ -226,6 +300,13 @@ class FileWatcher(
                 return
             } catch (_: InterruptedException) {
                 return
+            }
+            // Coverage runs on its OWN, COARSE cadence - deliberately NOT hung on the liveness tick, which fires
+            // every few seconds: the scheduler would coalesce the passes, but each pass it does run is O(corpus),
+            // and a big corpus would rebuild itself into the ground for as long as one subtree stays unwatched.
+            if (partial.load() && System.nanoTime() >= nextRetry) {
+                nextRetry = System.nanoTime() + coverageRetryInterval.inWholeNanoseconds
+                retryCoverage()
             }
             if (key == null) {
                 if (rootLost()) return // an idle interval - the one tick that catches a root nobody is writing to
@@ -250,7 +331,7 @@ class FileWatcher(
             // a remount over it). Watch coverage for the whole tree went with the old key, which no rebuild can
             // repair, so re-register and converge: the OVERFLOW recovery, for the same reason.
             logger.warn { "the watch key for $root was invalidated but the path is still there: re-registering the tree" }
-            register(root)
+            registerWholeTree()
             onChange(ContentStore.OVERFLOW)
         }
     }
@@ -277,7 +358,7 @@ class FileWatcher(
             // registered — the scheduled full pass converges index state but cannot restore watch
             // coverage, so re-walk the registrations first (idempotent; overflow is rare enough
             // that the walk's cost is irrelevant). See the class doc.
-            register(root)
+            registerWholeTree()
             onChange(ContentStore.OVERFLOW)
             return
         }
@@ -286,7 +367,7 @@ class FileWatcher(
         val relative = relativeOf(child)
         if (ignoreRules.isIgnored(child.fileName.toString(), relative)) return
         if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
-            register(child) // a created directory is registered on sight (§B1)
+            registerSubtree(child) // a created directory is registered on sight (§B1)
         }
         // TreePath.of NFC-normalizes (the boundary rule); a name it rejects cannot be content.
         val treePath = TreePath.of(relative) ?: return
@@ -315,13 +396,29 @@ class FileWatcher(
         internal val LIVENESS_INTERVAL = 5.seconds
 
         /**
+         * How often a PARTIALLY-covered tree re-registers and drives a converging full pass - the bound on how
+         * late an edit under an unwatched subtree can land, and on how long a fixed permission (or a raised
+         * inotify limit) stays reported as PARTIAL.
+         *
+         * Deliberately COARSE, and deliberately not the liveness tick: the pass is a whole-corpus rebuild, so on a
+         * large corpus a per-tick pass would be a rebuild storm for as long as one directory stayed unreadable.
+         * Five minutes is the trade the degraded state is meant to make - slow convergence beats both a lie and a
+         * self-inflicted outage.
+         */
+        internal val COVERAGE_RETRY_INTERVAL = 5.minutes
+
+        /** The first few uncovered directories: an inotify-limit failure can name thousands of them, and the WARN cannot. */
+        private fun bounded(uncovered: List<Path>): String =
+            uncovered.take(3).joinToString() + if (uncovered.size > 3) " (+${uncovered.size - 3} more)" else ""
+
+        /**
          * Registration-failure classification — and the ONE place that decides whether coverage was LOST
          * (the return). A path that VANISHED mid-walk is the harmless deletion race — its delete event in the
          * parent's key already schedules the convergence pass — so it stays at DEBUG and costs no coverage
          * (false). Anything else (the inotify watch limit on large trees, permissions) leaves a silently
          * un-watched subtree behind a healthy-looking server, so it WARNs, naming the directory and the
-         * consequence, and answers TRUE: the watcher then FAILS this root ([failIfUncovered]) rather than
-         * reporting a coverage it does not have. Internal, not private: the failure modes are not cheaply
+         * consequence, and answers TRUE: the watcher then reports [WatchCoverage.PARTIAL] ([reportCoverage])
+         * rather than a coverage it does not have. Internal, not private: the failure modes are not cheaply
          * fakeable through a real `WatchService`, so the classification is unit-tested directly.
          */
         internal fun logRegistrationFailure(dir: Path, failure: IOException): Boolean {
@@ -336,18 +433,6 @@ class FileWatcher(
         }
     }
 }
-
-/**
- * Part of the tree could not be registered: edits under [uncovered] will never schedule a rebuild, so this root
- * is live but only PARTLY watched — which the server cannot repair on its own and no other detector can even see.
- * Carried to the watcher's `onFailure` exactly like a worker death, because for the operator it is the same
- * outage (`watcher_failed`: restart the server; the disk is fine).
- */
-class WatchCoverageLost(root: Path, val uncovered: List<Path>) : IOException(
-    "watch coverage lost under $root: could not register ${uncovered.take(3).joinToString()}" +
-        (if (uncovered.size > 3) " (+${uncovered.size - 3} more)" else "") +
-        " - edits under them would never trigger a rebuild",
-)
 
 /**
  * The default [FileWatcher.rootIsAlive]: the store's own runtime probe ([rootLivenessProbe]), bound to [root]

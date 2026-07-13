@@ -16,6 +16,7 @@ import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
@@ -811,7 +812,11 @@ class LocalContentStore(
         return dir
     }
 
-    override fun watch(onChange: (TreePath) -> Unit, onFailure: (Throwable) -> Unit): AutoCloseable =
+    override fun watch(
+        onChange: (TreePath) -> Unit,
+        onFailure: (Throwable) -> Unit,
+        onCoverage: (WatchCoverage) -> Unit,
+    ): AutoCloseable =
         // The watcher shares the scan's IgnoreRules (one ignore policy, §B1) and skips the
         // configured exclusions - DATA_DIR when it is nested inside the content root, so the app's
         // own search-index/database writes can never re-trigger the watcher.
@@ -821,6 +826,7 @@ class LocalContentStore(
             excluded = excludedDirs,
             onChange = onChange,
             onFailure = onFailure,
+            onCoverage = onCoverage,
             // THIS store's probe, not a second one: the watcher's "is the root there" and the write path's must
             // never fork, and a seamed probe (tests) has to reach the watcher too.
             rootIsAlive = ::available,
@@ -858,38 +864,75 @@ internal fun rootIsTraversable(root: Path): Boolean =
     Files.isDirectory(root) && Files.isReadable(root) && Files.isExecutable(root)
 
 /**
- * The RUNTIME liveness probe: [rootIsTraversable] over the path, AND the tree at it still being the tree we were
- * given. Bound to [root] at construction, because the second half needs something to compare against.
+ * The RUNTIME liveness probe: [rootIsTraversable] over the path, plus the ONE distinction three `stat`s cannot
+ * make - a tree that was REPLACED versus a tree that went AWAY. Both answer the path predicates identically, and
+ * they are opposite events.
  *
- * The path predicates alone cannot see an unmount, and an unmount is the shape that matters most: unmounting a
- * volume AT the root leaves the MOUNT-POINT DIRECTORY behind - present, empty, readable, executable - so the
- * root has not gone MISSING, it has gone BLANK, and nothing in three `stat`s distinguishes those. Called
- * available, the root then scans to zero files and enters the pass's DELETE-AUTHORITY set, and every pipeline
- * keyed off it does exactly what a genuine full-corpus delete asks for: the search rows go, the checkpoints go,
- * an interrupted save's `dirty_page` recovery record goes, reads answer 404 instead of 503, and the watcher
- * reads the OS's one unmount signal as "the root was REPLACED" and schedules the rebuild that performs the
- * purge. So the probe asks the question the predicates cannot: is this the SAME tree? [BasicFileAttributes.fileKey]
- * is `(st_dev, st_ino)` on Unix - an unmount, a remount and a rename-in all change it - and it is the same
- * identity the CAS already re-checks a file with before it renames over it.
+ * The tree's identity is what tells them apart, but only as a HINT: [BasicFileAttributes.fileKey] is
+ * `(st_dev, st_ino)` on Unix, so an unmount, a remount, a rename-in and a `git clone` into place ALL change it,
+ * and it says nothing about which of those happened. What decides is what is THERE afterwards:
+ *  - a DIFFERENT tree that is BLANK is a loss. Unmounting a volume at the root leaves the mount-point directory
+ *    behind - present, empty, readable, executable - so the root has not gone missing, it has gone blank, and
+ *    called available it would scan to zero files and hand a full-corpus DELETE to every pipeline keyed off the
+ *    pass's authority set. This is the case the identity half exists for.
+ *  - a DIFFERENT tree with CONTENT in it is a DEPLOY: an atomic-rename content release (`mv site.new site`), a
+ *    symlink flip, a fresh clone. The root is healthy and fully readable, and answering "vanished" for it would
+ *    503 a live root - stickily, until a restart nobody should need - on the strength of an inode number. So the
+ *    probe REBINDS to the new tree and answers live, and the watcher re-registers on the same signal.
+ * The blank-tree check runs only when the key actually CHANGED, so the hot path stays three `stat`s.
  *
- * Where the filesystem cannot key a directory (Windows) the captured key is null and the probe is the three
- * predicates alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there
- * AT CONSTRUCTION keys null for the same reason - and needs nothing more, since the boot gate marks it
- * unavailable and D5 keeps it that way until a restart.
+ * What this probe deliberately does NOT do is decide whether a corpus was DELETED - a same-tree root that reads
+ * empty answers `true` here. That question needs state that outlives the process (the durable rows), which is
+ * where `IndexBuilder`'s corpus-loss tripwire asks it. Liveness is about the TREE; the corpus is the index's.
+ *
+ * Where the filesystem cannot key a directory (Windows) the key is null and the probe is the three predicates
+ * alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there AT
+ * CONSTRUCTION keys null too, and binds to whatever tree turns up at the path.
  */
 internal fun rootLivenessProbe(root: Path): (Path) -> Boolean {
-    val key = rootFileKey(root)
-    return { path -> rootIsTraversable(path) && (key == null || rootFileKey(path) == key) }
+    val bound = AtomicReference(rootFileKey(root))
+    return probe@{ path ->
+        if (!rootIsTraversable(path)) return@probe false
+        val now = rootFileKey(path) ?: return@probe true // no directory keys on this filesystem: predicates only
+        val captured = bound.load()
+        when {
+            captured == now -> true
+            captured == null -> {
+                bound.compareAndSet(expectedValue = null, newValue = now) // first tree to turn up at an absent root
+                true
+            }
+            isBlank(path) -> false // a different, EMPTY tree: the mount point an unmount left behind
+            else -> {
+                bound.store(now) // a different, POPULATED tree: a deploy. Rebind and converge.
+                true
+            }
+        }
+    }
 }
 
 /** The identity of the tree at [root] - null when it is not there, or when the filesystem does not key files. */
-private fun rootFileKey(root: Path): Any? =
+internal fun rootFileKey(root: Path): Any? =
     try {
         // Links FOLLOWED: a symlinked content root is legal (see `writeAsset`), and what must stay put is the
         // tree it points AT - which is also the thing an unmount takes away.
         Files.readAttributes(root, BasicFileAttributes::class.java).fileKey()
     } catch (_: IOException) {
         null
+    }
+
+/**
+ * Does the directory at [path] hold NOTHING at all? Deliberately the crudest possible question - any entry,
+ * ignored or not, counts - because the tree it is asked about is one nobody has scanned: the point is to tell a
+ * bare mount point from a populated deploy, not to judge what is content.
+ *
+ * A directory that cannot be opened is NOT blank: it is unreadable, which the traversability predicates and the
+ * scan's own live-root failure arm already answer for, and calling it a lost root would be the mirror-image lie.
+ */
+private fun isBlank(path: Path): Boolean =
+    try {
+        Files.newDirectoryStream(path).use { !it.iterator().hasNext() }
+    } catch (_: IOException) {
+        false
     }
 
 /**

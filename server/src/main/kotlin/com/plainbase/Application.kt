@@ -2,6 +2,7 @@ package com.plainbase
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
@@ -12,6 +13,7 @@ import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.DetachedRoots
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootShadow
@@ -281,9 +283,18 @@ private fun serve() {
         // was unavailable at boot gets no watcher at all - there is nothing to watch, and the status is sticky
         // until restart anyway. Which means every AVAILABLE root has a watcher, and that is what makes the
         // watcher's root-liveness probe (ContentStore.watch) a corpus-wide bound rather than a per-root nicety:
-        // an idle root's loss is detected without any traffic to trip it. The failure callback below is the
-        // narrower detector - a worker that dies while the root is FINE would otherwise leave a healthy-looking
-        // server that has silently stopped converging.
+        // an idle root's loss is detected without any traffic to trip it.
+        //
+        // The two callbacks below are DIFFERENT KINDS OF FACT, and keeping them apart is the whole point:
+        //  - onFailure is the worker's DEATH - the tree stops converging for good, which is an outage a restart
+        //    genuinely fixes, so it marks the root unavailable (503, sticky, `watcher_failed`);
+        //  - onCoverage is how much of the tree the watcher can SEE. A subtree it cannot register (the inotify
+        //    watch limit, a `chmod 000` directory) leaves a root that is THERE and serves every byte - it just
+        //    converges on a periodic pass instead of on events. Marking THAT unavailable would 503 a healthy root
+        //    over a host-wide kernel limit, stickily, until a restart that only re-registers, re-fails and
+        //    re-marks. So it lands in the non-sticky convergence holder, flips back on its own, and reaches the
+        //    operator through `/healthz` rather than through an outage.
+        val convergence = koin.get<RootConvergence>()
         val watchers = koin.get<RootRegistry>().roots
             .filter { availability.current().isAvailable(it.name) }
             .map { root ->
@@ -293,6 +304,7 @@ private fun serve() {
                         logger.error(failure) { "the watcher for root '${root.name}' died; marking it unavailable" }
                         availability.markUnavailable(root.name, UnavailableCause.WATCHER_FAILED)
                     },
+                    onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
                 )
             }
         val server = KtorServer(config, koin.get())

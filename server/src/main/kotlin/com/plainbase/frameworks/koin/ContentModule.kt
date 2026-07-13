@@ -3,6 +3,7 @@ package com.plainbase.frameworks.koin
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -36,6 +37,10 @@ val contentModule = module {
     single { IgnoreRules() }
     single<RootRegistry> { RootRegistry.of(get<PlainbaseConfig>().roots.list) }
     single { RootAvailability(Clock.System) }
+    // The availability holder's non-sticky twin: `serve()` records each watcher's coverage into it and `/healthz`
+    // reads it. ONE instance for both, which is the whole reason it is a single - two would report a convergence
+    // nobody observed.
+    single { RootConvergence() }
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda

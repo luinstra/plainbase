@@ -171,6 +171,15 @@ interface ContentStore {
      * one: an unexpected worker death would otherwise leave a healthy-looking server whose changes silently
      * stop converging.
      *
+     * [onCoverage] reports how much of the tree the watcher can actually SEE ([WatchCoverage]), and it is
+     * deliberately NOT a failure: a subtree the backend cannot register (the inotify watch limit, a
+     * permission-denied directory) degrades CONVERGENCE, never AVAILABILITY - the root is there, every byte of
+     * it serves, and the backend keeps converging it the slow way (a periodic full pass) while it retries the
+     * registration in place. Reporting it as a root fault would 503 a healthy root over a host-wide kernel
+     * limit, sticky until a restart that re-registers, re-fails and re-marks: an outage the server inflicts on
+     * itself and cannot leave. Both transitions are reported, so a raised limit or a fixed permission clears
+     * the flag with no restart.
+     *
      * The other is ROOT LOSS, and a backend that watches a root MUST detect it (ADR-0011 D5): a deleted or
      * unmounted root does not necessarily fail its watcher and may raise no event at all, so a root with no
      * write traffic has NO other detector - every one of them (the write probe, the rebuild probe) is driven by
@@ -179,7 +188,11 @@ interface ContentStore {
      * unavailable and schedules the converging pass (see `LocalContentStore.watch`); no callback is added here
      * for it, because both mechanisms are ones the store already holds.
      */
-    fun watch(onChange: (TreePath) -> Unit, onFailure: (Throwable) -> Unit = {}): AutoCloseable
+    fun watch(
+        onChange: (TreePath) -> Unit,
+        onFailure: (Throwable) -> Unit = {},
+        onCoverage: (WatchCoverage) -> Unit = {},
+    ): AutoCloseable
 
     companion object {
         /** The synthetic path [watch] delivers on an event-queue overflow (consumers just schedule - §B2). */
@@ -192,6 +205,22 @@ interface ContentStore {
          */
         const val WATCH_CLOSE_BOUND_MILLIS: Long = 10_000
     }
+}
+
+/**
+ * How much of a root's tree its watcher is actually watching - a CONVERGENCE fact, never an availability one
+ * (see [ContentStore.watch]'s `onCoverage`).
+ */
+enum class WatchCoverage {
+    /** Every directory in the tree is registered: an edit anywhere converges within the change-to-visible bound. */
+    WHOLE,
+
+    /**
+     * Part of the tree could not be registered (the inotify watch limit, an unreadable directory): edits under it
+     * raise no event, so they converge only on the backend's periodic full pass - slower, never never. The backend
+     * keeps retrying the registration, so this can go back to [WHOLE] without a restart.
+     */
+    PARTIAL,
 }
 
 /**

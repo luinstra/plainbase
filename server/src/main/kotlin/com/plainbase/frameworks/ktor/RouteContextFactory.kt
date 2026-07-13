@@ -4,6 +4,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
@@ -46,6 +47,12 @@ fun buildRouteContext(
     registry: RootRegistry,
     /** Runtime per-root serving state — the facades gate on it; only `/healthz` reads it directly. */
     availability: RootAvailability,
+    /**
+     * Runtime per-root watch coverage — `/healthz` alone reads it. Defaulted to a fresh (all-whole) holder because a
+     * harness wires no watcher, and a tree nobody is watching has no coverage to be degraded; production passes the
+     * SAME single `serve()` records each watcher's coverage into.
+     */
+    convergence: RootConvergence = RootConvergence(),
     /** The ONE owner of the id→root and root→status questions, injected into all three guarded facades. */
     resolver: PageRootResolver,
     /** Per-root content trees. Registry-built, so an unregistered name is a PROGRAMMING error, not a runtime one. */
@@ -125,6 +132,7 @@ fun buildRouteContext(
         proposals = proposals,
         registry = registry,
         availability = availability,
+        convergence = convergence,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

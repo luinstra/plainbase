@@ -166,6 +166,11 @@ object ReindexCommand {
                 citations = CitationFactory(),
                 rootRank = registry::rank,
                 registeredRoots = registry.roots.map { it.name }.toSet(),
+                // The offline reindex holds the same DELETE AUTHORITY the server does (the checkpoint listener
+                // below, and the generation swap), so it honors the same corpus-loss tripwire and the same
+                // operator override - a CLI that ignored PLAINBASE_ACCEPT_EMPTY_ROOTS would refuse to perform the
+                // one deletion the operator ran it to perform.
+                acceptEmptyRoots = config.acceptEmptyRoots,
                 // No search sync listener - only the §B3 checkpoint replace. The search engine is
                 // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
                 listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),

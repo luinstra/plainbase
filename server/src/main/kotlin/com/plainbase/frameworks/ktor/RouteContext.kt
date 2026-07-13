@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
@@ -37,6 +38,12 @@ class RouteContext(
      * authn-precedes-topology rule cannot be sidestepped by a route.
      */
     val availability: RootAvailability,
+    /**
+     * Runtime per-root watch COVERAGE - availability's non-sticky twin, read by the same one route. A root whose
+     * watcher cannot see its whole tree is still AVAILABLE (it serves every byte); what it has lost is event-driven
+     * convergence, so `/healthz` reports it as degraded rather than down, and no gated surface consults it at all.
+     */
+    val convergence: RootConvergence,
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,

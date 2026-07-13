@@ -125,6 +125,8 @@ fun IndexHarness.testRouteContext(
     // config.agentDirectCommitGlobs()); forwarded into buildRouteContext so the harness can exercise the gate.
     agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
+    /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */
+    convergence: com.plainbase.domain.root.RootConvergence = com.plainbase.domain.root.RootConvergence(),
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
@@ -159,6 +161,7 @@ fun IndexHarness.testRouteContext(
         writePipeline = writePipeline,
         registry = rootRegistry,
         availability = availability,
+        convergence = convergence,
         resolver = resolver,
         stores = stores,
         histories = histories,

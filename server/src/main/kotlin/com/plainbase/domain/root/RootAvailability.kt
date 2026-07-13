@@ -29,6 +29,15 @@ enum class UnavailableCause {
     /** The root's file watcher died unexpectedly, so its changes would silently stop converging. */
     WATCHER_FAILED,
 
+    /**
+     * The root's tree is THERE and reads as EMPTY, while durable rows say it holds pages - and nothing this
+     * process has seen says the corpus was ever there to be deleted (the D5 corpus-loss tripwire,
+     * `IndexBuilder`). A volume that is not mounted, a bind mount the container runtime created as an empty
+     * directory, a tree not yet restored: the root is not a corpus, so it is refused delete authority and
+     * serves 503 rather than 404-ing a corpus that still exists everywhere but here.
+     */
+    CORPUS_MISSING,
+
     /** WIRE-ONLY: the root's name is gone from `roots {}` but durable rows still name it (ADR-0011 D2/D15). */
     DETACHED,
 }

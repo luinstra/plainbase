@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.RootGateVerdict
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.PreviousUrl
@@ -10,6 +11,7 @@ import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -71,6 +73,9 @@ class MultiRootRestHarness(
 
     val registry: RootRegistry = RootRegistry.of(roots)
     val availability = RootAvailability(Clock.System)
+
+    /** Availability's non-sticky twin, wired exactly as `serve()` wires it: the watchers write it, `/healthz` reads it. */
+    val convergence = RootConvergence()
 
     /** WHICH roots actually got a `watch()` — the harness-side assertion for the watcher-skip rule. */
     val watched = mutableListOf<RootName>()
@@ -137,6 +142,7 @@ class MultiRootRestHarness(
             enforced = enforcedMode,
             agentDirectCommitGlobs = globList,
             extract = extractor,
+            convergence = convergence,
         )
         return this
     }
@@ -168,7 +174,15 @@ class MultiRootRestHarness(
         if (!liveWatchers) return
         val alarmed = RebuildScheduler(rebuild = { builder.rebuild() }, alarm = ExecutorAlarm())
         scheduler = alarmed
-        servingRoots.forEach { root -> watchers += storesByRoot.getValue(root.name).watch(onChange = { alarmed.schedule() }) }
+        servingRoots.forEach { root ->
+            watchers += storesByRoot.getValue(root.name).watch(
+                onChange = { alarmed.schedule() },
+                // The production pairing (Application.kt): a watcher that DIED marks the root unavailable, while a
+                // tree it cannot fully SEE only degrades convergence. Wiring only one of the two here would let a
+                // test pass while `serve` crossed the wires.
+                onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
+            )
+        }
     }
 
     /**

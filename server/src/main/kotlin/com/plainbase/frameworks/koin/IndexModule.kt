@@ -11,6 +11,7 @@ import com.plainbase.domain.service.ProposalIdProvider
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.UuidV7ProposalIdProvider
+import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import org.koin.dsl.module
@@ -57,6 +58,9 @@ val indexModule = module {
             // The D16 input: the FULL registry, never derived from the sources - configured extras
             // must classify as unscanned-but-registered, not detached.
             registeredRoots = registry.roots.map { it.name }.toSet(),
+            // The corpus-loss tripwire's operator override (PLAINBASE_ACCEPT_EMPTY_ROOTS): the roots whose empty
+            // scan is a real wipe, not a broken view.
+            acceptEmptyRoots = get<PlainbaseConfig>().acceptEmptyRoots,
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),
