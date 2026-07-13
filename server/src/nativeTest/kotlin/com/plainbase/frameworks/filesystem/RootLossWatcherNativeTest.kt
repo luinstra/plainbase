@@ -95,6 +95,31 @@ class RootLossWatcherNativeTest {
     }
 
     @Test
+    fun `an UNMOUNTED root is MARKED, not treated as a root that was REPLACED and re-registered`() {
+        // The unmount leaves the MOUNT-POINT DIRECTORY behind - present, empty, readable, executable - so the path
+        // predicates alone answer "alive". The watcher would then take its rename-in/remount branch: re-register the
+        // tree and schedule OVERFLOW, i.e. turn the OS's one unmount signal into the very rebuild that scans the root
+        // to zero files and purges it. The probe's identity half is what makes this a LOSS instead.
+        val root = Files.createTempDirectory("pb-rootloss-unmounted")
+        Files.writeString(root.resolve("page.md"), "# Page\n")
+        val marks = mutableListOf<RootName>()
+        val converged = ConcurrentLinkedQueue<TreePath>()
+
+        try {
+            watch(root, marks, converged).use {
+                Files.move(root, root.resolveSibling("${root.fileName}-volume"))
+                Files.createDirectory(root) // the mount point, left behind by the unmount
+
+                awaitUntil("the unmount was read as a live-but-empty root: nothing would ever mark it") { marks.isNotEmpty() }
+            }
+            assertEquals(listOf(RootName.require("extra")), marks, "marked exactly once - the D5 status is sticky")
+        } finally {
+            root.toFile().deleteRecursively()
+            root.resolveSibling("${root.fileName}-volume").toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `the watch loop does not wedge when its last key dies - the liveness tick is what wakes it`() {
         // A root deleted out from under the watcher leaves the WatchService with no valid keys at all. A take()-based
         // loop would block there forever with nothing left to signal it; the poll timeout is what keeps the worker

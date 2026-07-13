@@ -1,5 +1,6 @@
 package com.plainbase
 
+import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
@@ -304,15 +305,29 @@ private fun serve() {
         // watchers stop the object-mode poll thread BEFORE the transport it uses; the scheduler drains before
         // the DR flush, so an in-flight rebuild's commits still make the final bundle; the transport closes
         // after the ship that needs it; the DATA_DIR lock releases last, once nothing is writing under it.
+        //
+        // Each step declares the bound its collaborator actually honors - taken FROM that collaborator, never
+        // guessed - because the teardown budget is their sum. A budget under it would not bound these steps, it
+        // would cut the slowest of them short, and the slowest is the final DR bundle ship.
         val shutdown = GracefulShutdown(
             buildList {
-                add(GracefulShutdown.Step("http server") { server.stop() })
-                add(GracefulShutdown.Step("watchers") { watchers.forEach { it.close() } })
-                add(GracefulShutdown.Step("rebuild scheduler") { scheduler.close() })
+                add(GracefulShutdown.Step("http server", KtorServer.STOP_BOUND_MILLIS) { server.stop() })
+                add(
+                    GracefulShutdown.Step("watchers", watchers.size * ContentStore.WATCH_CLOSE_BOUND_MILLIS) {
+                        // Per-root failure stays per-root: one root's wedged close must not abandon the others.
+                        watchers.forEach { watcher ->
+                            runCatching { watcher.close() }
+                                .onFailure { logger.warn(it) { "closing a root watcher failed; closing the rest" } }
+                        }
+                    },
+                )
+                add(GracefulShutdown.Step("rebuild scheduler", ExecutorAlarm.CLOSE_BOUND_MILLIS) { scheduler.close() })
                 if (config.storage.backend == StorageBackend.OBJECT) {
                     // Same `git.enabled` guard as the boot-side wiring, so a git-disabled object boot never
                     // constructs GitBundleDr here either (the R9 lazy-wiring discipline).
-                    if (config.git.enabled == true) add(GracefulShutdown.Step("git bundle DR") { koin.get<GitBundleDr>().close() })
+                    if (config.git.enabled == true) {
+                        add(GracefulShutdown.Step("git bundle DR", GitBundleDr.CLOSE_BOUND_MILLIS) { koin.get<GitBundleDr>().close() })
+                    }
                     add(GracefulShutdown.Step("object store transport") { koin.get<ObjectContentStore>().close() })
                 }
                 add(GracefulShutdown.Step("DATA_DIR lock") { lock.close() })

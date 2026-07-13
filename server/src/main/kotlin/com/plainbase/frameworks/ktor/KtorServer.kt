@@ -72,9 +72,13 @@ class KtorServer(
         engine.stop(gracePeriodMillis = STOP_GRACE_MILLIS, timeoutMillis = STOP_TIMEOUT_MILLIS)
     }
 
-    private companion object {
-        const val STOP_GRACE_MILLIS = 3_000L
-        const val STOP_TIMEOUT_MILLIS = 5_000L
+    internal companion object {
+        private const val STOP_GRACE_MILLIS = 3_000L
+        private const val STOP_TIMEOUT_MILLIS = 5_000L
+
+        /** What [stop] can honestly take: the drain grace, then the hard stop behind it - the bound the
+         *  graceful-shutdown budget counts for the http-server step (see `serve()`). */
+        const val STOP_BOUND_MILLIS: Long = STOP_GRACE_MILLIS + STOP_TIMEOUT_MILLIS
     }
 }
 

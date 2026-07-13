@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.ContentStore
@@ -17,6 +19,8 @@ import java.nio.file.WatchKey
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -66,8 +70,9 @@ class FileWatcher(
     excluded: Collection<Path>,
     private val onChange: (TreePath) -> Unit,
     /**
-     * Invoked at most ONCE when the worker exits NON-gracefully - a `WatchService` fault, not a close or an
-     * interrupt. Without it such a death kills the daemon thread SILENTLY: the server keeps serving, looks
+     * Invoked at most ONCE when this watcher can no longer converge its tree, from either detector: the worker
+     * exiting NON-gracefully (a `WatchService` fault, not a close or an interrupt), or REGISTRATION COVERAGE
+     * being lost ([WatchCoverageLost]). Without it either failure is SILENT: the server keeps serving, looks
      * healthy, and simply stops converging on this tree forever. The one-per-event catch below is a different
      * thing entirely - it absorbs a bad event and keeps the loop alive.
      *
@@ -78,10 +83,12 @@ class FileWatcher(
      */
     private val onFailure: (Throwable) -> Unit = {},
     /**
-     * Is the watched tree still THERE? The store's own three-predicate probe ([ContentStore.available]) when the
-     * production wiring passes it, so the watcher and every other root-loss detector share ONE notion of gone.
+     * Is the watched tree still THERE? The store's own probe ([ContentStore.available]) when the production
+     * wiring passes it, so the watcher and every other root-loss detector share ONE notion of gone. The default
+     * is that same probe, bound here ([rootLivenessProbe]) - a watcher constructed without a store must not
+     * detect LESS than one constructed with it.
      */
-    private val rootIsAlive: () -> Boolean = { rootIsTraversable(root.toAbsolutePath().normalize()) },
+    private val rootIsAlive: () -> Boolean = boundRootProbe(root),
     /**
      * Invoked at most ONCE when the ROOT ITSELF is gone (see the class doc). The production wiring closes over the
      * D5 marker and the rebuild scheduler ([LocalContentStore.watch]) - publication is load-bearing, not
@@ -101,6 +108,9 @@ class FileWatcher(
 
     private val watchService = this.root.fileSystem.newWatchService()
     private val keys = ConcurrentHashMap<WatchKey, Path>()
+
+    /** [onFailure]'s at-most-once contract, over BOTH detectors (a worker death, lost coverage). */
+    private val failed = AtomicBoolean(false)
     private val worker: Thread
 
     init {
@@ -110,18 +120,30 @@ class FileWatcher(
                     "changes under it never trigger rebuilds (DATA_DIR-in-CONTENT_DIR policy, §B1)"
             }
         }
-        registerTree(this.root)
+        val uncovered = registerTree(this.root)
         worker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
         logger.info { "watching ${this.root} (${keys.size} directories)" }
+        // Reported AFTER the worker starts, so what coverage we DO have is live either way - but reported, not
+        // merely logged: a watcher that registered part of its tree and then answered "watching" is a server
+        // that serves this root's stale bytes as fresh, forever, with no event, no rebuild and no 503.
+        failIfUncovered(uncovered)
     }
 
     override fun close() {
         watchService.close() // wakes the worker's take() with ClosedWatchServiceException
-        worker.join(5_000)
+        worker.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS) // the port's close bound, which the shutdown budget counts
     }
 
-    /** Registers [start] and every non-ignored, non-excluded directory below it. Idempotent — a watched dir keeps its key. */
-    private fun registerTree(start: Path) {
+    /** Registers [start]'s subtree, and FAILS this watcher if any of it could not be covered ([failIfUncovered]). */
+    private fun register(start: Path) = failIfUncovered(registerTree(start))
+
+    /**
+     * Registers [start] and every non-ignored, non-excluded directory below it. Idempotent — a watched dir keeps
+     * its key. Returns the directories whose WATCH COVERAGE was lost (the [logRegistrationFailure] classification);
+     * an empty list means the tree is watched whole.
+     */
+    private fun registerTree(start: Path): List<Path> {
+        val uncovered = mutableListOf<Path>()
         try {
             Files.walkFileTree(
                 start,
@@ -139,14 +161,14 @@ class FileWatcher(
                                 ),
                             ] = dir
                         } catch (e: IOException) {
-                            logRegistrationFailure(dir, e)
+                            if (logRegistrationFailure(dir, e)) uncovered.add(dir)
                         }
                         return FileVisitResult.CONTINUE
                     }
 
                     override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult {
                         if (Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS)) {
-                            logRegistrationFailure(file, exc) // an unvisitable DIRECTORY is lost watch coverage
+                            if (logRegistrationFailure(file, exc)) uncovered.add(file) // an unvisitable DIRECTORY is lost coverage
                         } else {
                             // A plain file's visit failure loses no coverage — its events come from
                             // the parent directory's key — so no dir-scoped WARN.
@@ -157,8 +179,27 @@ class FileWatcher(
                 },
             )
         } catch (e: IOException) {
-            logRegistrationFailure(start, e)
+            if (logRegistrationFailure(start, e)) uncovered.add(start)
         }
+        return uncovered
+    }
+
+    /**
+     * Lost coverage FAILS this watcher, exactly like a dead worker - because it IS one, from where the operator
+     * stands: the tree stops converging, silently, behind a server that keeps answering 200. The inotify watch
+     * limit and a permission-denied subtree were previously a WARN in a log nobody reads, and nothing else in the
+     * system can notice them (the idle tick only asks whether the root still EXISTS, and it does).
+     *
+     * Per-root by construction - one watcher, one root, one signal - so a sibling root's watcher runs on.
+     */
+    private fun failIfUncovered(uncovered: List<Path>) {
+        if (uncovered.isEmpty()) return
+        fail(WatchCoverageLost(root, uncovered))
+    }
+
+    /** [onFailure], at most once, whichever detector got there first. */
+    private fun fail(cause: Throwable) {
+        if (failed.compareAndSet(expectedValue = false, newValue = true)) onFailure(cause)
     }
 
     /**
@@ -171,7 +212,7 @@ class FileWatcher(
             pollLoop()
         } catch (e: Exception) {
             logger.error(e) { "the watch worker for $root died; changes under it will NOT converge until a restart" }
-            onFailure(e)
+            fail(e)
         }
     }
 
@@ -209,7 +250,7 @@ class FileWatcher(
             // a remount over it). Watch coverage for the whole tree went with the old key, which no rebuild can
             // repair, so re-register and converge: the OVERFLOW recovery, for the same reason.
             logger.warn { "the watch key for $root was invalidated but the path is still there: re-registering the tree" }
-            registerTree(root)
+            register(root)
             onChange(ContentStore.OVERFLOW)
         }
     }
@@ -236,7 +277,7 @@ class FileWatcher(
             // registered — the scheduled full pass converges index state but cannot restore watch
             // coverage, so re-walk the registrations first (idempotent; overflow is rare enough
             // that the walk's cost is irrelevant). See the class doc.
-            registerTree(root)
+            register(root)
             onChange(ContentStore.OVERFLOW)
             return
         }
@@ -245,7 +286,7 @@ class FileWatcher(
         val relative = relativeOf(child)
         if (ignoreRules.isIgnored(child.fileName.toString(), relative)) return
         if (event.kind() == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
-            registerTree(child) // a created directory is registered on sight (§B1)
+            register(child) // a created directory is registered on sight (§B1)
         }
         // TreePath.of NFC-normalizes (the boundary rule); a name it rejects cannot be content.
         val treePath = TreePath.of(relative) ?: return
@@ -274,23 +315,47 @@ class FileWatcher(
         internal val LIVENESS_INTERVAL = 5.seconds
 
         /**
-         * Registration-failure visibility policy (review finding): a path that VANISHED mid-walk is
-         * the harmless deletion race — its delete event in the parent's key already schedules the
-         * convergence pass — and stays at DEBUG. Anything else (the inotify watch limit on large
-         * trees, permissions) leaves a silently un-watched subtree behind a healthy-looking server,
-         * so it WARNs, naming the directory and the consequence. Startup still proceeds either way:
-         * the index itself works and rescan converges on demand — degraded watching beats failing
-         * hard. Internal, not private: the failure modes are not cheaply fakeable through a real
-         * `WatchService`, so the classification is unit-tested directly.
+         * Registration-failure classification — and the ONE place that decides whether coverage was LOST
+         * (the return). A path that VANISHED mid-walk is the harmless deletion race — its delete event in the
+         * parent's key already schedules the convergence pass — so it stays at DEBUG and costs no coverage
+         * (false). Anything else (the inotify watch limit on large trees, permissions) leaves a silently
+         * un-watched subtree behind a healthy-looking server, so it WARNs, naming the directory and the
+         * consequence, and answers TRUE: the watcher then FAILS this root ([failIfUncovered]) rather than
+         * reporting a coverage it does not have. Internal, not private: the failure modes are not cheaply
+         * fakeable through a real `WatchService`, so the classification is unit-tested directly.
          */
-        internal fun logRegistrationFailure(dir: Path, failure: IOException) {
+        internal fun logRegistrationFailure(dir: Path, failure: IOException): Boolean {
             if (failure is NoSuchFileException) {
                 logger.debug { "directory vanished during watch registration (deletion race): $dir" }
-            } else {
-                logger.warn(failure) {
-                    "could not watch $dir: edits under it will NOT trigger rebuilds until a restart or a manual rescan"
-                }
+                return false
             }
+            logger.warn(failure) {
+                "could not watch $dir: edits under it will NOT trigger rebuilds until a restart or a manual rescan"
+            }
+            return true
         }
     }
+}
+
+/**
+ * Part of the tree could not be registered: edits under [uncovered] will never schedule a rebuild, so this root
+ * is live but only PARTLY watched — which the server cannot repair on its own and no other detector can even see.
+ * Carried to the watcher's `onFailure` exactly like a worker death, because for the operator it is the same
+ * outage (`watcher_failed`: restart the server; the disk is fine).
+ */
+class WatchCoverageLost(root: Path, val uncovered: List<Path>) : IOException(
+    "watch coverage lost under $root: could not register ${uncovered.take(3).joinToString()}" +
+        (if (uncovered.size > 3) " (+${uncovered.size - 3} more)" else "") +
+        " - edits under them would never trigger a rebuild",
+)
+
+/**
+ * The default [FileWatcher.rootIsAlive]: the store's own runtime probe ([rootLivenessProbe]), bound to [root]
+ * once, here — never re-derived per tick, since the identity half of the probe is the tree captured at capture
+ * time. Production passes `LocalContentStore::available`, which is this same probe.
+ */
+private fun boundRootProbe(root: Path): () -> Boolean {
+    val normalized = root.toAbsolutePath().normalize()
+    val probe = rootLivenessProbe(normalized)
+    return { probe(normalized) }
 }

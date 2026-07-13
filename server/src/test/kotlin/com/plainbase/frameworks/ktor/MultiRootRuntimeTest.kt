@@ -290,7 +290,12 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
-    // ---- the control case: EMPTY is not GONE ------------------------------------------------------
+    // ---- EMPTY is not GONE, and GONE can look EMPTY -----------------------------------------------
+    //
+    // These two are the same wire-level input - an available root with no files in it - reached from opposite
+    // causes, and the whole delete pipeline hangs off telling them apart. What separates them is not the CONTENT
+    // (both are empty) but the TREE: the operator's `rm` leaves the SAME directory behind, an unmount leaves a
+    // DIFFERENT one (the mount point) at the same path.
 
     test("an EXISTING but emptied root scans normally and its pages DO delete - the probe tells gone from empty") {
         twoRoots { main, extra ->
@@ -298,7 +303,8 @@ class MultiRootRuntimeTest : FunSpec({
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
 
-                // Empty the root but LEAVE IT THERE - a genuine full-corpus delete, not an unplugged disk.
+                // Empty the root but LEAVE IT THERE - the SAME directory, contents gone: a genuine full-corpus
+                // delete, and the one thing carry-forward must never mask.
                 Files.walk(extra.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 harness.builder.rebuild()
 
@@ -306,6 +312,33 @@ class MultiRootRuntimeTest : FunSpec({
                     harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
                     harness.builder.current.byId.containsKey(extraPage).shouldBeFalse()
                     harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeFalse()
+                }
+            }
+        }
+    }
+
+    test("an UNMOUNTED root looks empty and is NOT: it is marked, carried, and nothing is deleted for it") {
+        twoRoots { main, extra ->
+            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+                val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
+                val checkpointsBefore = harness.checkpoints.load().size
+                val engineBefore = harness.searchProvider.indexedState().keys
+
+                // Unmounting a volume AT the root leaves the MOUNT-POINT DIRECTORY behind: present, empty,
+                // readable, executable, and a DIFFERENT tree at the same path. Reproduced exactly - move the
+                // volume away, leave a fresh empty directory where it was mounted. Read as merely empty, the pass
+                // takes delete authority over a disk that is not there and purges the root on an unplug.
+                Files.move(extra, extra.resolveSibling("unmounted-volume"))
+                Files.createDirectory(extra)
+                harness.builder.rebuild()
+
+                withClue("a DIFFERENT tree at the root's path is a lost root, not an emptied one") {
+                    harness.availability.current().isAvailable(RootName.require("extra")).shouldBeFalse()
+                    harness.builder.current.byId.containsKey(extraPage).shouldBeTrue() // carried, not dropped
+                }
+                withClue("an unplugged disk deletes NOTHING: the listeners may only delete what the pass SCANNED") {
+                    harness.checkpoints.load() shouldHaveSizeOf checkpointsBefore
+                    harness.searchProvider.indexedState().keys shouldBe engineBefore
                 }
             }
         }

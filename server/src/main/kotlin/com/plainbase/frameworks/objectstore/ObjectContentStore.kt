@@ -283,7 +283,7 @@ class ObjectContentStore(
         return AutoCloseable {
             stop.countDown()
             thread.interrupt()
-            thread.join(POLL_JOIN_TIMEOUT_MS)
+            thread.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS)
         }
     }
 
@@ -1086,9 +1086,6 @@ class ObjectContentStore(
 
         private const val FETCH_CHUNK = 64
         private const val FETCH_PARALLELISM = 16
-
-        /** Bounded join for the poll thread on close(): long enough for an in-flight op to unwind, never a hang. */
-        private const val POLL_JOIN_TIMEOUT_MS = 10_000L
 
         private val logger = KotlinLogging.logger {}
     }

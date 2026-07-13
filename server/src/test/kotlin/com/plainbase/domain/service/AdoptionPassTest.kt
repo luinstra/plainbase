@@ -303,6 +303,60 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
+    // ---- a loser's id_map binding is a CLAIM, and another claimant can already have WON it ----------
+    //
+    // The loser of EITHER duplicate arm reaches for its own `id_map` row, and a row is not a right: the id it
+    // names can already belong to a page this same plan resolved earlier. Reusing it blind puts one id on two
+    // pages of the plan - and since `bind` is key-complete, the loser's bind then SWEEPS the winner's row and
+    // walks off with the permalink. Neither shape needs the loser to have contested the mapped id itself.
+
+    test("within-root loser: its id_map binding, just WON by an outranking root, is never reused - it mints") {
+        withTwoRoots { h, extra ->
+            // dup-a/dup-b are the §5.2 copied-file pair in main, so dup-b is the within-root loser; its own
+            // binding names MAPPED, which extra - seated ahead - has just taken from it.
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/dup-a.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/dup-b.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val loser = RootedPath(RootName.MAIN, TreePath.require("notes/dup-b.md"))
+            h.idMap.bind(loser, MAPPED, materialized = false)
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root)))
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            val reassigned = plan.pages.single { it.path.value == "notes/dup-b.md" }
+            reassigned.id shouldNotBe MAPPED
+            reassigned.id shouldNotBe CONTESTED
+            reassigned.source shouldBe PageIdentityService.Source.MINTED
+            reassigned.issues.filterIsInstance<IdentityIssue.DuplicateId>().single().keptPath shouldBe
+                TreePath.require("notes/dup-a.md")
+            // The winner's binding SURVIVED the loser's bind - the whole point of the gate.
+            h.idMap.pathOf(MAPPED) shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { it.id }.toSet() shouldHaveSize h.idMap.bindings().size
+        }
+    }
+
+    test("cross-root loser: its id_map binding, just WON by another page of the winning root, is never reused - it mints") {
+        withTwoRoots { h, extra ->
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
+            Files.writeString(extra.resolve("winner.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val loser = RootedPath(RootName.MAIN, TreePath.require("notes/claimant.md"))
+            h.idMap.bind(loser, MAPPED, materialized = false)
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            val reassigned = plan.pages.single { it.path.value == "notes/claimant.md" }
+            reassigned.id shouldNotBe MAPPED
+            reassigned.id shouldNotBe CONTESTED
+            reassigned.source shouldBe PageIdentityService.Source.MINTED
+            reassigned.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single().kept shouldBe EXTRA_WINNER
+            h.idMap.pathOf(CONTESTED) shouldBe EXTRA_WINNER
+            h.idMap.pathOf(MAPPED) shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { it.id }.toSet() shouldHaveSize h.idMap.bindings().size
+        }
+    }
+
     test("the dry run IS the write: PREVIEW's planned bytes are exactly the bytes MATERIALIZE puts on disk") {
         withTwoRoots { h, extra ->
             addRefusalPage(h.root)
@@ -464,8 +518,12 @@ class AdoptionPassTest : FunSpec({
 })
 
 private val CONTESTED = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+
+/** A SECOND contested id, the one a loser's own `id_map` row names while another claimant wins it. */
+private val MAPPED = PageId.require("0197b555-1111-7222-8333-444455556666")
 private val EXTRA = RootName.require("extra")
 private val EXTRA_PAGE = RootedPath(EXTRA, TreePath.require("shared.md"))
+private val EXTRA_WINNER = RootedPath(EXTRA, TreePath.require("winner.md"))
 private val EXTRA_ONBOARDING = RootedPath(EXTRA, TreePath.require("onboarding.md"))
 
 private fun source(tree: Path) = AdoptionPass.Source(EXTRA, LocalContentStore(tree, rootName = EXTRA))

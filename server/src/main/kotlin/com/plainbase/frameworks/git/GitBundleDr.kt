@@ -735,6 +735,17 @@ class GitBundleDr(
          *  shutdown wait is 2x this - short enough never to hang a graceful close, long enough for a normal ship. */
         private const val SHIP_SHUTDOWN_GRACE_SECONDS = 30L
 
+        /**
+         * What [close] can honestly take, in full: the two drain awaits above, then the final flush's own `ship()`
+         * - a size-dependent `bundle create` plus the bucket PUT, each bounded by its own transfer timeout. The
+         * graceful-shutdown budget is the SUM of its steps' bounds, so this number is the one that stops a slow
+         * final bundle from being killed at a smaller, guessed-at deadline (the bug this class exists to fix).
+         */
+        internal const val CLOSE_BOUND_MILLIS: Long =
+            2 * SHIP_SHUTDOWN_GRACE_SECONDS * 1_000 +
+                BUNDLE_GIT_TIMEOUT_SECONDS * 1_000 +
+                ObjectContentStore.BUNDLE_TRANSFER_TIMEOUT_MILLIS
+
         /** `git count-objects -v` lines (G4): `count: <loose>` and `in-pack: <packed>`. */
         private val OBJECT_COUNT_LINE = Regex("(?m)^count: (\\d+)$")
         private val OBJECT_IN_PACK_LINE = Regex("(?m)^in-pack: (\\d+)$")

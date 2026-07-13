@@ -33,20 +33,22 @@ import com.plainbase.domain.root.RootedPath
  * binding while its carried section still holds the page. So the pass's own page reassigns instead,
  * and the contest waits for a pass that can see both roots.
  *
- * The loser reassigns like the within-root loser, with one GUARD: it reuses its own `mappedId` ONLY
- * when that differs from the contested id, else it MINTS FRESH. The guard closes the prior-owner case
- * (two checkouts of one repo): a stale read of the loser's own binding yields the contested id, and
- * reusing it would either key-complete the winner's fresh row away (a silent cross-root steal) or trip
- * the snapshot's byId uniqueness check (a rebuild crash). The mint is rescan-stable from the next pass
- * on. REACHABILITY: the guard's mappedId == contested-id case stays unreachable in every pass - the
- * cross-root arm only fires when ANOTHER path owns the contested id, and UNIQUE(id) precludes the
- * loser's own binding equaling it. The guard is a pure BELT protecting future batched-bind refactors;
- * keep guard, execution invariants, and the unit test that drives the case synthetically.
+ * The loser reassigns like the within-root loser, and BOTH reassign through ONE gate: a loser keeps its own
+ * `mappedId` only when [ownerOf] says that binding is still ITS to keep (nobody else holds the id), else it
+ * MINTS FRESH. The gate closes two cases, and the second is why it is a gate and not an id comparison:
+ *  - the prior-owner case (two checkouts of one repo), where the loser's own binding IS the contested id:
+ *    reusing it would either key-complete the winner's fresh row away (a silent cross-root steal) or trip the
+ *    snapshot's byId uniqueness check (a rebuild crash);
+ *  - and the case a `mappedId != contested id` check cannot see at all: the loser's binding names a DIFFERENT
+ *    id, which another claimant of this same pass has already won. Reusing it hands one id to two live pages -
+ *    the same crash, reached by a page that never contested that id.
+ * Either way the mint is rescan-stable from the next pass on, since the fresh id becomes this path's binding.
  *
  * **A mapped id is contestable too, and for the same reason.** The cross-root loser above needed a
  * frontmatter id to lose the contest with; a page that carries NONE, but whose `id_map` row holds the
- * id an earlier claimant just won, loses it exactly as hard - so [ownerOf] is consulted on the id_map
- * arm as well, and a taken id is reassigned (fresh mint) with the issue recorded.
+ * id an earlier claimant just won, loses it exactly as hard - so [ownerOf] gates EVERY reuse of a
+ * `mappedId`, the no-frontmatter arm and both duplicate arms alike, and a taken id is reassigned (fresh
+ * mint) with the issue recorded.
  *
  * **This arm is why BOTH passes now resolve the whole corpus before they bind ANY of it.** A pass that
  * bound INLINE could never reach the check: the winner's key-complete bind had already swept the loser's
@@ -108,7 +110,7 @@ class PageIdentityService(
         if (frontmatterId != null) {
             val owner = ownerOf(frontmatterId)
             if (owner != null && owner != path) {
-                return duplicate(path, frontmatterId, mappedId, owner, supersedable(owner))
+                return duplicate(path, frontmatterId, mappedId, owner, supersedable(owner), ownerOf)
             }
             return Assignment(frontmatterId, Source.FRONTMATTER)
         }
@@ -123,7 +125,8 @@ class PageIdentityService(
         // above. A pass that RESOLVES BEFORE IT BINDS (`AdoptionPass`'s read-only plan, which must be able to
         // abort without a trace) still reads the stale row, and honoring it would hand the winner's id to two
         // pages at once: a duplicate in the plan, and a byId uniqueness crash the moment it is indexed. So the
-        // owner check is on BOTH id sources, and resolve() no longer depends on a side effect of the last bind.
+        // owner check gates EVERY reuse of a mappedId - this arm and the reassignments in [duplicate] - and
+        // resolve() no longer depends on a side effect of the last bind.
         val owner = ownerOf(mapped)
         if (owner == null || owner == path) return Assignment(mapped, Source.ID_MAP)
         return Assignment(
@@ -147,19 +150,16 @@ class PageIdentityService(
         mappedId: PageId?,
         owner: RootedPath,
         supersedable: Boolean,
+        ownerOf: (PageId) -> RootedPath?,
     ): Assignment = when {
         // A valid frontmatter id already bound to ANOTHER path of the SAME root is a copied-file
         // duplicate: the previously-bound path keeps it; this path is reassigned. First detection
         // mints fresh, but a rescan reuses this path's own id_map binding so /p/{id} stays stable.
-        owner.root == path.root -> Assignment(
-            id = mappedId ?: idProvider.next(),
-            source = if (mappedId != null) Source.ID_MAP else Source.MINTED,
-            issue = IdentityIssue.DuplicateId(
-                id = frontmatterId,
-                root = path.root,
-                keptPath = owner.path,
-                reassignedPath = path.path,
-            ),
+        owner.root == path.root -> reassign(
+            path,
+            mappedId,
+            ownerOf,
+            IdentityIssue.DuplicateId(id = frontmatterId, root = path.root, keptPath = owner.path, reassignedPath = path.path),
         )
         // Cross-root, this path outranks the owner AND the pass may take the id from it: it WINS
         // (D17 - rank beats previously-bound). The beaten owner sits in a root this pass SCANNED, so
@@ -167,16 +167,30 @@ class PageIdentityService(
         supersedable && rootRank(path.root) < rootRank(owner.root) -> Assignment(frontmatterId, Source.FRONTMATTER)
         // Cross-root loser - beaten on rank, or holding a rank it cannot cash because the owner's root
         // is one this pass never scanned (D16: rank cannot settle a contest one side did not turn up
-        // to, and the bind would destroy that root's durable binding). Either way: reassign, with the
-        // D17 mint guard - its own stale binding equaling the contested id must never be reused (the
-        // prior-owner steal/crash case, class doc).
-        else -> {
-            val kept = mappedId?.takeIf { it != frontmatterId }
-            Assignment(
-                id = kept ?: idProvider.next(),
-                source = if (kept != null) Source.ID_MAP else Source.MINTED,
-                issue = IdentityIssue.CrossRootDuplicateId(id = frontmatterId, kept = owner, reassigned = path),
-            )
+        // to, and the bind would destroy that root's durable binding). Either way: reassign.
+        else -> reassign(path, mappedId, ownerOf, IdentityIssue.CrossRootDuplicateId(id = frontmatterId, kept = owner, reassigned = path))
+    }
+
+    /**
+     * The ONE way a duplicate loser gets an identity: its own `id_map` binding when [ownerOf] says that binding
+     * is still its to keep, else a fresh mint - the SAME gate [resolve]'s id_map arm applies, for the same reason
+     * (class doc). A `mappedId` some other claimant of this pass has already won is not a fallback, it is one id
+     * on two live pages: a duplicate in the plan, and a `PageIndex` byId crash the moment it is indexed.
+     */
+    private fun reassign(
+        path: RootedPath,
+        mappedId: PageId?,
+        ownerOf: (PageId) -> RootedPath?,
+        issue: IdentityIssue,
+    ): Assignment {
+        val kept = mappedId?.takeIf { id ->
+            val owner = ownerOf(id)
+            owner == null || owner == path
         }
+        return Assignment(
+            id = kept ?: idProvider.next(),
+            source = if (kept != null) Source.ID_MAP else Source.MINTED,
+            issue = issue,
+        )
     }
 }

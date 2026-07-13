@@ -41,6 +41,9 @@ class IndexBuilderMultiRootTest : FunSpec({
 
     val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
 
+    /** A SECOND contested id, the one a loser's own `id_map` row names while another claimant wins it. */
+    val mapped = PageId.require("0197b555-1111-7222-8333-444455556666")
+
     fun identified(id: PageId, title: String = "T") = "---\nid: ${id.value}\ntitle: $title\n---\n\n# $title\n\nbody\n"
 
     test("the round-1 panel crash case: the same id at the SAME relative path in two roots rebuilds cleanly, winner by registry order") {
@@ -146,6 +149,70 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 snapshot.byId.getValue(contested).root shouldBe EXTRA
                 snapshot.section(RootName.MAIN).pages.single().id shouldNotBe contested
+            }
+        }
+    }
+
+    // ---- a loser's id_map binding is a CLAIM, and another claimant can already have WON it ----------
+    //
+    // Both arms of the duplicate branch reassign a loser through the same gate: keep the loser's own
+    // `mappedId` only if nobody else holds it. A loser that reached for its binding blind would hand one id
+    // to TWO live pages - PageIndex's byId check throws, AFTER the durable binds have run, so the boot wedges
+    // and the winner's root comes back with its binding wrongly moved. Neither shape needs the loser to have
+    // contested the mapped id at all, which is why an `id != the contested id` check cannot see them.
+
+    test("within-root loser: its id_map binding, just WON by an outranking root, is never reused - it mints") {
+        withTrees { mainDir, extraDir ->
+            // a.md and b.md are the §5.2 copied-file pair, so b.md is the within-root loser and reaches for
+            // its own binding - which names `mapped`, the id extra (seated ahead) has just taken from it.
+            writePage(mainDir, "guides/a.md", identified(contested))
+            writePage(mainDir, "guides/b.md", identified(contested))
+            writePage(extraDir, "mirror/holder.md", identified(mapped))
+            val loser = RootedPath(RootName.MAIN, TreePath.require("guides/b.md"))
+            World(extraFirst(mainDir, extraDir)).use { world ->
+                world.idMap.bind(loser, mapped, materialized = false)
+
+                val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild() // must NOT throw
+
+                snapshot.byId.getValue(mapped).root shouldBe EXTRA // the rank winner keeps it...
+                snapshot.byPath.getValue(loser).id shouldNotBe mapped // ...and the loser mints rather than share it
+                snapshot.byPath.getValue(loser).id shouldNotBe contested
+                snapshot.pages.map { it.id }.toSet() shouldHaveSize snapshot.pages.size
+                // Reassigned for the reason it actually lost: the copied frontmatter id, in its own root.
+                world.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single() shouldBe
+                    IdentityIssue.DuplicateId(
+                        id = contested,
+                        root = RootName.MAIN,
+                        keptPath = TreePath.require("guides/a.md"),
+                        reassignedPath = loser.path,
+                    )
+            }
+        }
+    }
+
+    test("cross-root loser: its id_map binding, just WON by another page of the winning root, is never reused - it mints") {
+        withTrees { mainDir, extraDir ->
+            // main's page loses `contested` to extra's winner on rank, and its own binding names `mapped` -
+            // which extra's OTHER page has just won from it. Two ids lost to one root, in one pass.
+            writePage(extraDir, "mirror/holder.md", identified(mapped))
+            writePage(extraDir, "mirror/winner.md", identified(contested))
+            writePage(mainDir, "guides/claimant.md", identified(contested))
+            val loser = RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
+            World(extraFirst(mainDir, extraDir)).use { world ->
+                world.idMap.bind(loser, mapped, materialized = false)
+
+                val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild() // must NOT throw
+
+                snapshot.byId.getValue(contested).path shouldBe TreePath.require("mirror/winner.md")
+                snapshot.byId.getValue(mapped).path shouldBe TreePath.require("mirror/holder.md")
+                snapshot.byPath.getValue(loser).id shouldNotBe mapped
+                snapshot.pages.map { it.id }.toSet() shouldHaveSize snapshot.pages.size
+                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe
+                    IdentityIssue.CrossRootDuplicateId(
+                        id = contested,
+                        kept = RootedPath(EXTRA, TreePath.require("mirror/winner.md")),
+                        reassigned = loser,
+                    )
             }
         }
     }

@@ -95,9 +95,9 @@ class LocalContentStore(
      * root was still there when we ENTERED". No FS state change can happen between two calls inside a single
      * operation, so a test scripts THIS to pass once and every other thing in the row - the failing FS call,
      * the failure arm, the exit classifier, the mark, the throw - stays production code. Production always
-     * runs the real three-predicate check.
+     * runs the real check ([rootLivenessProbe]), bound at construction to the tree this store serves.
      */
-    private val probeRoot: (Path) -> Boolean = ::rootIsTraversable,
+    private val probeRoot: (Path) -> Boolean = rootLivenessProbe(root),
 ) : ContentStore {
 
     // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
@@ -847,13 +847,50 @@ class LocalContentStore(
 }
 
 /**
- * The ONE liveness predicate: the backing tree exists and is traversable right now. Kept textually PAIRED with
- * `PlainbaseConfig.canonicalRootPathOrNull`'s one-probe rule, which defines a usable root as a readable,
- * SEARCHABLE directory - the runtime probe and the config probe must never fork, which is a second reason not
- * to add a write bit here (see [ContentStore.available]).
+ * The ONE traversability predicate: a directory at this path exists and can be walked right now. Kept textually
+ * PAIRED with `PlainbaseConfig.canonicalRootPathOrNull`'s one-probe rule, which defines a usable root as a
+ * readable, SEARCHABLE directory - the runtime probe and the config probe must never fork, which is a second
+ * reason not to add a write bit here (see [ContentStore.available]).
+ *
+ * It answers about the PATH, which is why it is only half of the runtime probe ([rootLivenessProbe]).
  */
 internal fun rootIsTraversable(root: Path): Boolean =
     Files.isDirectory(root) && Files.isReadable(root) && Files.isExecutable(root)
+
+/**
+ * The RUNTIME liveness probe: [rootIsTraversable] over the path, AND the tree at it still being the tree we were
+ * given. Bound to [root] at construction, because the second half needs something to compare against.
+ *
+ * The path predicates alone cannot see an unmount, and an unmount is the shape that matters most: unmounting a
+ * volume AT the root leaves the MOUNT-POINT DIRECTORY behind - present, empty, readable, executable - so the
+ * root has not gone MISSING, it has gone BLANK, and nothing in three `stat`s distinguishes those. Called
+ * available, the root then scans to zero files and enters the pass's DELETE-AUTHORITY set, and every pipeline
+ * keyed off it does exactly what a genuine full-corpus delete asks for: the search rows go, the checkpoints go,
+ * an interrupted save's `dirty_page` recovery record goes, reads answer 404 instead of 503, and the watcher
+ * reads the OS's one unmount signal as "the root was REPLACED" and schedules the rebuild that performs the
+ * purge. So the probe asks the question the predicates cannot: is this the SAME tree? [BasicFileAttributes.fileKey]
+ * is `(st_dev, st_ino)` on Unix - an unmount, a remount and a rename-in all change it - and it is the same
+ * identity the CAS already re-checks a file with before it renames over it.
+ *
+ * Where the filesystem cannot key a directory (Windows) the captured key is null and the probe is the three
+ * predicates alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there
+ * AT CONSTRUCTION keys null for the same reason - and needs nothing more, since the boot gate marks it
+ * unavailable and D5 keeps it that way until a restart.
+ */
+internal fun rootLivenessProbe(root: Path): (Path) -> Boolean {
+    val key = rootFileKey(root)
+    return { path -> rootIsTraversable(path) && (key == null || rootFileKey(path) == key) }
+}
+
+/** The identity of the tree at [root] - null when it is not there, or when the filesystem does not key files. */
+private fun rootFileKey(root: Path): Any? =
+    try {
+        // Links FOLLOWED: a symlinked content root is legal (see `writeAsset`), and what must stay put is the
+        // tree it points AT - which is also the thing an unmount takes away.
+        Files.readAttributes(root, BasicFileAttributes::class.java).fileKey()
+    } catch (_: IOException) {
+        null
+    }
 
 /**
  * Whether a [CasResult] is AMBIGUOUS - i.e. a live-root failure and a root-gone condition mint the SAME value,

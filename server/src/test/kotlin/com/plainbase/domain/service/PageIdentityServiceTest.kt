@@ -240,8 +240,6 @@ class PageIdentityServiceTest : FunSpec({
     }
 
     test("D17 mint guard: a loser whose own stale binding IS the contested id MINTS FRESH (the prior-owner steal/crash case)") {
-        // Unreachable in every pass (bind-inline + UNIQUE(id) preclude it) - this synthetic ownerOf is the
-        // one place the belt CAN be exercised; see the service KDoc.
         val ownedByX = { id: PageId -> if (id == validId) pathX else null }
         val r = service.resolve(
             pathA,
@@ -252,6 +250,58 @@ class PageIdentityServiceTest : FunSpec({
         )
         r.source shouldBe PageIdentityService.Source.MINTED
         r.id shouldNotBe validId // reusing it would steal the winner's fresh row or crash byId uniqueness
+        r.issue.shouldBeInstanceOf<IdentityIssue.CrossRootDuplicateId>()
+    }
+
+    // ---- a loser's mappedId is a CLAIM like any other, and it can be lost like any other ------------
+    //
+    // The reassignment gate reads `ownerOf(mappedId)`, not `mappedId != the contested id`. The difference is
+    // a loser whose binding names a DIFFERENT id that another claimant of this same pass has already won:
+    // an id comparison sees nothing wrong with it, hands it over, and two live pages end up holding one id -
+    // PageIndex's byId check throws, AFTER the durable binds have run. Both duplicate arms share the gate,
+    // so both cases are pinned.
+
+    test("within-root loser: a mappedId ANOTHER claimant has already won is never reused - it mints fresh") {
+        val stale = PageId.require("0197b111-2222-7333-8444-555566667777")
+        // pathA owns the contested frontmatter id; pathX (a page of the OTHER root, resolved earlier this
+        // pass) has just won the very id pathB's own id_map row still names.
+        val owners = { id: PageId ->
+            when (id) {
+                validId -> pathA
+                stale -> pathX
+                else -> null
+            }
+        }
+        val r = service.resolve(
+            pathB,
+            rawFrontmatterId = validId.value,
+            mappedId = stale,
+            ownerOf = owners,
+            supersedable = everyRootScanned,
+        )
+        r.source shouldBe PageIdentityService.Source.MINTED
+        r.id shouldNotBe stale
+        r.issue.shouldBeInstanceOf<IdentityIssue.DuplicateId>() // still the copied-file duplicate it is
+    }
+
+    test("cross-root loser: a mappedId ANOTHER claimant has already won is never reused - it mints fresh") {
+        val stale = PageId.require("0197b111-2222-7333-8444-555566667777")
+        val owners = { id: PageId ->
+            when (id) {
+                validId -> pathX // extra outranks main and takes the contested id
+                stale -> pathB // ...and main's own b.md has already been awarded the id pathA's row names
+                else -> null
+            }
+        }
+        val r = service.resolve(
+            pathA,
+            rawFrontmatterId = validId.value,
+            mappedId = stale,
+            ownerOf = owners,
+            supersedable = everyRootScanned,
+        )
+        r.source shouldBe PageIdentityService.Source.MINTED
+        r.id shouldNotBe stale
         r.issue.shouldBeInstanceOf<IdentityIssue.CrossRootDuplicateId>()
     }
 })

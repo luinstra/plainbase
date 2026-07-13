@@ -1,7 +1,12 @@
 package com.plainbase.frameworks.lifecycle
 
+import com.plainbase.frameworks.git.GitBundleDr
+import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.longs.shouldBeGreaterThan
+import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -77,6 +82,57 @@ class GracefulShutdownTest : FunSpec({
         )
 
         GracefulShutdown(steps).run()
+
+        ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
+    }
+
+    test("an ERROR is contained too - containment with a hole in it costs exactly the steps it was built to save") {
+        // The JVM is already going down, so there is nothing left for a rethrow to protect - while an Error escaping
+        // the loop skips every step BEHIND it, which is the DR bundle ship and the DATA_DIR lock release.
+        val ran = ConcurrentLinkedQueue<String>()
+        val steps = listOf(
+            GracefulShutdown.Step("boom") { throw NoClassDefFoundError("a close path nobody had loaded yet") },
+            GracefulShutdown.Step("git bundle DR") { ran += "git bundle DR" },
+            GracefulShutdown.Step("lock") { ran += "lock" },
+        )
+
+        GracefulShutdown(steps).run()
+
+        ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
+    }
+
+    test("the budget is DERIVED from the steps' own bounds - it can never be smaller than what it fronts") {
+        // The bug: a FIXED 25s budget in front of a 30s executor grace (twice over) and a bundle ship bounded only
+        // by a 10-minute transfer timeout. On expiry run() returned, the hook thread returned, and the JVM HALTED -
+        // killing a live DR ship mid-upload, which is the precise loss this class exists to prevent.
+        val steps = listOf(
+            GracefulShutdown.Step("http server", KtorServer.STOP_BOUND_MILLIS) {},
+            GracefulShutdown.Step("rebuild scheduler", ExecutorAlarm.CLOSE_BOUND_MILLIS) {},
+            GracefulShutdown.Step("git bundle DR", GitBundleDr.CLOSE_BOUND_MILLIS) {},
+            GracefulShutdown.Step("DATA_DIR lock") {},
+        )
+
+        val budget = GracefulShutdown(steps).budgetMillis
+
+        budget shouldBe steps.sumOf { it.boundMillis }
+        steps.forEach { budget shouldBeGreaterThanOrEqual it.boundMillis }
+        // ...and the old fixed number survives only as the advisory line, which is now strictly inside the budget.
+        budget shouldBeGreaterThan GracefulShutdown.WARN_AFTER_MILLIS
+    }
+
+    test("a slow-but-LIVE step is WARNED about, never cut - its successors still run") {
+        // The bug's behavioral half: the warn threshold used to BE the deadline, so a slow (not wedged) step lost
+        // the steps behind it - the DR bundle ship, and the lock release after it.
+        val ran = ConcurrentLinkedQueue<String>()
+        val steps = listOf(
+            GracefulShutdown.Step("git bundle DR") {
+                Thread.sleep(300)
+                ran += "git bundle DR"
+            },
+            GracefulShutdown.Step("lock") { ran += "lock" },
+        )
+
+        GracefulShutdown(steps, warnAfterMillis = 50).run()
 
         ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
     }

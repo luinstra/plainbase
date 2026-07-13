@@ -26,18 +26,37 @@ import kotlin.concurrent.thread
  * [run] is idempotent because the clean-exit `finally` still calls it too and both can fire.
  *
  * Bounded, because a hook that blocks forever is its own outage (the container runtime SIGKILLs at its own
- * grace period regardless): every [Step] is individually bounded, and [run] additionally waits at most
- * [budgetMillis] on a daemon worker - an overrun NAMES the step it is stuck on rather than hanging silently.
+ * grace period regardless): every [Step] is individually bounded and DECLARES that bound, and [run] waits on a
+ * daemon worker for the sum of them ([budgetMillis]) - so the budget cannot be SHORTER than what it fronts. A
+ * budget that is shorter does not bound the steps, it TRUNCATES them, and the step it truncates is the slow one:
+ * a final DR bundle ship, which is the loss this class was written to prevent. Overrunning the derived budget
+ * means a step blew its OWN internal timeout, which is the only condition on which abandoning it is right - and
+ * the overrun NAMES it. A long-but-live step is WARNed about at [warnAfterMillis] and then WAITED for.
+ *
  * A step that throws is logged and the remaining steps still run: a wedged watcher must not cost us the DR
  * bundle. Order is the caller's, and it is load-bearing (see `serve()`).
  */
 internal class GracefulShutdown(
     private val steps: List<Step>,
-    private val budgetMillis: Long = BUDGET_MILLIS,
+    /**
+     * The hard bound, DERIVED from what the steps themselves promise rather than guessed at. A fixed number here
+     * silently forked from the collaborators behind it (a 30s executor grace, a 10-minute bundle transfer) and
+     * cut them off mid-work.
+     */
+    val budgetMillis: Long = steps.sumOf { it.boundMillis },
+    /** When to say a teardown is taking unusually long - advisory only; the wait continues to [budgetMillis]. */
+    private val warnAfterMillis: Long = WARN_AFTER_MILLIS,
 ) {
 
-    /** One named teardown action. Expected to be bounded and quiet; a throw is contained, never propagated. */
-    class Step(val name: String, val close: () -> Unit)
+    /**
+     * One named teardown action, and [boundMillis] - the longest its collaborator can honestly take, which is
+     * the sum of ITS OWN internal timeouts (see the `serve()` call site). It is not a wish: nothing here can
+     * interrupt a step, so a bound that undersells its collaborator only lies to the budget above.
+     *
+     * The default suits a step with no internal wait at all (a lock release, a transport close). Expected to be
+     * quiet; a throw is contained, never propagated.
+     */
+    class Step(val name: String, val boundMillis: Long = FAST_STEP_BOUND_MILLIS, val close: () -> Unit)
 
     private val started = AtomicBoolean(false)
     private val finished = CountDownLatch(1)
@@ -73,7 +92,11 @@ internal class GracefulShutdown(
                 inFlight.store(step.name)
                 try {
                     step.close()
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
+                    // Throwable, NOT Exception, and this is the one place in the tree where that is right: the
+                    // JVM is already on its way out, so there is nothing left for a rethrow to protect - while an
+                    // Error escaping this loop would skip every step BEHIND it, which is the DR bundle ship and
+                    // the DATA_DIR lock release. Containment is the whole contract; it cannot have a hole in it.
                     logger.warn(e) { "shutdown step '${step.name}' failed; continuing with the remaining steps" }
                 }
             }
@@ -87,8 +110,20 @@ internal class GracefulShutdown(
     }
 
     private fun awaitFinished() {
+        val warnAt = minOf(warnAfterMillis, budgetMillis)
         try {
-            if (finished.await(budgetMillis, TimeUnit.MILLISECONDS)) return
+            if (finished.await(warnAt, TimeUnit.MILLISECONDS)) return
+            if (warnAt < budgetMillis) {
+                // Advisory, never a deadline: the step may simply be a big DR bundle going up a slow link, and
+                // cutting it here is exactly the bug. It tells the operator what their runtime's grace period is
+                // now racing, while we keep waiting for the step's OWN bound.
+                logger.warn {
+                    "shutdown step '${inFlight.load()}' has been running for ${warnAt}ms and is still going; waiting up to " +
+                        "${budgetMillis}ms for it. If the runtime SIGKILLs first, raise its grace period (docker stop -t, " +
+                        "terminationGracePeriodSeconds) - a truncated shutdown can leave the final DR bundle unshipped."
+                }
+                if (finished.await(budgetMillis - warnAt, TimeUnit.MILLISECONDS)) return
+            }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt() // restore it, never swallow (the ExecutorAlarm idiom)
             logger.warn { "shutdown wait was interrupted while step '${inFlight.load()}' was in flight; exiting without waiting further" }
@@ -96,21 +131,23 @@ internal class GracefulShutdown(
         }
         logger.warn {
             "shutdown exceeded its ${budgetMillis}ms budget with step '${inFlight.load()}' still in flight; exiting " +
-                "without waiting further. If this recurs, raise the runtime's grace period (docker stop -t, " +
-                "terminationGracePeriodSeconds) - a truncated shutdown can leave the final DR bundle unshipped."
+                "without waiting further. The step has overrun its own declared bound, so it is wedged rather than slow."
         }
     }
 
-    private companion object {
+    companion object {
         private val logger = KotlinLogging.logger {}
+
+        /** A step with no internal wait of its own (a lock release, a transport close) - generous, and never reached. */
+        const val FAST_STEP_BOUND_MILLIS = 5_000L
 
         /**
          * Comfortably over the sub-second happy path and under Kubernetes' 30s default grace, so an operator on
-         * defaults sees the overrun WARN rather than a bare SIGKILL. `docker stop`'s 10s default is TIGHTER than
-         * this budget - a slow final DR bundle can still be cut short there; the operating guide says to raise it.
+         * defaults hears about a long teardown BEFORE their runtime SIGKILLs it. Advisory only (see [awaitFinished]):
+         * the budget the wait actually honors is the steps' own, summed.
          */
-        const val BUDGET_MILLIS = 25_000L
-        const val WORKER_THREAD = "plainbase-shutdown"
-        const val HOOK_THREAD = "plainbase-shutdown-hook"
+        const val WARN_AFTER_MILLIS = 25_000L
+        private const val WORKER_THREAD = "plainbase-shutdown"
+        private const val HOOK_THREAD = "plainbase-shutdown-hook"
     }
 }

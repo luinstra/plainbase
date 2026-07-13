@@ -54,6 +54,7 @@ class LocalContentStoreRootLossNativeTest {
         } finally {
             restore(root)
             root.toFile().deleteRecursively()
+            root.resolveSibling("${root.fileName}-volume").toFile().deleteRecursively() // the unmount rows' moved-aside tree
         }
     }
 
@@ -262,6 +263,61 @@ class LocalContentStoreRootLossNativeTest {
             }
             assertTrue(marks.isNotEmpty())
         }
+    }
+
+    // ---- the UNMOUNT: the root did not go missing, it went BLANK ----------------------------------
+    //
+    // Three `stat`s answer about the PATH, and an unmount does not take the path away: unmounting a volume AT the
+    // root leaves the MOUNT-POINT DIRECTORY behind - present, empty, readable, executable. Reproduced exactly
+    // below (move the volume aside, leave a fresh directory where it was mounted), because the only thing that
+    // tells the two apart is the tree's IDENTITY - `fileKey()`, i.e. `(st_dev, st_ino)`, which is squarely the NIO
+    // divergence surface this file exists for.
+
+    @Test
+    fun `an UNMOUNTED root is GONE, not empty - a different tree at the same path is never AVAILABLE`() {
+        withRoot { root, store, _ ->
+            assertTrue(store.available(), "the control: the tree it was constructed over is right there")
+
+            unmount(root)
+
+            assertFalse(
+                store.available(),
+                "an empty mount-point directory passed all three predicates: the pass would scan the root to zero " +
+                    "files, take DELETE AUTHORITY over it, and purge its search rows and checkpoints on an unplug",
+            )
+        }
+    }
+
+    @Test
+    fun `a read through an UNMOUNTED root is RootDown, and the store MARKS it - never the 404 that says the page is gone`() {
+        withRoot { root, store, marks ->
+            unmount(root)
+
+            // Absent would tell an agent its citation is dead. The page is not deleted; the disk is unplugged.
+            assertEquals(ContentRead.RootDown, store.readClassified(page))
+            assertTrue(marks.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `a write into an UNMOUNTED root is refused - the page is never written to the mount point underneath`() {
+        withRoot { root, _, marks ->
+            val s = store(root, marks)
+            unmount(root)
+
+            assertFailsWith<RootUnavailable> { s.createExclusive(TreePath.require("fresh.md"), "x".toByteArray(), hasher) }
+            assertFalse(
+                Files.exists(root.resolve("fresh.md")),
+                "the bytes would be stranded on the underlying disk, invisible once remounted",
+            )
+            assertTrue(marks.isNotEmpty())
+        }
+    }
+
+    /** Takes the volume out from under [root] the way an unmount does: same path, same permissions, DIFFERENT tree. */
+    private fun unmount(root: Path) {
+        Files.move(root, root.resolveSibling("${root.fileName}-volume"))
+        Files.createDirectory(root)
     }
 
     // ---- the negative half: a LIVE root's genuine faults are UNCHANGED ----------------------------
