@@ -99,8 +99,9 @@ Every page lives under a named **root** - a document directory the server is con
 one, named `main`; a multi-root install can have more (`memoria`, `handbook`, whatever the operator
 named them). `search` and `read_page` already carry the root in their responses (see the worked
 session above); the URL grammar is always `/docs/{root}/{path}`, and a `create` (or a REST direct
-commit) **names its root explicitly** - `propose_change`'s `root` field on a `create` operation (default
-`main` if you omit it), or `CreatePageRequest.root` over REST.
+commit) **names its root explicitly, with no default** - `propose_change`'s `root` field on a `create`
+operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_root` (above), never
+permission to write into `main`.
 
 A root can be unavailable or read-only, and the server tells you which with a code, not a guess. Three
 wire shapes to recognize:

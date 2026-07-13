@@ -107,7 +107,7 @@ function DocsSplat() {
 // (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
 // dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
 
-/** The `/new` search: `?root=` names the document root the create lands in (absent → the server's `main`). */
+/** The `/new` search: `?root=` names the document root the create lands in (absent → `NewPage` resolves `main`). */
 interface NewSearch {
   root?: string;
 }
@@ -116,8 +116,9 @@ const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
   component: NewSplat,
-  // A non-string `root` coerces to undefined → the server's `main` default. An unknown NAME is not decided
-  // here: the server owns the registry and answers 400 `invalid_root`, so the client never guesses.
+  // A non-string `root` coerces to undefined → `NewPage` sends the reserved `main` (the wire field is REQUIRED;
+  // an omitted root is a 400, not a default). An unknown NAME is not decided here: the server owns the registry
+  // and answers 400 `invalid_root`, so the client never guesses.
   validateSearch: (search: Record<string, unknown>): NewSearch =>
     typeof search.root === "string" && search.root !== "" ? { root: search.root } : {},
 });

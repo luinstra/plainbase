@@ -436,9 +436,9 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
     // frontmatter blocks). The title comes from the user's possibly-edited frontmatter, else the filename.
     const { frontmatter, body } = splitFrontmatter(buffer);
     const title = (frontmatter && frontmatterValue(frontmatter, "title")) || fallbackTitle;
-    // The recovered page is re-created in the root it was deleted FROM. Omitting the root would default the
-    // server to `main`, quietly relocating an extra root's page - a rescue path is the last place to lose the
-    // user's tree.
+    // The recovered page is re-created in the root it was deleted FROM. The wire root is required (an omitted
+    // one is a 400 `invalid_root`, never a silent `main`), and a rescue path is the last place to fumble the
+    // user's tree - so it is threaded from the page, never re-derived.
     const result = await createPage({ root, folder, title, body });
     setSaving(false);
     if (result.kind === "created") {

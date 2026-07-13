@@ -4,6 +4,7 @@ import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { TreeResponse } from "../api/types";
+import { ROOT_UNAVAILABLE } from "../components/ErrorView";
 import { createAppRouter } from "../router";
 
 /**
@@ -27,6 +28,12 @@ const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_m
 /** The same topology with `handbook` READ-ONLY — the default `plainbase root add` produces. */
 const readOnlyHandbook: TreeResponse = {
   roots: [tree.roots[0], { ...tree.roots[1], editable: false }],
+};
+
+/** `handbook` EDITABLE but not serving (an unmounted disk). The tree still LISTS it (that is how the client
+ *  tells "down" from "gone"), so `editable` alone still said yes and offered a create that can only 503. */
+const unavailableHandbook: TreeResponse = {
+  roots: [tree.roots[0], { ...tree.roots[1], available: false }],
 };
 
 /** [primeTree] false leaves the tree query in flight forever — the window under test. */
@@ -90,5 +97,20 @@ describe("the chrome New action", () => {
     expect(action.tagName).toBe("BUTTON");
     expect(action.hasAttribute("disabled")).toBe(true);
     expect(action.getAttribute("title")).toBe("This root is read-only");
+  });
+
+  it("is DISABLED on an UNAVAILABLE root - an editable root whose disk is not mounted can only answer 503", async () => {
+    // `editable` and `available` are two bits and the gate needs BOTH: an unmounted-but-editable root passed the
+    // editable check, so "New" stayed live on a root where the create could only ever 503 `root_unavailable`.
+    const view = renderShell(true, unavailableHandbook);
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action.hasAttribute("disabled")).toBe(true);
+    // And it must not call an OUTAGE "read-only": the reader would go looking for a permission they do have.
+    expect(action.getAttribute("title")).toBe(ROOT_UNAVAILABLE.headline("handbook"));
   });
 });

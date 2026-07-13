@@ -128,7 +128,7 @@ Per-root keys:
 
 ### The ORDER of the block is a contract: it decides who keeps a permalink
 
-**A root's rank is its line number in this block, and the lowest rank wins.** Two roots may hold two
+**A root's rank is its DECLARATION LINE in this block, and the lowest rank wins.** Two roots may hold two
 different pages carrying the same frontmatter `id:` - a copied file, a forked runbook, a page moved
 by hand between trees. Exactly one of them can answer that id's `/p/{id}` permalink, and the winner
 is the one whose root is declared **first**. The other page is a duplicate-id loser: it is minted a
@@ -162,10 +162,25 @@ way to learn whether you have any shared ids at all *before* you touch the order
 announces that a reorder just moved a permalink. **Treat the line order of `roots {}` the way you
 treat the ids themselves.**
 
-Two consequences worth stating outright:
+Three consequences worth stating outright:
 
-- **`main` is not automatically rank 0.** It ranks where you declared it, so `roots { zeta {…} main
-  {…} }` really does let `zeta` outrank `main` - that is the point of honoring the order you wrote.
+- **`main` is not automatically rank 0.** It ranks where you declared it, so this really does let
+  `zeta` outrank `main` - that is the point of honoring the order you wrote:
+
+  ```hocon
+  roots {
+    zeta { path = "/srv/zeta" }
+    main { path = "/srv/docs" }
+  }
+  ```
+
+- **Roots declared on ONE line rank ALPHABETICALLY, not left-to-right.** Rank reads the declaration
+  LINE, so roots sharing a line are tied and the tie breaks on the name. Written on one line
+  (`roots { zeta { path = "/srv/zeta" }, main { path = "/srv/docs" } }` - and the comma is not
+  optional there; without a newline between them HOCON refuses to parse the block at all), the
+  example above means the OPPOSITE of what it reads like: both roots are on line 1, so `main`
+  outranks `zeta`. **Give each root its own line and the question never arises** - which is why every
+  example here does.
 - **`roots.conf` (the CLI's file) always ranks after `plainbase.conf`'s block**, and `plainbase root
   add` **appends**, so a newly added root ranks last and can never take an id away from a root that
   was already serving it. `root remove` + `root add` of the same name (the rename path) therefore

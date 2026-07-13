@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { treeQuery } from "../api/queries";
 import type { TreeResponse } from "../api/types";
 import { Breadcrumbs } from "../components/Breadcrumbs";
@@ -96,6 +96,8 @@ function renderSoloCrumbs(path: string, title: string) {
   );
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("Breadcrumbs", () => {
   it("drops the redundant ancestor crumb on a section's own index landing", () => {
     // The index page renders AS the /docs/main/runbooks landing; folderTitle(runbooks) === the index title,
@@ -167,6 +169,29 @@ describe("Breadcrumbs", () => {
     expect(container.querySelector('[aria-current="page"]')?.textContent).toBe("Runbooks");
   });
 
+  it("a FAILED tree says so - the inert trail is not left to look like it is still loading", async () => {
+    // The bug: the component read `data?.roots`, so a dead fetch and a pending one rendered IDENTICALLY -
+    // a trail that will never link, with nothing to say it is not still coming. The degraded trail is right
+    // either way (the root COUNT is still unknown), so what the failure owes the reader is the news itself.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: { code: "internal", message: "boom" } }), { status: 500 })),
+    );
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <Breadcrumbs root="extra" path="runbooks/deploy.md" title="Extra Deploy" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(container.querySelector("[data-pb-breadcrumbs-error]")).not.toBeNull());
+    // The trail itself still renders (the page is perfectly readable) and still links nowhere.
+    const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "runbooks", "Extra Deploy"]);
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+    // A settled failure is NOT busy - the one bit that tells the two states apart.
+    expect(container.querySelector("[data-pb-breadcrumbs]")?.getAttribute("aria-busy")).toBe("false");
+  });
+
   it("while the tree is still loading the `docs` crumb is INERT - a link there could walk the reader into main", () => {
     // The root COUNT is unknown until the tree arrives, and the crumb's two forms disagree about where it
     // POINTS: on a single-root install `/docs` is this page's own tree, and on a multi-root one `/docs`
@@ -184,5 +209,8 @@ describe("Breadcrumbs", () => {
     expect(container.querySelector('a[href="/docs"]')).toBeNull();
     // No crumb links anywhere in this window: the ancestor has no server-issued url yet either.
     expect(container.querySelectorAll("a")).toHaveLength(0);
+    // PENDING, not failed: announced as busy, and it does NOT claim a failure that has not happened.
+    expect(container.querySelector("[data-pb-breadcrumbs]")?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector("[data-pb-breadcrumbs-error]")).toBeNull();
   });
 });

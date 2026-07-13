@@ -15,7 +15,8 @@ import { folderTitle, foldersByPath, landingPage, treeFor } from "../lib/tree";
  * the non-link current crumb.
  */
 export function Breadcrumbs({ root, path, title }: { root: string; path: string; title: string }) {
-  const { data } = useQuery(treeQuery);
+  const tree = useQuery(treeQuery);
+  const data = tree.data;
   const entryTree = data ? treeFor(data.roots, root) : null;
   const folders = entryTree ? foldersByPath(entryTree) : new Map<string, TreeFolder>();
 
@@ -36,6 +37,12 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   // who clicks that crumb in the pending window is walked out of the tree they are reading and into a different
   // one. `Shell` makes the same call for "New" in the same window (disabled beats wrong); here the crumb still
   // renders - the trail must not reflow - it simply does not link anywhere.
+  //
+  // A FAILED tree is that same inert trail, and that is the bug this splits: `data?.roots` alone renders the
+  // pending window and the error IDENTICALLY, so a reader whose tree fetch died sits in front of a trail that
+  // will never link, with nothing to tell them it is not still loading. The degraded render is right either way
+  // (we still do not know the count); what differs is that the pending one RESOLVES and the failed one does not,
+  // so the failure is SAID (below) and the pending window is announced as busy instead of silently waiting.
   const roots = data?.roots;
   const rootCrumb = !roots
     ? { key: "/docs", label: "docs", url: null }
@@ -56,7 +63,7 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   const crumbs = path === "" ? [] : [rootCrumb, ...(pageIsLanding ? ancestors.slice(0, -1) : ancestors)];
 
   return (
-    <nav className="pb-breadcrumbs mb-4 text-sm text-muted" data-pb-breadcrumbs aria-label="Breadcrumb">
+    <nav className="pb-breadcrumbs mb-4 text-sm text-muted" data-pb-breadcrumbs aria-label="Breadcrumb" aria-busy={tree.isPending}>
       <ol className="flex flex-wrap items-center gap-1.5">
         {crumbs.map((crumb) => (
           <Fragment key={crumb.key}>
@@ -78,6 +85,14 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
           {title}
         </li>
       </ol>
+      {/* Nav-sized, like the sidebar's outage notice: the page itself loaded and is perfectly readable, so a
+          full-page error would be a lie about what is broken. It says the one thing the reader cannot see from
+          the inert trail - that it is not coming. */}
+      {tree.isError && (
+        <p className="mt-1 text-xs text-muted" data-pb-breadcrumbs-error>
+          Couldn’t load the navigation tree, so this trail can’t link anywhere. Reload to try again.
+        </p>
+      )}
     </nav>
   );
 }

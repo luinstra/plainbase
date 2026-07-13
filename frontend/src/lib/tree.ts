@@ -50,19 +50,27 @@ export function mainEntry(roots: RootTree[]): RootTree | null {
 }
 
 /**
- * Whether [root] accepts page writes at all (`RootTree.editable`) - the gate on every write AFFORDANCE
- * (Shell's "New", PageView's "Edit this page").
+ * Whether [root] can take a page write RIGHT NOW - the gate on every write AFFORDANCE (Shell's "New",
+ * PageView's "Edit this page").
  *
- * **Unknown is NOT editable**, and that is the point of the default: a root name the tree does not carry, or a
+ * BOTH wire bits, because an affordance that can only fail is the same lie whichever one is false:
+ * `editable` says the root accepts writes at all (403 `root_not_editable` otherwise, in every auth mode),
+ * and `available` says its content is reachable (503 `root_unavailable` otherwise - the root is configured
+ * and still listed, but its subtree arrives EMPTY and nothing can land in it until an operator restores it).
+ * An editable root that is DOWN was the gap: `editable` alone still offered the action.
+ *
+ * **Unknown is NOT writable**, and that is the point of the default: a root name the tree does not carry, or a
  * tree that has not loaded, means we do not know the topology - and offering an action we cannot honor walks a
  * reader into the editor, takes their keystrokes and fails at save. `plainbase root add` defaults an extra root
  * to `editable = false`, so guessing `true` would be wrong for the DEFAULT CLI-added root.
  *
- * It gates the affordance ONLY. The server's 403 `root_not_editable` is the authority and the editor's
- * buffer-preserving 403 path is the backstop - this never becomes the thing that decides a write.
+ * It gates the affordance ONLY. The server's 403/503 is the authority and the editor's buffer-preserving
+ * failure path is the backstop - this never becomes the thing that decides a write.
  */
-export function rootIsEditable(roots: RootTree[] | undefined, root: string | null): boolean {
-  return roots && root ? (entryFor(roots, root)?.editable ?? false) : false;
+export function rootAcceptsWrites(roots: RootTree[] | undefined, root: string | null): boolean {
+  if (!roots || !root) return false;
+  const entry = entryFor(roots, root);
+  return entry !== null && entry.available && entry.editable;
 }
 
 /**

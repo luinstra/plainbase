@@ -29,9 +29,12 @@ is the URL your users end up on, what they copy out of the address bar, and what
 analytics you run now reports as moved. A legacy link that *also* hits a `redirect_from` alias chains
 two hops (legacy 301, then the alias 301) - accepted, and still lands.
 
-**The agent/API surfaces are NOT redirected**, deliberately: `GET /api/v1/pages/by-path/{path}` and
-`GET /browse/{path}` resolve a legacy tail under `main` directly, so no agent client pays a redirect
-hop. Their responses' `url` fields carry the new canonical form. `/p/{id}` permalinks are unchanged.
+**No agent/API surface pays a legacy redirect hop**, deliberately: `GET /api/v1/pages/by-path/{path}`
+and `GET /browse/{path}` both resolve a legacy tail under `main` directly. `by-path` answers the page
+itself (200, never a 301), and its `url` field carries the new canonical form. `/browse` is a lookup
+that has always answered a redirect - it still does, and the **302 it issues already points at the
+canonical `/docs/main/...` URL**, so a legacy `/browse/...` costs one hop, not two. `/p/{id}`
+permalinks are unchanged.
 
 **2. A corpus with a top-level `main` entry will REFUSE to boot.** `main` is now a reserved URL
 segment, so a `content/main/` directory (or a top-level `main.md`, or a `slug: main`) makes an old
@@ -40,9 +43,37 @@ silently re-resolve those links to the wrong page. **This is the one upgrade tha
 server into a failed start, so check for it first:**
 
 ```
-ls -d "$CONTENT_DIR"/main "$CONTENT_DIR"/main.md 2>/dev/null   # anything printed here refuses to boot
-grep -rl '^slug: *main$' "$CONTENT_DIR" --include='*.md'       # and so does any of these
+# Top-level entries whose NAME mints the segment - any case, file or directory (an asset directory
+# counts; `Main/` and `MAIN.md` slugify to `main` exactly like `main/` does).
+find "$CONTENT_DIR" -maxdepth 1 \( -iname 'main' -o -iname 'main.md' \)
+
+# Any `slug:` override that mints it - quoted or bare, any case, frontmatter or _folder.yaml. A
+# folder whose `_folder.yaml` says `slug: main` is the shape a naive check misses: the override moves
+# it out of the URL space its directory name lives in, so the search above cannot see it at all.
+grep -rEil "^slug:[[:space:]]*['\"]?main['\"]?[[:space:]]*$" "$CONTENT_DIR" \
+  --include='*.md' --include='_folder.yaml'
 ```
+
+Both over-report (only a TOP-LEVEL segment is reserved - a nested `guides/main/` is fine), and that is
+the right direction for a pre-check to err in. **But a clean result does not prove a clean upgrade**,
+because the rule is not about spelling: it is about what a name SLUGIFIES to, and that equivalence
+class has no regex. A `slug:` with a trailing comment, a directory whose punctuation falls away in
+slugification - a grep only ever finds the spellings you thought to write down.
+
+**So check the OUTCOME, not the precondition: boot the new binary and read what it says.** It costs
+one command, it answers the actual question, and it is the check to trust:
+
+```
+# A scratch DATA_DIR and a spare port. The new binary reads your real content, builds its index, and
+# either serves or refuses. It writes nothing into CONTENT_DIR (only `adopt --write-ids` ever does)
+# and nothing into your real DATA_DIR, so the install still running is undisturbed. A v0.1.0 install
+# has no `roots {}` block yet, so the scratch boot sees the very topology your upgrade will.
+CONTENT_DIR="$CONTENT_DIR" DATA_DIR="$(mktemp -d)" PLAINBASE_PORT=8099 plainbase serve
+```
+
+It either comes up - the corpus is clean, stop it and upgrade for real - or it exits 1 with
+`REFUSING TO SERVE: ... Colliding entries: ...`, which names every offending entry it found. **That
+list is the remedy list.** The greps above only tell you where to start looking.
 
 The remedy is to rename the offending entry; there is no config key to disable the reservation. The
 full rule (every shape that trips it, and the deep-link consequence of renaming) is in

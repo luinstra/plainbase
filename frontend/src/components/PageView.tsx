@@ -12,8 +12,8 @@ import {
   landingPage,
   mainEntry,
   pageHref,
+  rootAcceptsWrites,
   rootEntryOfUrl,
-  rootIsEditable,
   type FolderEntry,
 } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -316,11 +316,11 @@ function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) 
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
   const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
   const page = seeded ?? fetched.data;
-  // The page names its own root; the TREE is what says whether that root takes writes. Read-only (and
-  // not-yet-known) roots get no Edit affordance - the same call Shell makes for "New", and for the same
-  // reason: the alternative is an editor session that can only end in a 403 at save.
+  // The page names its own root; the TREE is what says whether that root takes writes. Read-only, down, and
+  // not-yet-known roots get no Edit affordance - the same call Shell makes for "New", and for the same
+  // reason: the alternative is an editor session that can only end in a 403 (or a 503) at save.
   const tree = useQuery(treeQuery);
-  const editable = rootIsEditable(tree.data?.roots, html.data?.root ?? null);
+  const editable = rootAcceptsWrites(tree.data?.roots, html.data?.root ?? null);
 
   const title = html.data?.title;
   useEffect(() => {
