@@ -71,6 +71,13 @@ class WriteRestHarness(
     val registry get() = harness.registry
     val dirtyPages get() = harness.dirtyPages
 
+    /**
+     * The proof-apply transaction (C0). A write test that wants the `page_deleted` conflict has to RETIRE the binding
+     * first, because that is now the only way a deletion is a fact: no production code mints an [com.plainbase.domain
+     * .root.AbsenceProof] before C2/C4, so a test that merely deletes the file is testing LIMBO, not deletion.
+     */
+    val retirements get() = harness.retirements
+
     val services: RouteContext
 
     init {

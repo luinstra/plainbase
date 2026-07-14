@@ -6,7 +6,6 @@ import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentEntry
 import com.plainbase.domain.content.ContentFile
 import com.plainbase.domain.content.ContentFolder
-import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
@@ -15,6 +14,7 @@ import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
@@ -72,9 +72,14 @@ internal const val FOLDER_META_NAME = "_folder.yaml"
  * exception - and BOTH can be produced or REPLACED by anything that runs before the frame pops, a `finally`
  * cleanup included. So the three mutation surfaces and [readClassified] each run their whole body inside
  * [classifyingRootLoss], which re-probes [available] on the way out: root gone -> MARK, then the carrier
- * (a `RootUnavailable` throw for a write; a `ContentRead.RootDown` value for a read); root live -> the
+ * (a `RootUnavailable` throw for a write; a `StoreRead.RootDown` value for a read); root live -> the
  * outcome passes through byte-unchanged and a genuine fault stays a genuine fault. Closure is then
  * structural - nothing can leave without being seen, and there is no list to keep complete.
+ *
+ * **The indexed-only read gate is NOT an absence oracle (C1).** It answers what this store can SEE; it says
+ * nothing about whether a page exists, because it is derived from the last SCAN - a snapshot from T, consulted at
+ * T+n, of exactly the tree that may have gone away. `readClassified` therefore reports [StoreRead.NoBytes] and
+ * stops. The durable index decides whether that absence is a 404 or a 503, one layer up.
  */
 class LocalContentStore(
     private val root: Path,
@@ -219,7 +224,7 @@ class LocalContentStore(
      * fault it is.
      *
      * [onRootLoss] is the CARRIER, and it is the only thing that differs between the read and the write paths:
-     * the mutation surfaces THROW `RootUnavailable`, [readClassified] RETURNS `ContentRead.RootDown` (three of
+     * the mutation surfaces THROW `RootUnavailable`, [readClassified] RETURNS `StoreRead.RootDown` (three of
      * its consumers must SWALLOW the condition, so a throw would be laundered by catches already sitting on
      * those paths). One rule, one probe, one marker, two carriers.
      *
@@ -394,20 +399,24 @@ class LocalContentStore(
         return Files.readAllBytes(osPath)
     }
 
-    override fun readClassified(path: TreePath): ContentRead =
-        // ONE exit. The read's ambiguous value is Absent; its root-loss carrier is RootDown - a VALUE, never a
+    override fun readClassified(path: TreePath): StoreRead =
+        // ONE exit. The read's ambiguous value is NoBytes; its root-loss carrier is RootDown - a VALUE, never a
         // throw, which is the whole point of a classified read. read() itself is untouched.
-        classifyingRootLoss(ambiguous = { it == ContentRead.Absent }, onRootLoss = { ContentRead.RootDown }) {
+        //
+        // NoBytes is as far as this goes, and C1 is why: whether "no bytes here" MEANS the page was deleted is a
+        // question about the durable index, which this adapter has never heard of. It reports the observation;
+        // AbsenceClassifier decides what it is evidence OF.
+        classifyingRootLoss(ambiguous = { it == StoreRead.NoBytes }, onRootLoss = { StoreRead.RootDown }) {
             try {
-                read(path)?.let(ContentRead::Bytes) ?: ContentRead.Absent
+                read(path)?.let(StoreRead::Bytes) ?: StoreRead.NoBytes
             } catch (_: NoSuchFileException) {
                 // The FILE vanished between read()'s isRegularFile probe and its readAllBytes (which sits outside
                 // any catch). That means exactly what read()'s own null means, so say so and let the wrapper decide
-                // WHOSE absence it was: root gone -> RootDown; root live -> a plain deletion race, honestly Absent.
+                // WHOSE absence it was: root gone -> RootDown; root live -> a plain deletion race, honestly NoBytes.
                 // The two races COMPOSE rather than needing separate arms. Any OTHER IOException (a chmod-ed page
                 // file, an EIO, a read-only remount) escapes to the wrapper's catch and is rethrown on a live root -
                 // a genuine fault stays a genuine fault, never a false 503.
-                ContentRead.Absent
+                StoreRead.NoBytes
             }
         }
 

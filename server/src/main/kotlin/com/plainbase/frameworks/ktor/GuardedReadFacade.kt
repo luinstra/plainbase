@@ -18,6 +18,8 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.domain.service.IndexBuilder
@@ -72,6 +74,8 @@ class GuardedReadFacade(
     private val availability: RootAvailability,
     /** The ONE owner of "who owns this id?" and "is that root serving?" - never a raw idMap/registry here. */
     private val resolver: PageRootResolver,
+    /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the write and index paths ask. */
+    private val absence: AbsenceClassifier,
     private val stores: (RootName) -> ContentStore,
     private val histories: (RootName) -> HistoryProvider,
 ) : ReadFacade {
@@ -131,6 +135,12 @@ class GuardedReadFacade(
         val snapshot = indexBuilder.current
         val root = resolver.rootOf(snapshot, id) ?: return null
         requireAvailable(root)
+        // **The 404 lie, at its source (C1).** A page in the durable index and NOT in the published snapshot is a
+        // page whose bytes the last pass could not produce - and every id-addressed read above then resolved it to
+        // `null`, i.e. told the caller it does not exist. The root is up (the gate just said so) and the binding is
+        // live, so the honest answer is "come back later" - and it is a DIFFERENT answer from `root_unavailable`,
+        // because the disk is fine.
+        absence.requireVerifiedAbsence(root, id, snapshot)
         return snapshot
     }
 
@@ -202,9 +212,13 @@ class GuardedReadFacade(
         // never fall through to bundled static and unmask a shadowed name (disk is source of truth). But a 404 is
         // only honest for a file that is genuinely gone on a LIVE root - for a downed one it is the "drop your
         // citations" lie - so the read is CLASSIFIED, not a bare null.
-        return when (val read = stores(root).readClassified(path)) {
+        //
+        // An ASSET has no `id_map` binding - the durable index tracks PAGES - so the classifier can only ever answer
+        // ConfirmedAbsent for one, and the 404 stands. That is not a gap the classifier papers over: it is the honest
+        // limit of what we durably know about an asset, said in one place instead of assumed in each.
+        return when (val read = absence.read(stores(root), RootedPath(root, path))) {
             is ContentRead.Bytes -> AssetReadOutcome.Found(read.bytes)
-            ContentRead.Absent -> AssetReadOutcome.IndexedButMissing
+            ContentRead.ConfirmedAbsent, ContentRead.AbsenceUnknown -> AssetReadOutcome.IndexedButMissing
             ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
         }
     }
@@ -212,9 +226,14 @@ class GuardedReadFacade(
     override fun pageBytes(principal: Principal, root: RootName, path: TreePath): ByteArray? {
         policy.checkRead(principal, RootedResource(root, path.value).audit)
         requireAvailable(root)
-        return when (val read = stores(root).readClassified(path)) {
+        val target = RootedPath(root, path)
+        return when (val read = absence.read(stores(root), target)) {
             is ContentRead.Bytes -> read.bytes
-            ContentRead.Absent -> null
+            // The index still binds this page and its bytes are not there: 503, never the null the route turns into
+            // a 404. This is the raw-markdown surface an AGENT reads (`read_file`), so it is the one place the lie
+            // costs the most - a 404 tells it to drop the citation for a page that is coming back.
+            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
+            ContentRead.ConfirmedAbsent -> null
             ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
         }
     }
@@ -239,6 +258,10 @@ class GuardedReadFacade(
         val root = resolver.rootOf(snapshot, id)
             ?: return resolver.retirementOf(id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
         requireAvailable(root)
+        // A live binding with no page in the snapshot is LIMBO, not Unknown (C1): the permalink is the ONE promise
+        // §A4 makes to an agent, and answering 404 for a page we still bind - because a mount came up empty - is the
+        // failure mode the whole absence-authority redesign exists to end.
+        absence.requireVerifiedAbsence(root, id, snapshot)
         val page = snapshot.byId[id] ?: return PermalinkResolution.Unknown
         return page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
     }

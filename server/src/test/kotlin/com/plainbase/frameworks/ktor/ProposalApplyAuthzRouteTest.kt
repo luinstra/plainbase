@@ -170,7 +170,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val proposalService = ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -182,6 +182,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     indexBuilder = harness.builder,
                     availability = harness.availability,
                     resolver = harness.resolver,
+                    absence = harness.absence,
                     proposals = { proposalsFacade },
                     agentDirectCommitGlobs = globs,
                     proposalLabeler = labeler,
@@ -196,6 +197,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.builder,
                         harness.resolver,
                         harness.availability,
+                        harness.absence,
                     )
                 proposalsFacade = facade
                 block(harness, store, facade, mutate, root)
@@ -397,12 +399,21 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Clock.System,
                     enforced = true,
                 )
-            val mutate = GuardedMutatingFacade(policy, pipeline, harness.stores, harness.builder, harness.availability, harness.resolver)
+            val mutate =
+                GuardedMutatingFacade(
+                    policy,
+                    pipeline,
+                    harness.stores,
+                    harness.builder,
+                    harness.availability,
+                    harness.resolver,
+                    harness.absence,
+                )
             val proposalService =
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -415,6 +426,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 harness.builder,
                 harness.resolver,
                 harness.availability,
+                harness.absence,
             )
             val admin = Principal.Human("builtin", "admin")
             val proposalId = app.proposeEdit(id, hash)
@@ -449,7 +461,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 ProposalService(
                     harness.proposalRepository,
                     citations,
-                    IndexProposalBaseReader(harness.builder, harness.stores),
+                    IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
                     UuidV7ProposalIdProvider(),
                     Clock.System,
                 )
@@ -482,6 +494,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     harness.builder,
                     harness.resolver,
                     harness.availability,
+                    harness.absence,
                 )
             val outcome = facade.approve(Principal.Human("builtin", "admin"), pid)
             (outcome as ApplyOutcome.Failed).reason shouldBe "unreadable" // the STABLE string, never the raw cause
@@ -832,13 +845,21 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val pipelineHook = com.plainbase.domain.service.WriteHistoryHook { _, p, b, a, c -> history.commit(p, b, a, c)?.sha }
                 val pipeline = harness.writePipeline(pipelineHook, store)
                 val mutate =
-                    GuardedMutatingFacade(policy, pipeline, harness.stores, harness.builder, harness.availability, harness.resolver)
+                    GuardedMutatingFacade(
+                        policy,
+                        pipeline,
+                        harness.stores,
+                        harness.builder,
+                        harness.availability,
+                        harness.resolver,
+                        harness.absence,
+                    )
                 val labeler = ProposalAuthorLabeler(harness.apiTokenRepository, harness.userRepository)
                 val proposalService =
                     ProposalService(
                         harness.proposalRepository,
                         citations,
-                        IndexProposalBaseReader(harness.builder, harness.stores),
+                        IndexProposalBaseReader(harness.builder, harness.stores, harness.absence),
                         UuidV7ProposalIdProvider(),
                         Clock.System,
                     )
@@ -852,6 +873,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                         harness.builder,
                         harness.resolver,
                         harness.availability,
+                        harness.absence,
                     )
                 // Propose (agent) then approve (admin).
                 val page = harness.builder.current.pages.single()

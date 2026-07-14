@@ -229,6 +229,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             registry = rootRegistry,
             availability = availability,
             resolver = PageRootResolver(idMap, rootRegistry),
+            absence = AbsenceClassifier(idMap),
             stores = { store },
             histories = { NoOpHistoryProvider },
             idProvider = UuidV7IdProvider(),

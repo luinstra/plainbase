@@ -2,6 +2,7 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AdminFacade
 import com.plainbase.domain.service.LoginService
 import com.plainbase.domain.service.PageRootResolver
@@ -41,6 +42,9 @@ val restModule = module {
     // PARAMETERS, which is what keeps it stateless and holder-free (and therefore safe to reach from the domain
     // proposal service through a lambda).
     single { PageRootResolver(get(), get()) }
+    // The ONE owner of 404-vs-503 for an absent page (C1). ONE dep - the durable index - because that is the ONLY
+    // party to this question that knows anything: every filesystem probe it replaces was the wrong KIND of fact.
+    single { AbsenceClassifier(get()) }
     single {
         WritePipeline(
             stores = get<RootStores>()::get,
@@ -111,7 +115,7 @@ val restModule = module {
     // PB-PROPOSE-1 (P1a): the proposal store seam + the guarded facade. The live read seam over the SAME
     // IndexBuilder + ContentStore the read facade uses; the C4 label resolver over the token/user repos. Clock is
     // inlined as Clock.System (no Clock single exists here, the ApiTokenService idiom).
-    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), stores = get<RootStores>()::get) }
+    single<ProposalBaseReader> { IndexProposalBaseReader(indexBuilder = get(), stores = get<RootStores>()::get, absence = get()) }
     single { ProposalAuthorLabeler(tokens = get(), users = get()) }
     single {
         ProposalService(
@@ -145,7 +149,9 @@ val restModule = module {
             registry = get(),
             availability = get(),
             convergence = get(),
+            limbo = get(),
             resolver = get(),
+            absence = get(),
             stores = get<RootStores>()::get,
             histories = get<HistoryProviders>()::get,
             idProvider = get(),

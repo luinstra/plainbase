@@ -3,6 +3,9 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
@@ -273,11 +276,27 @@ class WriteGoldenTest : FunSpec({
         }
     }
 
-    test("write-conflict-page-deleted.json — a 409 page_deleted has current_* all null") {
+    // The golden ENVELOPE is unchanged and stays frozen; what C1 changed is WHO MAY SAY IT. Deleting an indexed
+    // page's file no longer produces `page_deleted` - a missing file is not a proof, and the binding is still live,
+    // so that read answers 503 `absence_unverified` (WriteRouteTest pins it). Only a PROVEN absence may be reported
+    // as a deletion, so this golden now earns its 409 the way production will: an AbsenceProof retires the binding
+    // (C2's epoch / C4's git history mint these for real; an OPERATOR proof stands in), and only then is a stale
+    // client PUT told the page is gone.
+    test("write-conflict-page-deleted.json — a 409 page_deleted (a PROVEN absence) has current_* all null") {
         writeRestTest(Fixtures.demoDocs, seed) { harness ->
             val original = harness.diskBytes("guides/deploy-guide.md")
             val hBase = citations.contentHash(original)
             java.nio.file.Files.delete(harness.root.resolve("guides/deploy-guide.md"))
+            harness.retirements.applyProofs(
+                listOf(
+                    AbsenceProof(
+                        root = RootName.MAIN,
+                        source = ProofSource.OPERATOR,
+                        observationId = harness.retirements.observation(RootName.MAIN),
+                        covers = setOf(BindingRef(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId))),
+                    ),
+                ),
+            )
             val put = client.put("/api/v1/pages/$deployGuideId") {
                 header(HttpHeaders.IfMatch, etag(hBase))
                 contentType(markdown())

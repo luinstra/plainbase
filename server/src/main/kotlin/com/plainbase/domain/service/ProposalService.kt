@@ -89,7 +89,11 @@ class ProposalService(
             // NEVER StaleBase: "your base moved" is a lie when the truth is that the disk is unmounted, and it is
             // the kind of lie that makes an agent re-read and re-propose against nothing.
             ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
-            ContentRead.Absent -> return ProposeOutcome.StaleBase
+            // ...and the same lie, one step subtler (C1): a page whose binding is still live and whose bytes we
+            // cannot produce has NOT moved either. `StaleBase` tells the agent to re-read a base that is not there
+            // to be re-read; 503 tells it to come back, which is the truth.
+            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
+            ContentRead.ConfirmedAbsent -> return ProposeOutcome.StaleBase
         }
         if (citations.contentHash(currentBytes) != baseHash) return ProposeOutcome.StaleBase
 
@@ -286,7 +290,11 @@ class ProposalService(
             // THAT would rewrite durable state on evidence a missing root could not supply - and it would FORECLOSE
             // the recovery that restoring the root would otherwise give. Leave it CONFLICTED; answer 503.
             ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
-            null, ContentRead.Absent -> null
+            // The SAME foreclosure, on the SAME durable row, from an absence nobody proved (C1):
+            // `rebase_target_gone` is TERMINAL, and a page still bound in the index is not gone. Leave it
+            // CONFLICTED and answer 503 - the rebase is decidable again the moment the page is witnessed.
+            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
+            null, ContentRead.ConfirmedAbsent -> null
         }
         if (target == null || currentBytes == null) {
             // The target page is gone → stamp terminal FAILED via the CONFLICTED->FAILED CAS. HONOR the CAS result the
@@ -401,7 +409,18 @@ class ProposalService(
                 }
                 return
             }
-            null, ContentRead.Absent -> null
+            // A boot path cannot answer 503 to anybody - so it does the other thing this design always does with an
+            // unverified absence: NOTHING (C1). The row stays APPLYING and the next boot decides it. Returning it to
+            // PENDING off a page whose binding is still live would be a durable rewrite on an absence nobody proved,
+            // and it would discard an apply that may well have LANDED (the bytes are only unreadable, not known gone).
+            ContentRead.AbsenceUnknown -> {
+                logger.warn {
+                    "APPLYING proposal ${row.id}: '${row.targetPath.value}' is still bound in the index but its bytes are not " +
+                        "there; leaving it APPLYING - an unverified absence never decides a durable row"
+                }
+                return
+            }
+            null, ContentRead.ConfirmedAbsent -> null
         }
         if (diskBytes != null && citations.contentHash(diskBytes) == citations.contentHash(row.proposedContent)) {
             repository.markApplied(
@@ -492,8 +511,12 @@ class ProposalService(
             // happens to hold the id today.
             ProposalOperation.EDIT -> when (val read = pageId?.let { baseReader.pathOf(target.root, it) }?.let(baseReader::currentBytes)) {
                 is ContentRead.Bytes -> citations.contentHash(read.bytes) != baseHash
-                ContentRead.RootDown -> true
-                null, ContentRead.Absent -> true
+                // An unreadable base IS drift, whichever way it is unreadable - and NEITHER may throw here (C1). The
+                // whole review queue renders through this, and the rows an operator most needs to see during an
+                // outage are precisely the ones a throw would take the page down for. It is an explicitly
+                // NON-AUTHORITATIVE triage flag: "not applyable right now", which is exactly true of both.
+                ContentRead.RootDown, ContentRead.AbsenceUnknown -> true
+                null, ContentRead.ConfirmedAbsent -> true
             }
             ProposalOperation.CREATE -> baseReader.occupied(target)
         }

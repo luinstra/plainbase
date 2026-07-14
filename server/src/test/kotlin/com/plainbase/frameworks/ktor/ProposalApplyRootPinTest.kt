@@ -94,6 +94,7 @@ class ProposalApplyRootPinTest : FunSpec({
                     indexBuilder = harness.builder,
                     availability = harness.availability,
                     resolver = harness.resolver,
+                    absence = harness.absence,
                 )
 
                 // The apply, exactly as GuardedProposalFacade drives it: the row's page_id + base_hash, pinned to the
@@ -157,6 +158,7 @@ class ProposalApplyRootPinTest : FunSpec({
                     indexBuilder = harness.builder,
                     availability = harness.availability,
                     resolver = harness.resolver,
+                    absence = harness.absence,
                 )
 
                 val result = mutate.save(

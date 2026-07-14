@@ -49,15 +49,22 @@ interface ContentStore {
     fun read(path: TreePath): ByteArray?
 
     /**
-     * [read], CLASSIFIED. EVERY rooted read whose FAILURE would drive a durable rewrite or a not-found WIRE
-     * answer calls this and never [read] - neither a bare null NOR a raw `IOException` can distinguish a
-     * deleted page from a downed root, and the two must never produce the same answer: telling an agent
-     * "page gone" for a root whose disk is unmounted is the exact lie ADR-0011 D5 forbids.
+     * [read], CLASSIFIED - and classified as far as a STORE can honestly go, which is not all the way (C1).
+     *
+     * EVERY rooted read whose FAILURE would drive a durable rewrite or a not-found WIRE answer calls this and
+     * never [read] - neither a bare null NOR a raw `IOException` can distinguish "no bytes here" from a downed
+     * root, and the two must never produce the same answer: telling an agent "page gone" for a root whose disk
+     * is unmounted is the exact lie ADR-0011 D5 forbids.
+     *
+     * It returns [StoreRead], NOT [ContentRead]: a store knows about BYTES, not about PAGES. "There is nothing
+     * at that path" ([StoreRead.NoBytes]) is the whole of what it can say, and turning that into "this page was
+     * deleted" needs the durable index, which a store has never heard of. The domain's [com.plainbase.domain
+     * .service.AbsenceClassifier] makes that call, in one place, for every consumer.
      *
      * The liveness probe fires ONLY on a failure, so the hot read path is untouched. [read] itself is left
      * exactly as it is - reading for RENDERING is unchanged; only reading to DECIDE is classified.
      */
-    fun readClassified(path: TreePath): ContentRead
+    fun readClassified(path: TreePath): StoreRead
 
     /**
      * Lists the immediate children (files and folders) of the directory at [dir], or of the
@@ -224,12 +231,47 @@ enum class WatchCoverage {
 }
 
 /**
- * The classification a null [ContentStore.read] cannot express: the FILE is absent, versus the ROOT is not
- * readable. A sealed RESULT rather than a throw, deliberately - several consumers must SWALLOW a root-down
- * condition (leave an APPLYING proposal APPLYING, leave a dirty journal row dirty, answer `base_drifted =
- * true`) rather than propagate it, and two blanket `catch (Exception)` arms already sitting on these paths
- * would otherwise launder an honest 503 back into one of the very codes ADR-0011 D5 forbids. The compiler
- * makes each consumer name its behavior; a `catch` nobody remembered to narrow cannot swallow it.
+ * **Everything a STORE can honestly say about a read** (C1). It knows about BYTES; it does not know about pages,
+ * and it has never heard of the durable index - so it cannot, and no longer may, decide that a page is DELETED.
+ *
+ * A sealed RESULT rather than a throw, deliberately: several consumers must SWALLOW a root-down condition (leave
+ * an APPLYING proposal APPLYING, leave a dirty journal row dirty, answer `base_drifted = true`) rather than
+ * propagate it, and two blanket `catch (Exception)` arms already sitting on these paths would otherwise launder
+ * an honest 503 back into one of the very codes ADR-0011 D5 forbids.
+ */
+sealed interface StoreRead {
+
+    data class Bytes(val bytes: ByteArray) : StoreRead {
+        override fun equals(other: Any?): Boolean = this === other || (other is Bytes && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /**
+     * There are no bytes at that path, on a root that IS live. **That is ALL it means.**
+     *
+     * It is NOT "the page was deleted". An empty mount point, a half-finished restore, a decoy tree and a real
+     * deletion produce the identical observation here, and no probe a store can run separates them - so the
+     * store hands the fact up and the domain decides what it MEANS ([com.plainbase.domain.service.AbsenceClassifier]).
+     */
+    data object NoBytes : StoreRead
+
+    /** The backing tree is not traversable right now - NOTHING may be concluded about the file. */
+    data object RootDown : StoreRead
+}
+
+/**
+ * **What the DOMAIN concludes** by combining a [StoreRead] with the durable index (C1). The compiler makes each
+ * consumer name its behavior for all four arms; a `catch` nobody remembered to narrow cannot swallow one.
+ *
+ * The rule, and it closes ledger A4 by REMOVING a check rather than adding one:
+ *
+ * > A read for a page **the durable index HAS**, whose bytes the store cannot produce, is **503**.
+ * > **404** only for a page the index does not have.
+ *
+ * The adapter used to decide this from `available()`, and after an ext4 inode-reused replacement `available()`
+ * says LIVE - so a read for a page sitting safe on an unmounted disk answered 404 ("drop your citations") and a
+ * CAS write answered `page_deleted`. The index knew better the whole time; nobody asked it.
  */
 sealed interface ContentRead {
 
@@ -239,8 +281,18 @@ sealed interface ContentRead {
         override fun hashCode(): Int = bytes.contentHashCode()
     }
 
-    /** No file at the path, on a root that IS live - a genuine deletion, and today's honest 404. */
-    data object Absent : ContentRead
+    /** No bytes, AND the durable index does not have this page either. Nothing is in doubt: the honest **404**. */
+    data object ConfirmedAbsent : ContentRead
+
+    /**
+     * No bytes, BUT the durable index HAS a live binding for it. The page is in LIMBO - neither present nor
+     * proven gone - and the only honest answer is **503 `absence_unverified`: come back later**.
+     *
+     * **An `AbsenceUnknown` is never allowed to become a fact.** It ends every path in "we do not know yet",
+     * never in "it's gone": no 404, no `page_deleted`, no `rebase_target_gone`, no cleared recovery row, no
+     * adoption against a view we cannot verify. It self-heals the moment the page is witnessed again.
+     */
+    data object AbsenceUnknown : ContentRead
 
     /** The backing tree is not traversable right now - NOTHING may be concluded about the file. */
     data object RootDown : ContentRead

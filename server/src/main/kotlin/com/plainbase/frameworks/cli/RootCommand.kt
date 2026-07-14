@@ -1,7 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.bootGateFor
-import com.plainbase.domain.content.ContentRead
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -197,6 +197,17 @@ object RootCommand {
                     )
                     return 1
                 }
+                // Fail CLOSED for the SAME reason, one page down: an absence this scan cannot verify never becomes a
+                // fact (C1), and here the fact it would silently become is "that page's slug shadows nothing".
+                is Shadow.Unverified -> {
+                    System.err.println(
+                        "root add: main's page ${shadow.path} was listed by the scan and could not be read, so the shadow " +
+                            "check ran against a view that is not main and would be accepted on incomplete evidence. " +
+                            "Re-run (it self-heals if the page was simply being written), or pass --force to add without " +
+                            "the check.",
+                    )
+                    return 1
+                }
                 Shadow.None -> Unit
             }
         }
@@ -380,7 +391,7 @@ object RootCommand {
         return Artifact(text)
     }
 
-    /** The shadow scan's three outcomes - and [MainDown] is why it is not a nullable list (D5). */
+    /** The shadow scan's outcomes - and the two REFUSALS are why it is not a nullable list (D5/C1). */
     private sealed interface Shadow {
         data object None : Shadow
 
@@ -388,6 +399,18 @@ object RootCommand {
 
         /** Main is not readable, so NOTHING may be concluded about what the new name shadows. */
         data object MainDown : Shadow
+
+        /**
+         * A page main's own walk had just listed could not be READ (C1). The scan's view of main is therefore not
+         * main, and this check cannot be completed - so it is not completed, rather than completed wrongly.
+         *
+         * The CLI has no index to ask (no DATA_DIR lock, no database - deliberately), so it cannot tell a page that
+         * was deleted mid-scan from one that is momentarily unreadable. That is exactly an `AbsenceUnknown`, and the
+         * rule is the same here as everywhere: it never becomes a fact. It matters because the unread page's `slug:`
+         * override is the one thing that could have shadowed the new root name, and silently dropping it turns a
+         * REFUSAL into an approval - the one check boot does not repeat.
+         */
+        data class Unverified(val path: String) : Shadow
     }
 
     /**
@@ -416,11 +439,12 @@ object RootCommand {
         val scan = store.scan()
         val pages = scan.files.filter { it.path.name.endsWith(".md") }.map { file ->
             val slugOverride = when (val read = store.readClassified(file.path)) {
-                is ContentRead.Bytes -> FrontmatterReader().parse(read.bytes).scalar("slug")
-                // Deleted between the scan and this read: a page that is gone shadows nothing, and its filename
-                // segment is still in the set below - so an honest absence costs the scan nothing.
-                ContentRead.Absent -> null
-                ContentRead.RootDown -> return Shadow.MainDown
+                is StoreRead.Bytes -> FrontmatterReader().parse(read.bytes).scalar("slug")
+                // A page the walk listed a moment ago and cannot read now. See [Shadow.Unverified]: the missing
+                // `slug:` override is precisely what could have shadowed the new name, so the scan REFUSES rather
+                // than quietly answering "shadows nothing" off a view it knows is incomplete.
+                StoreRead.NoBytes -> return Shadow.Unverified(file.path.value)
+                StoreRead.RootDown -> return Shadow.MainDown
             }
             CanonicalUrlBuilder.PageInput(path = file.path, rawName = file.rawName, slugOverride = slugOverride)
         }

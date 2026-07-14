@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
@@ -44,6 +45,13 @@ class RouteContext(
      * convergence, so `/healthz` reports it as degraded rather than down, and no gated surface consults it at all.
      */
     val convergence: RootConvergence,
+    /**
+     * The DERIVED per-root limbo set (C1) - rows whose pages the last pass did not witness and no proof covers. Read
+     * by the SAME one route, and for the same reason: it is an operator signal, not an authorization input. A gated
+     * surface never asks here - it asks the `AbsenceClassifier`, which reads the durable binding directly rather than
+     * a set derived once per pass, so a read cannot be answered off a snapshot older than the request.
+     */
+    val limbo: RootLimbo = RootLimbo(),
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,

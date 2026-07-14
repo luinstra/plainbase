@@ -9,6 +9,7 @@ import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.Action
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CreateIntent
@@ -65,6 +66,8 @@ class GuardedProposalFacade(
     private val indexBuilder: IndexBuilder,
     private val resolver: PageRootResolver,
     private val availability: RootAvailability,
+    /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the read and write facades ask. */
+    private val absence: AbsenceClassifier,
 ) : ProposalFacade {
 
     override fun propose(principal: Principal, command: ProposeCommand): ProposeOutcome =
@@ -94,6 +97,10 @@ class GuardedProposalFacade(
         // service is never called, so it can never re-resolve a target the gate did not see.
         if (root == null) return ProposeOutcome.StaleBase
         requireAvailable(root)
+        // A page we still BIND and did not witness is not a moved base - it is a page we could not read (C1). `StaleBase`
+        // would tell the agent to re-read a base that is not there to be re-read, and then to propose against whatever
+        // it found instead. 503: come back when we can see it.
+        absence.requireVerifiedAbsence(root, command.pageId, snapshot)
         val target = snapshot.byId[command.pageId]?.let { RootedPath(it.root, it.path) } ?: return ProposeOutcome.StaleBase
         return proposals.proposeEdit(
             grant = grant,

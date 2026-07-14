@@ -134,7 +134,13 @@ class ObjectHybridRouteParityTest : FunSpec({
         }
     }
 
-    test("edit Deleted: the object is gone at the BUCKET (the authority) - 409 page_deleted with current_* null") {
+    // RE-SPEC'd in C1, and PARITY IS THE POINT OF THIS FILE: the local backend answers 503 `absence_unverified` for
+    // exactly this shape (WriteRouteTest), so the hybrid must too. A gone OBJECT is no more a proof than a gone FILE
+    // is - "the authority says there are no bytes" and "the page was deleted" are different sentences, and a wrong
+    // bucket, a wrong prefix and a still-hydrating mirror all produce the first one. The binding is live; it 503s.
+    // (C3 gives the object backend its own proof source - a complete LIST under a TRUSTED binding - and THAT is what
+    // will let a drained bucket converge to `page_deleted` again, on evidence rather than on an empty answer.)
+    test("edit Deleted: the object is gone at the BUCKET, and an UNPROVEN absence is 503 - the local parity") {
         // For the hybrid, "deleted" means gone at the bucket (the authority), not merely absent from the
         // local mirror render - deleting only the mirror file would let the fake bucket's copy heal it
         // right back (a legitimate hybrid behavior, not the scenario under test). Delete via the fake.
@@ -149,9 +155,8 @@ class ObjectHybridRouteParityTest : FunSpec({
                 contentType(markdown())
                 setBody(original)
             }
-            put.status shouldBe HttpStatusCode.Conflict
-            put.errorJson().getValue("reason").jsonPrimitive.content shouldBe "page_deleted"
-            put.errorJson().getValue("current_content").toString() shouldBe "null"
+            put.status shouldBe HttpStatusCode.ServiceUnavailable
+            put.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
         }
     }
 

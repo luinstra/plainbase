@@ -192,7 +192,8 @@ fun withRestServices(
                 }
                 val stores: (com.plainbase.domain.root.RootName) -> com.plainbase.domain.content.ContentStore = { store }
                 val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry)
-                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, stores = stores)
+                val absence = com.plainbase.domain.service.AbsenceClassifier(idMap)
+                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
                 val proposalService = com.plainbase.domain.service.ProposalService(
                     repository = SqlDelightProposalRepository(database),
                     citations = CitationFactory(),
@@ -220,6 +221,7 @@ fun withRestServices(
                     registry = rootRegistry,
                     availability = availability,
                     resolver = resolver,
+                    absence = absence,
                     stores = stores,
                     histories = { NoOpHistoryProvider },
                     idProvider = UuidV7IdProvider(),

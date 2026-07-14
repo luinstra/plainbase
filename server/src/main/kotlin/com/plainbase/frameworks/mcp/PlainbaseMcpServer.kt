@@ -3,6 +3,7 @@ package com.plainbase.frameworks.mcp
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.ProposeOutcome
@@ -179,6 +180,8 @@ private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): C
         deniedResult(denied)
     } catch (unavailable: RootUnavailable) {
         unavailableResult(unavailable)
+    } catch (unverified: AbsenceUnverified) {
+        unverifiedResult(unverified)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" } // cause to the log, never the wire
         errorResult("internal", "Internal error")
@@ -197,6 +200,8 @@ private inline fun catchingErrors(body: () -> CallToolResult): CallToolResult =
         deniedResult(denied)
     } catch (unavailable: RootUnavailable) {
         unavailableResult(unavailable)
+    } catch (unverified: AbsenceUnverified) {
+        unverifiedResult(unverified)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" }
         errorResult("internal", "Internal error")
@@ -213,6 +218,19 @@ private fun unavailableResult(unavailable: RootUnavailable): CallToolResult =
         ErrorCodes.ROOT_UNAVAILABLE,
         "Root '${unavailable.root.value}' is not serving (${unavailable.reason.name.lowercase()}). Nothing was written. " +
             "The page is NOT deleted - keep your citations. Retry after the operator restores the root and restarts.",
+    )
+
+/**
+ * Maps an [AbsenceUnverified] to the MCP twin of the REST 503 `absence_unverified` (C1) - and this is the surface the
+ * distinction was drawn FOR. An agent is on the other end: `not_found` is an instruction to drop its citations, and
+ * this page's citations are good. The root is up (so `root_unavailable` would send it to wait out an outage that is
+ * not happening); we simply have not seen the page, and we will not pretend that means it is gone. Retry shortly.
+ */
+private fun unverifiedResult(unverified: AbsenceUnverified): CallToolResult =
+    errorResult(
+        ErrorCodes.ABSENCE_UNVERIFIED,
+        "The page '${unverified.subject}' is still bound in root '${unverified.root.value}' and its content cannot be read " +
+            "right now. It is NOT deleted - KEEP your citations, and do not re-create it. Nothing was written. Retry shortly.",
     )
 
 /**

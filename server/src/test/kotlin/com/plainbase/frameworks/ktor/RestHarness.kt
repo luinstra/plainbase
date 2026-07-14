@@ -53,8 +53,17 @@ class RestHarness(
     )
 
     val idMap: IdMapRepository get() = harness.idMap
+
+    /** The proof-apply transaction (C0): the ONE way a test can make an absence PROVEN rather than merely observed. */
+    val retirements get() = harness.retirements
     val builder get() = harness.builder
     val registry get() = harness.registry
+
+    /** The availability holder - so a test can drive the OTHER 503 and prove the two are not the same answer (C1). */
+    val availability get() = harness.availability
+
+    /** The DERIVED limbo set `/healthz` reports (C1). */
+    val limbo get() = harness.limbo
 
     /** The A3 route holder `plainbaseModule` serves from. Auth ON, loopback-dev (OFF) open behavior by default. */
     val services: RouteContext
@@ -143,7 +152,8 @@ fun IndexHarness.testRouteContext(
     // the test declares the whole per-root map itself.
     val histories: (com.plainbase.domain.root.RootName) -> HistoryProvider =
         historiesByRoot ?: { if (it == rootRegistry.main.name) history else NoOpHistoryProvider }
-    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores)
+    val proposalReader =
+        com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
     val proposalService = com.plainbase.domain.service.ProposalService(
         repository = proposalRepository,
         citations = CitationFactory(),
@@ -162,7 +172,9 @@ fun IndexHarness.testRouteContext(
         registry = rootRegistry,
         availability = availability,
         convergence = convergence,
+        limbo = limbo,
         resolver = resolver,
+        absence = absence,
         stores = stores,
         histories = histories,
         idProvider = idProvider,

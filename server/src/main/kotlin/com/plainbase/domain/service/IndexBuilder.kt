@@ -223,6 +223,9 @@ class IndexBuilder(
     /** The shared root-loss rule (probe → mark), over the SAME holder this builder reads and writes. */
     private val rootLoss = RootLossClassifier(availability)
 
+    /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pass binds into. Never re-derived here. */
+    private val absence = AbsenceClassifier(idMap)
+
     /**
      * The roots whose corpus THIS PROCESS has actually seen on disk - and, since C0, a **SERVING HINT with ZERO
      * delete authority.** Read [publishLimbo] for what it is now allowed to decide, which is exactly one thing:
@@ -237,7 +240,17 @@ class IndexBuilder(
      * COST of being wrong, and that is the whole reason it survives: wrong here means a page reads 404 instead
      * of 503, which is bad; wrong as a delete oracle meant the corpus. Without it, deleting the last page of a
      * root would mark the WHOLE root unavailable and 503 it, sticky until restart - a product-breaking answer to
-     * an ordinary edit. C1 removes it for good, replacing a root-granular guess with a per-ROW limbo fact.
+     * an ordinary edit.
+     *
+     * **C1 was going to delete this, and did not - deliberately.** The per-ROW limbo 503 ([AbsenceClassifier]) is
+     * strictly finer-grained and it does subsume the READ half of this hint: a limbo page answers 503
+     * `absence_unverified` whether or not its root is marked. What it does NOT subsume is the WRITE half. An empty
+     * mount point passes `available()` (it is a readable, searchable directory), so an unmarked root would accept a
+     * CREATE and lay a partial skeleton of the operator's tree into the mount point - the exact resurrection the
+     * whole D5 design exists to prevent, arriving through the one surface a per-page rule cannot see. So the
+     * root-granular BROKEN-VIEW mark stays for the case it was always about (a root that scanned to zero pages
+     * having never shown this process a corpus - a failed mount at boot), and the per-row rule handles everything
+     * finer than that, including the partial restore this mark never could.
      *
      * Touched only from inside the `@Synchronized` [rebuild], so it needs no atomics.
      */
@@ -407,8 +420,12 @@ class IndexBuilder(
      * hint - a write fail-fast and a health signal, never an input to anything that deletes). That is the whole
      * difference from the tripwire it replaces: the old rule used this same observation to hand out and withhold
      * DELETE AUTHORITY, which is a question an empty directory can never answer. Deletion now needs a proof, so
-     * being wrong here costs a 503 instead of a corpus. C1 makes the 503 per-ROW off [RootLimbo], at which point
-     * this root-granular mark - and the last echo of the tripwire with it - goes away.
+     * being wrong here costs a 503 instead of a corpus.
+     *
+     * C1 makes the READ 503 per-ROW off the durable binding ([AbsenceClassifier]) - so every page here already
+     * answers `absence_unverified` without this mark. The mark survives for the WRITE side, which no per-page rule
+     * can reach: an empty mount point is a perfectly writable directory, and an unmarked root would let a create
+     * lay a skeleton corpus into it. See [corpusSeen].
      */
     private fun publishLimbo(witnessed: Map<RootedPath, Witness>, scannedRoots: Set<RootName>) {
         val stranded = idMap.bindings()
@@ -535,13 +552,19 @@ class IndexBuilder(
         // (the bytes ARE on disk, the dirty mark IS retained). A STATUS cannot answer for the UNMARKED window,
         // though, which is what the two classified calls below are for.
         if (!availability.current().isAvailable(target.root)) throw RootUnavailable(target.root, UnavailableCause.VANISHED)
-        val bytes = when (val read = source.store.readClassified(target.path)) {
+        val bytes = when (val read = absence.read(source.store, target)) {
             is ContentRead.Bytes -> read.bytes
             // The store has already MARKED on its way out; this throw is only the carrier. Without it the read's
             // null became an error() the pipeline's blanket catch absorbed - the right wire answer, but the root
             // was never marked, so every subsequent READ kept serving its carried content.
             ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
-            ContentRead.Absent -> error("reindex($target): ${target.path.value} unreadable just after a CAS write")
+            // BOTH absences are an invariant violation HERE and nowhere else: the CAS wrote these bytes moments ago,
+            // on this path, in this root. Whichever way the index reads it, the file is not supposed to be missing -
+            // so this stays a loud error() that the pipeline's post-write catch turns into WrittenButUnindexed (the
+            // bytes ARE on disk, the dirty mark IS retained). This is not the C1 read-classification surface; it is a
+            // save-path invariant, and softening it would hide a lost write behind a retry.
+            ContentRead.ConfirmedAbsent, ContentRead.AbsenceUnknown ->
+                error("reindex($target): ${target.path.value} unreadable just after a CAS write")
         }
         val parsed = frontmatterParser.parse(bytes)
         val rendered = rendererFactory(previous.view(target.root)).render(target.path, bytes)
@@ -774,16 +797,31 @@ class IndexBuilder(
         val drafts = scan.files
             .filter { it.path.name.endsWith(".md") }
             .sortedBy { it.path.value }
-            .map { file ->
-                // CLASSIFIED, not `checkNotNull`: a plain null read cannot tell a page deleted mid-scan (which
-                // must still fail the rebuild loudly - the watcher event for that same deletion drives the
-                // converging pass) from the whole ROOT going away (which must mark + skip + carry). The old
-                // checkNotNull raised an IllegalStateException that walked straight past the classifier above,
-                // leaving the root AVAILABLE and its carried section being served - the D5 lie.
-                val bytes = when (val read = source.store.readClassified(file.path)) {
+            .mapNotNull { file ->
+                // CLASSIFIED, not `checkNotNull`: a plain null read cannot tell a page that vanished mid-scan from
+                // the whole ROOT going away (which must mark + skip + carry). The old checkNotNull raised an
+                // IllegalStateException that walked straight past the classifier above, leaving the root AVAILABLE
+                // and its carried section being served - the D5 lie.
+                //
+                // A page that vanished between the walk and the read is simply NOT WITNESSED (C1): it drops out of
+                // this pass's drafts, so it is in no snapshot, and - if the durable index still binds it - it lands
+                // in LIMBO, which reads 503 rather than 404 until the page is seen again or a proof settles it. It
+                // used to `error()`, which killed the whole rebuild (and, at boot, the server) over one file losing
+                // a race with an ordinary `rm` - taking every OTHER root's pass down with it.
+                val bytes = when (val read = absence.read(source.store, RootedPath(root, file.path))) {
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
-                    ContentRead.Absent -> error("scanned page vanished before read: ${file.path.value}")
+                    ContentRead.AbsenceUnknown -> {
+                        logger.warn {
+                            "page ${file.path.value} in '$root' vanished between the walk and the read; it is NOT witnessed " +
+                                "this pass and its durable row goes to LIMBO - nothing is deleted for it"
+                        }
+                        return@mapNotNull null
+                    }
+                    ContentRead.ConfirmedAbsent -> {
+                        logger.warn { "page ${file.path.value} in '$root' vanished between the walk and the read; it was never indexed" }
+                        return@mapNotNull null
+                    }
                 }
                 Draft(file, bytes, frontmatterParser.parse(bytes))
             }

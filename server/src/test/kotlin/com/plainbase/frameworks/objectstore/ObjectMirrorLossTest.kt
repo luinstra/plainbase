@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.objectstore
 
-import com.plainbase.domain.content.ContentRead
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
@@ -27,7 +27,7 @@ class ObjectMirrorLossTest : FunSpec({
 
     val deploy = TreePath.require("guides/deploy.md")
 
-    test("a HYDRATED mirror that is deleted makes the store unavailable, and its reads answer RootDown, never Absent") {
+    test("a HYDRATED mirror that is deleted makes the store unavailable, and its reads answer RootDown, never NoBytes") {
         HybridFixture().use { hybrid ->
             hybrid.seedExisting(deploy, "# Deploy\n\nbody\n".toByteArray())
             hybrid.store.hydrate()
@@ -40,7 +40,7 @@ class ObjectMirrorLossTest : FunSpec({
                 shouldThrow<IOException> { hybrid.store.scan() }
             }
             withClue("404 tells an agent to drop its citations - for a page the BUCKET still holds") {
-                hybrid.store.readClassified(deploy) shouldBe ContentRead.RootDown
+                hybrid.store.readClassified(deploy) shouldBe StoreRead.RootDown
             }
         }
     }
@@ -62,7 +62,7 @@ class ObjectMirrorLossTest : FunSpec({
                 hybrid.store.available() shouldBe false
             }
             withClue("404 tells an agent to drop its citations - for a page the BUCKET still holds") {
-                hybrid.store.readClassified(deploy) shouldBe ContentRead.RootDown
+                hybrid.store.readClassified(deploy) shouldBe StoreRead.RootDown
             }
         }
     }

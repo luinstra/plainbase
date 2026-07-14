@@ -2,13 +2,13 @@ package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentEntry
-import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
@@ -173,14 +173,18 @@ class ObjectContentStore(
     override fun read(path: TreePath): ByteArray? = mirror.read(path)
 
     /**
-     * Read-or-[ContentRead.Absent], with the same D5 classification every rooted read owes: a read that comes back
-     * empty-handed on a mirror that is GONE is `RootDown` (503, "the page still exists"), never `Absent` (404, "drop
-     * your citations"). The probe fires only on that empty-handed path, so the hot read is untouched. Deliberately
-     * NOT delegated to `mirror.readClassified`: the mirror is a `LocalContentStore` bound to a root it did not
-     * choose, and its classifier would answer `RootDown` for the never-hydrated mirror this store answers for.
+     * Read-or-[StoreRead.NoBytes], with the same D5 classification every rooted read owes: a read that comes back
+     * empty-handed on a mirror that is GONE is `RootDown` (503, "the page still exists"), never a bare no-bytes the
+     * caller could mistake for a deletion. The probe fires only on that empty-handed path, so the hot read is
+     * untouched. Deliberately NOT delegated to `mirror.readClassified`: the mirror is a `LocalContentStore` bound to
+     * a root it did not choose, and its classifier would answer `RootDown` for the never-hydrated mirror this store
+     * answers for.
+     *
+     * `NoBytes` is the end of what this store may conclude (C1) - whether the page is DELETED is the durable index's
+     * call, not the bucket's, and least of all this mirror's.
      */
-    override fun readClassified(path: TreePath): ContentRead =
-        read(path)?.let(ContentRead::Bytes) ?: if (available()) ContentRead.Absent else ContentRead.RootDown
+    override fun readClassified(path: TreePath): StoreRead =
+        read(path)?.let(StoreRead::Bytes) ?: if (available()) StoreRead.NoBytes else StoreRead.RootDown
 
     override fun list(dir: TreePath?): List<ContentEntry> = mirror.list(dir)
 

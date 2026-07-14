@@ -1,7 +1,7 @@
 package com.plainbase.domain.service
 
-import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
@@ -86,7 +86,7 @@ class IndexBuilderFixtureTest : FunSpec({
         // and the builder must be able to), so the count lives THERE - counting the now-unused `read` would make
         // this assertion vacuously pass whatever the builder did.
         val counting = object : ContentStore by store {
-            override fun readClassified(path: TreePath): ContentRead {
+            override fun readClassified(path: TreePath): StoreRead {
                 reads.merge(path.value, 1, Int::plus)
                 return store.readClassified(path)
             }

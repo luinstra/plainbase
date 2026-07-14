@@ -14,7 +14,10 @@ import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AgentWriteDecision
 import com.plainbase.domain.service.AssetWriteOutcome
 import com.plainbase.domain.service.CommitGlob
@@ -80,6 +83,8 @@ class GuardedMutatingFacade(
     private val availability: RootAvailability,
     /** The ONE owner of the id -> root resolution. Never a raw idMap/registry here: two copies of this rule drift. */
     private val resolver: PageRootResolver,
+    /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the read and index paths ask. */
+    private val absence: AbsenceClassifier,
     // The degrade path files a proposal through the SAME guarded ProposalFacade routes use. The mutate↔proposals
     // construction cycle is broken by a provider-lambda (RouteContextFactory's 2-phase lateinit) - invoked only at
     // request time, never during assembly. Defaulted so the many older test constructors compile unchanged.
@@ -130,7 +135,13 @@ class GuardedMutatingFacade(
             policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(root, request.pageId.value))
             // The boot arm reaches HERE precisely because the page is absent from the snapshot - its root was never
             // scanned - so the 503 must be answered after the gate and before the 404, or an agent is told "gone".
-            root?.let(::requireAvailable)
+            // And the SAME is true of a page whose root is up and whose binding we still hold (C1): the pass could
+            // not read it, which is not the same fact as its being deleted, and an agent told "gone" for a page in
+            // limbo drops its citations for a page that is coming back.
+            root?.let {
+                requireAvailable(it)
+                absence.requireVerifiedAbsence(it, request.pageId, snapshot)
+            }
             return SaveResult.PageNotFound
         }
 
@@ -186,11 +197,20 @@ class GuardedMutatingFacade(
         requireAvailable(root)
 
         // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route never
-        // invents a path. A stale binding under a LIVE root lands here, and 404 is the honest answer: the root is up
-        // and serving. An id present but under a DIFFERENT root than the pinned one is the same 404: from the root
-        // this save was authorized against, that page is gone. The git attribution is whatever the request carried
-        // (the apply path's proposer/approver).
-        val current = snapshot.byId[request.pageId]?.takeIf { it.root == root } ?: return SaveResult.PageNotFound
+        // invents a path. The git attribution is whatever the request carried (the apply path's proposer/approver).
+        //
+        // "A stale binding under a LIVE root lands here, and 404 is the honest answer" is what this used to say, and
+        // it was WRONG in the one direction that costs a corpus (C1): a live binding whose page is missing from the
+        // snapshot means the pass could not read it, not that it is gone. The classifier decides, and it 503s.
+        val current = snapshot.byId[request.pageId]
+            ?: run {
+                absence.requireVerifiedAbsence(root, request.pageId, snapshot)
+                return SaveResult.PageNotFound
+            }
+        // Present, but under a DIFFERENT root than the pinned one (a D17 cross-root re-award between propose and
+        // apply): NOT an absence at all - the page is right there, in a repository this write was never authorized
+        // against. From the root this save was gated on, it is gone, and 404 stays the honest answer.
+        if (current.root != root) return SaveResult.PageNotFound
         return directWriteResolved(grant, request, current, request.author, request.committer)
     }
 
@@ -365,6 +385,8 @@ class GuardedMutatingFacade(
         // 404, so a boot-unavailable root's page is never reported as gone.
         if (root == null) return AssetWriteOutcome.PageMissing
         requireAvailable(root)
+        // ...and 503 before 404 for a page we still BIND but did not witness, for the same reason (C1).
+        absence.requireVerifiedAbsence(root, pageId, snapshot)
         val page = snapshot.byId[pageId] ?: return AssetWriteOutcome.PageMissing
         val store = stores(page.root)
 
@@ -378,15 +400,19 @@ class GuardedMutatingFacade(
         // told "page gone" drops its citations). Hence a CLASSIFIED read. It also has to be a RESULT and not a throw:
         // the blanket catch just below would have swallowed a throw and re-emitted it as 503 `content_unreadable`,
         // one of the very codes the invariant forbids for a root-gone condition.
+        val target = RootedPath(page.root, page.path)
         val pageOnDisk = try {
-            store.readClassified(page.path)
+            absence.read(store, target)
         } catch (e: Exception) {
             logger.warn(e) { "stale-page re-check failed reading '${page.path.value}'; treating as unreadable" }
             return AssetWriteOutcome.Unreadable
         }
         when (pageOnDisk) {
             is ContentRead.Bytes -> Unit
-            ContentRead.Absent -> return AssetWriteOutcome.PageMissing
+            ContentRead.ConfirmedAbsent -> return AssetWriteOutcome.PageMissing
+            // The page is still BOUND and its bytes are missing (C1): `PageMissing` is a 404, and a 404 here would
+            // tell an author uploading an image that their page is gone while it sits on an unmounted disk. 503.
+            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
             ContentRead.RootDown -> throw RootUnavailable(page.root, UnavailableCause.VANISHED)
         }
 

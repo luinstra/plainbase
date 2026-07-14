@@ -5,6 +5,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalBaseReader
 
@@ -15,9 +16,13 @@ import com.plainbase.domain.service.ProposalBaseReader
  * there; this impl frameworks-side).
  *
  * It is the ONE place the store's root-loss classification crosses OUT of `LocalContentStore` into another
- * subsystem: [currentBytes] is a straight pass-through of [ContentRead] from the store port to the domain service -
- * no translation, no re-nulling - which is what lets each of the four `ProposalService` consumers name its own
- * behavior for a downed root at the compiler's insistence.
+ * subsystem: [currentBytes] hands the domain a [ContentRead] - no re-nulling, no translation - which is what lets
+ * each of the four `ProposalService` consumers name its own behavior for a downed root at the compiler's insistence.
+ *
+ * Since C1 that crossing runs through the [AbsenceClassifier], because a `StoreRead` is not yet an answer: this
+ * adapter does not DECIDE anything about an absent page, it just hands the store's observation and the target to
+ * the one domain rule that may. (An adapter re-deriving 404-vs-503 for itself is precisely the bug C1 exists to
+ * remove; it does not get to grow back here.)
  *
  * `occupied` is the FILE-PATH collision (`byPath` ∪ `assets`) — the analog the apply-time `WritePipeline.create`
  * rejects via `createExclusive` → `AlreadyExists`. The canonical-URL/slug collision (`SlugConflict`) is a SECOND
@@ -27,13 +32,13 @@ import com.plainbase.domain.service.ProposalBaseReader
 class IndexProposalBaseReader(
     private val indexBuilder: IndexBuilder,
     private val stores: (RootName) -> ContentStore,
+    private val absence: AbsenceClassifier,
 ) : ProposalBaseReader {
 
     override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
         indexBuilder.current.byId[pageId]?.takeIf { it.root == root }?.let { RootedPath(it.root, it.path) }
 
-    override fun currentBytes(target: RootedPath): ContentRead =
-        stores(target.root).readClassified(target.path)
+    override fun currentBytes(target: RootedPath): ContentRead = absence.read(stores(target.root), target)
 
     override fun occupied(target: RootedPath): Boolean {
         val snapshot = indexBuilder.current

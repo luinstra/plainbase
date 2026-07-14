@@ -10,6 +10,7 @@ import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
@@ -27,6 +28,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -73,6 +75,13 @@ class IndexHarness(
     val checkpoints = SqlDelightPageCheckpointRepository(database)
     val dirtyPages = SqlDelightDirtyPageRepository(database)
 
+    /**
+     * The proof-apply transaction (C0) - the ONE deleter. Exposed because a test that wants to drive a PROVEN
+     * absence (the only kind the server may call a deletion) has to be able to mint the licence by hand: no
+     * production code mints one until C2/C4, which is the safety floor working as designed.
+     */
+    val retirements = SqlDelightRetirementRepository(database)
+
     // A3 auth substrate over the SAME in-memory DB (the schema includes subject_role/audit_log via 5.sqm). The
     // route-test harnesses build a PolicyService over these + seed a role; ApiTokenService mints test bearers.
     val roleRepository = SqlDelightRoleRepository(database)
@@ -107,9 +116,16 @@ class IndexHarness(
     /** The ONE id→root / root→status resolver, shared by every facade the harness wires (as production does). */
     val resolver = PageRootResolver(idMap, rootRegistry)
 
+    /** The ONE 404-vs-503 absence rule (C1), over the SAME durable index the builder binds into. */
+    val absence = AbsenceClassifier(idMap)
+
+    /** The DERIVED limbo set the builder republishes each pass and `/healthz` reports (C1). */
+    val limbo = RootLimbo()
+
     val builder = IndexBuilder(
         sources = sourceList,
         availability = availability,
+        limbo = limbo,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
         identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),

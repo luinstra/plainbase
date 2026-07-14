@@ -5,6 +5,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.RootUnavailable
@@ -342,9 +343,12 @@ internal sealed interface ExtractedPrincipal {
  *    403 `forbidden` for an authenticated-but-unauthorized principal (the role×action matrix denied it);
  *  - [AccessDenied] with [DenyReason.ROOT_NOT_EDITABLE] → 403 `root_not_editable` (the root refuses page writes in
  *    EVERY auth mode — but only ever AFTER authn has passed, so anonymous still sees 401 and the flag never leaks);
- *  - [RootUnavailable] → 503 `root_unavailable` + [ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS].
+ *  - [RootUnavailable] → 503 `root_unavailable` + [ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS];
+ *  - [AbsenceUnverified] → 503 `absence_unverified` + [ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS] (C1) — a HEALTHY
+ *    root holding ONE page whose absence nobody has proven. A separate code, because it is a separate fact and a
+ *    separate remedy: nothing to restore, nothing to restart, and it clears itself.
  *
- * Both are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
+ * All are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
  * a denied read never leaks page existence and an unauthenticated prober never learns a root's topology.
  */
 internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
@@ -378,6 +382,16 @@ internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
             "Root '${unavailable.root.value}' is not serving (${unavailable.reason.name.lowercase()}). Nothing was " +
                 "written. The page still exists - do not discard it. Restore the root and restart the server.",
         )
+    } catch (unverified: AbsenceUnverified) {
+        response.header(HttpHeaders.RetryAfter, ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS.toString())
+        respondError(
+            HttpStatusCode.ServiceUnavailable,
+            ErrorCodes.ABSENCE_UNVERIFIED,
+            "The page '${unverified.subject}' is still bound in root '${unverified.root.value}' and its content cannot be " +
+                "read right now. It is NOT deleted - nothing here has proven that, and nothing was written. Do not discard " +
+                "the page or its citations; retry shortly. If its file really is gone for good, the page converges once an " +
+                "absence proof arrives (a git commit, a completed observation, or `plainbase root reconcile`).",
+        )
     }
 }
 
@@ -386,6 +400,14 @@ internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
  * five minutes balances agent politeness against how long a fixed deployment sits unnoticed.
  */
 internal const val ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS: Int = 300
+
+/**
+ * The `Retry-After` a 503 `absence_unverified` advertises (C1) - SHORTER than the root-unavailable one, and for a
+ * reason rather than as a nicety: limbo is derived per pass and SELF-HEALS the moment the page is witnessed again.
+ * A page that comes back with the next watcher-driven rebuild is serving in seconds, with no operator in the loop,
+ * so a five-minute window would leave an agent sitting out an outage that had already ended.
+ */
+internal const val ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS: Int = 30
 
 /**
  * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the

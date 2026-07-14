@@ -16,6 +16,7 @@ import com.plainbase.domain.repository.ProposalSummaryRow
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -24,6 +25,7 @@ import io.kotest.matchers.ints.shouldBeExactly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlin.time.Clock
@@ -59,6 +61,13 @@ class ProposalServiceTest : FunSpec({
         var occupiedPaths: Set<TreePath> = emptySet(),
         /** Paths whose ROOT is not serving — the arm that must never drive a durable rewrite (ADR-0011 D5). */
         var rootDownPaths: Set<TreePath> = emptySet(),
+        /**
+         * Paths whose bytes are missing while the durable index STILL BINDS the page (C1): the root is healthy, the
+         * page is in LIMBO, and its absence is unproven. The arm that must never become `StaleBase` or
+         * `rebase_target_gone` - both of those are assertions that the page is GONE, and nothing here has established
+         * that. A path NOT in this set and absent from [bytesByPath] is a real, index-confirmed absence.
+         */
+        var unverifiedPaths: Set<TreePath> = emptySet(),
     ) : ProposalBaseReader {
         // Root-scoped like the real reader: a page lives in main here, so a lookup under any OTHER root answers null -
         // which is what makes the cross-root rows below assert something rather than accidentally pass.
@@ -67,7 +76,8 @@ class ProposalServiceTest : FunSpec({
 
         override fun currentBytes(target: RootedPath): ContentRead = when {
             target.path in rootDownPaths -> ContentRead.RootDown
-            else -> bytesByPath[target.path]?.let(ContentRead::Bytes) ?: ContentRead.Absent
+            target.path in unverifiedPaths -> ContentRead.AbsenceUnknown
+            else -> bytesByPath[target.path]?.let(ContentRead::Bytes) ?: ContentRead.ConfirmedAbsent
         }
 
         override fun occupied(target: RootedPath): Boolean = target.path in occupiedPaths
@@ -687,6 +697,90 @@ class ProposalServiceTest : FunSpec({
         val (svc, _) = editService()
         val id = pendingEdit(svc)
         svc.rebase(approveGrantForTests(), id) shouldBe RebaseOutcome.NotConflicted
+    }
+
+    // C1: the three ProposalService rows where an UNVERIFIED absence must not become a fact. `rebase_target_gone` and
+    // `StaleBase` are both assertions that the page is GONE, and they are both DURABLE (the first stamps the row
+    // terminally FAILED, foreclosing the recovery that restoring the page would otherwise give). A page whose binding
+    // is still live and whose bytes we cannot read has established neither.
+    test("rebase against an UNVERIFIED absence throws 503 - it does NOT stamp the row terminally rebase_target_gone") {
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = (
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
+            ).id
+        svc.apply(
+            approveGrantForTests(),
+            id,
+            approver,
+            FakeWriter(WriteOutcome.Conflict("content_changed", "x", "sha256:" + "b".repeat(64), path)),
+        )
+        repo.findById(id)!!.status shouldBe ProposalStatus.CONFLICTED
+
+        // The page's bytes are unreadable while the index still binds it - limbo, not deletion.
+        reader.bytesByPath = emptyMap()
+        reader.unverifiedPaths = setOf(path)
+
+        shouldThrow<AbsenceUnverified> { svc.rebase(approveGrantForTests(), id) }
+        withClue(
+            "the row stays CONFLICTED and REBASABLE: restoring the page restores the decision, which a FAILED stamp would have foreclosed",
+        ) {
+            repo.findById(id)!!.status shouldBe ProposalStatus.CONFLICTED
+            repo.findById(id)!!.statusReason shouldNotBe "rebase_target_gone"
+        }
+    }
+
+    test("proposeEdit against an UNVERIFIED absence throws 503 - never StaleBase ('your base moved' is a lie here)") {
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), unverifiedPaths = setOf(path))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+
+        shouldThrow<AbsenceUnverified> {
+            svc.proposeEdit(grantForTests(), pageId, rooted(path), citations.contentHash(current), null, proposed, "r", author)
+        }
+        withClue("and nothing was persisted - a 503 files no proposal") {
+            repo.all().shouldBeEmpty()
+        }
+    }
+
+    test("the review QUEUE still renders over an unverified absence: base_drifted = true, and it does NOT throw") {
+        // The one place a 503 would be the wrong answer: `list`/`get` render the queue, and the rows an operator most
+        // needs to see during an outage are exactly the ones a throw would take the whole page down for. An unreadable
+        // base IS drift - "not applyable right now" - and it is an explicitly NON-AUTHORITATIVE triage flag.
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = (
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
+            ).id
+
+        reader.bytesByPath = emptyMap()
+        reader.unverifiedPaths = setOf(path)
+
+        svc.get(id).shouldNotBeNull().baseDrifted shouldBe true
+        svc.list().single().baseDrifted shouldBe true
     }
 
     test("rebase whose pathOf returns null -> Gone AND the row is FAILED with status_reason rebase_target_gone") {

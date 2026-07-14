@@ -37,11 +37,24 @@ data class HealthStatus(val status: String, val version: String, val roots: List
  * moment a retry re-registers the tree, with no restart. A root reporting `partial` for long is an operator
  * condition (raise `fs.inotify.max_user_watches`, or fix the permissions), never an outage.
  *
+ * [limbo] is the THIRD axis and the newest (C1): how many durable rows this root holds whose pages the last pass did
+ * not witness and no absence proof covers. They are neither present nor deleted; each one reads 503
+ * `absence_unverified` rather than the 404 that would tell an agent its citations were never real, and NOTHING is
+ * deleted for them. A healthy root reports `0`. A non-zero count on an `available: true` root is the signal an
+ * operator actually acts on - a failed submount, a half-finished restore, a decoy tree at the mount point - and it
+ * SELF-HEALS to zero with no operator action the moment the pages are read again.
+ *
  * A DETACHED root — one whose name has left `roots {}` while its rows remain — does not appear here AT ALL: health
  * reports the configured topology's liveness, and a detached root's visibility is the boot WARN that already ships.
  */
 @Serializable
-data class RootHealth(val root: String, val available: Boolean, val reason: String? = null, val coverage: String? = null)
+data class RootHealth(
+    val root: String,
+    val available: Boolean,
+    val reason: String? = null,
+    val coverage: String? = null,
+    val limbo: Int = 0,
+)
 
 /** Registers the unauthenticated `GET /healthz` liveness probe. */
 fun Route.healthRoute(ctx: RouteContext) {
@@ -50,6 +63,7 @@ fun Route.healthRoute(ctx: RouteContext) {
         // half the roots from before a flip and half from after would be a picture of no moment in time.
         val unavailable = ctx.availability.current().unavailable
         val degraded = ctx.convergence.degraded()
+        val limbo = ctx.limbo.current()
         call.respond(
             HealthStatus(
                 status = "ok",
@@ -61,6 +75,7 @@ fun Route.healthRoute(ctx: RouteContext) {
                         available = down == null,
                         reason = down?.cause?.name?.lowercase(),
                         coverage = if (root.name in degraded) WatchCoverage.PARTIAL.name.lowercase() else null,
+                        limbo = limbo[root.name]?.size ?: 0,
                     )
                 },
             ),

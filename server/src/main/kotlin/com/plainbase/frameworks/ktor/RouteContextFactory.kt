@@ -5,8 +5,10 @@ import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IdProvider
@@ -53,8 +55,16 @@ fun buildRouteContext(
      * SAME single `serve()` records each watcher's coverage into.
      */
     convergence: RootConvergence = RootConvergence(),
+    /**
+     * The DERIVED limbo set `/healthz` reports (C1). Defaulted to a fresh (empty) holder for the same reason
+     * [convergence] is: a harness that never ran a pass has nothing in limbo. Production passes the SAME single the
+     * IndexBuilder republishes into.
+     */
+    limbo: RootLimbo = RootLimbo(),
     /** The ONE owner of the id→root and root→status questions, injected into all three guarded facades. */
     resolver: PageRootResolver,
+    /** The ONE owner of the 404-vs-503 absence decision (C1), injected into the read + write facades. */
+    absence: AbsenceClassifier,
     /** Per-root content trees. Registry-built, so an unregistered name is a PROGRAMMING error, not a runtime one. */
     stores: (RootName) -> ContentStore,
     /** Per-root history providers (a root may legitimately have none — the no-op adapter). */
@@ -94,6 +104,7 @@ fun buildRouteContext(
         registry = registry,
         availability = availability,
         resolver = resolver,
+        absence = absence,
         stores = stores,
         histories = histories,
     )
@@ -108,6 +119,7 @@ fun buildRouteContext(
         indexBuilder = indexBuilder,
         availability = availability,
         resolver = resolver,
+        absence = absence,
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = agentDirectCommitGlobs,
         proposalLabeler = proposalLabeler,
@@ -124,6 +136,7 @@ fun buildRouteContext(
         indexBuilder = indexBuilder,
         resolver = resolver,
         availability = availability,
+        absence = absence,
     )
     proposalsFacade = proposals
     return RouteContext(
@@ -133,6 +146,7 @@ fun buildRouteContext(
         registry = registry,
         availability = availability,
         convergence = convergence,
+        limbo = limbo,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

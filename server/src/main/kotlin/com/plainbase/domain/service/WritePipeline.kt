@@ -69,6 +69,9 @@ class WritePipeline(
     /** The shared probe-and-mark rule, over the SAME holder (see [markIfRootGone]). */
     private val rootLoss = RootLossClassifier(availability)
 
+    /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pipeline binds into. Never re-derived here. */
+    private val absence = AbsenceClassifier(idMap)
+
     @Synchronized
     fun write(@Suppress("UNUSED_PARAMETER") grant: EditGrant, intent: WriteIntent): WriteOutcome {
         // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3): the gated mutator
@@ -106,6 +109,15 @@ class WritePipeline(
             // recovery record, or clear.
             is CasResult.Deleted -> {
                 restoreOrClear(intent.pageId, prior)
+                // **A4's live instance** (C1). `CasResult.Deleted` means the CAS resolved NO FILE to swap - a
+                // no-bytes observation, arriving by a different road than a classified read, and it gets the same
+                // answer: only the durable INDEX may turn it into "this page was deleted". Reporting `page_deleted`
+                // for a page whose binding is still live is the write path's version of the 404 lie - it tells the
+                // editor its content has no home and offers to save it as a NEW page, minting a second permalink for
+                // a page that is sitting safe on an unmounted disk. So an unverified absence 503s and the buffer
+                // survives to be saved again.
+                val target = RootedPath(intent.root, intent.path)
+                if (absence.absenceAt(target) == ContentRead.AbsenceUnknown) throw AbsenceUnverified(target)
                 conflict(intent, reason = "page_deleted", current = null)
             }
             is CasResult.Mismatch -> {
@@ -360,7 +372,7 @@ class WritePipeline(
                     }
                     continue
                 }
-                val onDisk = when (val read = stores(root).readClassified(page.path.path)) {
+                val onDisk = when (val read = absence.read(stores(root), page.path)) {
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> {
                         // The status arms passed and the root STILL turned out to be gone - the unmarked window.
@@ -372,12 +384,16 @@ class WritePipeline(
                         }
                         continue
                     }
-                    ContentRead.Absent -> {
-                        // **NOT a clear (C0).** "The file is not there" is not "the page was deleted" - it is
-                        // equally what a failed submount, a partial restore and a decoy tree look like, and this
-                        // row is an interrupted save's ONLY recovery record. It is USER CONTENT. It is cleared in
-                        // exactly ONE place, the proof-apply transaction, alongside the retirement of the binding
-                        // it belongs to (SqlDelightRetirementRepository.applyProofs) - never on a bare read.
+                    // **NEITHER absence clears (C0/C1), and they are one arm because they have one answer.** "The
+                    // file is not there" is not "the page was deleted" - it is equally what a failed submount, a
+                    // partial restore and a decoy tree look like - and this row is an interrupted save's ONLY
+                    // recovery record. It is USER CONTENT. Even `ConfirmedAbsent` does not clear it: "the index does
+                    // not have this page" is not the same fact as "we are authorized to destroy its recovery
+                    // record", and for a page whose save was interrupted BEFORE its bind the index never had it in
+                    // the first place - so a clear-on-confirmed rule would destroy exactly the rows most in need of
+                    // recovery. It is cleared in ONE place, the proof-apply transaction, alongside the retirement of
+                    // the binding it belongs to (`RetirementRepository.applyProofs`) - never on a bare read.
+                    ContentRead.AbsenceUnknown, ContentRead.ConfirmedAbsent -> {
                         logger.warn {
                             "dirty page ${page.path.path.value} is not on disk under a live root '$root'; leaving it journaled. " +
                                 "Nothing but an absence PROOF may destroy an interrupted save's recovery record, and in C0 there " +

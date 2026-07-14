@@ -1,8 +1,8 @@
 package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.CasResult
-import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.root.RootName
@@ -112,7 +112,7 @@ class LocalContentStoreRootLossNativeTest {
             chmod(root.resolve("page.md"))
             chmod(root, PosixFilePermission.OWNER_EXECUTE)
 
-            assertEquals(ContentRead.RootDown, store.readClassified(page))
+            assertEquals(StoreRead.RootDown, store.readClassified(page))
             assertTrue(marks.isNotEmpty(), "detection without publication would 503 the write while reads served the carried section")
         }
     }
@@ -132,11 +132,16 @@ class LocalContentStoreRootLossNativeTest {
     }
 
     @Test
-    fun `a page DELETED under a LIVE root is Absent - today's honest 404, not a 500 and not a 503`() {
+    fun `a page DELETED under a LIVE root is NoBytes - and that is the WHOLE of what a store may say (C1)`() {
         withRoot { root, store, marks ->
             Files.delete(root.resolve("page.md"))
 
-            assertEquals(ContentRead.Absent, store.readClassified(page))
+            // It used to be `Absent`, and `Absent` was a verdict: it meant "deleted", and the adapter's callers spent
+            // it as a 404. A store cannot know that. It knows there are no bytes here, on a root that is live - which
+            // is equally what an empty mount point, a half-finished restore and a decoy tree look like. Whether this
+            // page is GONE is a question about the durable index, and it is answered by `AbsenceClassifier`, one layer
+            // up. Everything this row asserted about the STORE still holds; the word for it is now honest.
+            assertEquals(StoreRead.NoBytes, store.readClassified(page))
             assertTrue(marks.isEmpty())
         }
     }
@@ -293,8 +298,9 @@ class LocalContentStoreRootLossNativeTest {
         withRoot { root, store, marks ->
             unmount(root)
 
-            // Absent would tell an agent its citation is dead. The page is not deleted; the disk is unplugged.
-            assertEquals(ContentRead.RootDown, store.readClassified(page))
+            // NoBytes would send the classifier looking at the index; RootDown stops the question dead. The page is
+            // not deleted - the disk is unplugged, and nothing about this tree may be believed.
+            assertEquals(StoreRead.RootDown, store.readClassified(page))
             assertTrue(marks.isNotEmpty())
         }
     }
@@ -339,7 +345,7 @@ class LocalContentStoreRootLossNativeTest {
 
             assertTrue(store.available(), "a fully-readable tree full of pages was called GONE over an inode number")
             assertTrue(marks.isEmpty(), "the mark is sticky until restart: a deploy must never demand one")
-            assertTrue(store.readClassified(page) is ContentRead.Bytes, "and it serves the NEW tree's bytes, converged")
+            assertTrue(store.readClassified(page) is StoreRead.Bytes, "and it serves the NEW tree's bytes, converged")
         }
     }
 
@@ -374,7 +380,7 @@ class LocalContentStoreRootLossNativeTest {
             // condition a `mount -o remount,rw` already fixed. It is a WRITE fault, and the honest answer says so.
             chmod(root, PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE)
 
-            assertTrue(store.readClassified(page) is ContentRead.Bytes, "every READ of a read-only root serves correct bytes")
+            assertTrue(store.readClassified(page) is StoreRead.Bytes, "every READ of a read-only root serves correct bytes")
 
             val outcome = store.createExclusive(TreePath.require("fresh.md"), "x".toByteArray(), hasher)
             assertTrue(outcome is CreateResult.Unreadable, "nothing landed, and it is retryable WITHOUT a restart")

@@ -1,8 +1,8 @@
 package com.plainbase.frameworks.ktor
 
-import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.EditGrant
@@ -189,9 +189,16 @@ class AssetUploadRouteTest : FunSpec({
                     Files.createSymbolicLink(harness.root.resolve("linked"), outside)
 
                     val resp = client.post("/api/v1/pages/$linkedPageId/assets?filename=x.png") { setBody(png) }
-                    // The page folder vanished/became a symlink: either a containment Rejected (400) or a
-                    // ParentMissing (404) - both refuse, and crucially nothing lands through the link.
-                    (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.NotFound) shouldBe true
+                    // The page folder vanished/became a symlink: a containment Rejected (400), a ParentMissing (404),
+                    // or - since C1, and it is what wins the race here - a 503 `absence_unverified`, because the page's
+                    // own .md went with the folder and its binding is still live, so the write refuses BEFORE it ever
+                    // reaches the containment gate. All three refuse; the containment gate keeps its own direct tests
+                    // (`CreateGatesTest`, the store-level rows above).
+                    //
+                    // THE INVARIANT THIS ROW GUARDS IS UNCHANGED AND STILL ASSERTED: nothing lands through the link.
+                    val refused = resp.status in
+                        listOf(HttpStatusCode.BadRequest, HttpStatusCode.NotFound, HttpStatusCode.ServiceUnavailable)
+                    refused shouldBe true
                     Files.list(outside).use { it.count() } shouldBe 0L
                 }
             } finally {
@@ -424,7 +431,7 @@ class AssetUploadRouteTest : FunSpec({
         // is fine, and RETHROWS the genuine fault (a false 503 `root_unavailable` here would be a lie about the disk).
         val readThrows: (ContentStore) -> ContentStore = { real ->
             object : ContentStore by real {
-                override fun readClassified(path: TreePath): ContentRead =
+                override fun readClassified(path: TreePath): StoreRead =
                     if (armed.get() && path.value == "guides/deploy-guide.md") {
                         throw java.io.IOException("simulated transient FS fault reading the page file")
                     } else {
@@ -471,15 +478,23 @@ class AssetUploadRouteTest : FunSpec({
             root.toFile().deleteRecursively()
         }
 
-        // Route-level: delete the page's on-disk folder after indexing → 404, folder not recreated.
+        // Route-level: delete the page's on-disk folder after indexing. RE-SPEC'd in C1 - it asserted 404
+        // `page_not_found`, and that is ledger A4 on the asset surface: the page's binding is still live, so its
+        // file being unreadable is an UNVERIFIED absence, not a deletion. Telling an author uploading an image that
+        // their page no longer exists - when a submount failed, or a restore is half-done - is the same lie in a
+        // friendlier place. It answers 503 `absence_unverified` now.
+        //
+        // What this row is FOR is untouched and still asserted: NOTHING is written, and the folder is NOT recreated.
+        // (The store-level half above still pins `ParentMissing` directly, so the no-resurrection contract keeps its
+        // own unmediated test.)
         writeRestTest(Fixtures.demoDocs, seed) { harness ->
             harness.root.resolve("guides/deploy-guide.md").toFile().delete()
             Files.walk(harness.root.resolve("guides")).use { s ->
                 s.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
             val resp = client.post("/api/v1/pages/$deployGuideId/assets?filename=x.png") { setBody(png) }
-            resp.status shouldBe HttpStatusCode.NotFound
-            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_not_found"
+            resp.status shouldBe HttpStatusCode.ServiceUnavailable
+            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
             Files.exists(harness.root.resolve("guides")) shouldBe false // not recreated
         }
     }
@@ -489,7 +504,10 @@ class AssetUploadRouteTest : FunSpec({
     // parent-exists check would PASS and the asset would write + 201 for a gone page. The disk re-check
     // (services.contentStore.read(page.path) == null → 404) catches it BEFORE the write. Top-level is the
     // sharpest case: the content root always exists, so only the .md re-check can detect the deletion.
-    test("a top-level page whose .md was deleted (folder survives) is 404 page_not_found; no asset written") {
+    // RE-SPEC'd in C1: the re-check still FIRES and still refuses (which is what this row exists to prove), but the
+    // refusal is 503 `absence_unverified`, not 404 `page_not_found`. The page's binding is live and its bytes are
+    // missing - an absence nobody proved - and "your page is gone" is the one thing we may not say about that.
+    test("a top-level page whose .md was deleted (folder survives) is 503 absence_unverified; no asset written") {
         val indexPageId = "0197c2d0-7a1b-7c45-8e2f-3b9d6a1c4e02"
         val seedTopLevel: (IdMapRepository) -> Unit = { idMap ->
             idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(indexPageId), materialized = false)
@@ -499,9 +517,9 @@ class AssetUploadRouteTest : FunSpec({
             harness.root.resolve("index.md").toFile().delete()
 
             val resp = client.post("/api/v1/pages/$indexPageId/assets?filename=x.png") { setBody(png) }
-            resp.status shouldBe HttpStatusCode.NotFound
-            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_not_found"
-            // No asset landed in the (surviving) content root for the gone page.
+            resp.status shouldBe HttpStatusCode.ServiceUnavailable
+            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
+            // No asset landed in the (surviving) content root for the gone page. THAT is the invariant.
             Files.exists(harness.root.resolve("x.png")) shouldBe false
         }
     }

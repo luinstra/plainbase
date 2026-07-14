@@ -5,11 +5,15 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.filesystem.Fixtures
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -144,11 +148,56 @@ class WriteRouteTest : FunSpec({
     }
 
     // 4. page_deleted 409 — indexed-but-gone file.
-    test("an indexed page deleted on disk is 409 page_deleted with current_* null") {
+    // RE-SPEC'd in C1, and this row is ledger A4's LIVE INSTANCE - it asserted the bug. A page whose file is gone
+    // while the durable index STILL BINDS IT has not been proven deleted: that is exactly what a failed submount, a
+    // half-finished restore and a decoy tree at the mount point look like. Answering `page_deleted` told the editor
+    // its page no longer exists and offered to save the buffer as a NEW page - minting a second permalink for a page
+    // sitting safe on an unmounted disk, and orphaning every citation to the first.
+    //
+    // The 409 `page_deleted` envelope is NOT gone (it is frozen, and the row below still drives it end to end); what
+    // changed is who may say it. Only a PROVEN absence may, and a scan is not a proof.
+    test("a CAS write against a page whose absence is UNVERIFIED is 503 absence_unverified - NEVER page_deleted (A4)") {
         writeRestTest(Fixtures.demoDocs, seed) { harness ->
             val original = harness.diskBytes("guides/deploy-guide.md")
             val hBase = citations.contentHash(original)
             java.nio.file.Files.delete(harness.root.resolve("guides/deploy-guide.md"))
+            val put = client.put("/api/v1/pages/$deployGuideId") {
+                header(HttpHeaders.IfMatch, etag(hBase))
+                contentType(markdown())
+                setBody(original)
+            }
+            put.status shouldBe HttpStatusCode.ServiceUnavailable
+            put.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
+            withClue("it self-heals, so the retry window is short - and it is NOT the operator-restart 300s of root_unavailable") {
+                put.headers["Retry-After"] shouldBe "30"
+            }
+            withClue("the binding is untouched: nothing about a failed READ may retire a page") {
+                harness.idMap.pathOf(PageId.require(deployGuideId)).shouldNotBeNull()
+            }
+        }
+    }
+
+    test("a CAS write against a PROVEN absence (its binding retired) is the frozen 409 page_deleted, current_* null") {
+        writeRestTest(Fixtures.demoDocs, seed) { harness ->
+            val original = harness.diskBytes("guides/deploy-guide.md")
+            val hBase = citations.contentHash(original)
+            val path = TreePath.require("guides/deploy-guide.md")
+            java.nio.file.Files.delete(harness.root.resolve("guides/deploy-guide.md"))
+            // THE DIFFERENCE, and it is the whole of C1: an absence PROOF retires the binding, so the index no longer
+            // holds this page and the answer "it was deleted" is one we have earned. (In C0/C1 no production source
+            // mints a proof - C2's epoch and C4's git history do - so an OPERATOR proof stands in for them here,
+            // exactly as it will when `plainbase root reconcile` ships.)
+            harness.retirements.applyProofs(
+                listOf(
+                    AbsenceProof(
+                        root = RootName.MAIN,
+                        source = ProofSource.OPERATOR,
+                        observationId = harness.retirements.observation(RootName.MAIN),
+                        covers = setOf(BindingRef(path, PageId.require(deployGuideId))),
+                    ),
+                ),
+            )
+
             val put = client.put("/api/v1/pages/$deployGuideId") {
                 header(HttpHeaders.IfMatch, etag(hBase))
                 contentType(markdown())

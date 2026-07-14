@@ -134,6 +134,9 @@ class AdoptionPass(
     /** The roots this pass can see. Adopt covers every configured root or refuses, so this IS the registry. */
     private val scannedRoots: Set<RootName> = this.sources.mapTo(mutableSetOf()) { it.root }
 
+    /** The ONE 404-vs-503 rule (C1), over the SAME durable index this pass binds into. Never re-derived here. */
+    private val absence = AbsenceClassifier(idMap)
+
     /** The three `adopt` modes — see the class header for the frozen write policy of each. */
     enum class Mode {
         /** Default `adopt`: id_map rows (and issues) only; zero ContentStore writes. */
@@ -349,18 +352,28 @@ class AdoptionPass(
             .map { it.path }
             .filter { it.name.endsWith(".md") }
             .sortedBy { it.value }
-            .map { path ->
+            .mapNotNull { path ->
                 // CLASSIFIED, not `checkNotNull` (the `IndexBuilder.scan` rule, which this had escaped): a bare
                 // null read cannot tell a page deleted mid-scan from a root that went away UNDER the scan, and
                 // the resulting IllegalStateException would walk straight past the `guarding` boundary above -
                 // bypassing the classifier, leaving the root unmarked, and handing the CLI a stack trace where
                 // it had an actionable "restore the path and re-run" to print.
-                val bytes = when (val read = source.store.readClassified(path)) {
+                //
+                // **Adopt ABORTS on an unverified absence (C1), where the indexer merely carries on.** It is the
+                // asymmetry between reading and WRITING: this pass materializes ids into the operator's own files
+                // and binds permalinks off a resolve that ran over every root at once, so a page it could not read -
+                // whose row the index still holds - means the corpus it is resolving against is not the corpus. Adopt
+                // never runs against a view it cannot verify; it says so, and the operator re-runs.
+                val target = RootedPath(source.root, path)
+                val bytes = when (val read = absence.read(source.store, target)) {
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> throw RootUnavailable(source.root, UnavailableCause.VANISHED)
-                    ContentRead.Absent -> error("scanned page vanished before read: ${path.value}")
+                    ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
+                    // Never indexed and no longer on disk: it lost a race with an ordinary `rm`, it has no binding to
+                    // protect, and there is nothing here to adopt. Skipping it costs the pass nothing.
+                    ContentRead.ConfirmedAbsent -> return@mapNotNull null
                 }
-                Draft(RootedPath(source.root, path), bytes)
+                Draft(target, bytes)
             }
     }
 

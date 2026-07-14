@@ -126,6 +126,22 @@ object ErrorCodes {
      */
     const val ROOT_UNAVAILABLE: String = "root_unavailable"
 
+    /**
+     * 503 (+ a SHORT `Retry-After`): the durable index still binds this page and the store cannot produce its bytes.
+     * The page is in LIMBO - neither present nor proven deleted (C1).
+     *
+     * **Deliberately NOT `root_unavailable`, and the difference is the operator's next hour.** The root may be
+     * perfectly healthy: its other pages are serving normally, the disk is mounted, and there is nothing to restart -
+     * what is in doubt is ONE page (a failed submount, a half-finished restore, a decoy tree at the mount point).
+     * Reporting it as a downed root would send an operator to remount a volume that is already there.
+     *
+     * **Deliberately NOT a 404**, for the reason the whole absence-authority redesign exists: a 404 tells an agent
+     * the page is GONE and it should drop its citations, and the page is not gone - we simply did not see it. It
+     * self-heals with no operator action the moment the page is witnessed again, which is why the retry window is
+     * short.
+     */
+    const val ABSENCE_UNVERIFIED: String = "absence_unverified"
+
     /** 403: the target root is declared `editable = false` — page-mutation writes are refused there in EVERY auth mode. */
     const val ROOT_NOT_EDITABLE: String = "root_not_editable"
 

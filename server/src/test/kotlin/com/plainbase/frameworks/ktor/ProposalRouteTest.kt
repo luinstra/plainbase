@@ -1,5 +1,11 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.ProofSource
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import io.kotest.core.spec.style.FunSpec
@@ -266,7 +272,13 @@ class ProposalRouteTest : FunSpec({
         }
     }
 
-    test("stale_base both branches: a matching base_hash then succeeds; a deleted target is stale_base") {
+    // RE-SPEC'd in C1. The second branch used to assert that a target deleted on disk is `stale_base`, and that is
+    // the propose surface's flavor of the 404 lie: "your base moved" is a lie when the truth is "we could not read
+    // your base", and it is the kind of lie that makes an agent re-read a base that is not there and re-propose
+    // against whatever it finds instead. A page whose binding is still LIVE and whose bytes are missing is in limbo:
+    // 503, come back. `stale_base` survives for what it always meant - a base that really is gone (a PROVEN absence,
+    // below) or a hash that really did move (the row above and the `base_drifted` rows).
+    test("stale_base both branches: a matching base_hash succeeds; an UNPROVEN deletion is 503, a PROVEN one is stale_base") {
         withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n\nBody.\n") }) { root ->
             restTest(root) { harness ->
                 val (id, hash) = page("doc")
@@ -278,9 +290,30 @@ class ProposalRouteTest : FunSpec({
                 ok.status shouldBe HttpStatusCode.Created
                 ok.body().getValue("unified_diff").jsonPrimitive.content shouldContain "+Edited."
 
-                // Delete the page on disk + republish — a subsequent edit propose against the same (now stale) hash is stale_base.
+                // Delete the page on disk + republish. The binding is untouched (nothing proved a deletion), so the
+                // page is in LIMBO and a propose against it must not be told its base moved.
                 java.nio.file.Files.delete(root.resolve("doc.md"))
                 harness.builder.rebuild()
+                val limbo = client.post("/api/v1/changes") {
+                    contentType(json)
+                    setBody(proposeEdit(id, hash, "x"))
+                }
+                limbo.status shouldBe HttpStatusCode.ServiceUnavailable
+                limbo.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
+
+                // Now PROVE the absence (C2's epoch / C4's git history mint these for real; an OPERATOR proof stands
+                // in). The binding retires, the index no longer holds the page - and `stale_base` becomes the honest
+                // answer it always claimed to be.
+                harness.retirements.applyProofs(
+                    listOf(
+                        AbsenceProof(
+                            root = RootName.MAIN,
+                            source = ProofSource.OPERATOR,
+                            observationId = harness.retirements.observation(RootName.MAIN),
+                            covers = setOf(BindingRef(TreePath.require("doc.md"), PageId.require(id))),
+                        ),
+                    ),
+                )
                 val gone = client.post("/api/v1/changes") {
                     contentType(json)
                     setBody(proposeEdit(id, hash, "x"))
