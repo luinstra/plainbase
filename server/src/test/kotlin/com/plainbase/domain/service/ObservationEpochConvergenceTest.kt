@@ -113,9 +113,18 @@ class ObservationEpochConvergenceTest : FunSpec({
                 val builder = world.builder(mainDir, store, world.indexer)
                 builder.rebuild() // the epoch witnesses all 20
 
+                // A RENAME-IN swap (`mv site.new site`), which is what an atomic content release actually does - and
+                // the ONE swap the store's own probe can see, because the new tree brings its own inode.
+                //
+                // It deliberately is NOT `rm -rf site && mkdir site`: on ext4 that REUSES the directory's inode, so
+                // `fileKey` is unchanged and NO rebind fires. CI caught exactly that (this test failed on Linux and
+                // passed on macOS). The store's identity probe is a HINT, not a detector - the fourth time this
+                // feature has trusted `fileKey` past what it can bear. The same-inode swap is caught by the WATCHER's
+                // key cancellation instead, and that is pinned in `ObservationBreakNativeTest` on the real platform.
+                val fresh = Files.createDirectories(extraDir.resolveSibling("extra.new"))
+                repeat(3) { i -> writePage(fresh, "decoy-$i.md", "# Decoy $i\n\nbody\n") }
                 extraDir.toFile().deleteRecursively()
-                Files.createDirectories(extraDir)
-                repeat(3) { i -> writePage(extraDir, "decoy-$i.md", "# Decoy $i\n\nbody\n") }
+                Files.move(fresh, extraDir)
                 builder.rebuild()
 
                 withClue("the REBIND is what saved it - not some other break that happened to fire on the way past") {

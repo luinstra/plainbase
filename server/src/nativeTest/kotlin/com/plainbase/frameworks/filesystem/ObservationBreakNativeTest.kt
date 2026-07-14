@@ -154,6 +154,63 @@ class ObservationBreakNativeTest {
         }
     }
 
+    /**
+     * **A tree swapped at the same path ALWAYS breaks the epoch - by one detector or the other.**
+     *
+     * This asserts the SAFETY PROPERTY, not a mechanism, because no single mechanism holds on both platforms and
+     * an epoch that survives a swap reaps the corpus it had witnessed:
+     *
+     *  - **Linux/ext4:** `rm -rf site && mkdir site` REUSES the directory's inode, so `fileKey` compares EQUAL and
+     *    the store's identity probe is BLIND. The `WatchService` (inotify) cancels the key on the deleted directory,
+     *    and that cancellation is the break. CI proved the need for this: the domain-level swap test passed on macOS
+     *    and FAILED on Linux, where the epoch stayed alive and would have reaped the 20 pages it had witnessed.
+     *  - **macOS/APFS:** the recreated directory gets a NEW inode, so the probe reports the rebind - while the JDK's
+     *    `WatchService` is a POLLER there and does not reliably cancel the key.
+     *
+     * So the two detectors are not redundant, they are complementary, and PRODUCTION WIRES BOTH (`LocalContentStore`'s
+     * `onIdentityRebind` and `FileWatcher`'s `onBreak`). Asserting either-fires is the only honest cross-platform
+     * statement of the invariant the corpus actually depends on. It is also why an epoch REQUIRES a live watcher:
+     * no watcher, no coverage, no epoch, no proof, no reap.
+     */
+    @Test
+    fun `a tree swapped at the same path ALWAYS breaks the epoch - the probe and the watcher cover each other`() {
+        withTree { parent ->
+            val root = Files.createDirectory(parent.resolve("site"))
+            Files.writeString(root.resolve("page.md"), "# Page\n")
+
+            val breaks = ConcurrentLinkedQueue<String>()
+            val store = LocalContentStore(root = root, onIdentityRebind = { breaks += "IDENTITY_REBIND" })
+
+            FileWatcher(
+                root = root,
+                ignoreRules = IgnoreRules(),
+                excluded = emptyList(),
+                onChange = {},
+                onBreak = { breaks += it.name },
+            ).use {
+                assertTrue(store.available())
+
+                // The shape CI caught: delete the tree and recreate it at the SAME path. On ext4 the inode is reused.
+                root.toFile().deleteRecursively()
+                Files.createDirectory(root)
+                Files.writeString(root.resolve("decoy.md"), "# Decoy\n")
+
+                store.available() // drives the probe, exactly as the rebuild and the liveness tick do
+
+                val deadline = System.nanoTime() + 20_000_000_000L
+                while (breaks.isEmpty() && System.nanoTime() < deadline) Thread.sleep(50)
+
+                assertTrue(
+                    breaks.isNotEmpty(),
+                    "a swapped tree MUST break the epoch, or a decoy reaps the corpus it never saw. " +
+                        "Neither detector holds on both platforms - the inode probe is blind to ext4's reuse, and " +
+                        "the macOS poller does not cancel the key - so production wires BOTH and this asserts the " +
+                        "invariant they jointly guarantee.",
+                )
+            }
+        }
+    }
+
     private fun supportsPosix(path: Path): Boolean =
         path.fileSystem.supportedFileAttributeViews().contains("posix")
 
