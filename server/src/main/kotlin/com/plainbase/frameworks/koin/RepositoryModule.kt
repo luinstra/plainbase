@@ -9,6 +9,7 @@ import com.plainbase.domain.repository.PageCheckpointRepository
 import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.RoleRepository
+import com.plainbase.domain.repository.RootTopologyRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.TransactionRunner
@@ -24,6 +25,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightProposalRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRootTopologyRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightTransactionRunner
@@ -37,6 +39,9 @@ val repositoryModule = module {
     single<IdMapRepository> { SqlDelightIdMapRepository(get()) }
     // The ONE deleter (C0): the proof-apply transaction plus the durable freshness token it checks against.
     single<RetirementRepository> { SqlDelightRetirementRepository(get()) }
+    // The DURABLE binding latch (C3): where each root points, and whether we believe it. Durable because the
+    // wrong-bucket wipe survives a restart, so the thing that stops it has to as well.
+    single<RootTopologyRepository> { SqlDelightRootTopologyRepository(get()) }
     single<UrlAliasRepository> { SqlDelightUrlAliasRepository(get()) }
     single<PageCheckpointRepository> { SqlDelightPageCheckpointRepository(get()) }
     single<DirtyPageRepository> { SqlDelightDirtyPageRepository(get()) }

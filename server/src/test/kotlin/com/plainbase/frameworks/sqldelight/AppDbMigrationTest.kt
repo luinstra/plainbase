@@ -140,7 +140,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 12L
+                    version shouldBe 13L
                 }
             }
         } finally {
@@ -320,7 +320,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 12L
+                driver.queryLong("PRAGMA user_version") shouldBe 13L
                 db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
                 db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }

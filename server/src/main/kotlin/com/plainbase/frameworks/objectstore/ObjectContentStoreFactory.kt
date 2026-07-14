@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -23,6 +25,10 @@ object ObjectContentStoreFactory {
         // MINOR-1: an indexed per-path dirty check for the poll hot-path guard; defaults to membership in
         // [dirtyPaths] so a caller that has no cheaper query (a CLI over a tiny journal) need not wire one.
         isDirty: (TreePath) -> Boolean = { it in dirtyPaths() },
+        // C3: the root's durable bindings, read fresh before each LIST. Defaulted to NONE - a store built with no
+        // durable index behind it publishes generations that cover nothing, so it can prove nothing gone. That is the
+        // right authority for the offline CLIs, which reap on nobody's inference (they wire no proof source at all).
+        rowsAtStart: () -> Set<BindingRef> = { emptySet() },
     ): ObjectContentStore {
         val storage = config.storage
         val client = S3ObjectClient(
@@ -49,6 +55,8 @@ object ObjectContentStoreFactory {
             client = client,
             mirror = LocalContentStore(root = mirrorRoot, ignoreRules = ignoreRules),
             state = MirrorState(config.dataDir.resolve("mirror-state")),
+            binding = bindingOf(config),
+            rowsAtStart = rowsAtStart,
             keyPrefix = if (storage.prefix.isEmpty()) "" else "${storage.prefix}/",
             pollSeconds = storage.pollSeconds,
             dirtyPaths = dirtyPaths,
@@ -57,4 +65,15 @@ object ObjectContentStoreFactory {
             ignoreRules = ignoreRules,
         )
     }
+
+    /**
+     * **WHICH BUCKET this configuration names** (C3): all three of endpoint, bucket and prefix, because changing ANY
+     * of them points the root at a different universe. Derived HERE, in the one place that builds the client from
+     * them, so the string the latch compares and the bucket the client talks to cannot drift apart.
+     *
+     * Residual, documented rather than pretended away: the same config string can be made to point at a different
+     * backend (a DNS or gateway swap). No string can see that.
+     */
+    fun bindingOf(config: PlainbaseConfig): RootBinding =
+        RootBinding("${config.storage.endpoint}|${config.storage.bucket}|${config.storage.prefix}")
 }

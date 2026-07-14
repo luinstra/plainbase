@@ -2,8 +2,13 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
+import com.plainbase.domain.repository.NoTopology
+import com.plainbase.domain.root.BindingLatch
+import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
@@ -60,6 +65,10 @@ val contentModule = module {
     // scans nothing and reaps nothing; degrading here is what keeps it that way, where a `get()` would have made
     // every CLI verb resolve a database it is forbidden to touch.
     single { ObservationEpoch(getOrNull() ?: NoRetirements, get()) }
+    // The C3 binding latch - the OTHER half of the absence authority, and the one that asks whether the tree we are
+    // looking at is the tree our rows describe. It degrades on the SAME boot-gate seal as the epochs above, and for
+    // the same reason: a graph with no app database has no durable latch, so it can promote nothing and grant nothing.
+    single { BindingLatch(getOrNull() ?: NoTopology) }
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
@@ -110,6 +119,8 @@ val contentModule = module {
     single<ObjectContentStore> {
         val config = get<PlainbaseConfig>()
         val dirtyPages = get<DirtyPageRepository>()
+        val idMap = get<IdMapRepository>()
+        val main = get<RootRegistry>().main.name
         ObjectContentStoreFactory.build(
             config,
             ignoreRules = get(),
@@ -118,6 +129,11 @@ val contentModule = module {
             dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
             // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
             isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
+            // C3: the pagination boundary. Read FRESH before each LIST (never captured here), so a page created while
+            // a LIST paginates is not in the generation's rows and can never be covered by its proof.
+            rowsAtStart = {
+                idMap.bindings().filter { it.path.root == main }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+            },
         )
     }
     // Backend selection (Q9): the port ALIASES the selected backend's concrete adapter (one instance,
@@ -155,4 +171,11 @@ class RootStores(private val byRoot: Map<RootName, ContentStore>) {
      * phantom that does not match the real file on a normalization-preserving filesystem.
      */
     fun localOrNull(root: RootName): LocalContentStore? = byRoot[root] as? LocalContentStore
+
+    /**
+     * [root]'s bucket listings, or null when it is not object-backed (C3). The rebuild's OBJECT_LIST proof source:
+     * a local root has no bucket to list, and its absence authority is an observation epoch instead - so "no manifest
+     * provider" is the honest shape of "this root does not answer that question", not a missing wire.
+     */
+    fun manifestsOrNull(root: RootName): ObjectManifestProvider? = byRoot[root] as? ObjectManifestProvider
 }

@@ -55,6 +55,7 @@ object DatabaseFactory {
             pathAdapter = TreePathColumnAdapter,
         ),
         root_observationAdapter = Root_observation.Adapter(rootAdapter = RootNameColumnAdapter),
+        root_topologyAdapter = Root_topology.Adapter(rootAdapter = RootNameColumnAdapter),
         proposalsAdapter = Proposals.Adapter(
             idAdapter = ProposalIdColumnAdapter,
             page_idAdapter = PageIdColumnAdapter,

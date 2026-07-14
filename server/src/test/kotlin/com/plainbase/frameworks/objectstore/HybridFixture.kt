@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -26,6 +28,10 @@ class HybridFixture(
     val stateAtomics: FailableFileAtomics = FailableFileAtomics(),
     keyPrefix: String = "",
     pollSeconds: Long = 3600,
+    /** WHICH BUCKET this store thinks it is looking at (C3) - the string the durable latch compares. */
+    val binding: RootBinding = RootBinding("https://fake|bucket|"),
+    /** The root's durable bindings, read fresh before every LIST (the C3 pagination boundary). None by default. */
+    val rowsAtStart: () -> Set<BindingRef> = { emptySet() },
 ) : AutoCloseable {
     val mirrorRoot: Path = Files.createTempDirectory("pb-hybrid-mirror")
     private val stateFile: Path = Files.createTempFile("pb-hybrid-mirror-state", ".json").also { Files.deleteIfExists(it) }
@@ -37,6 +43,8 @@ class HybridFixture(
         client = fake,
         mirror = mirror,
         state = state,
+        binding = binding,
+        rowsAtStart = rowsAtStart,
         keyPrefix = keyPrefix,
         pollSeconds = pollSeconds,
         dirtyPaths = { dirtyPaths.toSet() },

@@ -42,7 +42,14 @@ val indexModule = module {
             // Every registered root, in D7 order - the N-source machinery the C1-C3 seams were built for. The
             // builder sorts by rank itself, so the order is enforced by construction, not trusted from here.
             sources = registry.roots.map { root ->
-                IndexBuilder.Source(root = root, store = stores[root.name], history = histories[root.name])
+                IndexBuilder.Source(
+                    root = root,
+                    store = stores[root.name],
+                    history = histories[root.name],
+                    // The C3 proof source, wired for exactly the roots that HAVE one: an object-backed root's own
+                    // bucket listings. A local root answers null and earns its authority from its observation epoch.
+                    manifests = stores.manifestsOrNull(root.name),
+                )
             },
             availability = get(),
             frontmatterParser = get(),
@@ -66,6 +73,9 @@ val indexModule = module {
             // on the same single), which is what makes the token an epoch mints and the token the proof-apply
             // transaction re-reads the SAME token - the entire freshness argument rests on there being one.
             epochs = get(),
+            // The C3 latch, over the SAME durable topology `serve()` records the binding into at boot - so the row the
+            // boot writes and the row a pass reads to decide whether it may believe a LIST are one row.
+            bindings = get(),
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),

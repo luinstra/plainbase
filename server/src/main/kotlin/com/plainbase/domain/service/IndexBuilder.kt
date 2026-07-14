@@ -25,15 +25,19 @@ import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
+import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.PageCheckpointRepository
 import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.ObservationId
+import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
@@ -183,6 +187,12 @@ class IndexBuilder(
      * the many single-root constructions stay terse AND stay at the C0 floor: they observe, and they reap nothing.
      */
     private val epochs: ObservationEpoch = ObservationEpoch(NoRetirements, RootConvergence()),
+    /**
+     * The C3 binding latch - the OTHER proof source, and the one that decides whether a bucket LIST is evidence about
+     * OUR corpus or about somebody else's. Defaulted to a latch with no durable table behind it, which records
+     * nothing, promotes nothing and therefore grants nothing: the C0 floor, again as a value rather than as a policy.
+     */
+    private val bindings: BindingLatch = BindingLatch(NoTopology),
 ) {
 
     /** One root's inputs: its topology entry, its content tree, and its history. */
@@ -190,6 +200,12 @@ class IndexBuilder(
         val root: Root,
         val store: ContentStore,
         val history: HistoryProvider,
+        /**
+         * The C3 proof source for an OBJECT-backed root: the latest complete bucket LIST. Null for a local root,
+         * which has no bucket to list and earns its authority the other way (an observation epoch) - and null for
+         * every construction that wires no manifest at all, which therefore mints no `OBJECT_LIST` proof.
+         */
+        val manifests: ObjectManifestProvider? = null,
     )
 
     /**
@@ -321,21 +337,41 @@ class IndexBuilder(
         // Nothing here is an ADMISSION any more - there is no tripwire to pass and no authority to be granted,
         // because a scan is no longer evidence of a deletion under any circumstances. What comes out of it is a
         // WITNESS map: the pages we READ, and the ids they carried.
-        val scans = sources.mapNotNull { scanIfAvailable(it) }
-        val scannedRoots: Set<RootName> = scans.filter { it.complete }.map { it.root }.toSet()
-        val witnessed: Map<RootedPath, Witness> = scans.flatMap { scan ->
+        val observed = sources.mapNotNull { scanIfAvailable(it) }
+        // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
+        // every page we looked at, because "is this the tree our rows describe?" is exactly what it is deciding.
+        val seen: Map<RootedPath, Witness> = observed.flatMap { scan ->
             scan.drafts.map { draft ->
                 RootedPath(scan.root, draft.file.path) to Witness(patcher.readIdValue(draft.bytes)?.let(PageId::of))
             }
         }.toMap()
 
-        // **The only licence to delete** - and since C2 there is exactly ONE source that mints it here (EPOCH).
-        // OBJECT_LIST (C3), GIT (C4), OPERATOR (C5) and API_DELETE arrive later; until they do, an absence outside
-        // an unbroken observation is still never believed. Minted BEFORE the binds below, against the id_map as it
-        // stands NOW: a proof is about the durable binding a page HAD when the pass observed it gone, and this pass
-        // is about to rewrite that table.
-        val proofs: List<AbsenceProof> = mintEpochProofs(scans)
+        // **The only licence to delete** - and there are now TWO sources that mint it here: EPOCH (C2, local roots)
+        // and OBJECT_LIST (C3, a complete bucket LIST under a TRUSTED binding). GIT (C4), OPERATOR (C5) and
+        // API_DELETE arrive later; until they do, an absence outside those two is still never believed. Minted BEFORE
+        // the binds below, against the id_map as it stands NOW: a proof is about the durable binding a page HAD when
+        // the pass observed it gone, and this pass is about to rewrite that table.
+        val proofs: List<AbsenceProof> = mintEpochProofs(observed) + mintObjectListProofs(seen)
         val retired: Set<PageId> = retirements.applyProofs(proofs).map { it.id }.toSet()
+
+        // **A suspect tree may not DISPLACE the incumbents it does not carry** (C3). The latch guards the ABSENCE
+        // half; this is the door beside it. On a root whose binding is UNRESOLVED - a swapped bucket, a first sight -
+        // a decoy file at an at-risk path carrying a DIFFERENT id needs no absence proof to destroy anything:
+        // displacement is POSITIVE evidence ("we read the file, and it no longer holds that id"), so the bind would
+        // tombstone the incumbent and turn a protected page into a 410 before the binding is trusted at all.
+        //
+        // So those drafts are dropped from this pass entirely: not bound, not published, not witnessed. Their
+        // incumbents fall to LIMBO and read 503 - "we do not know what we are looking at" - which is the honest
+        // answer and the self-healing one. (Minted proofs above are unaffected: they were computed from the FULL
+        // witness, which is what the latch needs to decide whether the tree is ours in the first place.)
+        val suspect = suspectDrafts(seen)
+        val scans = if (suspect.isEmpty()) {
+            observed
+        } else {
+            observed.map { scan -> scan.copy(drafts = scan.drafts.filterNot { RootedPath(scan.root, it.file.path) in suspect }) }
+        }
+        val witnessed: Map<RootedPath, Witness> = if (suspect.isEmpty()) seen else seen - suspect
+        val scannedRoots: Set<RootName> = scans.filter { it.complete }.map { it.root }.toSet()
         // The SERVING hint (see [corpusSeen]) - a complete walk that came back holding pages. It decides 503-vs-404
         // for a later empty scan of this root, and it decides NOTHING ELSE. It is not delete authority, and there
         // is no longer any code path by which it could become some.
@@ -460,6 +496,51 @@ class IndexBuilder(
                 )
             }
     }
+
+    /**
+     * **The OBJECT_LIST proof source (C3): the chunk that lets an object root converge a delete without ever letting
+     * it believe the wrong bucket.**
+     *
+     * An object root gets no observation epoch - its watch is a POLLER over a mirror, and "the page is not in the
+     * mirror" says nothing about the bucket. What it gets instead is the bucket itself: a COMPLETE LIST is positive
+     * proof of absence, *of the bucket it listed*. Whether that bucket is OURS is the [BindingLatch]'s question, and
+     * every guard lives there rather than here, so this is only the plumbing: hand the latch the manifest and the
+     * witness, take back the bindings it says are provably gone, and stamp them with the root's current token.
+     *
+     * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
+     * arm, and it is the common one: a store that has listed nothing knows nothing.
+     */
+    private fun mintObjectListProofs(witnessed: Map<RootedPath, Witness>): List<AbsenceProof> =
+        sources.filter { it.root.backend is RootBackend.Object }.mapNotNull { source ->
+            val root = source.root.name
+            val manifest = source.manifests?.latestManifest() ?: return@mapNotNull null
+            val gone = bindings.proven(root, manifest, witnessed)
+            if (gone.isEmpty()) {
+                null
+            } else {
+                AbsenceProof(root = root, source = ProofSource.OBJECT_LIST, observationId = retirements.observation(root), covers = gone)
+            }
+        }
+
+    /**
+     * The drafts this pass must NOT bind: a file at an at-risk path, under a root whose binding is still UNRESOLVED,
+     * carrying an id that is NOT the incumbent's (see the call site for why binding it would destroy a permalink).
+     *
+     * The two arms it deliberately leaves alone:
+     *  - a file carrying **NO** id displaces nothing. Its identity comes from the `id_map` row itself (pre-materialized
+     *    identity is path-keyed), so the incumbent id is what it binds to - which is also why an UNMATERIALIZED page
+     *    must not be quarantined here: it would take a legitimate install's own pages away from it while its binding
+     *    waits for the operator reconcile it can never earn by witness.
+     *  - a file carrying the incumbent's OWN id is the page witnessing itself. That is the promotion path, not a threat.
+     */
+    private fun suspectDrafts(witnessed: Map<RootedPath, Witness>): Set<RootedPath> =
+        sources.filter { it.root.backend is RootBackend.Object }
+            .flatMapTo(mutableSetOf()) { source ->
+                bindings.protects(source.root.name)
+                    .map { RootedPath(source.root.name, it.path) to it.id }
+                    .filter { (path, id) -> witnessed[path]?.observedId?.let { it != id } == true }
+                    .map { (path, _) -> path }
+            }
 
     /**
      * `limbo = durableRows - witnessed - retired`, recomputed from scratch every pass and never stored.
@@ -731,7 +812,7 @@ class IndexBuilder(
      * abandoned (root-loss) scan leaves no rows describing a tree it never finished walking. The caller
      * records them once the scan has come back whole.
      */
-    private class SourceScan(
+    private data class SourceScan(
         val root: RootName,
         val drafts: List<Draft>,
         val folders: List<ContentFolder>,

@@ -75,6 +75,16 @@ class FakeObjectStore(
     /** Keys whose NEXT `get` throws once then removes itself - a one-shot GET failure (hydrate-retry test). */
     val failNextGetFor: MutableSet<String> = mutableSetOf()
 
+    /**
+     * Caps each LIST page at this many keys, so a listing PAGINATES (C3): the manifest is assembled across several
+     * round trips, and everything that can go wrong between them - a page that errors, a page created while the
+     * pagination is in flight - becomes reachable in a test rather than only in production.
+     */
+    var pageSize: Int? = null
+
+    /** The 1-based `list` CALL that throws instead of answering (then resets) - a mid-pagination page failure. */
+    var failListCall: Int? = null
+
     override suspend fun head(key: String): ObjectStat? {
         onNetworkOp()
         heads.incrementAndGet()
@@ -159,11 +169,15 @@ class FakeObjectStore(
 
     override suspend fun list(prefix: String, continuationToken: String?, maxKeys: Int?): ListResponseParser.Listing {
         onNetworkOp()
-        lists.incrementAndGet()
+        val call = lists.incrementAndGet()
+        if (synchronized(lock) { (failListCall == call).also { if (it) failListCall = null } }) {
+            throw ObjectStoreException("simulated LIST page failure (page $call)")
+        }
         failIfInjected()
         val keys = synchronized(lock) { objects.keys.filter { it.startsWith(prefix) }.sorted() }
         val start = continuationToken?.toIntOrNull() ?: 0
-        val page = keys.drop(start).let { if (maxKeys != null) it.take(maxKeys) else it }
+        val perPage = maxKeys ?: pageSize
+        val page = keys.drop(start).let { if (perPage != null) it.take(perPage) else it }
         val truncated = start + page.size < keys.size
         val entries = page.map { key ->
             val stored = synchronized(lock) { objects.getValue(key) }
@@ -183,6 +197,11 @@ class FakeObjectStore(
 
     /** The current etag for [key], or null when absent - a test-setup/assertion convenience. */
     fun currentEtag(key: String): String? = synchronized(lock) { objects[key]?.etag }
+
+    /** Test-only direct removal (the operator deleting an object out from under us). */
+    fun remove(key: String) {
+        synchronized(lock) { objects.remove(key) }
+    }
 
     /** The current bytes for [key], or null when absent - a test-setup/assertion convenience. */
     fun currentBytes(key: String): ByteArray? = synchronized(lock) { objects[key]?.bytes?.copyOf() }

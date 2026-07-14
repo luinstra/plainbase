@@ -6,6 +6,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchProvider
@@ -167,6 +168,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 client = fake,
                 mirror = mirrorA,
                 state = MirrorState(tmpDirA.resolve("mirror-state")),
+                binding = RootBinding("https://fake|bucket|"),
                 keyPrefix = "",
                 pollSeconds = 3600,
                 dirtyPaths = { emptySet() },
@@ -221,6 +223,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 client = fake,
                 mirror = mirrorB,
                 state = MirrorState(tmpDirB.resolve("mirror-state")),
+                binding = RootBinding("https://fake|bucket|"),
                 keyPrefix = "",
                 pollSeconds = 3600,
                 dirtyPaths = { emptySet() },

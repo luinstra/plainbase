@@ -12,7 +12,11 @@ import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.ObjectManifest
+import com.plainbase.domain.root.ObjectManifestProvider
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -36,7 +40,6 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -67,6 +70,18 @@ class ObjectContentStore(
     /** The inner mirror store (exposed per the plan's Koin shape; C5 binds git's repoPath to it). */
     val mirror: LocalContentStore,
     private val state: MirrorState,
+    /**
+     * **WHICH BUCKET THIS IS** (C3): `endpoint|bucket|prefix`, stamped into every generation this store publishes so
+     * a listing can never be cashed against a bucket it did not list. The latch compares it to the durable one.
+     */
+    val binding: RootBinding,
+    /**
+     * The root's durable bindings, read fresh BEFORE the first LIST page of every generation (the pagination
+     * boundary - see [ObjectManifest]). Defaulted to NONE for the constructions with no durable index behind them
+     * (the offline CLIs, preview): a generation with no rows at start covers nothing, so it can prove nothing gone,
+     * which is exactly the authority a pass with no id_map should have.
+     */
+    private val rowsAtStart: () -> Set<BindingRef> = { emptySet() },
     /** `""`, or the configured `storage.prefix` + `"/"`. */
     private val keyPrefix: String,
     private val pollSeconds: Long,
@@ -81,9 +96,23 @@ class ObjectContentStore(
     mirrorRoot: Path,
     private val ignoreRules: IgnoreRules = IgnoreRules(),
     private val atomics: FileAtomics = FileAtomics.Real,
-) : ContentStore, AutoCloseable {
+) : ContentStore, ObjectManifestProvider, AutoCloseable {
 
     private val mirrorRoot: Path = mirrorRoot.toAbsolutePath().normalize()
+
+    /**
+     * **The latest COMPLETE bucket LIST, published as ONE immutable value** (C3) - the codebase's snapshot idiom, and
+     * the only thing this store ever says about what the bucket HOLDS.
+     *
+     * Null until the first LIST completes, and never a partial one: [listGeneration] publishes only after the whole
+     * pagination has run, so a run that errored on any page leaves the PREVIOUS generation standing. An incomplete
+     * manifest is not a smaller corpus, it is an unknown one.
+     *
+     * It is deliberately in-memory. A generation is a LIVE observation, not a durable claim: a restart has observed
+     * nothing until it lists again, and that is precisely why [scan]'s completeness is derived from this rather than
+     * from a flag somebody set once at boot.
+     */
+    private val generation = AtomicReference<Generation?>(null)
 
     // The hybrid apply monitor (M1): guards only the short local apply ({mirror write ->
     // recordConfirmed/invalidate -> persist} plus the per-key re-checks). Never held across a
@@ -124,18 +153,18 @@ class ObjectContentStore(
      * available-and-empty (404 + a full-corpus delete, of a corpus the bucket still holds in full). The
      * corresponding blank LOCAL root is the opposite case and must stay AVAILABLE: an operator may legitimately
      * empty a content tree, and adjudicating THAT is the corpus-loss tripwire's job, not a `stat`'s.
+     *
+     * **The exoneration is the LIVE generation, not a boot flag** (C3). "Did the boot hydrate see pages?" was a
+     * snapshot from T answering a question at T+n, and it was stale in BOTH directions: a bucket DRAINED while the
+     * server ran left the flag set, so the honestly-empty mirror it converged to would 503 forever; and a mirror
+     * populated by a POLL (never by a hydrate) left it clear, so that mirror unmounting read as available-and-empty.
+     * The latest LIST knows what the bucket holds RIGHT NOW, and that is the only fact this question needs.
      */
     override fun available(): Boolean {
         val probe = mirrorProbe.get() ?: return true
-        return probe(mirrorRoot) && !(hydratedPages.get() && isBlank(mirrorRoot))
+        val bucketHoldsPages = generation.get()?.listed?.isNotEmpty() == true
+        return probe(mirrorRoot) && !(bucketHoldsPages && isBlank(mirrorRoot))
     }
-
-    /**
-     * Did the last [hydrate] materialize any page AT ALL? The exoneration [available]'s blank-mirror check needs: a
-     * bucket that is legitimately empty hydrates to an empty mirror, and an empty mirror is the honest answer for
-     * it - only a mirror that HAD pages and lost them is a loss.
-     */
-    private val hydratedPages = AtomicBoolean(false)
 
     /**
      * The mirror's liveness probe, bound to the tree [hydrate] materialized. Null until then - the only state in
@@ -144,32 +173,78 @@ class ObjectContentStore(
     private val mirrorProbe = AtomicReference<((Path) -> Boolean)?>(null)
 
     /**
-     * Did the last [hydrate] leave an object BEHIND? A non-strict boot DEFERS a key whose GET or mirror write
-     * failed (sites (a) and (b) there) and returns successfully anyway - the bucket is still the authority and a
-     * transient fault must not stop the server - so the mirror it hands the rebuild is missing pages the bucket
-     * still holds. Published as ONE value at the end of the hydrate that computed it, never mutated per key.
-     */
-    private val hydrationDeferred = AtomicBoolean(false)
-
-    /**
      * A never-hydrated store with no mirror on disk scans to an empty tree (seam c): a fresh install previews
      * cleanly instead of throwing NoSuchFileException. Once hydrated, the mirror IS the corpus - so a mirror that
      * has gone away is NOT an empty scan here, it is the store's NIO failure, which the rebuild's root-loss
      * classifier turns into skip-and-carry (never the mass delete an empty ScanResult would authorize).
      *
-     * **A hydrate that DEFERRED an object answers `complete = false`, and this is the one backend that ever does.**
-     * A walk cannot tell a page whose GET failed at boot from a page the operator deleted - both are simply not in
-     * the mirror - so the pass is refused DELETE AUTHORITY for this root ([ScanResult.complete]) until a hydrate
-     * comes back clean. Nothing is withheld from the READ path by that: every page the mirror DID hydrate still
-     * publishes and still serves, which is the whole point of the split - a transient GET failure must never blank
-     * a site, and it must never delete its rows either.
+     * **`complete` is DERIVED AT CALL TIME from the latest generation, and it is never a flag** (C3): this mirror is
+     * a whole view of the bucket exactly when it holds, as a REGULAR FILE, every key the last complete LIST returned,
+     * at the etag that LIST returned for it ([mirrorHoldsGeneration]). A pass gets DELETE AUTHORITY over this root on
+     * that and on nothing weaker - and nothing is withheld from the READ path by it: every page the mirror does hold
+     * still publishes and still serves, which is the whole point of the split. A transient GET failure must never
+     * blank a site, and it must never delete its rows either.
+     *
+     * A store that has never completed a LIST answers `false`, and that is not pedantry: it has listed nothing, so it
+     * vouches for nothing - including for the claim that its mirror is a whole view of a corpus. (PREVIEW adopt lives
+     * here. It reaps nothing anyway, because it holds no proofs; being unauthoritative costs it exactly nothing.)
      */
     override fun scan(): ScanResult =
         if (mirrorProbe.get() == null && !Files.isDirectory(mirrorRoot)) {
-            ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList())
+            ScanResult(files = emptyList(), folders = emptyList(), issues = emptyList(), complete = false)
         } else {
-            mirror.scan().copy(complete = !hydrationDeferred.get())
+            mirror.scan().copy(complete = mirrorHoldsGeneration())
         }
+
+    /**
+     * **The mirror holds the whole of the latest generation, BY IDENTITY.** Every listed key resolves to a REGULAR
+     * FILE whose RECORDED etag is the one the LIST returned for it.
+     *
+     * The etags are the point, and a bare key list is the bug this replaces: "the file exists" would let **stale
+     * same-path bytes** (an object re-uploaded at a new etag whose GET then failed) and **a DIRECTORY where a file
+     * should be** read as COMPLETE, handing the pass delete authority over a mirror it never actually verified. That
+     * is the `mirrorHasRaw`-checks-existence-not-identity bug walking straight back in through the fix meant to close
+     * it. Present AND current, or the generation is not materialized here.
+     */
+    private fun mirrorHoldsGeneration(): Boolean {
+        val current = generation.get() ?: return false
+        return current.listed.all { (path, entry) -> mirrorHasRaw(entry.rawRelative) && state.etagOf(path) == entry.etag }
+    }
+
+    /** C3: the latest COMPLETE listing, in the domain's terms. Null until this store has finished one (see [scan]). */
+    override fun latestManifest(): ObjectManifest? = generation.get()?.let {
+        ObjectManifest(binding = it.binding, listed = it.listed.keys, rowsAtStart = it.rowsAtStart)
+    }
+
+    /**
+     * **Forget which bucket generation each mirror file holds** - called at boot, before [hydrate], for a root whose
+     * binding is not TRUSTED (C3).
+     *
+     * `MirrorState` records "the mirror bytes at this path ARE the bucket generation this etag names", and hydrate
+     * skips any key whose listed etag already matches. **Across a REBIND those etags are about a different bucket.**
+     * An etag is an opaque provider token, not a promise about somebody else's namespace, so a new binding whose etag
+     * for a path happens to equal the recorded one would leave the OLD bucket's bytes sitting in the mirror - and the
+     * binding latch would then WITNESS THE OLD CORPUS and promote the new binding to TRUSTED on the strength of pages
+     * it never actually fetched from it. The verification would be reading its own memory.
+     *
+     * So an unverified binding starts from nothing known: every listed key is re-fetched, and the mirror the latch
+     * witnesses is one this store has materialized FROM THE BUCKET IT IS NOW BOUND TO. That is the "one GET per
+     * at-risk page, once, on the rarest event in the system" the design budgets for, and it is what makes the witness
+     * a witness. It uses the ONE sanctioned invalidation seam per path, never a bulk map write.
+     */
+    fun rebind() {
+        val known = state.snapshot()
+        if (known.isEmpty()) return
+        synchronized(applyLock) {
+            known.keys.forEach(state::invalidate)
+            state.persist()
+        }
+        logger.warn {
+            "root binding ${binding.value} is not TRUSTED: forgetting the recorded generation of all ${known.size} mirror " +
+                "file(s) so the next hydrate re-fetches every one of them FROM THIS BUCKET. A binding is witnessed with " +
+                "bytes we fetched from it, never with bytes we happen to still be holding"
+        }
+    }
 
     override fun read(path: TreePath): ByteArray? = mirror.read(path)
 
@@ -392,8 +467,11 @@ class ObjectContentStore(
      */
     internal fun pollOnce(onChange: (TreePath) -> Unit = {}) {
         val before = state.snapshot()
+        // A poll cycle is also a GENERATION (C3): every poll LISTs the whole bucket, so every poll that completes one
+        // republishes what the bucket holds. A cycle whose LIST failed publishes NOTHING and the previous generation
+        // stands - so a transient fault never becomes an "authoritative" smaller corpus.
         val listed = try {
-            listBucket()
+            listGeneration().listed
         } catch (e: Exception) {
             logger.warn { "poll LIST failed (${causeOf(e)}); nothing mutated, retrying next cycle" }
             return
@@ -483,7 +561,7 @@ class ObjectContentStore(
         mirrorProbe.set(rootLivenessProbe(mirrorRoot))
         val before = state.snapshot()
         val listed = try {
-            listBucket()
+            listGeneration().listed
         } catch (e: Exception) {
             throw bootRefusal(e)
         }
@@ -577,21 +655,18 @@ class ObjectContentStore(
             }
         }
         state.persist()
-        // Published ONCE, from the accounting the log line already keeps: a hydrate that left ANY object behind
-        // hands the rebuild a mirror with holes in it, and a view with holes is not a corpus (see [scan]). A later
-        // hydrate that comes back clean clears it; a root that stays deferred simply stays unauthoritative, which
-        // is the honest answer until the bucket (or the disk) is fixed.
+        // Nothing is FLAGGED here any more (C3). A hydrate that left an object behind hands the rebuild a mirror with
+        // holes in it, and a view with holes is not a corpus - but "did THIS hydrate defer something" is a fact about
+        // one moment, and the pass that reads it runs at another. [scan] re-derives it from the generation and the
+        // mirror as they stand WHEN IT IS ASKED, which is the same answer for a fresh deferral and a truthful one for
+        // everything that happened afterwards (a key a POLL healed; a mirror file deleted at runtime).
         val deferred = changed.size - healed
-        hydrationDeferred.set(deferred > 0)
-        // What the bucket HAS, not what this pass fetched: a hydrate that healed nothing because the mirror was
-        // already whole still stands behind every page in it (see [available]).
-        hydratedPages.set(listed.isNotEmpty())
         logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $deferred deferred" }
         if (deferred > 0) {
             logger.warn {
                 "$deferred object(s) could not be hydrated into the mirror: this root serves the pages it DID hydrate " +
-                    "but is refused delete authority until a hydrate completes cleanly - nothing of its is deleted, and " +
-                    "the poll keeps retrying"
+                    "but is refused delete authority until the mirror holds the whole listing - nothing of its is deleted, " +
+                    "and the poll keeps retrying"
             }
         }
     }
@@ -866,6 +941,24 @@ class ObjectContentStore(
     }
 
     /**
+     * **ONE generation: the durable rows as they stood BEFORE the first LIST page, then the whole LIST** (C3).
+     *
+     * The ORDER is the boundary and it is load-bearing. LIST pagination is not atomic, so a page CREATED while the
+     * pagination runs may legitimately be missing from the manifest - and it is not in [ObjectManifest.rowsAtStart]
+     * either, so this generation's proof can never cover it and it simply waits for the next cycle. Read the rows
+     * AFTER the LIST instead and a create racing the LIST is reaped by the very LIST that could not have seen it.
+     *
+     * Publication is all-or-nothing: [listBucket] THROWS if any page fails, so a partial pagination never reaches the
+     * `store` below and the previous generation stands. It does not "publish what it got" - an incomplete manifest is
+     * not a smaller corpus, it is an unknown one.
+     */
+    private fun listGeneration(): Generation {
+        val rows = rowsAtStart()
+        val listed = listBucket()
+        return Generation(binding = binding, listed = listed, rowsAtStart = rows).also(generation::set)
+    }
+
+    /**
      * LISTs the whole [keyPrefix] space through the eligibility funnel (seam a): wire decode
      * ([S3WireKey]) -> prefix strip -> per-segment ignore check + the NFC [TreePath] parse, with B3
      * winner resolution for NFC-colliding keys. Network - never called under the monitor. The
@@ -986,8 +1079,16 @@ class ObjectContentStore(
         }
     }
 
-    /** True iff the mirror already holds the exact raw file [rawRelative] names (the finding-1 self-heal probe). */
-    private fun mirrorHasRaw(rawRelative: String): Boolean = Files.exists(mirrorRoot.resolve(rawRelative))
+    /**
+     * True iff the mirror holds a REGULAR FILE at the exact raw name [rawRelative] (the finding-1 self-heal probe,
+     * and half of [mirrorHoldsGeneration]'s completeness check).
+     *
+     * A bare `exists` was the bug: a DIRECTORY where a file should be exists perfectly well, and it serves no bytes.
+     * `NOFOLLOW` because this store writes plain files and nothing else - a symlink here is not something we put
+     * there, so it is not a mirror file, and treating it as one would be trusting a link we did not make.
+     */
+    private fun mirrorHasRaw(rawRelative: String): Boolean =
+        Files.isRegularFile(mirrorRoot.resolve(rawRelative), LinkOption.NOFOLLOW_LINKS)
 
     /**
      * The TARGETED sibling sweep for the warm poll path (MINOR-2): removes only the NFC- and NFD-encoded
@@ -1174,6 +1275,19 @@ class ObjectContentStore(
     private fun causeOf(failure: Throwable): String = failure.message ?: failure::class.simpleName ?: "failure"
 
     private class ListedEntry(val rawRelative: String, val etag: String)
+
+    /**
+     * One complete LIST, as ONE immutable value (C3): what the bucket held, at which etags, and which durable rows
+     * this root had before the pagination started. Published whole or not at all - see [listGeneration].
+     *
+     * The etags are stored, not just the key names, because completeness is a claim about IDENTITY: see
+     * [mirrorHoldsGeneration].
+     */
+    private class Generation(
+        val binding: RootBinding,
+        val listed: Map<TreePath, ListedEntry>,
+        val rowsAtStart: Set<BindingRef>,
+    )
 
     companion object {
         /** R9 test hook: LOCAL boot must construct ZERO hybrids - proven by counter, never reasoned. */

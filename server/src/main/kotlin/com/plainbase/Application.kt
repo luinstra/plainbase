@@ -10,6 +10,8 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.UserRepository
+import com.plainbase.domain.root.BindingLatch
+import com.plainbase.domain.root.BindingStatus
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.DetachedRoots
 import com.plainbase.domain.root.ObservationEpoch
@@ -222,6 +224,17 @@ private fun serve() {
         // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
         // hydrate-only C4 boot).
         if (config.storage.backend == StorageBackend.OBJECT) {
+            // C3, and it runs BEFORE the first LIST: record WHERE this root now points. A first sight or a CHANGED
+            // binding (a swapped bucket, a re-prefixed one, credentials that resolve somewhere else entirely) latches
+            // UNRESOLVED with an at-risk snapshot taken from the durable rows AT THIS MOMENT - so the empty LIST that
+            // a wrong bucket answers with is a perfectly successful LIST that PROVES NOTHING, rather than an
+            // authoritative "the corpus is gone". The root still serves everything it can read.
+            val objectStore = koin.get<ObjectContentStore>()
+            if (koin.get<BindingLatch>().observe(koin.get<RootRegistry>().main.name, objectStore.binding) != BindingStatus.TRUSTED) {
+                // ...and an unverified binding gets a mirror re-derived FROM IT, so the pages the latch witnesses are
+                // pages this boot actually fetched from the bucket the config now names (see [ObjectContentStore.rebind]).
+                objectStore.rebind()
+            }
             try {
                 if (config.git.enabled == true) {
                     val bundleDr = koin.get<GitBundleDr>()

@@ -299,6 +299,7 @@ private fun hybridOverride(fakeSlot: Array<FakeObjectStore?>? = null): (LocalCon
         client = fake,
         mirror = mirror,
         state = MirrorState(stateFile),
+        binding = com.plainbase.domain.root.RootBinding("https://fake|bucket|"),
         keyPrefix = "",
         pollSeconds = 3_600,
         dirtyPaths = { emptySet() },

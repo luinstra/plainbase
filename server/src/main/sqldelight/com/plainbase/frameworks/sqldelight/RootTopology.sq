@@ -1,0 +1,43 @@
+-- WHERE each root points, and whether we believe it (C3).
+--
+-- A root's NAME is not its identity. Its BINDING is: the local path, or the endpoint|bucket|prefix of its
+-- bucket. ONE mechanism, both backends - there is no separate `object_binding` table - because the hole is
+-- the same hole on both. A wrong bucket name, a wrong prefix, or credentials scoped to a different EMPTY
+-- bucket produce a SUCCESSFUL EMPTY LIST: a readable, complete, entirely authoritative view of the WRONG
+-- UNIVERSE, which reads as "the corpus is gone" and deletes it.
+--
+-- So a CHANGED binding (and a first-sighted one) goes UNRESOLVED, with `at_risk` snapshotted from the
+-- durable bindings AT THAT MOMENT, and it mints NO absence proof until every at-risk binding is witnessed
+-- BY IDENTITY in the tree it now names (or an operator accepts).
+--
+-- DURABLE, because the wipe survives a restart and so must the thing that stops it: an in-memory latch
+-- would limbo the rows on poll 1 while recording the binding, then see the binding as "unchanged" on
+-- poll 2 and reap the corpus - the fix rebuilding the bug two polls later.
+--
+-- `at_risk` is a JSON document (kotlinx.serialization, the ONE sanctioned stack - the design's CBOR would
+-- have meant a new server dependency, which the native gate forbids). It is decoded WHOLE; a row that
+-- fails to decode is an UNSATISFIABLE at-risk set, never an empty one, so corruption fails CLOSED.
+
+import com.plainbase.domain.root.RootName;
+
+CREATE TABLE root_topology (
+  root TEXT AS RootName NOT NULL PRIMARY KEY,
+  binding TEXT NOT NULL,         -- the local path, or endpoint|bucket|prefix
+  status TEXT NOT NULL,          -- TRUSTED | UNRESOLVED
+  at_risk TEXT NOT NULL          -- the (path, id) bindings that existed when this binding was last set
+);
+
+selectTopology:
+SELECT *
+FROM root_topology
+WHERE root = :root;
+
+upsertTopology:
+INSERT INTO root_topology(root, binding, status, at_risk)
+VALUES (:root, :binding, :status, :atRisk)
+ON CONFLICT(root) DO UPDATE SET binding = excluded.binding, status = excluded.status, at_risk = excluded.at_risk;
+
+updateStatus:
+UPDATE root_topology
+SET status = :status
+WHERE root = :root;

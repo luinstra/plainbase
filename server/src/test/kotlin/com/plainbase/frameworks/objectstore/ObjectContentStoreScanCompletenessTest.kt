@@ -5,6 +5,7 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
+import java.nio.file.Files
 
 /**
  * DELETE AUTHORITY for the object backend (ADR-0011 D5): the mirror is the tree this store SERVES, and a WARM boot
@@ -72,9 +73,46 @@ class ObjectContentStoreScanCompletenessTest : FunSpec({
         }
     }
 
-    test("a store that never hydrated (PREVIEW adopt) is COMPLETE - it claimed no tree, so it lost nothing") {
+    test("a store that has never LISTED vouches for nothing - not even that its mirror is a whole corpus") {
         HybridFixture().use { hybrid ->
+            withClue("completeness is DERIVED from the latest generation, and a store with no generation has none") {
+                hybrid.store.scan().complete shouldBe false
+            }
+        }
+    }
+
+    test("STALE same-path bytes make the generation INCOMPLETE - the etag is the point, not the file name") {
+        HybridFixture().use { hybrid ->
+            val key = hybrid.mirror.resolveRepoRelativePath(hydrated)
+            hybrid.fake.seed(key, "# Hydrated\n".toByteArray())
+            hybrid.store.hydrate()
             hybrid.store.scan().complete shouldBe true
+
+            // The object is REPLACED at the bucket (a new etag) and the GET that would bring it down fails. The mirror
+            // file still EXISTS - it is simply the WRONG GENERATION. A manifest of bare key names could not tell the
+            // difference, and the root would take delete authority over a mirror it had never actually verified.
+            hybrid.fake.seed(key, "# Hydrated, rewritten\n".toByteArray())
+            hybrid.fake.failNextGetFor += key
+            hybrid.store.pollOnce()
+
+            withClue("present is not current: the mirror must hold the LISTED etag, not merely a file at that path") {
+                hybrid.store.scan().complete shouldBe false
+            }
+        }
+    }
+
+    test("a DIRECTORY where a file should be makes the generation INCOMPLETE - a directory exists, and serves no bytes") {
+        HybridFixture().use { hybrid ->
+            val key = hybrid.mirror.resolveRepoRelativePath(hydrated)
+            hybrid.fake.seed(key, "# Hydrated\n".toByteArray())
+            hybrid.store.hydrate()
+            hybrid.store.scan().complete shouldBe true
+
+            val target = hybrid.mirror.onDiskTarget(hydrated)
+            Files.delete(target)
+            Files.createDirectory(target) // `exists` says yes. It is not a mirror file, and it never was.
+
+            hybrid.store.scan().complete shouldBe false
         }
     }
 })
