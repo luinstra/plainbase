@@ -7,7 +7,9 @@ import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import java.nio.file.Files
 
 /**
@@ -57,6 +59,33 @@ class OnlineMoveIdentityTest : FunSpec({
                 }
                 withClue("and it is NOT tombstoned - /p/{id} must not answer 410 because somebody renamed a file") {
                     world.idMap.retired(pinned).shouldBeNull()
+                }
+            }
+        }
+    }
+
+    test("an UNMATERIALIZED page still SPLITS on a move, and SOFT-retires - the honest residue, pinned on purpose") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            // NO frontmatter id. This page's id lives NOWHERE but `id_map`, keyed by its path - so its bytes cannot
+            // testify to which page they are, and a move is genuinely indistinguishable from a delete-and-recreate.
+            // We do not guess. What we DO promise is that the loss is a soft one.
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                world.observe("main", "extra")
+                val builder = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
+                val before = builder.rebuild().byPath.getValue(RootedPath(extra, from)).id
+
+                Files.createDirectories(extraDir.resolve("notes/archive"))
+                Files.move(extraDir.resolve("notes/rollback.md"), extraDir.resolve("notes/archive/rollback.md"))
+                val moved = builder.rebuild()
+
+                withClue("nothing in the file carries the id, so the epoch's proof stands and a fresh id is minted") {
+                    moved.byPath.getValue(RootedPath(extra, to)).id shouldNotBe before
+                }
+                withClue("but the old id is TOMBSTONED, not destroyed: /p/{oldId} is a 410 that names the page, never a 404") {
+                    world.idMap.retired(before).shouldNotBeNull().path shouldBe RootedPath(extra, from)
                 }
             }
         }

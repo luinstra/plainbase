@@ -148,6 +148,35 @@ class ObjectBindingLatchTest : FunSpec({
         }
     }
 
+    test("an OBJECT-root MOVE preserves the id - the LIST proves absence by KEY, and a rename is what changes the key") {
+        ObjectAbsenceWorld().use { world ->
+            val bucket = handbook()
+            world.boot(bucket, real).rebuild() // TRUSTED, three rows
+
+            // The operator renames a key in the bucket we have VERIFIED is ours. The bytes are identical, and the id
+            // is inside them - only the key moved. `BindingLatch.proven` excludes witnessed PATHS, so the old key's
+            // binding lands in `gone` and the apply transaction would tombstone an id we are holding in our hands.
+            //
+            // This is the SAME defect as the local/EPOCH one ([com.plainbase.domain.service.OnlineMoveIdentityTest]),
+            // in a second source - which is why the refutation is enforced ONCE, over every scan-derived proof, in
+            // `IndexBuilder.refuted`. This row is what makes that a CLASS fix rather than a claim.
+            bucket.remove("guides/deploy.md")
+            bucket.seedPage("guides/deploy-v2.md", deployId)
+            world.store.pollOnce()
+            val snapshot = world.builder().rebuild()
+
+            withClue("the page keeps its permalink: we FETCHED those bytes, and they say which page they are") {
+                snapshot.pages.map { it.path } shouldContainExactlyInAnyOrder
+                    listOf(page("guides/deploy-v2.md"), runbook, onboarding)
+                world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, runbookId, onboardingId)
+            }
+            withClue("and NOTHING is tombstoned - a renamed key must not turn /p/{id} into a 410") {
+                world.idMap.retiredBindings().shouldBeEmpty()
+            }
+            world.limbo.count(RootName.MAIN) shouldBe 0
+        }
+    }
+
     test("a create racing a paginated LIST is never reaped - the boundary is the rows BEFORE the first page") {
         ObjectAbsenceWorld().use { world ->
             val bucket = handbook().apply { pageSize = 1 } // LIST paginates: three pages, three round trips
