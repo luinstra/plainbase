@@ -111,7 +111,22 @@ class BindingLatch(private val topology: RootTopologyRepository) {
         }
     }
 
-    /** TRUSTED already, or earning it now: every at-risk binding witnessed BY IDENTITY in the tree we are now bound to. */
+    /**
+     * TRUSTED already, or earning it now: every at-risk binding witnessed BY IDENTITY in the tree we are now bound to.
+     *
+     * **"By identity" means "the recorded id, AT ITS RECORDED PATH"** - and that is a deliberate key choice, not an
+     * oversight, so it is worth naming. Its cost: a page RENAMED inside an otherwise legitimate tree can never satisfy
+     * the at-risk set by witness, so a rebind plus a rename needs the operator path (`plainbase root reconcile`). Its
+     * benefit is the reason we pay that: an id-ANYWHERE test would let a RESTRUCTURED CLONE - the same corpus, reorganised,
+     * restored from somewhere else - witness every at-risk id and promote ITSELF to TRUSTED, which is the wrong-universe
+     * bug wearing the fix's clothes. Trust is the one place we can afford to be strict, because it costs LIVENESS
+     * (a 503 and a ceremony) and never the corpus.
+     *
+     * That is the opposite trade from `IndexBuilder.refuted`, which asks "did we read that id ANYWHERE?" - and the two
+     * are consistent, because they answer opposite questions: REFUTING an absence is a claim that a page is PRESENT
+     * (weaker evidence is safe - it only ever declines to delete), while EARNING TRUST is a claim that we are looking at
+     * the right universe (weaker evidence is a corpus).
+     */
     private fun trusted(root: RootName, latched: RootTopology, witnessed: Map<RootedPath, Witness>): Boolean {
         if (latched.status == BindingStatus.TRUSTED) return true
         val atRisk = latched.atRisk

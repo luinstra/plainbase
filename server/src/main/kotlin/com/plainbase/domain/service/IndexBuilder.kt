@@ -383,7 +383,7 @@ class IndexBuilder(
         // a tree nobody indexed. The identity issues below ride the resolve, which only ever sees full scans.
         scans.forEach { scan -> scan.issues.forEach(idMap::record) }
 
-        val identities = resolveIdentities(scans, witnessed, scannedRoots, retired)
+        val identities = resolveIdentities(scans, witnessed, scannedRoots)
 
         // Build ALL provisional sections, then render each root's pages against ITS view of the
         // ONE URL-complete skeleton (identity and URLs final; render fields filled below).
@@ -485,6 +485,14 @@ class IndexBuilder(
      * question is only ever *"are we looking at it?"*, and a proof we decline to mint costs a row in limbo (503,
      * self-healing) while one we mint wrongly costs a permalink forever.
      *
+     * **That is ACROSS ROOTS, and it is a coupling worth stating out loud.** An id read ANYWHERE refutes an absence
+     * claimed anywhere, so a stale copy of root A's corpus sitting in a wrong/UNRESOLVED bucket mounted as root B
+     * will veto A's legitimate deletes for as long as it is mounted: A's pages sit in limbo instead of converging,
+     * and the proof is re-minted and re-refuted every pass. The direction is FAIL-CLOSED (limbo, self-healing, and it
+     * clears the moment B is unmounted or reconciled), so it is the trade this function exists to make - but an
+     * operator debugging *"why will this delete not converge?"* will not think to look at a DIFFERENT root's misbound
+     * bucket, which is exactly why the refusal above is logged with the root and the source that minted it.
+     *
      * **`API_DELETE` is deliberately NOT filtered here** and never passes through this function: it is minted by the
      * write pipeline, not by a scan. Every proof this sees is an INFERENCE FROM NOT-SEEING, which reading the id
      * elsewhere refutes. `API_DELETE`'s authority is *"we CAUSED this"*, which no observation can refute.
@@ -496,8 +504,10 @@ class IndexBuilder(
             val gone = proof.covers.filterNotTo(mutableSetOf()) { it.id in present }
             if (gone.size != proof.covers.size) {
                 logger.info {
+                    // Deliberately NOT "the pages moved": a COPY refutes exactly as well as a move does, and so does a
+                    // witness in a tree we do not yet trust. What we actually know is the smaller, true thing.
                     "refusing ${proof.covers.size - gone.size} of root '${proof.root}''s ${proof.source} proof(s): this pass READ " +
-                        "those ids elsewhere in the tree, so the pages MOVED - a page we are looking at is not a page that is gone"
+                        "those ids somewhere, so they are not gone - a page we are looking at is not a page that is absent"
                 }
             }
             proof.takeIf { gone.isNotEmpty() }?.copy(covers = gone)
@@ -1132,10 +1142,19 @@ class IndexBuilder(
         scans: List<SourceScan>,
         witnessed: Map<RootedPath, Witness>,
         scannedRoots: Set<RootName>,
-        retired: Set<PageId>,
     ): Map<RootedPath, Identity> {
         // The ONE supersession rule, built once and handed to BOTH the resolver below and every bind it
         // produces - so the plan the pass makes and the writes the repository will accept cannot disagree.
+        //
+        // [Supersession.proven] is deliberately NOT passed, and the reason is an ORDERING rather than a rule: the
+        // proof-apply transaction has ALREADY run by the time we get here, so every binding a proof covered is gone
+        // from `id_map` and there is no incumbent left for that arm to displace. It would be vacuous, and a vacuous
+        // authority argument is worse than none - it reads like a working safety net.
+        //
+        // **So do not move `applyProofs` after this call and expect `proven` to carry the weight: nothing passes it.**
+        // (The order is load-bearing in the other direction too - it is what lets the tombstone arm of `ownerOf` below
+        // see THIS pass's own retirements, so a copied or restored file carrying a just-retired id is refused rather
+        // than handed a dead page's permalink.)
         val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
         val claimed = HashMap<PageId, RootedPath>()
         val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-path = the bind order
