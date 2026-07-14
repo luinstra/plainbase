@@ -351,7 +351,7 @@ class IndexBuilder(
         // API_DELETE arrive later; until they do, an absence outside those two is still never believed. Minted BEFORE
         // the binds below, against the id_map as it stands NOW: a proof is about the durable binding a page HAD when
         // the pass observed it gone, and this pass is about to rewrite that table.
-        val proofs: List<AbsenceProof> = mintEpochProofs(observed) + mintObjectListProofs(seen)
+        val proofs: List<AbsenceProof> = refuted(mintEpochProofs(observed) + mintObjectListProofs(seen), seen)
         val retired: Set<PageId> = retirements.applyProofs(proofs).map { it.id }.toSet()
 
         // **A suspect tree may not DISPLACE the incumbents it does not carry** (C3). The latch guards the ABSENCE
@@ -452,6 +452,56 @@ class IndexBuilder(
         }
         notifyPublished(snapshot, retired)
         return snapshot
+    }
+
+    /**
+     * **A MOVE is not an ABSENCE**, and this is the ONE place that says so - for every scan-derived source at once,
+     * including the ones that have not been written yet.
+     *
+     * A proof covers a binding whose PATH this pass did not see, and a RENAMED page's old path is exactly that. So
+     * every source here would mint a proof over a page that is sitting in front of us under a different name, and the
+     * apply transaction would tombstone the id its frontmatter still plainly carries - handing the file back a FRESH
+     * id and turning `/p/{oldId}` into a permanent 410. One `git mv` would kill every inbound link and every agent
+     * citation to that page. (That is not hypothetical: it shipped in C2 and [OnlineMoveIdentityTest] is the proof.)
+     *
+     * The rule the design already states, and the reason it did not bite here: *a witness is positive evidence of
+     * PRESENCE, and proving a page we are looking at to be absent is not a proof, it is a contradiction*
+     * ([com.plainbase.domain.root.BindingLatch]). Both sources enforce it - by **PATH** ([ObservationEpoch.scanned],
+     * `BindingLatch.proven`) - and a rename is precisely the event that changes the path. **IDENTITY is the only key
+     * that survives one**, so the refutation has to be asked in the currency the evidence actually arrives in: not
+     * *"did we read that path?"* but *"did we read that ID, anywhere?"*
+     *
+     * Two consequences worth being explicit about, because both are correct rather than tolerated:
+     *  - **An UNMATERIALIZED page still splits on a move.** Its id lives nowhere but `id_map`, so its bytes cannot
+     *    testify to which page they are, and a move is genuinely indistinguishable from a delete-and-recreate. The
+     *    honest residue - and a SOFT retirement, so the old id answers 410 rather than 404.
+     *  - **A COPY that carries a live id refutes the absence too**, and hands the id to the copy. A move and a copy
+     *    produce IDENTICAL observations - the design says so twice - so the two cannot be told apart here, and this is
+     *    the rank policy's problem, never the admission oracle's. It is also what an OFFLINE move has always done
+     *    (no epoch at boot, so no proof, so the id travels): this makes ONLINE agree with OFFLINE rather than
+     *    inventing a third behaviour.
+     *
+     * [witnessed] is the FULL witness - every page this pass READ, before the suspect-tree filter - because the
+     * question is only ever *"are we looking at it?"*, and a proof we decline to mint costs a row in limbo (503,
+     * self-healing) while one we mint wrongly costs a permalink forever.
+     *
+     * **`API_DELETE` is deliberately NOT filtered here** and never passes through this function: it is minted by the
+     * write pipeline, not by a scan. Every proof this sees is an INFERENCE FROM NOT-SEEING, which reading the id
+     * elsewhere refutes. `API_DELETE`'s authority is *"we CAUSED this"*, which no observation can refute.
+     */
+    private fun refuted(proofs: List<AbsenceProof>, witnessed: Map<RootedPath, Witness>): List<AbsenceProof> {
+        val present = witnessed.values.mapNotNullTo(mutableSetOf()) { it.observedId }
+        if (present.isEmpty()) return proofs
+        return proofs.mapNotNull { proof ->
+            val gone = proof.covers.filterNotTo(mutableSetOf()) { it.id in present }
+            if (gone.size != proof.covers.size) {
+                logger.info {
+                    "refusing ${proof.covers.size - gone.size} of root '${proof.root}''s ${proof.source} proof(s): this pass READ " +
+                        "those ids elsewhere in the tree, so the pages MOVED - a page we are looking at is not a page that is gone"
+                }
+            }
+            proof.takeIf { gone.isNotEmpty() }?.copy(covers = gone)
+        }
     }
 
     /**
