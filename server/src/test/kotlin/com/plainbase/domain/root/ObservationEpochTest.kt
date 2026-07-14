@@ -169,3 +169,15 @@ class ObservationEpochTest : FunSpec({
         epochs.scanned(extra, witnessed = emptySet(), durable = setOf(there)).shouldNotBe(null)
     }
 })
+
+/**
+ * Every row above is about the WITNESSED-vs-ABSENT split, over a tree with nothing UNREAD - so it says so once, here,
+ * rather than twenty-two times.
+ *
+ * The THIRD answer (a page the walk enumerated and the read could not produce - neither witnessed nor absent) is
+ * [com.plainbase.domain.service.UnreadPageIsNotAbsentTest]'s subject. Note the PRODUCTION signature takes `unread`
+ * EXPLICITLY and has NO DEFAULT: a safety input that silently defaults to the optimistic value ("nothing was unread")
+ * is precisely how it came to be missing in the first place, and it reaped pages that were sitting on disk.
+ */
+private fun ObservationEpoch.scanned(root: RootName, witnessed: Set<TreePath>, durable: Set<BindingRef>) =
+    scanned(root = root, witnessed = witnessed, unread = emptySet(), durable = durable)

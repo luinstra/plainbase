@@ -542,6 +542,9 @@ class IndexBuilder(
                 epochs.scanned(
                     root = root,
                     witnessed = scan.drafts.mapTo(mutableSetOf()) { it.file.path },
+                    // The walk saw these and the read could not produce them: neither witnessed nor absent, and the
+                    // difference between a page that is GONE and a page we merely could not read this pass.
+                    unread = scan.unread,
                     durable = durable[root].orEmpty().toSet(),
                 )
             }
@@ -872,6 +875,21 @@ class IndexBuilder(
         val issues: List<IdentityIssue>,
         /** Did the backend see the WHOLE tree ([ScanResult.complete])? Only a complete walk gets delete authority. */
         val complete: Boolean,
+        /**
+         * **The paths the WALK enumerated and the READ could not produce bytes for** - and the reason [complete] is
+         * not the whole story about what this pass knows.
+         *
+         * A scan is a walk followed by a read of each thing it walked, and [complete] describes only the WALK. So a
+         * page that lost a race between the two (an `rm`, a `git checkout` of another branch, a sync tool's
+         * delete-then-write) drops out of [drafts] while the scan still, correctly, calls itself complete - and it is
+         * then MISSING FROM THE WITNESS MAP of a scan that saw the whole tree. The epoch mints its proof from exactly
+         * that difference, so without this set the page we merely FAILED TO READ reads as a page that is GONE, and
+         * `AbsenceUnknown` - the carrier for *"the bytes are not there and we cannot prove they are gone"* - becomes
+         * the one thing this design forbids it to become.
+         *
+         * These paths are therefore neither WITNESSED nor ABSENT. They are the third answer, and they go to LIMBO.
+         */
+        val unread: Set<TreePath>,
     )
 
     private class Identity(
@@ -982,6 +1000,9 @@ class IndexBuilder(
         val root = source.root.name
         val scan = source.store.scan()
 
+        // The walk saw these; the read could not produce their bytes. NOT witnessed, and NOT absent - see
+        // [SourceScan.unread]. Collected here because this is the only place that knows the difference.
+        val unread = mutableSetOf<TreePath>()
         val drafts = scan.files
             .filter { it.path.name.endsWith(".md") }
             .sortedBy { it.path.value }
@@ -1000,6 +1021,12 @@ class IndexBuilder(
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
                     ContentRead.AbsenceUnknown -> {
+                        // ...and it is recorded as UNREAD, which is what actually keeps that last promise. Dropping the
+                        // draft is only half of it: a page missing from the witness map of a COMPLETE scan is precisely
+                        // what the epoch mints an absence proof from, so without this line the log below is a lie and
+                        // the row is reaped (tombstone, checkpoint, and the dirty_page row that is the interrupted
+                        // save's only recovery record). An unknown is not a fact.
+                        unread += file.path
                         logger.warn {
                             "page ${file.path.value} in '$root' vanished between the walk and the read; it is NOT witnessed " +
                                 "this pass and its durable row goes to LIMBO - nothing is deleted for it"
@@ -1038,6 +1065,7 @@ class IndexBuilder(
             commits = commits,
             issues = scan.issues.map { it.toIdentityIssue(root) } + urls.issues,
             complete = scan.complete,
+            unread = unread,
         )
     }
 

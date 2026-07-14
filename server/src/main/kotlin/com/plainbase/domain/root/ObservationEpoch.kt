@@ -122,8 +122,19 @@ class ObservationEpoch(
      * [durable] is the root's id_map rows as they stood BEFORE this pass touched them: what the proof is ABOUT is
      * a binding, and the binding is the durable fact. A row whose path this epoch never witnessed is not covered
      * however long the epoch has been open (the scoping rule).
+     *
+     * [unread] is the third answer, and leaving it out was a corpus bug. A scan is a WALK followed by a READ of each
+     * thing it walked, and COMPLETENESS is a property of the WALK - so a page that lost a race between the two is
+     * dropped from [witnessed] by a scan that still, correctly, saw the whole tree. This function's whole job is to
+     * turn "in the epoch, not in the witness" into "gone", so without [unread] a page we merely FAILED TO READ is
+     * reaped: tombstoned, its checkpoint deleted, and its `dirty_page` row - an interrupted save's ONLY recovery
+     * record - destroyed with it. That is `AbsenceUnknown` laundered into a fact through the read instead of the
+     * walk, and it is the exact thing the classifier says must never happen
+     * ([com.plainbase.domain.service.AbsenceClassifier]).
+     *
+     * **Witnessed, absent, and UNREAD are three answers, not two.** The third one goes to limbo, and it self-heals.
      */
-    fun scanned(root: RootName, witnessed: Set<TreePath>, durable: Set<BindingRef>): AbsenceProof? {
+    fun scanned(root: RootName, witnessed: Set<TreePath>, unread: Set<TreePath>, durable: Set<BindingRef>): AbsenceProof? {
         val state = holder.load()[root] ?: Epoch.Unobserved
         if (state == Epoch.Unobserved) return null // nobody is watching: a scan-diff is not an observation
         val epoch = liveEpoch(root)
@@ -136,7 +147,7 @@ class ObservationEpoch(
             return null
         }
         if (epoch == null) return open(root, witnessed)
-        val gone = durable.filterTo(mutableSetOf()) { it.path in epoch.witnessed && it.path !in witnessed }
+        val gone = durable.filterTo(mutableSetOf()) { it.path in epoch.witnessed && it.path !in witnessed && it.path !in unread }
         holder.store(holder.load() + (root to epoch.copy(witnessed = epoch.witnessed + witnessed)))
         if (gone.isEmpty()) return null
         logger.info {
