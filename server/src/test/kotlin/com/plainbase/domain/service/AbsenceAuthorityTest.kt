@@ -309,6 +309,9 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), old)),
                         ),
                     ),
+                    // A retirement manufactured for SETUP: no scan ran, so this observation saw nothing. (And OPERATOR
+                    // is not an INFERENCE from not-seeing, so no witness could refute it anyway - see ProofSource.)
+                    witnessed = emptySet(),
                 ) shouldBe setOf(BindingRef(TreePath.require("guides/deploy.md"), old))
 
                 writePage(mainDir, "guides/deploy.md", "# A totally different page\n\nbody\n")
@@ -338,6 +341,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), retiredId)),
                         ),
                     ),
+                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
                 mainDir.resolve("guides/deploy.md").toFile().delete()
 
@@ -371,6 +375,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), id)),
                         ),
                     ),
+                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
                 world.idMap.retired(id).shouldNotBeNull()
 
@@ -426,7 +431,7 @@ class AbsenceAuthorityTest : FunSpec({
                 )
                 world.retirements.revoke(RootName.MAIN)
 
-                world.retirements.applyProofs(listOf(proof)).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
                 world.idMap.pathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
                 world.idMap.retired(id).shouldBeNull()
             }
@@ -451,8 +456,42 @@ class AbsenceAuthorityTest : FunSpec({
                     covers = setOf(BindingRef(TreePath.require("notes/rollback.md"), id)), // ...but naming extra's binding
                 )
 
-                world.retirements.applyProofs(listOf(forRootA)).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(forRootA), witnessed = emptySet()).shouldBeEmpty()
                 world.idMap.pathOf(id) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
+            }
+        }
+    }
+
+    test("SEEING the page refutes an INFERRED absence, and refutes a CAUSED one NOT AT ALL - the fault line is the source") {
+        withAbsenceTrees { mainDir, extraDir ->
+            val id = PageId.require("0197c4d5-1a2b-7c3d-8e4f-5a6b7c8d9e01")
+            writePage(mainDir, "guides/deploy.md", "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
+                val binding = BindingRef(TreePath.require("guides/deploy.md"), id)
+                fun proofFrom(source: ProofSource) = AbsenceProof(
+                    root = RootName.MAIN,
+                    source = source,
+                    observationId = world.retirements.observation(RootName.MAIN),
+                    covers = setOf(binding),
+                )
+
+                // The witness says we READ this id. For an EPOCH proof that is a CONTRADICTION: the absence was
+                // INFERRED from a gap in what we observed, and the page turns out to be one of the things we observed.
+                withClue("an INFERRED absence is a conclusion from NOT SEEING, so seeing refutes it") {
+                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.EPOCH)), witnessed = setOf(id)).shouldBeEmpty()
+                    world.idMap.retired(id).shouldBeNull()
+                }
+
+                // ...and for an OPERATOR proof it is NOT a contradiction, because that proof never claimed to have
+                // inferred anything. A human read the exact reap set and signed it. If a witness could veto this, then
+                // a stale COPY of a page an operator deliberately deleted would block the delete FOREVER - and
+                // `reconcile` would be refused by the very copy it was run to resolve. The same holds for API_DELETE:
+                // "we CAUSED this" is not an observation, so no observation can refute it.
+                withClue("a CAUSED or ACCEPTED absence is not an inference, so no amount of looking can refute it") {
+                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.OPERATOR)), witnessed = setOf(id)) shouldBe setOf(binding)
+                    world.idMap.retired(id).shouldNotBeNull()
+                }
             }
         }
     }
@@ -471,7 +510,7 @@ class AbsenceAuthorityTest : FunSpec({
                     covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), other)), // a stale (path, id) pair
                 )
 
-                world.retirements.applyProofs(listOf(proof)).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
                 world.idMap.pathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
             }
         }
@@ -494,6 +533,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(home.path, id)),
                         ),
                     ),
+                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
 
                 val thief = RootedPath(extra, TreePath.require("copy.md"))

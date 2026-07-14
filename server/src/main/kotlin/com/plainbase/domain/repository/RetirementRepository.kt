@@ -1,8 +1,10 @@
 package com.plainbase.domain.repository
 
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.ObservationId
+import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 
 /**
@@ -33,14 +35,33 @@ interface RetirementRepository {
      * publication sinks then act on - they never re-derive the authority for themselves).
      *
      * A proof is applied only when ALL of these hold, re-checked INSIDE the transaction:
+     *  - it **SURVIVES [witnessed]** ([AbsenceProof.survives]) - an INFERRED absence is a conclusion drawn from a gap
+     *    in what we observed, and SEEING the page refutes it. This is first because it is the one that ships bugs;
      *  - its [AbsenceProof.observationId] still equals the root's CURRENT token (freshness - a restart, a
      *    watcher break or a rebind has not revoked it since it was minted);
      *  - `proof.root == the binding's root` (no cross-root proof replay: a [BindingRef] carries no root, so
      *    without this a proof minted for root A could retire a same-named, same-id binding in root B);
      *  - the live binding at that (root, path) still carries exactly the id the proof names (the page was not
      *    replaced underneath us between the observation and the apply).
+     *
+     * **[witnessed] is a REQUIRED argument, and that is the entire point of it being here.** The refutation used to be
+     * a filter the CALLER applied on its way in - one expression, at one call site, enforcing a rule the type system
+     * knew nothing about. That is a convention, and a convention is exactly what a new proof source walks around: a
+     * `GIT` oracle minting at boot, an `OPERATOR` path minting from a CLI, anything that does not happen to route
+     * through the pass that remembered. Demanding the witness set at the DOOR OF THE ONLY DELETER means a source that
+     * has not answered *"what did we actually SEE?"* cannot retire anything, because it cannot call this at all.
+     *
+     * Pass every [com.plainbase.domain.page.PageId] this observation READ - from any root, since an id seen ANYWHERE
+     * refutes an absence claimed anywhere. A caller with no observation behind it (a boot replay of an `API_DELETE`
+     * intent, an operator's accepted digest) passes the empty set truthfully: those sources are not
+     * [ProofSource.inferred], so nothing can refute them anyway, and the empty set says the honest thing rather than
+     * a convenient one.
+     *
+     * There is deliberately NO DEFAULT. An empty witness set means *"we saw nothing"*, which is the OPTIMISTIC value -
+     * it refutes no proof and reaps the most - and a safety input that silently defaults to the optimistic value is
+     * precisely how all three of these bugs came to exist.
      */
-    fun applyProofs(proofs: List<AbsenceProof>): Set<BindingRef>
+    fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef>
 
     /** [root]'s CURRENT freshness token, minting a fresh one on first sight. */
     fun observation(root: RootName): ObservationId
@@ -62,7 +83,7 @@ interface RetirementRepository {
  * grant no authority" is the C0 behavior everywhere, and this object simply cannot be talked out of it.
  */
 object NoRetirements : RetirementRepository {
-    override fun applyProofs(proofs: List<AbsenceProof>): Set<BindingRef> = emptySet()
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef> = emptySet()
     override fun observation(root: RootName): ObservationId = ObservationId(0)
     override fun observations(): Map<RootName, ObservationId> = emptyMap()
     override fun revoke(root: RootName): ObservationId = ObservationId(0)

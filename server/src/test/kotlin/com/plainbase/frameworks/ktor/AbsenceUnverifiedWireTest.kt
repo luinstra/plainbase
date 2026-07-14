@@ -137,6 +137,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
                         covers = setOf(BindingRef(docPath, PageId.require(docId))),
                     ),
                 ),
+                witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
             )
 
             val p = client.get("/p/$docId")

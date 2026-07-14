@@ -196,6 +196,7 @@ class WriteRouteTest : FunSpec({
                         covers = setOf(BindingRef(path, PageId.require(deployGuideId))),
                     ),
                 ),
+                witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
             )
 
             val put = client.put("/api/v1/pages/$deployGuideId") {

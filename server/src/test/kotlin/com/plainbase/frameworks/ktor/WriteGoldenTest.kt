@@ -296,6 +296,7 @@ class WriteGoldenTest : FunSpec({
                         covers = setOf(BindingRef(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId))),
                     ),
                 ),
+                witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
             )
             val put = client.put("/api/v1/pages/$deployGuideId") {
                 header(HttpHeaders.IfMatch, etag(hBase))

@@ -313,6 +313,7 @@ class ProposalRouteTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("doc.md"), PageId.require(id))),
                         ),
                     ),
+                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
                 )
                 val gone = client.post("/api/v1/changes") {
                     contentType(json)

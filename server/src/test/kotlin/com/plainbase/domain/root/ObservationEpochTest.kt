@@ -1,6 +1,7 @@
 package com.plainbase.domain.root
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.service.UuidV7IdProvider
 import io.kotest.core.spec.style.FunSpec
@@ -30,7 +31,7 @@ class ObservationEpochTest : FunSpec({
     /** The durable token, in memory: [revoke] mints, [applyProofs] is nobody's business here. */
     class Tokens : RetirementRepository {
         private val tokens = mutableMapOf<RootName, ObservationId>()
-        override fun applyProofs(proofs: List<AbsenceProof>) = emptySet<BindingRef>()
+        override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>) = emptySet<BindingRef>()
         override fun observation(root: RootName) = tokens.getOrPut(root) { ObservationId(1) }
         override fun observations() = tokens.toMap()
         override fun revoke(root: RootName): ObservationId = observation(root).next().also { tokens[root] = it }

@@ -26,28 +26,48 @@ import com.plainbase.domain.page.PageId
  *  - **ABSENCE** - we did NOT see it. *This is the only one that needs a proof, and it is the only one that
  *    has ever destroyed a corpus.*
  *
- * **In C0 there are ZERO proof sources.** Nothing in production constructs an [AbsenceProof] - every one of
- * the five [ProofSource]s arrives in a later chunk - so `proofs` is always empty and NOTHING IS EVER REAPED BY
- * INFERENCE. That is not an oversight; it is the safety floor, and it is a property of the TYPE rather than of
- * a policy anyone could forget to apply. The honest cost, stated out loud: a legitimate delete does not
- * converge in C0 - the row sits in limbo ([RootLimbo]) instead of being reaped. C2 (the observation epoch) and
- * C4 (git history) buy that back with evidence rather than with a guess.
+ * **C0 shipped with ZERO proof sources** - `proofs` was always empty and nothing could be reaped by inference at all,
+ * which was the safety floor and a property of the TYPE rather than of a policy anyone could forget. `EPOCH` (C2) and
+ * `OBJECT_LIST` (C3) have since bought delete convergence back with EVIDENCE rather than with a guess; `GIT` (C4),
+ * `OPERATOR` (C5) and `API_DELETE` are still to come. A page no source can account for sits in limbo ([RootLimbo]) and
+ * reads 503 - never a 404, and never a reap.
+ *
+ * ---
+ *
+ * [ProofSource] carries, in [ProofSource.inferred], the ONE thing the apply transaction needs to know about a claim:
+ * **was it concluded from NOT SEEING something?** That is the fault line the five sources actually fall along, and
+ * three corpus bugs came from not drawing it:
+ *
+ *  - An **INFERRED** absence is a conclusion drawn from a gap in what we observed - *"the epoch witnessed it and this
+ *    scan does not see it"*, *"the LIST does not hold it"*. Such a conclusion is **REFUTED BY SEEING**: if this pass
+ *    READ that id anywhere at all, the page is not gone and the inference was simply wrong. A RENAME is the everyday
+ *    case (the page is right there under a new name); a copy and a restore are the others.
+ *  - A **CAUSED or ACCEPTED** absence is not a conclusion at all. `API_DELETE` says *"we deleted it ourselves"* and
+ *    `OPERATOR` says *"a human read the exact reap set and signed it"*. No observation can refute either, because
+ *    neither is an observation - and refuting them would itself be the bug: a page an operator DELIBERATELY deleted,
+ *    whose bytes some stale copy still carries, must still converge, or `reconcile` would be vetoed by the very copy
+ *    it was run to resolve.
+ *
+ * So [ProofSource.inferred] lives on the TYPE rather than in a `when` somebody must remember to extend, and the
+ * refutation is demanded by [com.plainbase.domain.repository.RetirementRepository.applyProofs]'s SIGNATURE rather than
+ * applied by a caller who must remember to call it. **A new proof source cannot reach the database without answering
+ * the question** - which is the difference between a rule and a convention, and the convention is what shipped the bugs.
  */
-enum class ProofSource {
-    /** A delete through Plainbase's own API. We did not INFER this absence, we CAUSED it. */
-    API_DELETE,
+enum class ProofSource(val inferred: Boolean) {
+    /** A delete through Plainbase's own API. We did not INFER this absence, we CAUSED it - so nothing can refute it. */
+    API_DELETE(inferred = false),
 
     /** A CONFIRMATION scan under an unbroken observation epoch: it witnessed the page, and now it does not. */
-    EPOCH,
+    EPOCH(inferred = true),
 
     /** A commit range that DELETED the path, on a HEAD that descends from the recorded one. Recorded human intent. */
-    GIT,
+    GIT(inferred = true),
 
     /** A complete, generation-bound bucket LIST under a TRUSTED binding. */
-    OBJECT_LIST,
+    OBJECT_LIST(inferred = true),
 
-    /** An operator accepting an exact observation digest (`plainbase root reconcile --accept`). */
-    OPERATOR,
+    /** An operator accepting an exact observation digest (`plainbase root reconcile --accept`) - ACCEPTED, not inferred. */
+    OPERATOR(inferred = false),
 }
 
 /**
@@ -85,7 +105,40 @@ data class AbsenceProof(
     val source: ProofSource,
     val observationId: ObservationId,
     val covers: Set<BindingRef>,
-)
+) {
+
+    /**
+     * **What survives being looked at** - this proof with every binding whose id [witnessed] holds removed, or null when
+     * that empties it. A [ProofSource.inferred]`= false` proof survives whole: nothing observed can refute *"we caused
+     * this"* or *"a human signed this"*.
+     *
+     * > **A page we are LOOKING AT is not a page that is absent.** Proving otherwise is not a proof, it is a contradiction.
+     *
+     * A proof covers a `(path, id)` whose PATH a complete pass did not see, and a RENAMED page's old path is exactly
+     * that - so without this, every inferred source mints a proof over a page sitting in front of it under a different
+     * name, the apply transaction tombstones the id its frontmatter still plainly carries, and one `git mv` turns
+     * `/p/{id}` into a permanent 410. That shipped. So did its two siblings, and all three were the same mistake:
+     * concluding from what we had FAILED TO LOOK AT.
+     *
+     * [witnessed] is keyed by **IDENTITY**, and that is the whole point: every enforcement of this rule that came before
+     * was keyed by PATH, and a rename is precisely the event that changes the path. An id is the only key that survives one.
+     *
+     * It is also GLOBAL - an id read in ANY root refutes an absence claimed in ANY root. That coupling is deliberate and
+     * it fails CLOSED (the row waits in limbo, 503, self-healing), but it is worth knowing about: a stale copy of one
+     * root's corpus, mounted somewhere else, will hold up that root's legitimate deletes until it is gone.
+     *
+     * Two residues, both correct rather than merely tolerated. An **UNMATERIALIZED** page carries no id in its bytes, so
+     * it cannot be witnessed this way at all and still splits on a move - its bytes cannot testify to which page they
+     * are, and a move really is indistinguishable from a delete-and-recreate (it SOFT-retires, so the old id answers 410,
+     * never 404). And a **COPY** carrying a live id refutes just as well as a move does - the two produce IDENTICAL
+     * observations, so telling them apart belongs to the rank policy and never to the admission oracle.
+     */
+    fun survives(witnessed: Set<PageId>): AbsenceProof? {
+        if (!source.inferred || witnessed.isEmpty()) return this
+        val gone = covers.filterNotTo(mutableSetOf()) { it.id in witnessed }
+        return takeIf { gone.isNotEmpty() }?.copy(covers = gone)
+    }
+}
 
 /**
  * What a pass actually SAW at one rooted path: the page was READ, and [observedId] is the id its frontmatter

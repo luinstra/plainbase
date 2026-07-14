@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.sqldelight
 
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
@@ -26,12 +27,30 @@ class SqlDelightRetirementRepository(
     private val checkpoints get() = db.pageCheckpointQueries
     private val dirty get() = db.dirtyPageQueries
 
-    override fun applyProofs(proofs: List<AbsenceProof>): Set<BindingRef> {
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef> {
         if (proofs.isEmpty()) return emptySet() // C0's steady state: no source mints one, so nothing is ever reaped
         return db.transactionWithResult {
             val retiredAt = clock.now().toEpochMilliseconds()
             val applied = mutableSetOf<BindingRef>()
-            for (proof in proofs) {
+            for (minted in proofs) {
+                // REFUTATION, before anything else: an INFERRED absence is a conclusion drawn from a gap in what we
+                // observed, and SEEING the page refutes it. A renamed page's old path is "absent" to every source we
+                // have, and its id is sitting in the file we just read under the new name - so this is what stands
+                // between a `git mv` and a permanently 410'd permalink. Asked HERE, at the door of the only deleter,
+                // rather than trusted to a caller: a source that cannot answer "what did we SEE?" cannot reap.
+                val proof = minted.survives(witnessed) ?: run {
+                    logger.info {
+                        "root '${minted.root}''s ${minted.source} proof is REFUTED in full: this observation READ every id it " +
+                            "covers, and a page we are looking at is not a page that is absent"
+                    }
+                    continue
+                }
+                if (proof.covers.size != minted.covers.size) {
+                    logger.info {
+                        "refusing ${minted.covers.size - proof.covers.size} binding(s) of root '${minted.root}''s " +
+                            "${minted.source} proof: this observation READ those ids somewhere, so they are not gone"
+                    }
+                }
                 // FRESHNESS, re-read inside the transaction. A revocation that committed before this
                 // transaction opened is visible here, the compare fails, and the whole proof is worth nothing -
                 // which is precisely what "a restart is itself a revocation" has to mean for it to be true.
