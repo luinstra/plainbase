@@ -204,6 +204,6 @@ private class RecordingSearchProvider : SearchProvider {
     override fun index(pages: List<PageDocuments>) = pages.forEach { indexed += it.pageId }
     override fun delete(ids: Collection<PageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>?) = pages.forEach { indexed += it.pageId }
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) = pages.forEach { indexed += it.pageId }
     override fun indexedState(): Map<PageId, PageSearchState> = emptyMap()
 }

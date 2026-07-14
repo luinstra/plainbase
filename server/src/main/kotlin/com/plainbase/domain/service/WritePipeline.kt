@@ -373,7 +373,16 @@ class WritePipeline(
                         continue
                     }
                     ContentRead.Absent -> {
-                        dirtyPages.clear(page.pageId) // the file is genuinely gone, on a live root — nothing to reconcile
+                        // **NOT a clear (C0).** "The file is not there" is not "the page was deleted" - it is
+                        // equally what a failed submount, a partial restore and a decoy tree look like, and this
+                        // row is an interrupted save's ONLY recovery record. It is USER CONTENT. It is cleared in
+                        // exactly ONE place, the proof-apply transaction, alongside the retirement of the binding
+                        // it belongs to (SqlDelightRetirementRepository.applyProofs) - never on a bare read.
+                        logger.warn {
+                            "dirty page ${page.path.path.value} is not on disk under a live root '$root'; leaving it journaled. " +
+                                "Nothing but an absence PROOF may destroy an interrupted save's recovery record, and in C0 there " +
+                                "is no proof source - if the page really was deleted, the row is cleared when one arrives."
+                        }
                         continue
                     }
                 }

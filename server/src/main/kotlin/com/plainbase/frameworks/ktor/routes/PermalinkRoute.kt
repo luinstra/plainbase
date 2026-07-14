@@ -14,7 +14,10 @@ import io.ktor.server.routing.get
  *
  * **302**, never 301: the target moves with the page and must never be cached permanently. The
  * trailing segment is tolerated and ignored (stale slugs in old links keep working). Shape-invalid
- * id → 400 `invalid_page_id`; shape-valid unknown → 404 `page_not_found` (regex decides, §A4).
+ * id → 400 `invalid_page_id`; shape-valid unknown → 404 `page_not_found` (regex decides, §A4);
+ * **RETIRED → 410 `page_retired`** (C0), naming the last-known path. The 410 is the entire reason
+ * `retired_binding` exists: without a tombstone, a deleted page's permalink degrades to a 404 that is
+ * indistinguishable from "that id was never real", and every agent citation to it silently rots.
  *
  * **Collision losers (documented reading):** a path-space collision loser has `url = null` — there
  * is no canonical `/docs/...` to redirect to, yet §A4 promises the loser "remains fully reachable
@@ -45,6 +48,14 @@ private suspend fun ApplicationCall.handlePermalink(ctx: RouteContext) {
             is PermalinkResolution.Found -> respondRedirectPreservingQuery(resolution.url, permanent = false)
             // collision loser: the permalink is its only human URL (see class doc)
             PermalinkResolution.LoserNoUrl -> respondSpaShell()
+            // A RETIRED binding is GONE, not missing (C0). 410 names the last-known path, so a human or an agent
+            // holding the citation learns what happened instead of being told the id never existed.
+            is PermalinkResolution.Retired -> respondError(
+                HttpStatusCode.Gone,
+                ErrorCodes.PAGE_RETIRED,
+                "Page ${id.value} was deleted; it last lived at ${resolution.lastKnownPath.path.value} in " +
+                    "root '${resolution.lastKnownPath.root}'. The id is retired and will never name another page.",
+            )
             PermalinkResolution.Unknown ->
                 respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
         }

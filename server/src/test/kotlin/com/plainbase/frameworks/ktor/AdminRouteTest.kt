@@ -103,7 +103,7 @@ private class FailThenPassProvider : SearchProvider {
     override fun index(pages: List<PageDocuments>) = Unit
     override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<com.plainbase.domain.root.RootName>?) {
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.page.PageId>?) {
         if (fail.load()) throw IllegalStateException("rebuild blew up (deliberately)")
     }
     override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
@@ -116,7 +116,7 @@ private class BlockingProvider : SearchProvider {
     override fun index(pages: List<PageDocuments>) = Unit
     override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<com.plainbase.domain.root.RootName>?) = onRebuild()
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.page.PageId>?) = onRebuild()
     override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
 }
 

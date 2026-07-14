@@ -6,6 +6,7 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The ONE owner of the two root questions every gated surface asks: *who owns this page id?* and *is
@@ -39,6 +40,17 @@ class PageRootResolver(
      */
     fun rootOf(snapshot: PageIndex, id: PageId): RootName? =
         (snapshot.byId[id]?.root ?: idMap.pathOf(id)?.root)?.takeIf { registry.byName(it) != null }
+
+    /**
+     * The TOMBSTONE for [id] - its last-known rooted path - or null when the id was never retired (C0).
+     *
+     * Consulted only AFTER [rootOf] misses, which is the lookup contract: LIVE bindings first, tombstones second.
+     * The two can never both answer, because the bind transaction reserves a retired id against every claimant but
+     * the page that earned it - and that ordering is what makes `/p/{id}` a 410 rather than a redirect to whoever
+     * pasted the id next. It is deliberately NOT filtered by the registry: a retirement is a settled fact about
+     * the id, not a question about whether its root is still configured.
+     */
+    fun retirementOf(id: PageId): RootedPath? = idMap.retired(id)?.path
 
     /**
      * [root]'s serving status. DETACHED is checked FIRST: [RootAvailability] only ever tracks REGISTERED

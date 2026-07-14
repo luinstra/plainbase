@@ -1,0 +1,34 @@
+-- The DURABLE freshness token (C0), one per root.
+--
+-- It has to survive a restart, because **a restart is itself a revocation**: an in-memory token could
+-- not prove that after a crash, and a proof minted before the crash would then be applied by a process
+-- that has observed nothing at all. Any break, binding change or restart mints a new observation_id,
+-- which invalidates every outstanding AbsenceProof by the freshness rule.
+--
+-- The app DB is the AUTHORITATIVE linearization boundary: the reap re-reads this row and compares it to
+-- the proof's token INSIDE the same transaction that applies the retirements, so a revocation landing
+-- between publish and apply serializes AGAINST the reap and the reap becomes a no-op. There is no
+-- window. (search.db cannot join that transaction and does not need to - per ADR-0004 it is DERIVED
+-- state, so a crash between the two leaves a stale search row, which is a wrong hit, not a lost page,
+-- and the next sync reconciles it. Do not invent an outbox for a derived store.)
+
+import com.plainbase.domain.root.RootName;
+
+CREATE TABLE root_observation (
+  root TEXT AS RootName NOT NULL PRIMARY KEY,
+  observation_id INTEGER NOT NULL
+);
+
+selectObservation:
+SELECT observation_id
+FROM root_observation
+WHERE root = :root;
+
+selectAllObservations:
+SELECT *
+FROM root_observation;
+
+upsertObservation:
+INSERT INTO root_observation(root, observation_id)
+VALUES (:root, :observationId)
+ON CONFLICT(root) DO UPDATE SET observation_id = excluded.observation_id;

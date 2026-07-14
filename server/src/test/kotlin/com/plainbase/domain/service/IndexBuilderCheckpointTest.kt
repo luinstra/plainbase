@@ -132,7 +132,7 @@ class IndexBuilderCheckpointTest : FunSpec({
         }
     }
 
-    test("the checkpoint listener replaces on every publish, with collision losers checkpointed as null") {
+    test("the checkpoint listener upserts on every publish, with collision losers checkpointed as null") {
         withTempTree(seed = { root ->
             writePage(root, "a b.md", "---\ntitle: Spaced\n---\n\n# Spaced\n")
             writePage(root, "a-b.md", "---\ntitle: Hyphenated\n---\n\n# Hyphenated\n")
@@ -145,10 +145,16 @@ class IndexBuilderCheckpointTest : FunSpec({
                 harness.checkpoints.load() shouldContainExactly
                     mapOf(winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")), loser.id to PreviousUrl(RootName.MAIN, null))
 
-                // A second publish REPLACES (not appends): the loser's file disappears, so does its row.
+                // A second publish UPSERTS what it saw - and, since C0, DELETES only what an AbsenceProof retired.
+                // The loser's file disappears, and its row STAYS: "the scan did not find it" is not evidence that
+                // it is gone, and this row is the down-time-move alias fact. It is in LIMBO, and it self-heals if
+                // the page comes back. (Under the old rule the whole root's rows died to a decoy tree here.)
                 Files.delete(root.resolve("a-b.md"))
                 harness.startProcess().builder.rebuild()
-                harness.checkpoints.load() shouldContainExactly mapOf(winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")))
+                harness.checkpoints.load() shouldContainExactly mapOf(
+                    winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")),
+                    loser.id to PreviousUrl(RootName.MAIN, null),
+                )
             }
         }
     }

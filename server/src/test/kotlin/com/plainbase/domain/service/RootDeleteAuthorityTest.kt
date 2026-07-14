@@ -20,6 +20,7 @@ import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -166,15 +167,18 @@ class RootDeleteAuthorityTest : FunSpec({
         }
     }
 
-    test("the CONTROL: a corpus this process SCANNED and then watched drain is a real delete, and its rows DO delete") {
+    // ⚠ THIS ROW MOVES TO C2 (the observation epoch), and it is TIGHTENED there, never weakened. Under C0 an
+    // `rm -rf` beneath a RUNNING server does NOT reap - not because the case is wrong, but because C0 has NO PROOF
+    // SOURCE with which to believe it. "This process watched the corpus drain" was `corpusSeen`, and `corpusSeen`
+    // was a snapshot from T cashed at T+n: with ext4 inode reuse it hands a REAPED corpus full authority, which is
+    // ledger A2. C2 replaces it with an unbroken observation EPOCH - a live claim, revoked by every break - and at
+    // that point this case reaps again, on evidence rather than on a memory. Both sides get pinned there: a small
+    // delete inside an unbroken epoch REAPS; a delete storm that overflows the queue does NOT, and lands in limbo.
+    test("the C0 COST, stated: a corpus we watched drain does NOT reap - it lands in LIMBO until C2 can prove it") {
         withAuthorityTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
             AuthorityWorld(mainDir, extraDir).use { world ->
-                // The case the whole tripwire is balanced against: an `rm -rf` under a RUNNING server. The pass saw
-                // the corpus with its own eyes and then saw it go, which is precisely the evidence a cold boot into
-                // an outage does not have. It is a full-corpus delete, and it must still land - a tripwire that
-                // refuses this one is not conservative, it is broken.
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = builder.rebuild().byPath.getValue(rollbackPath).id
                 world.engine.indexedState().keys shouldContain rollback
@@ -182,37 +186,24 @@ class RootDeleteAuthorityTest : FunSpec({
                 Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 builder.rebuild()
 
-                world.availability.current().isAvailable(extra) shouldBe true
-                withClue("the two pipelines delete authority actually governs: the checkpoint replace and the search sync") {
-                    world.checkpoints.load().keys.contains(rollback) shouldBe false
-                    world.engine.indexedState().keys.contains(rollback) shouldBe false
+                withClue("the page leaves the SNAPSHOT at once - what waits for a proof is the DURABLE reap") {
+                    builder.current.section(extra).pages.shouldBeEmpty()
+                }
+                withClue("the durable rows are carried, not destroyed: an unmount and an rm -rf look identical from here") {
+                    world.checkpoints.load().keys shouldContain rollback
+                    world.engine.indexedState().keys shouldContain rollback
+                    world.idMap.pathOf(rollback) shouldBe rollbackPath
                 }
             }
         }
     }
 
-    test("the OPERATOR OVERRIDE: PLAINBASE_ACCEPT_EMPTY_ROOTS restores delete authority for a wipe performed while DOWN") {
-        withAuthorityTrees { mainDir, extraDir ->
-            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain body\n")
-            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nextra body\n")
-            AuthorityWorld(mainDir, extraDir).use { world ->
-                val rollback = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
-                    .rebuild().byPath.getValue(rollbackPath).id
-
-                // The wipe was REAL, and it happened while the server was down - the one case no probe and no row
-                // can distinguish from an outage. So the operator says so, by name, and the pass believes them.
-                Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
-                val cold = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, acceptEmptyRoots = setOf(extra))
-                cold.rebuild()
-
-                withClue("the operator declared the emptiness real: the pass must perform the deletion they ran it for") {
-                    world.checkpoints.load().keys.contains(rollback) shouldBe false
-                    world.engine.indexedState().keys.contains(rollback) shouldBe false
-                }
-                world.availability.current().isAvailable(extra) shouldBe true
-            }
-        }
-    }
+    // The OPERATOR OVERRIDE (PLAINBASE_ACCEPT_EMPTY_ROOTS) is DELETED with the tripwire it overrode. It was a
+    // deletion authority with no proof, no coverage set, no freshness and no revalidation - a sticky env var
+    // authorizing every future zero-scan of that root, forever - i.e. precisely the shape of thing this redesign
+    // exists to abolish. Its replacement is `plainbase root reconcile <root> --accept <digest>` (C5), which is
+    // still one non-interactive command an entrypoint can run, and which FAILS when the digest no longer matches.
+    // That is the property the env var could never have.
 
     test("a page that MOVED to another root while we were DOWN exonerates the row it left behind - a move is not a loss") {
         withAuthorityTrees { mainDir, extraDir ->
@@ -354,12 +345,12 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
 
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
     val indexer = SearchIndexer(engine, SectionSplitter())
+    val retirements = SqlDelightRetirementRepository(database)
 
     fun builder(
         mainDir: Path,
         extraStore: ContentStore,
         searchIndexer: SearchIndexer? = null,
-        acceptEmptyRoots: Set<RootName> = emptySet(),
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
             IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
@@ -375,7 +366,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         citations = CitationFactory(),
         rootRank = registry::rank,
         registeredRoots = registry.roots.map { it.name }.toSet(),
-        acceptEmptyRoots = acceptEmptyRoots,
+        retirements = retirements,
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer -> IndexBuilder.PublicationListener(indexer::sync) },

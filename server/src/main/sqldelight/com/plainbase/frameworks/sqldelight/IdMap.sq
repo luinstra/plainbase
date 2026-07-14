@@ -45,6 +45,32 @@ CREATE TABLE identity_issue (
   UNIQUE(kind, root, path, other_root, other_path, page_id)
 );
 
+-- TOMBSTONES (C0). A binding that leaves id_map lands here, and its id is RESERVED FOREVER: /p/{id}
+-- answers 410 Gone naming the last-known path instead of the 404 that tells an agent to drop its
+-- citation. IdMapRepository.kt:14 says why this table has to exist at all - "durability is only
+-- promised for materialized ids" - so for an UNMATERIALIZED page the id_map row is the SOLE record a
+-- path ever had that id: hard-delete it and the page returns with a fresh id, permalink gone forever.
+--
+-- It is a SEPARATE TABLE, not a `retired_at` flag on id_map, and that is the whole point: tombstones
+-- live OUTSIDE the live (root, path) key space, so ordinary path reuse (delete a page; later create a
+-- DIFFERENT page at the same path) cannot collide with one and there is no collision to arbitrate.
+-- `path` is the LAST-KNOWN path and is deliberately NOT a key - reuse is legal. `id` is the key,
+-- because the id is what the tombstone is about.
+--
+-- SQLite's UNIQUE(id) cannot span two tables, so the cross-table reservation (a retired id may be
+-- reclaimed ONLY by the same page returning to its OWN (root, path); anyone else mints fresh) is
+-- enforced INSIDE the bind transaction - SqlDelightIdMapRepository.bind - never by convention.
+--
+-- No GC. A row per page that ever existed is nothing, and a retention horizon is just soft-retirement
+-- becoming hard on a timer - i.e. the permalink-destroyer this table exists to prevent.
+CREATE TABLE retired_binding (
+  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  root TEXT AS RootName NOT NULL,
+  path TEXT AS TreePath NOT NULL,
+  materialized INTEGER AS Boolean NOT NULL,
+  retired_at INTEGER NOT NULL
+);
+
 -- An old canonical URL path -> the page's id (§A4), keyed per root: URL space is per-root, so the
 -- same old path may alias different pages under different roots. The value is always the PAGE id,
 -- never another alias, so chains collapse by construction (one hop). Rows are written by chunk 5's
@@ -67,6 +93,13 @@ SELECT root, path
 FROM id_map
 WHERE id = :id;
 
+-- The whole incumbent row, not just its key: the C0 bind gate has to ask whether it may DISPLACE this
+-- binding, and that question is about the binding, not about a path.
+selectBindingById:
+SELECT *
+FROM id_map
+WHERE id = :id;
+
 selectAllBindings:
 SELECT *
 FROM id_map;
@@ -75,16 +108,46 @@ selectDistinctRoots:
 SELECT DISTINCT root
 FROM id_map;
 
--- bind() = unbindStale + upsertBinding in one repository transaction. The SQL is deliberately
--- key-complete: it deletes ANY other (root, path) holding the id - which is what lets a live bind
--- supersede a detached or moved row, keeping UNIQUE(id) honest. The within-root-only supersede is
--- POLICY, enforced above this layer by the PageIdentityService duplicate rules (ADR-0011 D2/D17):
--- a live owner is only ever superseded as the deterministic cross-root rank-contest outcome.
+-- The key-complete supersede: it removes ANY other (root, path) holding the id, which is what keeps
+-- UNIQUE(id) honest when an id moves with its file.
+--
+-- **C0 GATED.** This DELETE is a NEGATIVE CLAIM about the incumbent ("it no longer holds this id"), and
+-- a negative claim needs authority like any other. A copied `id:` in another root used to hard-delete
+-- the original root's binding the moment the duplicate contest resolved - with no reference to the
+-- corpus-loss tripwire at all - so an unwitnessed page came back with a fresh id and its permalink
+-- pointed at the COPY. bind() therefore refuses to issue this unless the incumbent was WITNESSED this
+-- pass or an AbsenceProof covers it (BindingVisibility / IdMapRepository.Supersession); otherwise the
+-- CLAIMANT mints a fresh id and an issue is recorded. See SqlDelightIdMapRepository.bind.
 -- (The De Morgan form of `NOT (root = :root AND path = :path)`: plain SQL92, and the one shape
 -- the SQLDelight 2.3 grammar accepts here.)
 unbindStale:
 DELETE FROM id_map
 WHERE id = :id AND (root != :root OR path != :path);
+
+deleteBinding:
+DELETE FROM id_map
+WHERE root = :root AND path = :path;
+
+-- Tombstone reads/writes. `retire` is an upsert so a re-retirement of the same id (an idempotent
+-- replay) refreshes the last-known path rather than failing on the primary key.
+selectRetired:
+SELECT *
+FROM retired_binding
+WHERE id = :id;
+
+selectAllRetired:
+SELECT *
+FROM retired_binding;
+
+retire:
+INSERT INTO retired_binding(id, root, path, materialized, retired_at)
+VALUES (:id, :root, :path, :materialized, :retiredAt)
+ON CONFLICT(id) DO UPDATE SET root = excluded.root, path = excluded.path, materialized = excluded.materialized;
+
+-- The UN-RETIREMENT: the page came home to its OWN (root, path) and reclaims the id it earned.
+unretire:
+DELETE FROM retired_binding
+WHERE id = :id;
 
 upsertBinding:
 INSERT INTO id_map(root, path, id, materialized)

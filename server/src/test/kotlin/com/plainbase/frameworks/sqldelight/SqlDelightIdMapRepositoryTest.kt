@@ -6,7 +6,9 @@ import app.cash.sqldelight.db.SqlPreparedStatement
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdBinding
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.throwables.shouldThrowAny
@@ -23,6 +25,11 @@ import io.kotest.matchers.shouldNotBe
  * the key-complete move/cross-root supersede behind UNIQUE(id), idempotent issue recording for every
  * [IdentityIssue] variant (natural key with the C2 root dimensions), and the direct-SQL
  * binary-at-rest assertion (`length(id) = 16` over the seeded table).
+ *
+ * **The supersede is GATED since C0.** It still happens - the rows below prove it - but only under a stated
+ * [Supersession], because taking an id away from a binding is a NEGATIVE CLAIM about that page and a negative
+ * claim needs authority. A bind that states none takes nothing (the [Supersession.NONE] row), and that is the
+ * whole difference between a moved file keeping its id and a pasted one stealing it.
  */
 class SqlDelightIdMapRepositoryTest : FunSpec({
 
@@ -36,6 +43,14 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
     val pathA = RootedPath(main, TreePath.require("guides/a.md"))
     val pathB = RootedPath(main, TreePath.require("notes/réunion.md"))
     val idX = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+
+    // "Every page in play was READ this pass" - the ordinary full-visibility authority a rebuild resolves under,
+    // and the one under which the key-complete supersede is legitimate.
+    val witnessedAll = Supersession(
+        witnessed = setOf(pathA, pathB, RootedPath(extra, pathA.path), RootedPath(extra, TreePath.require("mirror/page.md"))),
+        scannedRoots = setOf(main, extra),
+        registeredRoots = setOf(main, extra),
+    )
     val idY = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")
 
     test("bind/find round-trip, including the materialized flag and pathOf") {
@@ -95,9 +110,23 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
     test("an id moving to a new path supersedes its stale row (a moved file keeps its id)") {
         withRepo { repo, _ ->
             repo.bind(pathA, idX, materialized = true)
-            repo.bind(pathB, idX, materialized = true)
+            repo.bind(pathB, idX, materialized = true, supersession = witnessedAll)
             repo.pathOf(idX) shouldBe pathB
             repo.find(pathA).shouldBeNull()
+            repo.bindings() shouldHaveSize 1
+        }
+    }
+
+    // THE C0 GATE, at the SQL boundary. Identical to the row above but for the authority - and the row that used
+    // to be a moved file keeping its id is, without one, a pasted file stealing it. bind() writes NOTHING.
+    test("...but a bind that states NO authority takes the id from NOBODY: it is refused, and nothing is written") {
+        withRepo { repo, _ ->
+            repo.bind(pathA, idX, materialized = true)
+
+            repo.bind(pathB, idX, materialized = true) shouldBe BindOutcome.Refused(idX, heldBy = pathA, retired = false)
+
+            repo.pathOf(idX) shouldBe pathA
+            repo.find(pathB).shouldBeNull()
             repo.bindings() shouldHaveSize 1
         }
     }
@@ -108,7 +137,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         withRepo { repo, _ ->
             val mirrored = RootedPath(extra, pathA.path)
             repo.bind(pathA, idX, materialized = true)
-            repo.bind(mirrored, idX, materialized = true)
+            repo.bind(mirrored, idX, materialized = true, supersession = witnessedAll)
             repo.pathOf(idX) shouldBe mirrored
             repo.find(pathA).shouldBeNull()
             repo.bindings() shouldHaveSize 1
@@ -138,14 +167,14 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             repo.bind(moved, idX, materialized = true)
 
             failUpsert = true
-            shouldThrowAny { repo.bind(pathA, idX, materialized = true) }
+            shouldThrowAny { repo.bind(pathA, idX, materialized = true, supersession = witnessedAll) }
 
             // All-or-nothing: the prior owner's row survived, and nothing half-landed.
             repo.pathOf(idX) shouldBe moved
             repo.find(pathA).shouldBeNull()
 
             failUpsert = false
-            repo.bind(pathA, idX, materialized = true)
+            repo.bind(pathA, idX, materialized = true, supersession = witnessedAll)
             repo.pathOf(idX) shouldBe pathA
             repo.bindings() shouldHaveSize 1
         }

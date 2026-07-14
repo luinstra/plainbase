@@ -3,10 +3,14 @@ package com.plainbase.frameworks.sqldelight
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
+import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import kotlin.time.Clock
 
 /**
  * SQLDelight adapter for [IdMapRepository] over the `id_map` and `identity_issue` tables (IdMap.sq).
@@ -17,7 +21,10 @@ import com.plainbase.domain.root.RootedPath
  * keep exactly one row per issue, so re-running `adopt` over an unchanged tree never grows the
  * issues list — while a message that changed between runs is refreshed, never served stale.
  */
-class SqlDelightIdMapRepository(private val db: PlainbaseDb) : IdMapRepository {
+class SqlDelightIdMapRepository(
+    private val db: PlainbaseDb,
+    private val clock: Clock = Clock.System,
+) : IdMapRepository {
 
     private val queries get() = db.idMapQueries
 
@@ -27,16 +34,58 @@ class SqlDelightIdMapRepository(private val db: PlainbaseDb) : IdMapRepository {
     override fun pathOf(id: PageId): RootedPath? =
         queries.selectPathById(id).executeAsOneOrNull()?.let { RootedPath(it.root, it.path) }
 
-    override fun bind(path: RootedPath, id: PageId, materialized: Boolean) {
-        db.transaction {
-            // Key-complete supersede: any OTHER (root, path) holding the id goes - a moved file's
-            // stale row, a detached root's row, or a scanned rank-contest loser's (port contract:
-            // the caller's D2/D16/D17 duplicate policy is what keeps unscanned owners safe) -
-            // keeping UNIQUE(id) honest.
+    override fun binding(id: PageId): IdBinding? = queries.selectBindingById(id).executeAsOneOrNull()?.toBinding()
+
+    override fun retired(id: PageId): RetiredBinding? = queries.selectRetired(id).executeAsOneOrNull()?.toRetired()
+
+    override fun retiredBindings(): List<RetiredBinding> = queries.selectAllRetired().executeAsList().map { it.toRetired() }
+
+    /**
+     * ONE transaction, and every C0 identity rule that cannot be enforced by convention lives inside it.
+     *
+     * The order is the argument:
+     *  1. **The tombstone reservation.** SQLite's `UNIQUE(id)` cannot span two tables, so once tombstones moved
+     *     out of `id_map` nothing but this check stopped a copied/restored file carrying a retired `id:` from
+     *     claiming it - and because the resolver checks LIVE first, `/p/{id}` would then silently redirect to
+     *     the WRONG PAGE. That is strictly worse than the 404 the tombstone exists to prevent: a dead link
+     *     announces itself, a live link to the wrong document does not. A retired id is reclaimable ONLY by the
+     *     same page returning to its OWN (root, path); anyone else is REFUSED.
+     *  2. **The supersession gate.** Removing another (root, path)'s row asserts that it no longer holds the id -
+     *     a negative claim, and negative claims need authority. Outside [Supersession] we REFUSE, having written
+     *     NOTHING, and the caller mints fresh.
+     *  3. **The displacement tombstone.** Whatever id this key held before is leaving the live key space with no
+     *     one else to hold it, so it is retired here, in the same transaction as the bind that displaces it -
+     *     `/p/{oldId}` answers 410, never 404. (Safe against a same-pass claimant of that id purely by the
+     *     rank-then-path bind order: a winner always binds before the page it beat. If that order ever breaks,
+     *     step 1 REFUSES the late claimant - a loud failure, never a silent steal.)
+     */
+    override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome =
+        db.transactionWithResult {
+            val tombstone = queries.selectRetired(id).executeAsOneOrNull()?.toRetired()
+            if (tombstone != null && tombstone.path != path) {
+                return@transactionWithResult BindOutcome.Refused(id, heldBy = tombstone.path, retired = true)
+            }
+            val incumbent = queries.selectBindingById(id).executeAsOneOrNull()?.toBinding()
+            if (incumbent != null && incumbent.path != path && !supersession.mayDisplace(incumbent)) {
+                return@transactionWithResult BindOutcome.Refused(id, heldBy = incumbent.path, retired = false)
+            }
+            queries.selectBinding(root = path.root, path = path.path).executeAsOneOrNull()
+                ?.toBinding()
+                ?.takeIf { it.id != id }
+                ?.let { displaced ->
+                    queries.retire(
+                        id = displaced.id,
+                        root = path.root,
+                        path = path.path,
+                        materialized = displaced.materialized,
+                        retiredAt = clock.now().toEpochMilliseconds(),
+                    )
+                }
+            if (tombstone != null) queries.unretire(id) // the page came home to its own (root, path) and reclaims it
             queries.unbindStale(id = id, root = path.root, path = path.path)
             queries.upsertBinding(root = path.root, path = path.path, id = id, materialized = materialized)
+            BindOutcome.Bound
         }
-    }
 
     override fun markMaterialized(path: RootedPath) {
         queries.markMaterialized(materialized = true, root = path.root, path = path.path)
@@ -74,6 +123,9 @@ class SqlDelightIdMapRepository(private val db: PlainbaseDb) : IdMapRepository {
         queries.selectAllIssues().executeAsList().map { it.toIssue() }
 
     private fun Id_map.toBinding(): IdBinding = IdBinding(path = RootedPath(root, path), id = id, materialized = materialized)
+
+    private fun Retired_binding.toRetired(): RetiredBinding =
+        RetiredBinding(id = id, path = RootedPath(root, path), materialized = materialized, retiredAt = retired_at)
 
     /**
      * One issue's flattened column values - THE per-kind mapping, in both directions ([toRow] /

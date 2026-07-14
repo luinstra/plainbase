@@ -6,7 +6,9 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
@@ -197,6 +199,12 @@ class AdoptionPass(
         /** Every page, in rank-then-path order (the bind order [apply] must keep). */
         val pages: List<PageReport>,
         private val patched: Map<RootedPath, PlannedWrite>,
+        /**
+         * The authority the plan was RESOLVED under, carried so [apply] binds under exactly the same rule (C0).
+         * Re-deriving it here would let the two drift, and the drift would be silent: the resolve would refuse to
+         * take an id and the bind would take it anyway.
+         */
+        internal val supersession: Supersession = Supersession.NONE,
     ) {
 
         /** [root]'s section of the report — the per-tree unit the `adopt` output prints. */
@@ -227,22 +235,28 @@ class AdoptionPass(
      */
     fun plan(mode: Mode): Plan {
         val drafts = sources.flatMap { source -> scan(source) }
-        val livePaths = drafts.mapTo(mutableSetOf()) { it.page }
+        val witnessed = drafts.mapTo(mutableSetOf()) { it.page }
         val claimed = HashMap<PageId, RootedPath>()
         val patched = HashMap<RootedPath, PlannedWrite>()
+        // The SAME supersession rule `IndexBuilder` resolves and binds under (C0) - one object, so the two passes
+        // cannot drift into disagreeing about whose id is whose. This pass mints no proofs either.
+        val supersession = Supersession(witnessed = witnessed, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
 
         val pages = drafts.map { draft ->
             val assignment = identity.resolve(
                 path = draft.page,
                 rawFrontmatterId = patcher.readIdValue(draft.bytes),
                 mappedId = idMap.find(draft.page)?.id,
-                // Duplicate-detection seam: within-run claims first, then id_map bindings classified by
-                // the shared D16 rule. This pass scans EVERY registered root, so the rule's arms here are
-                // "live iff on disk" and "a detached root is not an owner" - and rank decides the rest.
+                // Duplicate-detection seam: within-run claims first, then id_map bindings classified by the shared
+                // D16 rule, then the TOMBSTONES - a retired id is reserved forever and no claimant may take it.
                 ownerOf = { id ->
-                    claimed[id] ?: idMap.pathOf(id)?.takeIf { BindingVisibility.isLive(it, livePaths, scannedRoots, registeredRoots) }
+                    claimed[id]
+                        ?: idMap.binding(id)
+                            ?.takeIf { BindingVisibility.isLive(it, witnessed, scannedRoots, registeredRoots, supersession) }
+                            ?.path
+                        ?: idMap.retired(id)?.path
                 },
-                supersedable = { owner -> BindingVisibility.isSupersedable(owner, scannedRoots) },
+                supersedable = { owner -> idMap.find(owner)?.let(supersession::mayDisplace) ?: (owner in witnessed) },
             )
             claimed[assignment.id] = draft.page
             planPage(mode, draft, assignment, patched)
@@ -252,7 +266,7 @@ class AdoptionPass(
             "adoption plan ($mode) over ${sources.size} root(s): ${pages.size} page(s), " +
                 "${patched.size} to materialize, ${pages.count { it.issues.isNotEmpty() }} with issues"
         }
-        return Plan(mode, pages, patched)
+        return Plan(mode, pages, patched, supersession)
     }
 
     /**
@@ -281,7 +295,12 @@ class AdoptionPass(
         plan.pages.forEach { page ->
             val target = RootedPath(page.root, page.path)
             val idInFile = page.source == PageIdentityService.Source.FRONTMATTER
-            idMap.bind(target, page.id, materialized = idInFile)
+            val outcome = idMap.bind(target, page.id, materialized = idInFile, supersession = plan.supersession)
+            check(outcome is BindOutcome.Bound) {
+                "adoption resolved ${page.id.value} for ${page.path.value} in '${page.root}', and the bind REFUSED it " +
+                    "(${(outcome as BindOutcome.Refused).heldBy} still holds it). The resolver and the bind gate disagree " +
+                    "about who owns that id; adopt aborts rather than improvise a supersession neither of them authorized."
+            }
             plan.writeFor(target)?.let { planned ->
                 // Intent BEFORE write (durability policy), write, THEN mark materialized.
                 logIntent(target, page.id)

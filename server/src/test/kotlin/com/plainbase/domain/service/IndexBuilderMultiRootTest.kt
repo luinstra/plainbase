@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
@@ -330,7 +331,19 @@ class IndexBuilderMultiRootTest : FunSpec({
                 // contested id moves to a DETACHED root's row, which deletes extra's binding for it. Nothing
                 // now tells the contest that extra owns the id (a detached owner is supersedable, D2) - while
                 // extra's carried section still holds the page.
-                world.idMap.bind(RootedPath(RootName.require("ghost"), TreePath.require("mirror/page.md")), contested, materialized = true)
+                world.idMap.bind(
+                    RootedPath(RootName.require("ghost"), TreePath.require("mirror/page.md")),
+                    contested,
+                    materialized = true,
+                    // The older build's authority, restated: it had READ extra's page, so it was entitled to take
+                    // the id from it. C0 gates the supersede but does not forbid it - and the belt this row drives
+                    // is what happens AFTERWARDS, once that durable state exists.
+                    supersession = Supersession(
+                        witnessed = setOf(RootedPath(EXTRA, TreePath.require("mirror/page.md"))),
+                        scannedRoots = setOf(EXTRA),
+                        registeredRoots = setOf(RootName.MAIN, EXTRA),
+                    ),
+                )
                 writePage(mainDir, "guides/claimant.md", identified(contested))
 
                 val snapshot = builder.rebuild() // must NOT throw
@@ -348,6 +361,7 @@ class IndexBuilderMultiRootTest : FunSpec({
         withTrees { mainDir, _ ->
             writePage(mainDir, "guides/claimant.md", identified(contested))
             World(RootRegistry.of(listOf(localRoot("main", mainDir)))).use { world ->
+                // A FIRST bind - nobody holds the id, so there is nothing to supersede and no authority to state.
                 world.idMap.bind(RootedPath(RootName.require("ghost"), TreePath.require("mirror/page.md")), contested, materialized = true)
 
                 world.builder(mainOnlySource(world.registry, mainDir)).rebuild()

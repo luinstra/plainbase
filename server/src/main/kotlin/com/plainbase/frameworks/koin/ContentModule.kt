@@ -4,6 +4,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -41,6 +42,9 @@ val contentModule = module {
     // reads it. ONE instance for both, which is the whole reason it is a single - two would report a convergence
     // nobody observed.
     single { RootConvergence() }
+    // The DERIVED limbo set (C0), republished every pass: durable rows whose pages the pass did not witness and
+    // no proof covers. Never stored - a stored flag would be another snapshot from T used at T+n.
+    single { RootLimbo() }
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda

@@ -49,6 +49,12 @@ object DatabaseFactory {
             rootAdapter = RootNameColumnAdapter,
             pathAdapter = TreePathColumnAdapter,
         ),
+        retired_bindingAdapter = Retired_binding.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+        ),
+        root_observationAdapter = Root_observation.Adapter(rootAdapter = RootNameColumnAdapter),
         proposalsAdapter = Proposals.Adapter(
             idAdapter = ProposalIdColumnAdapter,
             page_idAdapter = PageIdColumnAdapter,

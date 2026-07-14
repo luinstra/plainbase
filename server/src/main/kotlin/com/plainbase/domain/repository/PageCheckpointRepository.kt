@@ -32,20 +32,20 @@ data class PreviousUrl(val root: RootName, val urlPath: TreePath?)
  * The §B4 checkpoint publication listener body: persists the just-published [snapshot] as the next
  * startup's previous-snapshot fact. One definition, shared by the Koin wiring and the test harness.
  *
- * REPLACE-EXCEPT, not replace (ADR-0011 D5/D15): a row whose root this pass did NOT scan SURVIVES. Checkpoints
- * are DURABLE state - they are what closes the down-time-move alias gap - so a routine rebuild must not delete
- * them for a root it has no authority over, and there are three such classes, not one: a root skipped this pass,
- * a root never scanned since boot, and a DETACHED root (whose rows the pre-C4 wholesale replace silently purged
- * on the first publish after its name left `roots {}` - the very act `detachedRootsRefusal` treats as a
- * deliberate, backup-first operator decision). Taking the POSITIVE authority set is what makes all three fall
- * out for free.
+ * **A checkpoint row is deleted ONLY when an `AbsenceProof` retired the binding it belongs to (C0).** [retired]
+ * is that applied set, and it is the whole delete authority - never a root-granular "we scanned this root, so
+ * anything missing from it must be gone". That inference is what let ONE decoy file in a broken mount purge a
+ * thousand rows, and it is deleted rather than tightened, because there is no honest version of it: a row whose
+ * page a pass did not witness is in LIMBO, and limbo is not a deletion.
+ *
+ * So: every row this pass did not just retire SURVIVES - the skipped root's, the never-scanned root's, the
+ * detached root's, the failed submount's, and the decoy tree's alike. In C0 [retired] is always EMPTY, so
+ * nothing is ever removed here at all; the pass only ever ADDS what it saw.
  *
  * The merge is KEYED, snapshot-wins - never a concat: a mid-run vanished root double-covers (its carried-forward
- * section supplies the same ids the retained rows do), so it must be idempotent by key. When every registered
- * root scanned and no detached rows exist, the retained set is empty and the result is byte-identical to the
- * wholesale replace - the ordinary case is unchanged.
+ * section supplies the same ids the retained rows do), so it must be idempotent by key.
  */
-fun PageCheckpointRepository.replaceFrom(snapshot: PageIndex, scannedRoots: Set<RootName>) {
-    val retained = load().filterValues { it.root !in scannedRoots }
+fun PageCheckpointRepository.replaceFrom(snapshot: PageIndex, retired: Set<PageId>) {
+    val retained = load().filterKeys { it !in retired }
     replace(retained + snapshot.pages.associate { it.id to PreviousUrl(it.root, it.urlPath) })
 }

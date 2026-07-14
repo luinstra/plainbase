@@ -31,6 +31,7 @@ import com.plainbase.frameworks.sqldelight.PlainbaseDb
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
+import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
 
@@ -167,10 +168,9 @@ object ReindexCommand {
                 rootRank = registry::rank,
                 registeredRoots = registry.roots.map { it.name }.toSet(),
                 // The offline reindex holds the same DELETE AUTHORITY the server does (the checkpoint listener
-                // below, and the generation swap), so it honors the same corpus-loss tripwire and the same
-                // operator override - a CLI that ignored PLAINBASE_ACCEPT_EMPTY_ROOTS would refuse to perform the
-                // one deletion the operator ran it to perform.
-                acceptEmptyRoots = config.acceptEmptyRoots,
+                // below, and the generation swap) - which since C0 means it holds NONE unless an AbsenceProof says
+                // otherwise. A CLI that could reap on its own inference would be a second door into the corpus.
+                retirements = SqlDelightRetirementRepository(database),
                 // No search sync listener - only the §B3 checkpoint replace. The search engine is
                 // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
                 listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),

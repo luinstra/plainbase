@@ -1,8 +1,8 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.page.IndexedPage
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
-import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.SearchProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
 
@@ -28,26 +28,24 @@ class SearchIndexer(
 ) {
 
     /**
-     * [scannedRoots] is the DELETE AUTHORITY (ADR-0011 D5/D10): only pages under a root this pass actually
-     * walked may be deleted from the engine. The rule bites on exactly one arm and it is worth being precise
-     * about which:
-     *  - the DELETE side needs it. A root unavailable SINCE BOOT was never scanned, so it has no section and
-     *    every one of its pages lands in `stale` - the first publish would purge its whole search index. The
-     *    filter reads the ENGINE row's OWN root ([com.plainbase.domain.search.PageSearchState.root], already in
-     *    the map this method holds), so it needs no snapshot lookup and no SQL change. A DETACHED root's rows
-     *    are retained for the same reason and are harmless: assembly joins every display field against the
-     *    published snapshot, where a detached root has no section, so its hits drop there anyway.
+     * [retired] is the DELETE AUTHORITY (C0): the ONLY pages that may leave the engine are the ones an
+     * `AbsenceProof` just retired. The rule bites on exactly one arm and it is worth being precise about which:
+     *  - the DELETE side needs it. An engine row absent from the snapshot USED to be "stale", and that word was
+     *    doing enormous unearned work: a root unavailable since boot, a failed submount, a decoy tree's 997
+     *    missing siblings and a genuinely deleted page all look exactly like this from here. The first publish
+     *    would purge the lot. Now a row is deleted only when something OUTSIDE the scan proved the page gone, so
+     *    in C0 nothing is deleted at all - the honest cost being a genuinely deleted page's row lingering as a
+     *    stale hit, which assembly drops anyway (it joins every display field against the published snapshot).
+     *    A wrong hit is recoverable; a purged index behind an unplugged disk is not.
      *  - the UPSERT side does not. A MID-RUN vanished root's pages ARE in the snapshot (its section was carried
      *    forward), so they enter the diff - and produce zero upserts, because a carried section is byte-identical
      *    to what the engine already holds. If the engine row is MISSING (a deleted search.db, a reindex
      *    generation swap), the carried page is re-upserted from the carried section, which is the §B4 self-heal
      *    working as designed: the content is still known; only the disk is gone.
      */
-    fun sync(snapshot: PageIndex, scannedRoots: Set<RootName>) {
+    fun sync(snapshot: PageIndex, retired: Set<PageId>) {
         val engineState = provider.indexedState()
-        val stale = engineState.keys
-            .minus(snapshot.byId.keys)
-            .filterTo(mutableSetOf()) { engineState.getValue(it).root in scannedRoots }
+        val stale = engineState.keys.intersect(retired)
         val changed = snapshot.pages.filter { page ->
             val state = engineState[page.id]
             // The root check keeps the engine's root column live: a cross-root move with an
@@ -82,16 +80,16 @@ class SearchIndexer(
      * the snapshot and calls this under the same monitor a watcher [sync] runs under — so the two
      * can never interleave to regress the engine to a stale generation (§B4 / the S8 atomicity fix).
      *
-     * [scannedRoots] is the SAME delete authority [sync] takes, and the swap needs it just as badly (ADR-0011
-     * D5): a root unavailable SINCE BOOT has no section in [snapshot], so it contributes no document here, and a
-     * swap that re-derived the engine from the snapshot ALONE would read that absence as a full-corpus delete
-     * and purge the root's whole index - a mass delete an admin `reindex` (or the `plainbase reindex` CLI)
-     * performed on behalf of an unplugged disk. The engine carries those rows across the swap instead, keyed off
-     * the ROW's own root. A mid-run vanished root was already immune - its carried section IS in the snapshot,
-     * so the swap regenerates its rows - and a DETACHED root's rows are retained exactly as [sync] retains them.
+     * [retired] is the SAME delete authority [sync] takes, and the swap needs it just as badly (C0): a root
+     * unavailable SINCE BOOT has no section in [snapshot], so it contributes no document here, and a swap that
+     * re-derived the engine from the snapshot ALONE would read that absence as a full-corpus delete and purge the
+     * root's whole index - a mass delete an admin `reindex` (or the `plainbase reindex` CLI) performed on behalf
+     * of an unplugged disk. The engine carries every unretired row across the swap instead. A mid-run vanished
+     * root was already immune (its carried section IS in the snapshot, so the swap regenerates its rows), and a
+     * DETACHED root's rows are retained exactly as [sync] retains them.
      */
-    fun rebuild(snapshot: PageIndex, scannedRoots: Set<RootName>) {
-        provider.rebuild(snapshot.pages.asSequence().map(splitter::split), deleteAuthority = scannedRoots)
+    fun rebuild(snapshot: PageIndex, retired: Set<PageId>) {
+        provider.rebuild(snapshot.pages.asSequence().map(splitter::split), retired = retired)
         logger.info { "search reindex: rebuilt the engine for ${snapshot.pages.size} page(s)" }
     }
 

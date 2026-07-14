@@ -176,7 +176,7 @@ private class CountingSearchProvider : SearchProvider {
 
     override fun delete(ids: Collection<PageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(hits = emptyList(), total = 0L)
-    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>?) {
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) {
         rebuildCalls += 1
         pages.count() // drain
     }

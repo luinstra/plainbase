@@ -234,7 +234,10 @@ class GuardedReadFacade(
     override fun permalink(principal: Principal, id: PageId): PermalinkResolution {
         policy.checkRead(principal, id.value)
         val snapshot = indexBuilder.current
-        val root = resolver.rootOf(snapshot, id) ?: return PermalinkResolution.Unknown
+        // No LIVE binding: the id may still be TOMBSTONED, and a retired id is reserved forever - so it answers
+        // 410 Gone naming its last-known path, never the 404 that tells an agent the citation was never real.
+        val root = resolver.rootOf(snapshot, id)
+            ?: return resolver.retirementOf(id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
         requireAvailable(root)
         val page = snapshot.byId[id] ?: return PermalinkResolution.Unknown
         return page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl

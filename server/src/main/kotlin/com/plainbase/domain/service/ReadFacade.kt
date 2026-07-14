@@ -9,6 +9,7 @@ import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The guarded READ surface (A3, the choke point). Every method takes a [Principal], calls
@@ -149,7 +150,7 @@ interface ReadFacade {
     fun permalink(principal: Principal, id: PageId): PermalinkResolution
 }
 
-/** The outcome of [ReadFacade.permalink] — the route maps these to 302 / SPA shell / 404. */
+/** The outcome of [ReadFacade.permalink] — the route maps these to 302 / SPA shell / 410 / 404. */
 sealed interface PermalinkResolution {
 
     /** The page's current canonical URL — a 302 (never a 301: the target moves with the page). */
@@ -157,6 +158,16 @@ sealed interface PermalinkResolution {
 
     /** A path-space collision loser: no canonical URL exists, so the permalink itself IS its human URL (the shell). */
     data object LoserNoUrl : PermalinkResolution
+
+    /**
+     * The binding was RETIRED (C0 tombstone) — **410 Gone**, naming [lastKnownPath].
+     *
+     * A retired id is reserved forever and never re-issued, so this is a permanent, honest answer rather than the
+     * 404 that tells an agent its citation was never valid. It is also why the tombstone table exists at all: for
+     * an unmaterialized page the `id_map` row is the ONLY record the path ever had that id, and hard-deleting it
+     * would leave nothing here to answer WITH.
+     */
+    data class Retired(val lastKnownPath: RootedPath) : PermalinkResolution
 
     /** No such page, here or in the persisted bindings — a 404. */
     data object Unknown : PermalinkResolution

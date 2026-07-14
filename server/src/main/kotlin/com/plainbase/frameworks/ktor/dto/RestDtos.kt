@@ -36,6 +36,13 @@ object ErrorCodes {
     /** 404: a canonical-shape-valid id (any version) absent from the index, or an unknown by-path. */
     const val PAGE_NOT_FOUND: String = "page_not_found"
 
+    /**
+     * 410: the page's binding was RETIRED (a C0 tombstone). The id is reserved forever and will never name another
+     * page, so this is a permanent, honest answer - distinct from [PAGE_NOT_FOUND], which says the id was never
+     * ours at all. An agent holding a citation can tell "this document was deleted" from "you made this up".
+     */
+    const val PAGE_RETIRED: String = "page_retired"
+
     /** 400: an id failing the §A4 canonical-shape regex (the regex decides, never JDK leniency). */
     const val INVALID_PAGE_ID: String = "invalid_page_id"
 

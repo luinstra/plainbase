@@ -334,21 +334,30 @@ class MultiRootRuntimeTest : FunSpec({
     // (both are empty) but the TREE: the operator's `rm` leaves the SAME directory behind, an unmount leaves a
     // DIFFERENT one (the mount point) at the same path.
 
-    test("an EXISTING but emptied root scans normally and its pages DO delete - the probe tells gone from empty") {
+    // ⚠ MOVED TO C2 (the observation epoch), where it is TIGHTENED rather than weakened. This row used to assert
+    // that an emptied-but-present root DELETES its pages, on the strength of "the directory is still there". C0
+    // deletes that inference, because the row below - `an UNMOUNTED root looks empty and is NOT` - is the SAME
+    // OBSERVATION: a readable, empty directory where a corpus used to be. No oracle can tell them apart; that is
+    // the theorem, not a gap. So C0 refuses to guess and BOTH end in limbo. C2 supplies the missing evidence (an
+    // unbroken observation epoch that WITNESSED the pages and then witnessed them go) and pins BOTH sides: a small
+    // delete inside an unbroken epoch reaps; a delete storm that overflows the queue does not.
+    test("an EXISTING but emptied root is indistinguishable from an unmounted one, so C0 reaps NOTHING for it (C2 tightens this)") {
         twoRoots { main, extra ->
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
 
-                // Empty the root but LEAVE IT THERE - the SAME directory, contents gone: a genuine full-corpus
-                // delete, and the one thing carry-forward must never mask.
                 Files.walk(extra.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 harness.builder.rebuild()
 
-                withClue("an existing empty directory is available - carry-forward must not mask a REAL delete") {
-                    harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
+                withClue("it leaves the snapshot at once - the pass serves only what it can read") {
                     harness.builder.current.byId.containsKey(extraPage).shouldBeFalse()
-                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeFalse()
+                }
+                withClue("but nothing DURABLE dies on a scan alone: the search row is carried, not purged") {
+                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
+                }
+                withClue("the root is still SERVING - a corpus we watched drain is an ordinary edit, not a lost volume") {
+                    harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
                 }
             }
         }
@@ -729,7 +738,12 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
-    test("a dirty row whose FILE is gone under a LIVE root still clears - the classification must not mask a real deletion") {
+    // C0: the dirty_page row is an interrupted save's ONLY recovery record, and it is USER CONTENT. "The file is
+    // not there" is not evidence that the page was deleted - it is equally what a failed submount, a partial
+    // restore and a decoy tree look like - so the row is cleared in exactly ONE place, the proof-apply
+    // transaction, alongside the retirement of the binding it belongs to. Never on a bare read. (Ledger A1's
+    // worst consequence was this row dying to a scan that had simply looked in the wrong place.)
+    test("a dirty row whose FILE is gone under a LIVE root is KEPT: only a PROOF may destroy a save's recovery record") {
         twoRoots { main, extra ->
             MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
@@ -747,7 +761,7 @@ class MultiRootRuntimeTest : FunSpec({
 
                 harness.index.writePipeline().reconcileDirtyPages()
 
-                harness.dirtyPages.all().shouldBeEmptyList()
+                harness.dirtyPages.all().map { it.pageId } shouldBe listOf(page.id)
             }
         }
     }

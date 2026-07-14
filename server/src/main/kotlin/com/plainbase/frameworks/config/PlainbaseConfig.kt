@@ -72,18 +72,6 @@ data class PlainbaseConfig(
      * resolves to the same [contentDir] value - the equal-value invariant [mainContentRoot] pins.)
      */
     val roots: RootsConfig = RootsConfig.synthesized(contentDir, storage),
-    /**
-     * The roots whose EMPTINESS the operator has declared REAL (`PLAINBASE_ACCEPT_EMPTY_ROOTS`, comma-separated) -
-     * the escape hatch the corpus-loss tripwire's own message prescribes ([com.plainbase.domain.service
-     * .IndexBuilder]), and the only way a full-corpus wipe performed while the server was DOWN gets its deletion:
-     * no probe and no durable row can tell that from an unmounted volume, and guessing is what the tripwire exists
-     * to stop.
-     *
-     * **ENV-ONLY, deliberately: there is no `plainbase.conf` path for it.** It is a ONE-BOOT instruction, and a
-     * file would leave behind a STANDING ORDER to read any future empty scan of that root as a delete - i.e. it
-     * would permanently disarm the tripwire on the exact root that already lost its corpus once.
-     */
-    val acceptEmptyRoots: Set<RootName> = emptySet(),
 ) {
     /** Path of the app-state SQLite database (workflow + security state, never content). */
     val appDatabasePath: Path get() = dataDir.resolve("plainbase.db")
@@ -845,7 +833,6 @@ data class PlainbaseConfig(
                 // one moment an operator reaches for this variable is the moment they are staring at a root whose
                 // pages are refusing to delete. A bad slug refuses the boot, through the same IllegalArgumentException
                 // funnel every other config fault takes.
-                acceptEmptyRoots = env["PLAINBASE_ACCEPT_EMPTY_ROOTS"]?.toCommaList()?.map(RootName::require)?.toSet().orEmpty(),
                 dataDir = dataDirFrom(env),
                 host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
                 port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,

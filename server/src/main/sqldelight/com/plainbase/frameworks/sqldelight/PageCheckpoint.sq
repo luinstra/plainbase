@@ -29,3 +29,9 @@ DELETE FROM page_checkpoint;
 insertRow:
 INSERT INTO page_checkpoint(id, root, url_path)
 VALUES (:id, :root, :urlPath);
+
+-- The proof-apply transaction's arm: a checkpoint row dies WITH the binding it belongs to, under the
+-- same AbsenceProof, never on its own inference (C0).
+deleteRow:
+DELETE FROM page_checkpoint
+WHERE id = :id;

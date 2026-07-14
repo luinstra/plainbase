@@ -62,7 +62,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         }
     }
 
-    override fun rebuild(pages: Sequence<PageDocuments>, deleteAuthority: Set<RootName>?) = db.write { connection ->
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) = db.write { connection ->
         val published = connection.transaction {
             val active = connection.activeGeneration()
             // Belt-and-braces: rows outside the active generation can only be debris (a crash
@@ -71,7 +71,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             connection.deleteGenerations("!= ?", active)
             val next = active + 1
             pages.forEach { page -> connection.insertPage(next, page) }
-            if (deleteAuthority != null) connection.carryRootsOutside(deleteAuthority, from = active, to = next)
+            if (retired != null) connection.carryUnretired(retired, from = active, to = next)
             connection.prepareStatement("UPDATE search_meta SET value = ? WHERE key = 'active_generation'").use { statement ->
                 statement.setString(1, next.toString())
                 statement.executeUpdate()
@@ -86,27 +86,28 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
     }
 
     /**
-     * Carries the rows of every root OUTSIDE [deleteAuthority] into the swap's new generation - the D5 half of
-     * [rebuild]. A carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so the
-     * `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its own)
-     * follow their document for free and the GC that runs after the flip no longer sees them. It is all inside the
-     * swap's ONE transaction, so a concurrent reader still observes one complete generation, old or new.
+     * Carries every row the proof did NOT retire into the swap's new generation - the absence-authority half of
+     * [rebuild] (C0). A carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so
+     * the `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its
+     * own) follow their document for free and the GC that runs after the flip no longer sees them. It is all
+     * inside the swap's ONE transaction, so a concurrent reader still observes one complete generation, old or new.
      *
      * ORDER MATTERS: `section_doc` re-stamps BEFORE `search_page`, because both ask "is this page already in the
      * new generation?" of `search_page@to` - which, until the second statement runs, holds exactly the pages the
      * swap inserted from the snapshot. A page whose section WAS carried into the snapshot is therefore skipped
      * here (the freshly inserted rows are the newer truth) and its stale generation is GC'd as usual.
      */
-    private fun Connection.carryRootsOutside(deleteAuthority: Set<RootName>, from: Long, to: Long) {
-        // An EMPTY authority deletes for no root at all, so the root predicate simply vanishes: every row rides.
-        val retained = if (deleteAuthority.isEmpty()) "" else " AND root NOT IN (${deleteAuthority.joinToString(", ") { "?" }})"
+    private fun Connection.carryUnretired(retired: Set<PageId>, from: Long, to: Long) {
+        // An EMPTY set retires nothing, so the predicate simply vanishes and EVERY row rides. That is C0's
+        // steady state, and it is the whole safety floor showing up as one absent SQL clause.
+        val kept = if (retired.isEmpty()) "" else " AND page_id NOT IN (${retired.joinToString(", ") { "?" }})"
         val notSuperseded = " AND page_id NOT IN (SELECT page_id FROM search_page WHERE generation = ?)"
         listOf("section_doc", "search_page").forEach { table ->
-            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$retained$notSuperseded").use { statement ->
+            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$kept$notSuperseded").use { statement ->
                 var p = 1
                 statement.setLong(p++, to)
                 statement.setLong(p++, from)
-                deleteAuthority.forEach { statement.setString(p++, it.value) }
+                retired.forEach { statement.setBytes(p++, it.toByteArray()) }
                 statement.setLong(p, to)
                 statement.executeUpdate()
             }

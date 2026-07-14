@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 /**
  * The C2 id_map migration (`10.sqm`) end-to-end on the xerial JDBC/JNI divergence surface: the
- * frozen one-way v10 -> v11 rebuild must run INSIDE the image, stamp every legacy row `'main'`,
+ * frozen one-way v10 -> v11 rebuild (and the additive C0 tables above it) must run INSIDE the image, stamp every legacy row `'main'`,
  * and leave the composite PK + UNIQUE(id) live. The pre-C2 database is built PROGRAMMATICALLY
  * (raw DriverManager DDL of the exact v10 shapes) rather than from a committed baseline: the JVM
  * test's baseline locator walks the filesystem from `user.dir`, which is brittle under the native
@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
 class AppDbMigrationNativeTest {
 
     @Test
-    fun `a v10 database migrates to v11 in-image with every row stamped main and UNIQUE(id) enforced`() {
+    fun `a v10 database migrates to the current schema in-image with every row stamped main and UNIQUE(id) enforced`() {
         val dir = Files.createTempDirectory("pb-native-migration")
         try {
             val dbPath = dir.resolve("plainbase.db")
@@ -104,7 +104,7 @@ class AppDbMigrationNativeTest {
                 assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
                 assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
-                assertEquals(11L, driver.queryLongNative("PRAGMA user_version"))
+                assertEquals(12L, driver.queryLongNative("PRAGMA user_version"))
 
                 // The composite PK is live: the same relative path inserts under another root...
                 db.idMapQueries.upsertBinding(
