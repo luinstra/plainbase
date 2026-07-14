@@ -6,7 +6,9 @@ import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.string.shouldContain
@@ -112,6 +114,28 @@ class FileWatcherTest : FunSpec({
         }
         warnings.single() shouldContain "/tmp/huge-tree/sub"
         warnings.single() shouldContain "will NOT trigger rebuilds"
+    }
+
+    test("a cancelled key over a DELETED directory is no gap; one over a directory STILL STANDING is (C2)") {
+        // The same shape as the row above, and for the same reason: a key cancellation cannot be provoked through a
+        // real WatchService portably (inotify cancels on delete, macOS's poller does not cancel at all), so the
+        // CLASSIFICATION - which is the part the epoch's safety rests on - is driven directly.
+        //
+        // An ordinary `rm -rf subdir` delivers every child's ENTRY_DELETE on that subdirectory's own key BEFORE the
+        // key dies, and leaves no directory behind: those deletes were OBSERVED, the next scan confirms them, and the
+        // epoch may honestly reap them. A key that dies while the directory is STILL THERE is the opposite animal -
+        // an unmounted submount (the mountpoint stays behind), a rename-flip that swapped the subtree out from under
+        // the watched inode. Those deliver NO child deletes at all, so their pages would vanish from the next scan
+        // with nothing having been seen, which is the one inference this whole design forbids.
+        withTempTree({}) { root ->
+            val standing = Files.createDirectory(root.resolve("still-here"))
+
+            FileWatcher.cancellationIsAGap(root.resolve("deleted-subdir")).shouldBeFalse()
+            FileWatcher.cancellationIsAGap(standing).shouldBeTrue()
+            withClue("an unknown key cannot be exonerated - it errs toward the break, which costs a re-earned epoch") {
+                FileWatcher.cancellationIsAGap(null).shouldBeTrue()
+            }
+        }
     }
 })
 

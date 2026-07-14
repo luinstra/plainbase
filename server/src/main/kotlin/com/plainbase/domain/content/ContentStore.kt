@@ -1,6 +1,7 @@
 package com.plainbase.domain.content
 
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BreakCause
 
 /**
  * The single internal interface to the content tree (master plan §2.2): a small port over a
@@ -187,6 +188,15 @@ interface ContentStore {
      * itself and cannot leave. Both transitions are reported, so a raised limit or a fixed permission clears
      * the flag with no restart.
      *
+     * [onBreak] is the C2 seam, and it is the reason [onChange] stays UNINTERPRETED. An observation epoch turns
+     * "this scan does not see a page the last one did" into a DELETE, and that is only sound while the watch has had
+     * no GAP in it - so what the epoch needs from a watcher is not the kind of each event (an unmount, a rename-flip's
+     * `rm -rf`, a watcher fault all raise delete events, and on macOS the JDK watcher is a POLLER, so its "delete
+     * event" is a scan-diff and the proof would be circular) but the honest admission that events were MISSED. Every
+     * [BreakCause] revokes the root's observation wholesale. A backend that cannot report its own gaps must not call
+     * this at all: silence would be a claim of continuity it cannot make, so a store with nothing to say here simply
+     * never earns an epoch (the object backend's absence authority is its bucket LIST, not its poller).
+     *
      * The other is ROOT LOSS, and a backend that watches a root MUST detect it (ADR-0011 D5): a deleted or
      * unmounted root does not necessarily fail its watcher and may raise no event at all, so a root with no
      * write traffic has NO other detector - every one of them (the write probe, the rebuild probe) is driven by
@@ -199,6 +209,7 @@ interface ContentStore {
         onChange: (TreePath) -> Unit,
         onFailure: (Throwable) -> Unit = {},
         onCoverage: (WatchCoverage) -> Unit = {},
+        onBreak: (BreakCause) -> Unit = {},
     ): AutoCloseable
 
     companion object {

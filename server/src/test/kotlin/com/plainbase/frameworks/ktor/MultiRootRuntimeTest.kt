@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -9,8 +10,11 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldNotBeEmpty
+import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
@@ -334,30 +338,62 @@ class MultiRootRuntimeTest : FunSpec({
     // (both are empty) but the TREE: the operator's `rm` leaves the SAME directory behind, an unmount leaves a
     // DIFFERENT one (the mount point) at the same path.
 
-    // ⚠ MOVED TO C2 (the observation epoch), where it is TIGHTENED rather than weakened. This row used to assert
-    // that an emptied-but-present root DELETES its pages, on the strength of "the directory is still there". C0
-    // deletes that inference, because the row below - `an UNMOUNTED root looks empty and is NOT` - is the SAME
-    // OBSERVATION: a readable, empty directory where a corpus used to be. No oracle can tell them apart; that is
-    // the theorem, not a gap. So C0 refuses to guess and BOTH end in limbo. C2 supplies the missing evidence (an
-    // unbroken observation epoch that WITNESSED the pages and then witnessed them go) and pins BOTH sides: a small
-    // delete inside an unbroken epoch reaps; a delete storm that overflows the queue does not.
-    test("an EXISTING but emptied root is indistinguishable from an unmounted one, so C0 reaps NOTHING for it (C2 tightens this)") {
+    // ⚠ ARRIVED AT C2, and TIGHTENED rather than weakened - the pair below is the whole point.
+    //
+    // The C0 version of this row asserted that an emptied-but-present root reaps NOTHING, because C0 had no proof
+    // source at all: a readable, empty directory where a corpus used to be is the SAME OBSERVATION as the unmounted
+    // root two rows down, and no oracle separates them. C2 does not repeal that theorem - it supplies the ONE thing
+    // that was missing, which is not a better look at the directory but an unbroken WATCH of it. An epoch that read
+    // these pages and never lost sight of the tree can say they were deleted. An epoch with a hole in it cannot, and
+    // does not, however ordinary the deletion looks.
+    //
+    // So both halves ship, and they differ in exactly one fact.
+    test("an EXISTING root drained under an UNBROKEN epoch REAPS - this is the online delete converging again") {
         twoRoots { main, extra ->
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
 
+                // The boot rebuild WITNESSED this page, and the root has been under observation ever since (the
+                // harness declares it exactly where serve() does - at the watcher install). This is an operator's
+                // ordinary `rm`, and it now converges with no ceremony at all.
                 Files.walk(extra.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 harness.builder.rebuild()
 
                 withClue("it leaves the snapshot at once - the pass serves only what it can read") {
                     harness.builder.current.byId.containsKey(extraPage).shouldBeFalse()
                 }
-                withClue("but nothing DURABLE dies on a scan alone: the search row is carried, not purged") {
-                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
+                withClue("and now the DURABLE state follows it, because the epoch PROVED it gone") {
+                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeFalse()
+                    harness.idMap.pathOf(extraPage).shouldBeNull()
+                    harness.idMap.retired(extraPage).shouldNotBeNull() // a TOMBSTONE: /p/{id} is 410, never 404
                 }
                 withClue("the root is still SERVING - a corpus we watched drain is an ordinary edit, not a lost volume") {
                     harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
+                }
+            }
+        }
+    }
+
+    test("the SAME drain past a BREAK reaps NOTHING and lands in limbo - past the overflow bound, `rm -rf` IS an unmount") {
+        twoRoots { main, extra ->
+            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+                val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
+
+                // Byte for byte the same deletion as the row above. The ONLY difference is that the watcher admits it
+                // dropped events first - which is what a big `rm -rf` actually does to the JDK's queue - and past that
+                // bound a mass delete and an unmounted volume are the same observation. The epoch refuses to guess.
+                harness.index.epochs.broke(RootName.require("extra"), BreakCause.OVERFLOW)
+                Files.walk(extra.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
+                harness.builder.rebuild()
+
+                withClue("NOTHING durable dies: the tail of a storm waits for real evidence, it is not inferred away") {
+                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
+                    harness.idMap.pathOf(extraPage).shouldNotBeNull()
+                    harness.idMap.retiredBindings().shouldBeEmpty()
+                }
+                withClue("it is in LIMBO - neither present nor proven gone, so it 503s rather than 404s, and self-heals") {
+                    harness.index.limbo.holds(RootName.require("extra"), extraPage).shouldBeTrue()
                 }
             }
         }
@@ -743,7 +779,11 @@ class MultiRootRuntimeTest : FunSpec({
     // restore and a decoy tree look like - so the row is cleared in exactly ONE place, the proof-apply
     // transaction, alongside the retirement of the binding it belongs to. Never on a bare read. (Ledger A1's
     // worst consequence was this row dying to a scan that had simply looked in the wrong place.)
-    test("a dirty row whose FILE is gone under a LIVE root is KEPT: only a PROOF may destroy a save's recovery record") {
+    // A `dirty_page` row is an interrupted save's ONLY recovery record, and it is USER CONTENT - so the rule has
+    // always been that a mere failed READ may not destroy it. C2 does not touch that rule; it changes which of these
+    // two scenarios you are IN. The pair pins both, because "cleared only under a proof" is worth nothing as a
+    // sentence unless both arms of it are exercised.
+    test("a dirty row whose FILE is gone with NO proof is KEPT - an unproven absence never destroys a recovery record") {
         twoRoots { main, extra ->
             MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
@@ -756,12 +796,41 @@ class MultiRootRuntimeTest : FunSpec({
                     expectedHash = page.contentHash,
                     stage = com.plainbase.domain.repository.Stage.WRITING,
                 )
+                // The watcher admits a gap, so this absence is UNPROVEN - the failed-submount / partial-restore shape,
+                // and the one ledger A1 was actually about. `reconcileDirtyPages` reads `AbsenceUnknown` and KEEPS it.
+                harness.index.epochs.broke(RootName.require("extra"), BreakCause.OVERFLOW)
                 Files.delete(extra.resolve("notes/rollback.md")) // the FILE, not the root
                 harness.builder.rebuild()
 
                 harness.index.writePipeline().reconcileDirtyPages()
 
                 harness.dirtyPages.all().map { it.pageId } shouldBe listOf(page.id)
+            }
+        }
+    }
+
+    test("...and a dirty row whose page an EPOCH PROVED gone is cleared - inside the proof-apply transaction, with its binding") {
+        twoRoots { main, extra ->
+            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+                harness.boot()
+                val page = harness.builder.current.byPath.getValue(
+                    com.plainbase.domain.root.RootedPath(RootName.require("extra"), TreePath.require("notes/rollback.md")),
+                )
+                harness.dirtyPages.mark(
+                    page.id,
+                    com.plainbase.domain.root.RootedPath(RootName.require("extra"), page.path),
+                    expectedHash = page.contentHash,
+                    stage = com.plainbase.domain.repository.Stage.WRITING,
+                )
+                // No break: the epoch witnessed this page and has watched the tree without a gap ever since. The page
+                // really is deleted, so there is nothing left for a recovery record to recover INTO - and the row is
+                // cleared by the ONE transaction allowed to do it, alongside the retirement it belongs to. Never by a
+                // read, and never on its own.
+                Files.delete(extra.resolve("notes/rollback.md"))
+                harness.builder.rebuild()
+
+                harness.dirtyPages.all().shouldBeEmpty()
+                harness.idMap.retired(page.id).shouldNotBeNull()
             }
         }
     }

@@ -12,6 +12,7 @@ import com.plainbase.domain.repository.SetupTokenRepository
 import com.plainbase.domain.repository.UserRepository
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.DetachedRoots
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
@@ -294,10 +295,24 @@ private fun serve() {
         //    over a host-wide kernel limit, stickily, until a restart that only re-registers, re-fails and
         //    re-marks. So it lands in the non-sticky convergence holder, flips back on its own, and reaches the
         //    operator through `/healthz` rather than through an outage.
+        //  - onBreak is the C2 seam, and it is a THIRD kind of fact again: a GAP in the observation. A dropped-event
+        //    storm, a subtree that stopped being watched, a key that died under a directory still standing, a tree
+        //    swapped out by a deploy - each one means this watcher cannot honestly say it has been watching without
+        //    interruption, and an observation epoch is the only thing in the system that may turn "the page is not
+        //    there any more" into a DELETE. So a break revokes that authority wholesale and the root's unproven rows
+        //    fall back to limbo. It is deliberately NOT an availability mark and NOT a coverage report: the root is
+        //    usually perfectly healthy, and what it lost is its standing to delete, not its ability to serve.
         val convergence = koin.get<RootConvergence>()
+        val epochs = koin.get<ObservationEpoch>()
         val watchers = koin.get<RootRegistry>().roots
             .filter { availability.current().isAvailable(it.name) }
             .map { root ->
+                // Installing the watcher is what makes an epoch EARNABLE here, so it is what declares it (C2), and
+                // an object-backed main declares it too - the rebuild is what withholds EPOCH from a backend whose
+                // watch is a poller. A root with no watcher earns nothing, which is the honest floor: two scans with
+                // an `rm` between them and two scans with an unmounted submount between them are the same pair of
+                // scans, and only a watcher can tell them apart.
+                epochs.observing(root.name)
                 stores[root.name].watch(
                     onChange = { scheduler.schedule() },
                     onFailure = { failure ->
@@ -305,6 +320,7 @@ private fun serve() {
                         availability.markUnavailable(root.name, UnavailableCause.WATCHER_FAILED)
                     },
                     onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
+                    onBreak = { cause -> epochs.broke(root.name, cause) },
                 )
             }
         val server = KtorServer(config, koin.get())

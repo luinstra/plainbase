@@ -12,6 +12,7 @@ import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BreakCause
 import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -326,10 +327,18 @@ class ObjectContentStore(
     // registration to lose here. Every poll LISTs the whole bucket, so coverage is whole by construction - and the
     // one incompleteness this backend DOES have (an object a boot hydrate deferred) is not a watch fact at all, so
     // it is reported where it belongs, on the scan ([scan]'s `complete`).
+    //
+    // [onBreak] is accepted and NEVER INVOKED, and that silence is not a claim of continuity - it is the reason this
+    // backend earns NO OBSERVATION EPOCH (C2). A poller is not an observation: between two polls the bucket can be
+    // rebound, drained, or replaced with a decoy, and nothing here would know. The absence authority an object root
+    // gets is `OBJECT_LIST` under the C3 binding latch, minted from a complete LIST of the bucket itself, and the
+    // rebuild is what withholds EPOCH from it (`IndexBuilder.mintEpochProofs` mints only for a LOCAL backend) rather
+    // than this store having to pretend it is permanently broken.
     override fun watch(
         onChange: (TreePath) -> Unit,
         onFailure: (Throwable) -> Unit,
         onCoverage: (WatchCoverage) -> Unit,
+        onBreak: (BreakCause) -> Unit,
     ): AutoCloseable {
         val stop = CountDownLatch(1)
         val thread = Thread {

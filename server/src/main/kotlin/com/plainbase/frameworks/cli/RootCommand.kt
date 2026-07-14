@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.bootGateFor
+import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
@@ -189,7 +190,11 @@ object RootCommand {
                 // Fail CLOSED. A main root that cannot be read says NOTHING about what the new name would shadow,
                 // and reporting "shadows nothing" from a tree we could not read is the root-down-as-absent lie the
                 // classified read exists to make unsayable.
-                Shadow.MainDown -> {
+                // Fail CLOSED for the SAME reason again, and this is the arm a permission-dropped root actually takes:
+                // its names still LIST (the read bit) while nothing under them can be STAT-ed (no search bit), so the
+                // walk comes back SHORT rather than failing - and a short walk that called itself complete would report
+                // "shadows nothing" from a tree it never read.
+                Shadow.MainDown, Shadow.Incomplete -> {
                     System.err.println(
                         "root add: the main root at ${config.roots.main.localPath} is not readable right now, so the " +
                             "shadow check cannot run and this add would be accepted BLIND. Restore the path (a missing " +
@@ -411,6 +416,17 @@ object RootCommand {
          * REFUSAL into an approval - the one check boot does not repeat.
          */
         data class Unverified(val path: String) : Shadow
+
+        /**
+         * The walk itself could not see the whole tree ([ScanResult.complete]) - an entry it could NAME but not STAT,
+         * so a whole subtree may have left the scan without a word said about it (C2).
+         *
+         * It is the same refusal as [Unverified], one layer down: there the page was listed and unreadable, here the
+         * page was never listed at all, and the second is the more dangerous of the two precisely because it leaves
+         * NOTHING behind to refuse on. A shadow check run over an incomplete walk cannot say "shadows nothing"; it can
+         * only say "I did not look". *An incomplete view is not a smaller corpus, it is an unknown one.*
+         */
+        data object Incomplete : Shadow
     }
 
     /**
@@ -437,6 +453,11 @@ object RootCommand {
         val mainPath = config.roots.main.localPath ?: return Shadow.None
         val store = LocalContentStore(root = mainPath, ignoreRules = IgnoreRules(), exclusions = listOf(config.dataDir))
         val scan = store.scan()
+        // BEFORE anything is concluded from `scan.files`: a walk that could not see the whole tree has no standing to
+        // report what the new name does or does not shadow. An entry it could name but not stat is simply absent from
+        // the list below, so there is no page left to refuse ON - the check would sail through and answer "None" off a
+        // view it knows is partial. That is the root-down-as-absent lie again, arriving one layer below the page reads.
+        if (!scan.complete) return Shadow.Incomplete
         val pages = scan.files.filter { it.path.name.endsWith(".md") }.map { file ->
             val slugOverride = when (val read = store.readClassified(file.path)) {
                 is StoreRead.Bytes -> FrontmatterReader().parse(read.bytes).scalar("slug")

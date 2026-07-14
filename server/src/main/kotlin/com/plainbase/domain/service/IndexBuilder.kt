@@ -31,9 +31,13 @@ import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
@@ -85,14 +89,15 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * What a pass publishes instead is what it actually SAW: a [Witness] per rooted path it READ, carrying the id
  * that file turned out to hold. Absence from that map is NOT a licence - it means "we did not read this",
  * which is exactly as consistent with an unplugged disk as with a delete. The ONLY licence to delete is an
- * [AbsenceProof], and **in C0 nothing mints one** (all five sources arrive in later chunks), so [Published.
- * proofs] is always empty and NOTHING IS EVER REAPED BY INFERENCE. That is the safety floor, and it is a
- * property of the TYPE rather than of a policy anyone could forget to apply.
+ * [AbsenceProof].
  *
- * Every durable row the pass could not account for is in LIMBO ([RootLimbo]) - carried, served as "come back
- * later", never destroyed, and self-healing by construction the moment the page is witnessed again. The honest
- * cost, said out loud: a LEGITIMATE delete does not converge in C0 either. C2 (the observation epoch) and C4
- * (git history) buy that back with evidence instead of a guess.
+ * **C2 mints the first one ([mintEpochProofs]), and it is what makes an ordinary delete converge again.** An
+ * [ObservationEpoch] that has watched a tree WITHOUT A GAP since it read a page - fully covered, identity-stable,
+ * scanned end to end - and now does not find it has evidence rather than an inference, and evidence is the only
+ * thing that has ever been allowed to delete anything here. Every other absence still ends in LIMBO ([RootLimbo]):
+ * carried, served as "come back later", never destroyed, self-healing the moment the page is witnessed again. The
+ * residue is honest and bounded - a delete storm past the watcher's queue bound is observationally identical to an
+ * unmount, so the epoch refuses to guess and its tail waits for `reconcile` (C5) or for git (C4).
  *
  * The sinks CONSUME that authority and never re-derive it - the checkpoint replace, the search sync, the search
  * generation swap, the id_map supersessions ([Supersession]) and the dirty-page reconcile. They are handed the
@@ -172,6 +177,12 @@ class IndexBuilder(
     private val retirements: RetirementRepository = NoRetirements,
     /** The DERIVED limbo set, republished every pass. Never stored: a stored flag is another snapshot used later. */
     private val limbo: RootLimbo = RootLimbo(),
+    /**
+     * The observation epochs (C2) - the ONE proof source this pass mints from, and the reason a legitimate delete
+     * converges again. Defaulted to an epoch over [NoRetirements], which cannot mint a token anything will honor, so
+     * the many single-root constructions stay terse AND stay at the C0 floor: they observe, and they reap nothing.
+     */
+    private val epochs: ObservationEpoch = ObservationEpoch(NoRetirements, RootConvergence()),
 ) {
 
     /** One root's inputs: its topology entry, its content tree, and its history. */
@@ -195,7 +206,8 @@ class IndexBuilder(
      * back as a partial view, a DETACHED root, a page on a failed submount and a page in a decoy tree all look
      * identical from here. Handing the listener the POSITIVE, proof-backed set means the compiler - not a
      * convention, and not the next listener's memory - is what keeps an unplugged disk from performing a mass
-     * delete. In C0 the set is ALWAYS EMPTY, because nothing mints a proof.
+     * delete. Since C2 the set is non-empty for exactly one reason: an unbroken observation epoch watched a page
+     * it had read stop existing.
      */
     fun interface PublicationListener {
         fun published(snapshot: PageIndex, retired: Set<PageId>)
@@ -264,8 +276,9 @@ class IndexBuilder(
      * [witnessed] is what the pass actually SAW: every rooted path it READ, and the id that file carried
      * (null = it carries none). Absence from this map is NOT a licence.
      *
-     * [proofs] is the ONLY licence to delete, and **in C0 it is always empty** - no source mints one yet.
-     * [retired] is what the proof-apply transaction actually acted on, which is what the sinks consume.
+     * [proofs] is the ONLY licence to delete - since C2, one per root whose observation epoch witnessed a page and
+     * then witnessed it go. [retired] is what the proof-apply transaction actually acted on (a proof whose token was
+     * revoked between the mint and the apply authorizes NOTHING), and it is what the sinks consume.
      *
      * [observedAt] stamps each root's durable freshness token, so a proof minted from this observation can be
      * checked against a token that a restart, a break or a rebind may since have revoked.
@@ -316,11 +329,12 @@ class IndexBuilder(
             }
         }.toMap()
 
-        // **The only licence to delete, and in C0 there is none.** EPOCH (C2), OBJECT_LIST (C3), GIT (C4),
-        // OPERATOR (C5) and API_DELETE all arrive later; until one of them does, no absence is ever believed.
-        // This is not a stub with a TODO in it - it is the safety floor, and the empty list is what makes every
-        // sink below structurally incapable of reaping a page it merely failed to see.
-        val proofs: List<AbsenceProof> = emptyList()
+        // **The only licence to delete** - and since C2 there is exactly ONE source that mints it here (EPOCH).
+        // OBJECT_LIST (C3), GIT (C4), OPERATOR (C5) and API_DELETE arrive later; until they do, an absence outside
+        // an unbroken observation is still never believed. Minted BEFORE the binds below, against the id_map as it
+        // stands NOW: a proof is about the durable binding a page HAD when the pass observed it gone, and this pass
+        // is about to rewrite that table.
+        val proofs: List<AbsenceProof> = mintEpochProofs(scans)
         val retired: Set<PageId> = retirements.applyProofs(proofs).map { it.id }.toSet()
         // The SERVING hint (see [corpusSeen]) - a complete walk that came back holding pages. It decides 503-vs-404
         // for a later empty scan of this root, and it decides NOTHING ELSE. It is not delete authority, and there
@@ -402,6 +416,49 @@ class IndexBuilder(
         }
         notifyPublished(snapshot, retired)
         return snapshot
+    }
+
+    /**
+     * **The EPOCH proof source (C2): the chunk that makes an online delete converge again.**
+     *
+     * A page is proven gone when an epoch that WITNESSED it - an unbroken observation of an identity-stable tree,
+     * fully watched, scanned end to end - looks again and does not find it. Nothing here trusts a delete EVENT:
+     * the events are what make us LOOK, and [ObservationEpoch] decides whether looking is worth anything.
+     *
+     * The four ways this can fail, and all of them fail CLOSED - into limbo, never into a delete:
+     *  - **an object root gets no epoch at all.** Its watch is a POLLER over a mirror, so "the page is not in the
+     *    mirror" says nothing about the bucket, and a rebound or wrong bucket would drain the mirror and read as a
+     *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the C3 binding latch, which is the
+     *    thing that can actually see what the bucket holds.
+     *  - **a root this pass could not scan** (unavailable, vanished, a live-root failure) BREAKS its epoch. That is
+     *    the availability mark and the scan failure, arriving as the same fact: we stopped watching.
+     *  - **an INCOMPLETE scan** breaks it too. A view with holes in it is not an observation of a tree, and a page
+     *    "missing" from a walk that could not see the whole tree is not missing at all.
+     *  - **partial watch coverage, a break, or a restart** are the epoch's own business ([ObservationEpoch]).
+     *
+     * [durable] is read HERE, before the binds: the proof is about the row the page HAD, and `resolveIdentities`
+     * is about to rewrite that table. ([publishLimbo] re-reads it afterwards on purpose - it is answering the
+     * opposite question, about the rows that are left.)
+     */
+    private fun mintEpochProofs(scans: List<SourceScan>): List<AbsenceProof> {
+        val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
+        return sources
+            .filter { it.root.backend is RootBackend.Local }
+            .mapNotNull { source ->
+                val root = source.root.name
+                // SKIPPED and SHORT are the same fact here - we did not see this tree - and they break the epoch for
+                // the same reason. The skip is where the availability mark and the scan failure both arrive.
+                val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete }
+                if (scan == null) {
+                    epochs.broke(root, BreakCause.SCAN_FAILED)
+                    return@mapNotNull null
+                }
+                epochs.scanned(
+                    root = root,
+                    witnessed = scan.drafts.mapTo(mutableSetOf()) { it.file.path },
+                    durable = durable[root].orEmpty().toSet(),
+                )
+            }
     }
 
     /**

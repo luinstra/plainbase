@@ -62,6 +62,10 @@ val indexModule = module {
             // by a later chunk, which is how the authority got scattered in the first place.
             retirements = get(),
             limbo = get(),
+            // The C2 proof source. It shares this builder's RetirementRepository by construction (both are `get()`
+            // on the same single), which is what makes the token an epoch mints and the token the proof-apply
+            // transaction re-reads the SAME token - the entire freshness argument rests on there being one.
+            epochs = get(),
             // Every PublicationListener definition across the loaded modules (searchModule's sync,
             // checkpointModule's checkpoint replace); empty when no listener module is loaded.
             listeners = getAll(),

@@ -5,6 +5,7 @@ package com.plainbase.frameworks.filesystem
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
+import com.plainbase.domain.root.BreakCause
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.ClosedWatchServiceException
@@ -103,6 +104,17 @@ class FileWatcher(
      */
     private val onCoverage: (WatchCoverage) -> Unit = {},
     /**
+     * Every GAP this watcher knows it has (C2) - and it already knew about all of them; it just never said so.
+     *
+     * The observation epoch turns "the last scan saw this page and this one does not" into a DELETE, which is sound
+     * only while nothing was MISSED in between. So the epoch needs the one thing a watcher can honestly supply: not
+     * the KIND of each event (see [onChange], which stays uninterpreted for exactly this reason) but the admission
+     * that events were dropped, a subtree stopped being watched, a key died under a directory that is still there,
+     * or the tree was swapped out from under the watches. Each one revokes the root's observation wholesale, because
+     * a gap is not scoped to the paths we happened to notice it on.
+     */
+    private val onBreak: (BreakCause) -> Unit = {},
+    /**
      * Is the watched tree still THERE? The store's own probe ([ContentStore.available]) when the production
      * wiring passes it, so the watcher and every other root-loss detector share ONE notion of gone. The default
      * is that same probe, bound here ([rootLivenessProbe]) - a watcher constructed without a store must not
@@ -145,13 +157,17 @@ class FileWatcher(
                     "changes under it never trigger rebuilds (DATA_DIR-in-CONTENT_DIR policy, §B1)"
             }
         }
-        val uncovered = registerTree(this.root)
+        // Reported BEFORE the worker starts, and the order is a CORRECTNESS constraint, not a preference (C2/B1).
+        // The worker can re-register and re-report from its very first tick (an overflow, a retry), so a report
+        // issued after it starts is racing one issued by it - and the CONSTRUCTING thread's `uncovered` is the
+        // STALER of the two. A stale WHOLE landing on top of a fresh PARTIAL used to cost a slow rebuild; now it
+        // poisons the OBSERVATION EPOCH, which would take delete authority over a tree it is not fully watching.
+        // (The old order existed so a consumer never learned "partial" from a watcher not yet driving the recovery
+        // pass. That is a latency argument against a correctness one, and it loses: the worker starts on the very
+        // next line, and a PARTIAL that arrives a microsecond early costs nothing.)
+        reportCoverage(registerTree(this.root))
         worker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
         logger.info { "watching ${this.root} (${keys.size} directories)" }
-        // Reported AFTER the worker starts, because the worker is what MAKES the report true: a PARTIAL tree
-        // converges on the periodic pass that loop drives, so the consumer must never learn "partial" from a
-        // watcher that is not yet driving one.
-        reportCoverage(uncovered)
     }
 
     override fun close() {
@@ -251,6 +267,11 @@ class FileWatcher(
             }
         }
         onCoverage(if (whole) WatchCoverage.WHOLE else WatchCoverage.PARTIAL)
+        // Losing coverage is also a BREAK (C2): edits under an unregistered subtree raise no event at all, so from
+        // here on this watcher is sampling the tree rather than observing it, and an epoch cannot rest on a sample.
+        // REGAINING it is not the mirror image - it does not re-open anything, because the pages that changed while
+        // we were blind changed unseen. A fresh epoch has to be earned by a scan, like every other epoch.
+        if (!whole) onBreak(BreakCause.COVERAGE_LOST)
     }
 
     /**
@@ -270,7 +291,9 @@ class FileWatcher(
 
     /** [onFailure], at most once - the worker can only die once, but `close()` racing a death must not double-report. */
     private fun fail(cause: Throwable) {
-        if (failed.compareAndSet(expectedValue = false, newValue = true)) onFailure(cause)
+        if (!failed.compareAndSet(expectedValue = false, newValue = true)) return
+        onBreak(BreakCause.WATCHER_DIED) // BEFORE the failure: the epoch must be dead before anything acts on the death
+        onFailure(cause)
     }
 
     /**
@@ -325,12 +348,18 @@ class FileWatcher(
             // A deleted SUBdirectory's key cancels itself; the delete event in its PARENT already scheduled the
             // rebuild that drops its entries. The ROOT's key is the different story: nothing above it is watched,
             // so its death is the only signal there is.
-            if (dir != root) continue
+            if (dir != root) {
+                if (cancellationIsAGap(dir)) onBreak(BreakCause.WATCH_KEY_CANCELLED)
+                continue
+            }
             if (rootLost()) return
             // The root's key died but its path is still traversable - the root directory was REPLACED (rename-in,
             // a remount over it). Watch coverage for the whole tree went with the old key, which no rebuild can
-            // repair, so re-register and converge: the OVERFLOW recovery, for the same reason.
+            // repair, so re-register and converge: the OVERFLOW recovery, for the same reason. And it is a BREAK
+            // for a reason no rebuild can repair either: every page this epoch witnessed, it witnessed on the tree
+            // that just went away.
             logger.warn { "the watch key for $root was invalidated but the path is still there: re-registering the tree" }
+            onBreak(BreakCause.WATCH_KEY_CANCELLED)
             registerWholeTree()
             onChange(ContentStore.OVERFLOW)
         }
@@ -343,6 +372,10 @@ class FileWatcher(
      */
     private fun rootLost(): Boolean {
         if (rootIsAlive()) return false
+        // Whatever happened under the root while it was away, we did not see it - and the worker stops here, so we
+        // are not going to. The epoch dies with the tree, and it dies BEFORE the loss is published, so nothing that
+        // reacts to the loss can still be holding delete authority over it.
+        onBreak(BreakCause.ROOT_LOST)
         logger.error {
             "the content root $root is gone (unmounted, renamed, or deleted); marking it unavailable - it will " +
                 "serve 503 until the path is restored and the server restarted"
@@ -353,7 +386,16 @@ class FileWatcher(
 
     private fun deliver(dir: Path?, event: WatchEvent<*>) {
         if (event.kind() == StandardWatchEventKinds.OVERFLOW || dir == null) {
-            logger.debug { "watch event queue overflow under ${dir ?: root}: re-registering the tree and scheduling a full pass" }
+            logger.warn {
+                "watch event queue overflow under ${dir ?: root}: an UNKNOWN set of events was dropped, so this root's " +
+                    "observation has a hole in it. Re-registering the tree and scheduling a full pass"
+            }
+            // OVERFLOW is itself a BREAK, and it has to be its own signal (C2): the re-registration below can come
+            // back WHOLE, and a WHOLE->WHOLE report publishes no transition at all - so before this, a dropped-event
+            // storm could pass through the watcher leaving no trace anywhere. Past the queue bound, `rm -rf` and an
+            // unmount are observationally IDENTICAL, and the epoch's answer to that is to refuse to guess: the tail
+            // of the storm lands in limbo rather than being reaped.
+            onBreak(BreakCause.OVERFLOW)
             // The dropped events may include directory CREATEs whose subtrees were therefore never
             // registered — the scheduled full pass converges index state but cannot restore watch
             // coverage, so re-walk the registrations first (idempotent; overflow is rare enough
@@ -406,6 +448,30 @@ class FileWatcher(
          * self-inflicted outage.
          */
         internal val COVERAGE_RETRY_INTERVAL = 5.minutes
+
+        /**
+         * A cancelled SUBdirectory key: is it a GAP in the observation, or a delete we watched happen? (C2)
+         *
+         * The directory is the whole answer. An ordinary `rm -rf subdir` delivers every child's ENTRY_DELETE on that
+         * subdirectory's own key BEFORE the key dies, and leaves NO directory behind - so the deletes were OBSERVED,
+         * the next scan confirms them, and the epoch may honestly reap them. A key that dies while its directory is
+         * STILL THERE is the opposite: an unmounted submount (the mountpoint stays), a rename-flip that swapped the
+         * subtree out from under the inode the watch was tracking, a remount. Those deliver NO child deletes at all,
+         * so their pages would vanish from the next scan with nothing having been seen - which is exactly the
+         * inference the whole design forbids.
+         *
+         * It errs toward BREAK, and deliberately: a delete-then-recreate that lands between the cancellation and this
+         * `stat` reads as "still there" and costs a re-earned epoch. The other way round costs a corpus.
+         */
+        internal fun cancellationIsAGap(dir: Path?): Boolean {
+            if (dir == null) return true // an unknown key is not one we can exonerate
+            if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) return false // the directory was DELETED, and we watched it go
+            logger.warn {
+                "the watch key for $dir died while the directory is still there (an unmounted submount, a rename-flip, a " +
+                    "remount): its pages can change with NO event, so this root's observation is broken until a fresh scan"
+            }
+            return true
+        }
 
         /** The first few uncovered directories: an inotify-limit failure can name thousands of them, and the WARN cannot. */
         private fun bounded(uncovered: List<Path>): String =

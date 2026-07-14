@@ -7,6 +7,7 @@ import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.PreviousUrl
+import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
@@ -74,8 +75,13 @@ class MultiRootRestHarness(
     val registry: RootRegistry = RootRegistry.of(roots)
     val availability = RootAvailability(Clock.System)
 
-    /** Availability's non-sticky twin, wired exactly as `serve()` wires it: the watchers write it, `/healthz` reads it. */
-    val convergence = RootConvergence()
+    /**
+     * Availability's non-sticky twin, wired exactly as `serve()` wires it: the watchers write it, `/healthz` reads it -
+     * and, since C2, the observation epoch READS it (a tree with an unwatched subtree in it cannot earn one). It is the
+     * INDEX harness's holder, deliberately: a second instance here would let a test degrade coverage on the wire while
+     * the epoch that has to honor it never heard.
+     */
+    val convergence: RootConvergence get() = index.convergence
 
     /** WHICH roots actually got a `watch()` — the harness-side assertion for the watcher-skip rule. */
     val watched = mutableListOf<RootName>()
@@ -98,6 +104,10 @@ class MultiRootRestHarness(
             root = requireNotNull(root.localPath),
             rootName = root.name,
             onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
+            // The production pairing again (ContentModule): a tree SWAPPED at the root's path is a healthy root and a
+            // NEW universe, so it keeps serving and its epoch dies. The lambda resolves [index] lazily - the probe
+            // cannot fire before the store it belongs to has been handed to a builder.
+            onIdentityRebind = { index.epochs.broke(root.name, BreakCause.IDENTITY_REBIND) },
         )
     }
 
@@ -171,6 +181,12 @@ class MultiRootRestHarness(
         val serving = availability.current()
         val servingRoots = roots.filter { serving.isAvailable(it.name) }
         servingRoots.forEach { watched += it.name }
+        // Every serving root is under OBSERVATION, watch THREAD or not - which is what `serve()` declares at exactly
+        // this point, and it is the precondition for earning an epoch (C2). The rows here drive their own rebuilds
+        // rather than waiting on a live watch thread, but the fact being declared is the same one: this root is being
+        // watched, so a page it stops showing us is a page that went away. A row that wants the BREAK half calls
+        // `epochs.broke(...)` itself - which is precisely what a real watcher does.
+        servingRoots.forEach { index.epochs.observing(it.name) }
         if (!liveWatchers) return
         val alarmed = RebuildScheduler(rebuild = { builder.rebuild() }, alarm = ExecutorAlarm())
         scheduler = alarmed
@@ -181,6 +197,7 @@ class MultiRootRestHarness(
                 // tree it cannot fully SEE only degrades convergence. Wiring only one of the two here would let a
                 // test pass while `serve` crossed the wires.
                 onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
+                onBreak = { cause -> index.epochs.broke(root.name, cause) },
             )
         }
     }

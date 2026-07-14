@@ -1,32 +1,15 @@
 package com.plainbase.domain.service
 
-import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
-import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.ProofSource
-import com.plainbase.domain.root.RootAvailability
-import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
-import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
-import com.plainbase.domain.search.SearchProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
-import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.markdown.FlexmarkRenderer
-import com.plainbase.frameworks.markdown.FrontmatterReader
-import com.plainbase.frameworks.search.Fts5SearchProvider
-import com.plainbase.frameworks.search.SearchDb
-import com.plainbase.frameworks.sqldelight.DatabaseFactory
-import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -36,8 +19,6 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.nio.file.Files
-import java.nio.file.Path
-import kotlin.time.Clock
 
 /**
  * THE SAFETY FLOOR (C0). One rule, driven at every place the tree used to break it:
@@ -60,7 +41,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- A1: the handbook decoy, and its blast radius --------------------------------------------------
 
     test("the handbook decoy: a 3-page scan of a DIFFERENT tree reaps NOTHING from the 497 rows it cannot see") {
-        withTrees { mainDir, handbookDir ->
+        withAbsenceTrees { mainDir, handbookDir ->
             // The real corpus: 500 pages, indexed, durable rows written for every one of them.
             repeat(500) { i -> writePage(handbookDir, "h/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
@@ -101,7 +82,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("partial restore: 40 pages of 1000 come back, and the other 960 rows survive it") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             repeat(1000) { i -> writePage(extraDir, "p/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -124,7 +105,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("limbo SELF-HEALS on reappearance: the restore finishes, and no code runs") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             repeat(10) { i -> writePage(extraDir, "p/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -156,7 +137,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- A2: inode reuse, and the zero-page scan ------------------------------------------------------
 
     test("inode reuse + a ZERO-page scan reaps nothing - and 'this process saw the corpus once' is not evidence") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -182,16 +163,18 @@ class AbsenceAuthorityTest : FunSpec({
 
     // ---- THE HONEST COST, said out loud ----------------------------------------------------------------
 
-    test("a LEGITIMATE delete does NOT converge in C0 - it lands in limbo, and C2/C4 are what buy it back") {
-        withTrees { mainDir, extraDir ->
+    test("a legitimate delete on a root NOBODY IS WATCHING does not converge - it lands in limbo, and only evidence buys it back") {
+        withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
+                // No `world.observe("extra")`, and that is the SUBJECT: with no watcher there is no observation, so
+                // two scans with an `rm` between them are just two scans - the same pair a failed submount produces.
+                // C2 does not weaken this row, it EXPLAINS it: the epoch is what an operator's delete converges
+                // through (see `ObservationEpochConvergenceTest`), and an unwatched root has none to converge through.
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = builder.rebuild().byPath.getValue(RootedPath(extra, TreePath.require("notes/rollback.md"))).id
 
-                // An operator really did delete this page, under a running server. C0 cannot tell that from an
-                // unmounted disk - nothing can, it is the theorem - so it refuses to guess, and the row waits.
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 val snapshot = builder.rebuild()
 
@@ -207,7 +190,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- A3 / C0.1: the unbindStale gate ---------------------------------------------------------------
 
     test("a copied id does NOT steal a permalink from an UNWITNESSED, UNMATERIALIZED incumbent") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "placeholder.md", "# P\n")
             // The incumbent carries NO id in its file, so its id_map row is the SOLE record it ever had one.
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
@@ -249,7 +232,7 @@ class AbsenceAuthorityTest : FunSpec({
     // the steal turns into an ordinary CONTEST that rank adjudicates and an issue records. Nothing is lost that a
     // pass which can see both roots cannot settle.
     test("the residue is BOUNDED, not silent: a materialized copy's steal becomes a rank CONTEST when the root returns") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val page = "---\nid: ${id.value}\ntitle: Rollback\n---\n\n# Rollback\n"
             writePage(mainDir, "placeholder.md", "# P\n")
@@ -283,7 +266,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- C0.4: tombstones ------------------------------------------------------------------------------
 
     test("an external id: change TOMBSTONES the displaced id - /p/{oldId} is 410-able, not a 404") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val old = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val new = PageId.require("0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01")
             writePage(mainDir, "guides/deploy.md", "---\nid: ${old.value}\ntitle: Deploy\n---\n\n# Deploy\n")
@@ -306,7 +289,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("path reuse preserves the old permalink: a DIFFERENT page at the same path takes a fresh id, the tombstone stands") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val old = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             writePage(mainDir, "guides/deploy.md", "---\nid: ${old.value}\ntitle: Deploy\n---\n\n# Deploy\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -340,7 +323,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("a copied file carrying a RETIRED id does NOT steal it - a tombstoned id is reserved forever") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val retiredId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             writePage(mainDir, "guides/deploy.md", "---\nid: ${retiredId.value}\ntitle: Deploy\n---\n\n# Deploy\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -372,7 +355,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("a page returning to its OWN (root, path) RECLAIMS its retired id - the one return that carries its own evidence") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val page = "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n"
             writePage(mainDir, "guides/deploy.md", page)
@@ -403,7 +386,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("an UNMATERIALIZED binding survives a wrong reap - the case where a hard delete would have been forever") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "placeholder.md", "# P\n")
             writePage(extraDir, "notes/loose.md", "# Loose\n\nno id in the file at all\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -425,7 +408,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- Freshness, and the ONE transaction boundary ---------------------------------------------------
 
     test("a revocation committed BEFORE the reap transaction yields ZERO deletes") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             writePage(mainDir, "guides/deploy.md", "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
@@ -451,7 +434,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("a proof minted for root A cannot retire anything in root B - no cross-root replay") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             // The SAME relative path and the SAME id in both roots is impossible (UNIQUE(id)), so the replay this
             // guards against is a proof whose (path, id) pair happens to name a binding that lives elsewhere.
             // BindingRef carries no root; `proof.root` is the only thing standing between it and root B's row.
@@ -475,7 +458,7 @@ class AbsenceAuthorityTest : FunSpec({
     }
 
     test("a proof whose binding no longer carries that id retires NOTHING - the page at that path is someone else's now") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val other = PageId.require("0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01")
             writePage(mainDir, "guides/deploy.md", "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n")
@@ -497,7 +480,7 @@ class AbsenceAuthorityTest : FunSpec({
     // ---- The bind gate, at the repository boundary ------------------------------------------------------
 
     test("bind REFUSES a retired id for anyone but the page that earned it - enforced in the transaction, not by convention") {
-        withTrees { mainDir, extraDir ->
+        withAbsenceTrees { mainDir, extraDir ->
             AbsenceWorld(mainDir, extraDir).use { world ->
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
                 val home = RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
@@ -525,76 +508,3 @@ class AbsenceAuthorityTest : FunSpec({
         }
     }
 })
-
-private fun <T> withTrees(block: (Path, Path) -> T): T {
-    val mainDir = Files.createTempDirectory("plainbase-absence-main")
-    val extraDir = Files.createTempDirectory("plainbase-absence-extra")
-    return try {
-        block(mainDir, extraDir)
-    } finally {
-        mainDir.toFile().deleteRecursively()
-        extraDir.toFile().deleteRecursively()
-    }
-}
-
-/**
- * One app-DB world (main, then extra) seating SEVERAL builders over the same durable state and the same REAL
- * search engine - because half the assertions here are about what the engine's generation swap did NOT delete,
- * and a fake provider would simply agree with whatever it was told.
- */
-private class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
-
-    private val driver = DatabaseFactory.createInMemoryDriver()
-    private val database = DatabaseFactory.createDatabase(driver)
-
-    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
-
-    val availability = RootAvailability(Clock.System)
-    val idMap = SqlDelightIdMapRepository(database)
-    val checkpoints = SqlDelightPageCheckpointRepository(database)
-    val dirtyPages = SqlDelightDirtyPageRepository(database)
-    val retirements = SqlDelightRetirementRepository(database)
-    val limbo = RootLimbo()
-    private val aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
-
-    private val searchDir: Path = Files.createTempDirectory("plainbase-absence-search")
-    private val searchDb = SearchDb(searchDir.resolve("search.db"))
-
-    val engine: SearchProvider = Fts5SearchProvider(searchDb)
-    val indexer = SearchIndexer(engine, SectionSplitter())
-
-    fun builder(
-        mainDir: Path,
-        extraStore: ContentStore,
-        searchIndexer: SearchIndexer? = null,
-    ): IndexBuilder = IndexBuilder(
-        sources = listOf(
-            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
-            IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, NoOpHistoryProvider),
-        ),
-        frontmatterParser = FrontmatterReader(),
-        rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
-        patcher = FrontmatterPatcher(),
-        idMap = idMap,
-        aliasRegistry = aliasRegistry,
-        checkpoint = checkpoints,
-        citations = CitationFactory(),
-        rootRank = registry::rank,
-        registeredRoots = registry.roots.map { it.name }.toSet(),
-        listeners = listOfNotNull(
-            IndexBuilder.PublicationListener(checkpoints::replaceFrom),
-            searchIndexer?.let { indexer -> IndexBuilder.PublicationListener(indexer::sync) },
-        ),
-        searchIndexer = searchIndexer,
-        availability = availability,
-        retirements = retirements,
-        limbo = limbo,
-    )
-
-    override fun close() {
-        searchDb.close()
-        searchDir.toFile().deleteRecursively()
-        driver.close()
-    }
-}

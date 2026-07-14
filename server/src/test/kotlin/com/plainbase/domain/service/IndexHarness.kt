@@ -7,9 +7,11 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBackend
+import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -122,10 +124,29 @@ class IndexHarness(
     /** The DERIVED limbo set the builder republishes each pass and `/healthz` reports (C1). */
     val limbo = RootLimbo()
 
+    /** Watch coverage, as `serve()` wires it: the watchers write it, `/healthz` and the epoch read it. */
+    val convergence = RootConvergence()
+
+    /**
+     * The observation epochs (C2), over the SAME retirement repository the builder applies proofs through.
+     *
+     * A root starts UNOBSERVED and earns nothing, exactly as in production - so a test that wants the epoch has to
+     * declare the root watched ([observe]), which is the honest precondition: without a watcher there is no
+     * observation, and two scans with an `rm` between them prove nothing at all.
+     */
+    val epochs = ObservationEpoch(retirements, convergence)
+
+    /** Declares [root] under continuous observation - what `serve()` does when it installs the root's watcher. */
+    fun observe(root: String = "main"): IndexHarness = apply { epochs.observing(RootName.require(root)) }
+
     val builder = IndexBuilder(
         sources = sourceList,
         availability = availability,
         limbo = limbo,
+        // Wired, where C0 left it defaulted to NoRetirements: the harness minted a real repository and then handed the
+        // builder one that could not cash a proof, so no test could have observed a reap even once a source minted one.
+        retirements = retirements,
+        epochs = epochs,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
         identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),

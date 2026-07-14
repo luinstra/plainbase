@@ -18,6 +18,7 @@ import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.RootUnavailable
@@ -97,13 +98,23 @@ class LocalContentStore(
      */
     private val onRootUnavailable: () -> Unit = {},
     /**
+     * Called when the probe REBINDS to a different tree at the same path - a deploy (`mv site.new site`), a symlink
+     * flip, a fresh clone. It is a healthy root and it keeps serving, which is exactly why it needs saying: every page
+     * an observation epoch witnessed here, it witnessed against the OLD inodes, and inodes are what the watches track.
+     * So the epoch must die with the tree it was watching (C2), or the first scan of the NEW tree would read as
+     * "the pages I was watching are gone" and reap a corpus that was merely replaced.
+     *
+     * The same ctor-callback idiom as [onRootUnavailable]: the frameworks store never depends on the domain holder.
+     */
+    private val onIdentityRebind: () -> Unit = {},
+    /**
      * The liveness probe [available] runs, seamed for the ONE instant a test cannot otherwise observe: "the
      * root was still there when we ENTERED". No FS state change can happen between two calls inside a single
      * operation, so a test scripts THIS to pass once and every other thing in the row - the failing FS call,
      * the failure arm, the exit classifier, the mark, the throw - stays production code. Production always
      * runs the real check ([rootLivenessProbe]), bound at construction to the tree this store serves.
      */
-    private val probeRoot: (Path) -> Boolean = rootLivenessProbe(root),
+    private val probeRoot: (Path) -> Boolean = rootLivenessProbe(root, onIdentityRebind),
 ) : ContentStore {
 
     // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
@@ -203,6 +214,15 @@ class LocalContentStore(
         val folders = mutableListOf<ContentFolder>()
         val issues = mutableListOf<ScanIssue>()
         val dirNames = mutableMapOf<TreePath, String>()
+
+        /**
+         * Did this walk see the WHOLE tree ([ScanResult.complete])? An unreadable DIRECTORY raises and takes the whole
+         * scan with it (fail-closed, and the rebuild carries the root), so what lands here is the quieter hole: a child
+         * this walk could LIST but could not STAT. That one is silent - the entry is simply skipped - and if it was a
+         * directory, its entire subtree leaves the scan with nothing said about it. A pass that then handed the epoch a
+         * `complete = true` scan would be claiming to have looked where it demonstrably could not.
+         */
+        var complete = true
     }
 
     /** A discovered child before collision resolution. */
@@ -271,7 +291,15 @@ class LocalContentStore(
     override fun scan(): ScanResult {
         val acc = ScanAccumulator()
         scanDir(root, null, acc)
-        val result = ScanResult(files = acc.files.toList(), folders = acc.folders.toList(), issues = acc.issues.toList())
+        val result = ScanResult(
+            files = acc.files.toList(),
+            folders = acc.folders.toList(),
+            issues = acc.issues.toList(),
+            // HONEST, not defaulted (C2). This used to take the `true` default, so the one backend whose walk can come
+            // back short structurally could not say so - and a scan that claims completeness it does not have is what
+            // an observation epoch would cash for delete authority.
+            complete = acc.complete,
+        )
         // Retain the raw directory names too so resolveOnDisk reaches an NFD-named ancestor (P4);
         // ContentFolder carries no rawName, so the dir map is sourced from the scan accumulator.
         snapshot.store(IndexSnapshot.of(result, acc.dirNames.toMap()))
@@ -292,7 +320,7 @@ class LocalContentStore(
         dirPath: TreePath?,
         acc: ScanAccumulator,
     ) {
-        val candidates = collectCandidates(dir, dirPath)
+        val candidates = collectCandidates(dir, dirPath, acc)
 
         for ((treePath, group) in candidates.groupBy { it.treePath }) {
             val winner = if (group.size == 1) {
@@ -310,8 +338,17 @@ class LocalContentStore(
         }
     }
 
-    /** Lists [dir]'s non-ignored children as [Candidate]s (raw name + NFC [TreePath]). */
-    private fun collectCandidates(dir: Path, dirPath: TreePath?): List<Candidate> {
+    /**
+     * Lists [dir]'s non-ignored children as [Candidate]s (raw name + NFC [TreePath]).
+     *
+     * ONE `readAttributes` decides both type questions (symlink, directory), where `isSymbolicLink` +
+     * `isDirectory` were two stats that each answered FALSE on an IO failure - so a child this walk could name but
+     * not stat was silently typed as a FILE, and if it was really a DIRECTORY its whole subtree left the scan with
+     * `complete = true` still claiming we had looked. That is the quiet half of the completeness lie (the loud half,
+     * an unreadable directory, raises out of [withDirectoryStream] and fails the scan). Now the stat failure is what
+     * it is: an entry we could not see, and a walk that must not pretend otherwise ([ScanAccumulator.complete]).
+     */
+    private fun collectCandidates(dir: Path, dirPath: TreePath?, acc: ScanAccumulator): List<Candidate> {
         val children = withDirectoryStream(dir) { it.toList() }
         return children.mapNotNull { child ->
             val rawName = child.fileName.toString()
@@ -322,14 +359,25 @@ class LocalContentStore(
                 logger.debug { "Skipping excluded app-owned subtree: $relativePath" }
                 return@mapNotNull null
             }
+            val attrs = try {
+                // NOFOLLOW_LINKS keeps the type checks honest about the link itself.
+                Files.readAttributes(child, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (e: IOException) {
+                acc.complete = false
+                logger.warn(e) {
+                    "could not stat $relativePath during the scan of $root: it is skipped, and this walk is INCOMPLETE - " +
+                        "the root keeps serving what it can read, and nothing may be deleted for what it cannot"
+                }
+                return@mapNotNull null
+            }
             // Skip symlinks: a symlink cycle is a startup stack overflow and an out-of-root target is
-            // a content-root escape. NOFOLLOW_LINKS keeps the type checks honest about the link itself.
-            if (Files.isSymbolicLink(child)) {
+            // a content-root escape.
+            if (attrs.isSymbolicLink) {
                 logger.warn { "Skipping symlink (policy: links are not content): $relativePath" }
                 return@mapNotNull null
             }
             val treePath = TreePath.childOf(dirPath, Nfc.normalize(rawName))
-            Candidate(rawName, child, treePath, Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS))
+            Candidate(rawName, child, treePath, attrs.isDirectory)
         }
     }
 
@@ -825,6 +873,7 @@ class LocalContentStore(
         onChange: (TreePath) -> Unit,
         onFailure: (Throwable) -> Unit,
         onCoverage: (WatchCoverage) -> Unit,
+        onBreak: (BreakCause) -> Unit,
     ): AutoCloseable =
         // The watcher shares the scan's IgnoreRules (one ignore policy, §B1) and skips the
         // configured exclusions - DATA_DIR when it is nested inside the content root, so the app's
@@ -836,6 +885,7 @@ class LocalContentStore(
             onChange = onChange,
             onFailure = onFailure,
             onCoverage = onCoverage,
+            onBreak = onBreak,
             // THIS store's probe, not a second one: the watcher's "is the root there" and the write path's must
             // never fork, and a seamed probe (tests) has to reach the watcher too.
             rootIsAlive = ::available,
@@ -904,7 +954,7 @@ internal fun rootIsTraversable(root: Path): Boolean =
  * alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there AT
  * CONSTRUCTION keys null too, and binds to whatever tree turns up at the path.
  */
-internal fun rootLivenessProbe(root: Path): (Path) -> Boolean {
+internal fun rootLivenessProbe(root: Path, onRebind: () -> Unit = {}): (Path) -> Boolean {
     val bound = AtomicReference(rootFileKey(root))
     return probe@{ path ->
         if (!rootIsTraversable(path)) return@probe false
@@ -918,7 +968,12 @@ internal fun rootLivenessProbe(root: Path): (Path) -> Boolean {
             }
             isBlank(path) -> false // a different, EMPTY tree: the mount point an unmount left behind
             else -> {
-                bound.store(now) // a different, POPULATED tree: a deploy. Rebind and converge.
+                // A different, POPULATED tree: a deploy. Rebind and converge - and TELL SOMEONE (C2). The root is
+                // healthy and every byte of it serves, but this is a NEW universe: an observation epoch built on the
+                // old tree witnessed pages that no longer exist AS THOSE FILES, so believing it here would let a
+                // release reap the site it just replaced. Only the CAS winner announces it: the probe runs on every
+                // liveness tick and every failed FS call, and one rebind is one break.
+                if (bound.compareAndSet(expectedValue = captured, newValue = now)) onRebind()
                 true
             }
         }

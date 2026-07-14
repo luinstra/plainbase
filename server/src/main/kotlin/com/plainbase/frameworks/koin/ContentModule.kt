@@ -2,6 +2,9 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.repository.DirtyPageRepository
+import com.plainbase.domain.repository.NoRetirements
+import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
@@ -45,6 +48,18 @@ val contentModule = module {
     // The DERIVED limbo set (C0), republished every pass: durable rows whose pages the pass did not witness and
     // no proof covers. Never stored - a stored flag would be another snapshot from T used at T+n.
     single { RootLimbo() }
+    // The observation epochs (C2) - the ONE holder that decides whether a scan may say a page is gone. It reads
+    // coverage from the SAME RootConvergence the watchers write and `/healthz` reads, and it revokes through the
+    // SAME RetirementRepository the proof-apply transaction re-checks against. Two of either would let an epoch
+    // stay open on evidence nobody else believes.
+    //
+    // `getOrNull()` HONORS THE BOOT-GATE SEAL and is not a shrug: `bootGateFor` builds this module WITHOUT
+    // repositoryModule on purpose - `plainbase root` holds `roots.lock`, never the DATA_DIR lock, so it may not open
+    // (and migrate) the app database. A graph with no repository therefore has no durable token to mint, which means
+    // it has no delete authority to hand out either - and [NoRetirements] is precisely that fact as a value. The gate
+    // scans nothing and reaps nothing; degrading here is what keeps it that way, where a `get()` would have made
+    // every CLI verb resolve a database it is forbidden to touch.
+    single { ObservationEpoch(getOrNull() ?: NoRetirements, get()) }
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
@@ -58,6 +73,9 @@ val contentModule = module {
             exclusions = listOf(config.dataDir),
             rootName = main.name,
             onRootUnavailable = { get<RootAvailability>().markUnavailable(main.name, UnavailableCause.VANISHED) },
+            // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
+            // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
+            onIdentityRebind = { get<ObservationEpoch>().broke(main.name, BreakCause.IDENTITY_REBIND) },
         )
     }
     // The per-root content trees. Construction for a configured root is ALWAYS allowed and is INERT for a missing
@@ -82,6 +100,9 @@ val contentModule = module {
                         exclusions = listOf(config.dataDir),
                         rootName = root.name,
                         onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
+                        // Resolved INSIDE the callback, like `onRootUnavailable` above: it fires on a rebind, not on a
+                        // construction, so the boot gate's graph never has to hold an epoch it has no business holding.
+                        onIdentityRebind = { get<ObservationEpoch>().broke(root.name, BreakCause.IDENTITY_REBIND) },
                     )
                 },
         )
