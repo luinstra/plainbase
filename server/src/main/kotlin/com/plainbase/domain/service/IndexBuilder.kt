@@ -351,7 +351,7 @@ class IndexBuilder(
         // API_DELETE arrive later; until they do, an absence outside those two is still never believed. Minted BEFORE
         // the binds below, against the id_map as it stands NOW: a proof is about the durable binding a page HAD when
         // the pass observed it gone, and this pass is about to rewrite that table.
-        val proofs: List<AbsenceProof> = refuted(mintEpochProofs(observed) + mintObjectListProofs(seen), seen)
+        val proofs: List<AbsenceProof> = refuted(mintEpochProofs(observed) + mintObjectListProofs(observed, seen), seen)
         val retired: Set<PageId> = retirements.applyProofs(proofs).map { it.id }.toSet()
 
         // **A suspect tree may not DISPLACE the incumbents it does not carry** (C3). The latch guards the ABSENCE
@@ -562,10 +562,24 @@ class IndexBuilder(
      *
      * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
      * arm, and it is the common one: a store that has listed nothing knows nothing.
+     *
+     * **And the mirror must hold the WHOLE generation, which is what [SourceScan.complete] means for an object root**
+     * (`ObjectContentStore.scan` derives it from `mirrorHoldsGeneration`). The LIST is the authority about the BUCKET
+     * and it needs no help from the mirror to say a key is gone - but the REFUTATION is made of pages we READ, and on
+     * an object root we read the MIRROR. A poll whose GET of one key failed drops it and "retries next cycle", so the
+     * published generation NAMES a key the mirror does not hold; if that key is a RENAMED page, the id that would
+     * have refuted its old binding is sitting in an object we never fetched, and a LIST returns keys and etags - never
+     * frontmatter ids - so the manifest cannot supply it either. Absence proven by the bucket, refutation withheld by
+     * the mirror: we would retire a page that MOVED.
+     *
+     * So we do not prove what we could not read. The rows wait in limbo (503, self-healing) and the next poll fetches
+     * the key and converges. A DRAINED bucket is unaffected - it lists nothing, so a mirror holding nothing holds the
+     * whole of it.
      */
-    private fun mintObjectListProofs(witnessed: Map<RootedPath, Witness>): List<AbsenceProof> =
+    private fun mintObjectListProofs(scans: List<SourceScan>, witnessed: Map<RootedPath, Witness>): List<AbsenceProof> =
         sources.filter { it.root.backend is RootBackend.Object }.mapNotNull { source ->
             val root = source.root.name
+            if (scans.none { it.root == root && it.complete }) return@mapNotNull null
             val manifest = source.manifests?.latestManifest() ?: return@mapNotNull null
             val gone = bindings.proven(root, manifest, witnessed)
             if (gone.isEmpty()) {

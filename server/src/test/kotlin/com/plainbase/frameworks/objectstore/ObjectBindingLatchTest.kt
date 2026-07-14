@@ -11,6 +11,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import java.io.IOException
 
 /**
  * **THE WRONG-BUCKET WIPE** (C3), and the latch that closes it.
@@ -177,6 +178,37 @@ class ObjectBindingLatchTest : FunSpec({
         }
     }
 
+    test("an object RENAME whose GET fails reaps NOTHING - we cannot refute what we did not read") {
+        ObjectAbsenceWorld().use { world ->
+            val bucket = handbook()
+            val client = GetFails(bucket, failFor = "guides/deploy-v2.md")
+            world.boot(client, real).rebuild() // TRUSTED, three rows, and a mirror holding the whole generation
+
+            // The rename - and this time the GET of the NEW key fails once. The poll drops it and "retries next
+            // cycle" (ObjectContentStore.kt:482-489), so the generation NAMES a key the mirror does not hold.
+            //
+            // The LIST is still complete and still authoritative about the BUCKET: `guides/deploy.md` is genuinely
+            // not there. But the REFUTATION is made of pages we READ, and on an object root we read the MIRROR - so
+            // the id that would have refuted this absence is sitting in a key we never fetched. A LIST returns keys
+            // and etags, never frontmatter ids, so the manifest cannot supply it either.
+            //
+            // Absence proven by the bucket, refutation withheld by the mirror. Minting here retires a page that MOVED.
+            bucket.remove("guides/deploy.md")
+            bucket.seedPage("guides/deploy-v2.md", deployId)
+            client.armed = true
+            world.store.pollOnce()
+            world.builder().rebuild()
+
+            withClue("a mirror that does not hold the whole generation has not shown us every page the bucket has") {
+                world.idMap.retiredBindings().shouldBeEmpty()
+            }
+            withClue("the page is not gone, it is UNREAD - so it waits in limbo, and the next poll fetches it") {
+                world.idMap.pathOf(deployId).shouldNotBeNull()
+                world.limbo.count(RootName.MAIN) shouldBe 1
+            }
+        }
+    }
+
     test("a create racing a paginated LIST is never reaped - the boundary is the rows BEFORE the first page") {
         ObjectAbsenceWorld().use { world ->
             val bucket = handbook().apply { pageSize = 1 } // LIST paginates: three pages, three round trips
@@ -230,3 +262,16 @@ class ObjectBindingLatchTest : FunSpec({
         }
     }
 })
+
+/**
+ * The bucket answers every LIST honestly; the GET of ONE key fails, exactly as a transient 500 or a timeout does.
+ * `pollOnce` catches it, drops the key, and retries next cycle - so the published generation NAMES a key that the
+ * mirror does not hold, and the pass reads a tree with a hole in it that only the etag map knows about.
+ */
+private class GetFails(private val delegate: FakeObjectStore, private val failFor: String) : ObjectStoreClient by delegate {
+
+    var armed = false
+
+    override suspend fun get(key: String, maxBytes: Long?): FetchedObject? =
+        if (armed && key == failFor) throw IOException("transient GET failure") else delegate.get(key, maxBytes)
+}

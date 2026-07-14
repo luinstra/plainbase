@@ -79,7 +79,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
      * [binding] is what the CONFIG says. Handing it in separately from [bucket] is the whole test surface: a wrong
      * bucket is a real, reachable, perfectly healthy object store that simply is not ours.
      */
-    fun boot(bucket: FakeObjectStore, binding: RootBinding, hydrate: Boolean = true): IndexBuilder {
+    fun boot(bucket: ObjectStoreClient, binding: RootBinding, hydrate: Boolean = true): IndexBuilder {
         val ignoreRules = IgnoreRules()
         val mirror = LocalContentStore(root = mirrorRoot, ignoreRules = ignoreRules)
         store = ObjectContentStore(
