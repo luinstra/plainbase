@@ -596,9 +596,10 @@ internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName
                 "(1) fix roots{} so the bound name(s) above are declared again (root names are permanent identifiers), " +
                 "or point DATA_DIR at the right directory; (2) if the removal is intentional and losing those roots' " +
                 "permalinks and old-URL redirects is accepted: back up DATA_DIR first, then delete only the detached " +
-                "rows, per root name, from the six root-bearing tables - e.g. " +
+                "rows, per root name, from the root-bearing tables - e.g. " +
                 "sqlite3 DATA_DIR/plainbase.db \"DELETE FROM id_map WHERE root='<name>'\" " +
-                "(repeat for url_alias, identity_issue, page_checkpoint, dirty_page, and proposals). Do NOT delete " +
+                "(repeat for retired_binding, url_alias, identity_issue, page_checkpoint, dirty_page, proposals, " +
+                "git_checkpoint, root_observation, and root_topology). Do NOT delete " +
                 "plainbase.db itself: it also holds users, sessions, API tokens, roles, proposals, and the audit log. " +
                 "NOTE: a detached root's PENDING/APPLYING proposals stay exactly as they are - they are never applied, " +
                 "never terminally failed, and never deleted - and they revive if the root's name returns to roots{}."
