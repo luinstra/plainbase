@@ -856,6 +856,9 @@ private object EnabledStubHistory : com.plainbase.domain.history.HistoryProvider
 
     override fun prepare() = Unit
     override fun gateCheck() = Unit
+    override fun currentHead(): String? = null
+    override fun isAncestor(ancestor: String, descendant: String) = false
+    override fun deletedIn(from: String, to: String): Set<TreePath>? = null
 }
 
 /**
@@ -887,6 +890,9 @@ private object FailingGitReads : com.plainbase.domain.history.HistoryProvider {
 
     override fun prepare() = Unit
     override fun gateCheck() = Unit
+    override fun currentHead(): String? = null
+    override fun isAncestor(ancestor: String, descendant: String) = false
+    override fun deletedIn(from: String, to: String): Set<TreePath>? = null
 }
 
 // ---- small, honest assertion helpers ------------------------------------------------------------

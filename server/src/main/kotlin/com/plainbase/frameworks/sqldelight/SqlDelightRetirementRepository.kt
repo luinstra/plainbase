@@ -4,6 +4,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.RootName
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -11,11 +12,11 @@ import kotlin.time.Clock
 
 /**
  * SQLDelight adapter for [RetirementRepository] - the proof-apply transaction, over `root_observation`,
- * `id_map`, `retired_binding`, `page_checkpoint` and `dirty_page` (see the port for the model).
+ * `id_map`, `retired_binding`, `page_checkpoint`, `dirty_page` and (C4) `git_checkpoint` (see the port for the model).
  *
- * All five tables live in the SAME app database, which is what lets the freshness compare and the deletions it
- * authorizes be ONE transaction rather than a protocol. That is not an implementation convenience; it is the
- * entire safety argument for the reap.
+ * All six tables live in the SAME app database, which is what lets the freshness compare, the deletions it
+ * authorizes, and the C4 checkpoint advance be ONE transaction rather than a protocol. That is not an implementation
+ * convenience; it is the entire safety argument for the reap.
  */
 class SqlDelightRetirementRepository(
     private val db: PlainbaseDb,
@@ -26,9 +27,12 @@ class SqlDelightRetirementRepository(
     private val idMap get() = db.idMapQueries
     private val checkpoints get() = db.pageCheckpointQueries
     private val dirty get() = db.dirtyPageQueries
+    private val gitCheckpoints get() = db.gitCheckpointQueries
 
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef> {
-        if (proofs.isEmpty()) return emptySet() // C0's steady state: no source mints one, so nothing is ever reaped
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<BindingRef> {
+        // A baseline or empty-reap advance (C4) arrives with NO proofs by construction, so the empty-list guard
+        // must check BOTH lists or the advance would never reach the transaction that lands the checkpoint.
+        if (proofs.isEmpty() && advances.isEmpty()) return emptySet()
         return db.transactionWithResult {
             val retiredAt = clock.now().toEpochMilliseconds()
             val applied = mutableSetOf<BindingRef>()
@@ -84,10 +88,36 @@ class SqlDelightRetirementRepository(
                     applied += ref
                 }
             }
-            logger.info { "applied ${proofs.size} absence proof(s): ${applied.size} binding(s) retired" }
+            // The GIT checkpoint advances (C4), in the SAME transaction and behind the IDENTICAL freshness compare
+            // the proofs above ride: a revoked view advances nothing, so a GIT proof discarded for freshness drops
+            // its root's advance too. There is one token, one transaction, no window between the reap and the move.
+            val advanced = mutableListOf<GitCheckpointAdvance>()
+            for (advance in advances) {
+                val current = observations.selectObservation(advance.root).executeAsOneOrNull()
+                if (current != advance.observationId.value) {
+                    logger.warn {
+                        "discarding a GIT checkpoint advance for root '${advance.root}': it was minted under observation " +
+                            "${advance.observationId.value}, and the root's current observation is $current - the view it " +
+                            "was minted from has been revoked, so it advances nothing"
+                    }
+                    continue
+                }
+                gitCheckpoints.upsertHead(root = advance.root, head = advance.head)
+                advanced += advance
+            }
+            // The advances get their own clause because the COMMON C4 pass mints no proof at all - a baseline, or a
+            // range whose deletions this walk resolved by presence - and "applied 0 absence proof(s)" alone reads like
+            // a pass that did nothing, on the one line an operator has to tell a moving checkpoint from a stuck one.
+            logger.info {
+                "applied ${proofs.size} absence proof(s): ${applied.size} binding(s) retired" +
+                    advanced.joinToString(prefix = "; git checkpoint advanced: ", limit = 8) { "'${it.root}' -> ${it.head}" }
+                        .takeIf { advanced.isNotEmpty() }.orEmpty()
+            }
             applied
         }
     }
+
+    override fun gitHead(root: RootName): String? = gitCheckpoints.selectHead(root).executeAsOneOrNull()
 
     override fun observation(root: RootName): ObservationId =
         db.transactionWithResult {

@@ -1,0 +1,29 @@
+-- The GIT absence oracle's checkpoint (C4), one per eligible local root: the last HEAD whose committed
+-- deletions this root has already reaped (or recorded a baseline against).
+--
+-- **No row = no oracle** for that root. Absence of a baseline is itself a fail-closed arm: the first
+-- complete pass records the CURRENT head and proves nothing (a range needs a start, and there is none
+-- yet), so a delete committed BEFORE the upgrade stays in limbo rather than being reaped from a range
+-- nobody bracketed. Every later pass diffs `checkpoint..HEAD`, retires what that range deleted and this
+-- pass did not witness, and advances the checkpoint - all inside the proof-apply transaction, under the
+-- SAME durable observation token, so the advance and the reap it rode share one linearization point.
+--
+-- The head is stored as git's raw object id (SHA-1 or SHA-256 hex); the oracle only ever asks git whether
+-- one head is an ancestor of another, so no structure beyond "the string git gave us" is assumed here.
+
+import com.plainbase.domain.root.RootName;
+
+CREATE TABLE git_checkpoint (
+  root TEXT AS RootName NOT NULL PRIMARY KEY,
+  head TEXT NOT NULL
+);
+
+selectHead:
+SELECT head
+FROM git_checkpoint
+WHERE root = :root;
+
+upsertHead:
+INSERT INTO git_checkpoint(root, head)
+VALUES (:root, :head)
+ON CONFLICT(root) DO UPDATE SET head = excluded.head;

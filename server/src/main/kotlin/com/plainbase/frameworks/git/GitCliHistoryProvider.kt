@@ -7,6 +7,9 @@ import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.deleteRecursively
@@ -294,6 +297,53 @@ class GitCliHistoryProvider(
         }
         result.orThrow("diff $from..$to")
         return FileDiff(from = from, to = to, path = path, unifiedDiff = result.stdoutText)
+    }
+
+    /**
+     * The GIT absence oracle's HEAD read (C4), fail-closed at every step. A SHALLOW repo is disabled OUTRIGHT
+     * (plan #19): its history is truncated, so a `checkpoint..HEAD` range could miss the very commit that
+     * deleted a page. The gate is STRICT - proceed ONLY when the shallow probe ran ok AND printed exactly
+     * `false`; `true`, a failed probe, or garbage all return null, because "I do not know whether this repo is
+     * shallow" is never a licence to trust a range from it. Then `rev-parse HEAD`; a non-ok exit or no sha
+     * (unborn HEAD, empty repo) is null. Both reads carry `-c core.useReplaceRefs=false` so a hostile replace
+     * ref cannot rewrite what HEAD resolves to.
+     */
+    override fun currentHead(): String? {
+        val shallow = exec.run(NO_REPLACE_REFS + listOf("rev-parse", "--is-shallow-repository"))
+        if (!shallow.ok || shallow.stdoutText.trim() != "false") return null
+        val head = exec.run(NO_REPLACE_REFS + listOf("rev-parse", "HEAD"))
+        return if (head.ok) GitExecutor.parseSha(head.stdout) else null
+    }
+
+    /**
+     * Whether [ancestor] is an ancestor of [descendant], via `merge-base --is-ancestor` - exit 0 is the ONLY
+     * true. Exit 1 is "not an ancestor"; exit 128 (unknown object) and every other non-zero (a missing binary
+     * comes back exit -1 from [GitExecutor]) collapse to false, so every failure is "no". A shallow repo never
+     * reaches here - [currentHead] already nulled it. `-c core.useReplaceRefs=false` seals the ancestry check
+     * against a replace ref that grafts an unrelated parent.
+     */
+    override fun isAncestor(ancestor: String, descendant: String): Boolean =
+        exec.run(NO_REPLACE_REFS + listOf("merge-base", "--is-ancestor", ancestor, descendant)).ok
+
+    /**
+     * The `.md` tree paths DELETED across [from]..[to], or null on ANY failure. `--no-renames` is DELIBERATE:
+     * a rename surfaces as `D old` + `A new`, and the `D` becomes a proof candidate that the pass's own witness
+     * (which read the file under its new name) refutes in the apply transaction - rename safety comes from the
+     * refutation, never from git's similarity-scored rename heuristic. `--no-ext-diff --no-textconv` disarm a
+     * hostile repo-local `diff.external`/`textconv` (the RCE class caught on the `/diff` route); `--relative`
+     * (with [GitExecutor]'s `-C workTree`) scopes and filters paths to the content root in one flag;
+     * `-c core.useReplaceRefs=false` seals the range against a replace ref. The page filter lives HERE (the
+     * §3.4 mint re-checks defensively); any record the pure parser cannot frame or convert nulls the whole diff.
+     */
+    override fun deletedIn(from: String, to: String): Set<TreePath>? {
+        val result = exec.run(
+            NO_REPLACE_REFS + listOf(
+                "diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--relative", from, to,
+            ),
+        )
+        if (!result.ok) return null
+        val records = parseNameStatusRecords(result.stdout) ?: return null
+        return records.filter { it.status == "D" && it.path.name.endsWith(".md") }.mapTo(mutableSetOf()) { it.path }
     }
 
     /**
@@ -616,6 +666,12 @@ class GitCliHistoryProvider(
          *  (traversal alone hides merge-resolved changes; display alone leaks side-branch commits). */
         private val FIRST_PARENT = listOf("--first-parent", "--diff-merges=first-parent")
 
+        // Leading `-c` seal for the C4 absence-oracle reads (currentHead/isAncestor/deletedIn): a repo-local
+        // replace ref CAN rewrite ancestry and what HEAD resolves to, which would let a hostile repo steer the
+        // oracle. GitExecutor prepends its own PINNED_CONFIG `-c` flags, so extra leading `-c` args before the
+        // subcommand are legal and precede it.
+        private val NO_REPLACE_REFS = listOf("-c", "core.useReplaceRefs=false")
+
         // The git version floor for the read path: `--diff-merges=first-parent` (in [FIRST_PARENT]) is only
         // a valid value since git 2.31.0 — that release taught `--diff-merges` the named convenience values
         // (`first-parent`, `m`, `c`, `cc`, `on`, `off`); 2.30 accepted only `off`/`none`/`on`. Source: git
@@ -661,6 +717,53 @@ class GitCliHistoryProvider(
             Regex("""fatal: bad object|unknown revision or path not in the working tree|fatal: bad revision|unknown revision""")
     }
 }
+
+/** One `git diff --name-status -z` record: the status token and the path it converted to. */
+internal data class NameStatusRecord(val status: String, val path: TreePath)
+
+/**
+ * Parses a `git diff --name-status -z` byte stream into (status, path) records, or null when it cannot be
+ * FULLY understood - the fail-closed contract the C4 oracle rides on ([GitCliHistoryProvider.deletedIn]),
+ * extracted pure so its malformed-stream arms run as plain JVM tests without a git binary.
+ *
+ * Under `-z` the stream is NUL-TERMINATED tokens alternating status, path, status, path... (`--no-renames`,
+ * so never the three-token rename form). A well-formed non-empty stream ends in one trailing empty token, so a
+ * non-empty final token is a TRUNCATED record. Odd arity (a status with no path), an empty status, or a path
+ * that is not a valid [TreePath] (empty, absolute, `..`, hostile bytes) each null the whole parse - "a diff we
+ * half-understood is not a smaller diff". An empty stream is zero records (a clean no-change diff).
+ *
+ * **The decode is STRICT for the same reason** ([decodeStrictUtf8]). A git path is BYTES, and `-z` hands them over
+ * raw; a lenient decode turns bytes that are not UTF-8 into U+FFFD, which is a path we invented. It matches no
+ * binding, so it covers nothing - but it is still IN the range, so the advance would consume the deletion it
+ * misread, and the real page's absence could never be proven again. Half-understanding a path is not understanding
+ * a smaller diff either.
+ */
+internal fun parseNameStatusRecords(stdout: ByteArray): List<NameStatusRecord>? {
+    val tokens = decodeStrictUtf8(stdout)?.split(Char(0)) ?: return null
+    if (tokens.last().isNotEmpty()) return null // a non-empty final token: the last record was cut off
+    val fields = tokens.dropLast(1)
+    if (fields.size % 2 != 0) return null
+    val records = ArrayList<NameStatusRecord>(fields.size / 2)
+    for (i in fields.indices step 2) {
+        val status = fields[i]
+        if (status.isEmpty()) return null
+        val path = TreePath.of(fields[i + 1]) ?: return null
+        records += NameStatusRecord(status, path)
+    }
+    return records
+}
+
+/** [bytes] as UTF-8, or null if they are not UTF-8 - REPORT, never the silently-lossy U+FFFD replacement. */
+private fun decodeStrictUtf8(bytes: ByteArray): String? =
+    try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (_: CharacterCodingException) {
+        null
+    }
 
 /**
  * Best-effort git auto-maintenance: `maintenance run --auto` on modern git, falling back to `gc --auto`

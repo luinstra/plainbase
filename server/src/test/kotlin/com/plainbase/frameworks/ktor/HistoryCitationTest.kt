@@ -140,6 +140,12 @@ private class CountingHistoryDecorator(private val delegate: HistoryProvider) : 
 
     override fun gateCheck() = delegate.gateCheck()
 
+    override fun currentHead() = delegate.currentHead()
+
+    override fun isAncestor(ancestor: String, descendant: String) = delegate.isAncestor(ancestor, descendant)
+
+    override fun deletedIn(from: String, to: String) = delegate.deletedIn(from, to)
+
     fun reset() {
         lastCommitsCalls = 0
         logCalls = 0

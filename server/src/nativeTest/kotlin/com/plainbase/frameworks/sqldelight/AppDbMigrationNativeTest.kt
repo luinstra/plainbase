@@ -104,7 +104,7 @@ class AppDbMigrationNativeTest {
                 assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
                 assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
-                assertEquals(13L, driver.queryLongNative("PRAGMA user_version"))
+                assertEquals(14L, driver.queryLongNative("PRAGMA user_version"))
 
                 // The composite PK is live: the same relative path inserts under another root...
                 db.idMapQueries.upsertBinding(

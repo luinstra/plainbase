@@ -3,6 +3,7 @@ package com.plainbase.domain.repository
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
@@ -24,9 +25,10 @@ import com.plainbase.domain.root.RootName
  * brings search into line afterwards, and a crash between the two leaves a STALE SEARCH ROW - a wrong hit, not
  * a lost page, and exactly the failure ADR-0004 already accepts. Do not invent an outbox for a derived store.
  *
- * **In C0 nothing calls [applyProofs] with a non-empty list.** No production code mints an [AbsenceProof] -
- * all five sources arrive in later chunks - so this machinery is real, tested, and idle. That is the safety
- * floor: a reaper that cannot be handed a licence cannot reap.
+ * **C0 shipped this idle** - nothing minted an [AbsenceProof], so the reaper was real, tested, and unusable. Since
+ * then EPOCH (C2), OBJECT_LIST (C3) and GIT (C4 - which also rides checkpoint advances through here) mint against it;
+ * OPERATOR (C5) and API_DELETE arrive later. The safety floor stands: a reaper that cannot be handed a licence cannot
+ * reap, and a source that cannot answer *"what did we SEE?"* cannot call this at all.
  */
 interface RetirementRepository {
 
@@ -60,8 +62,22 @@ interface RetirementRepository {
      * There is deliberately NO DEFAULT. An empty witness set means *"we saw nothing"*, which is the OPTIMISTIC value -
      * it refutes no proof and reaps the most - and a safety input that silently defaults to the optimistic value is
      * precisely how all three of these bugs came to exist.
+     *
+     * [advances] are the GIT-checkpoint moves (C4) that ride THIS transaction, each behind its own freshness compare,
+     * so an advance and the retirements it accounts for commit or roll back together. It HAS a default and [witnessed]
+     * does not, and the asymmetry is the point: omitting [witnessed] would default to the optimistic value (reap the
+     * most), while omitting [advances] defaults to the PESSIMISTIC one (the checkpoint does not move, the next boot
+     * re-derives) - a safety input gets no default, a fail-closed convenience may. A baseline or empty-reap advance
+     * arrives with NO proofs, which is why the empty-list early return must guard on BOTH lists.
      */
-    fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef>
+    fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<PageId>,
+        advances: List<GitCheckpointAdvance> = emptyList(),
+    ): Set<BindingRef>
+
+    /** [root]'s recorded GIT checkpoint HEAD (C4), or null when no baseline has been written for it yet. */
+    fun gitHead(root: RootName): String?
 
     /** [root]'s CURRENT freshness token, minting a fresh one on first sight. */
     fun observation(root: RootName): ObservationId
@@ -83,7 +99,12 @@ interface RetirementRepository {
  * grant no authority" is the C0 behavior everywhere, and this object simply cannot be talked out of it.
  */
 object NoRetirements : RetirementRepository {
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>): Set<BindingRef> = emptySet()
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<PageId>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<BindingRef> = emptySet()
+    override fun gitHead(root: RootName): String? = null
     override fun observation(root: RootName): ObservationId = ObservationId(0)
     override fun observations(): Map<RootName, ObservationId> = emptyMap()
     override fun revoke(root: RootName): ObservationId = ObservationId(0)

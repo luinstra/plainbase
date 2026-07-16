@@ -27,8 +27,8 @@ import com.plainbase.domain.page.PageId
  *    has ever destroyed a corpus.*
  *
  * **C0 shipped with ZERO proof sources** - `proofs` was always empty and nothing could be reaped by inference at all,
- * which was the safety floor and a property of the TYPE rather than of a policy anyone could forget. `EPOCH` (C2) and
- * `OBJECT_LIST` (C3) have since bought delete convergence back with EVIDENCE rather than with a guess; `GIT` (C4),
+ * which was the safety floor and a property of the TYPE rather than of a policy anyone could forget. `EPOCH` (C2),
+ * `OBJECT_LIST` (C3) and `GIT` (C4) have since bought delete convergence back with EVIDENCE rather than with a guess;
  * `OPERATOR` (C5) and `API_DELETE` are still to come. A page no source can account for sits in limbo ([RootLimbo]) and
  * reads 503 - never a 404, and never a reap.
  *
@@ -139,6 +139,34 @@ data class AbsenceProof(
         return takeIf { gone.isNotEmpty() }?.copy(covers = gone)
     }
 }
+
+/**
+ * A GIT-checkpoint advance (C4): move [root]'s recorded HEAD to [head] - but ONLY if [observationId] still
+ * equals the root's current token INSIDE the proof-apply transaction, the SAME freshness gate a proof rides,
+ * so a view revoked between the mint and the apply advances nothing.
+ *
+ * It carries no bindings because it is not a reap. It is the record that says *"every committed deletion up to
+ * [head] has been ACCOUNTED FOR"* - retired, refuted by a witness, or already gone - and it rides the same
+ * transaction as the retirements it travels with, so the advance and the deletes it authorized share ONE
+ * linearization point. That is what makes the crash semantics fall out: die before the commit and the next boot
+ * re-diffs the identical range from the unmoved checkpoint; die after and the range is consumed with its deletions.
+ *
+ * The advance is RESOLUTION-based, not reap-based: an EMPTY effective reap set still advances (a restored file
+ * that pinned the checkpoint would otherwise re-diff an ever-growing range forever), while an UNREAD path in the
+ * range withholds it (a page the walk saw and the read failed on is not accounted for). See the C4 mint.
+ *
+ * **Two stated residues, both fail-closed, both C5 reconcile's to clear:**
+ *  - **A CROSS-ROOT refutation consumes the range.** The refutation is global by id (a page seen ANYWHERE is not
+ *    absent), so a copy of the deleted page living in ANOTHER root refutes this root's cover - and the advance
+ *    still lands, because the deletion IS accounted for: we are looking at that id. Delete the other root's copy
+ *    later and nothing re-derives the original cover; the range is spent. That row waits in limbo (503,
+ *    self-healing on REAPPEARANCE) but does NOT self-heal into a retirement - it needs `root reconcile`.
+ *  - **[head] is compared by STRING EQUALITY, so the G2 bracket has an ABA residue.** A mid-pass `A -> B -> A`
+ *    (a commit and a `reset --hard` back, inside one walk) reads A at both ends and the bracket sees nothing move.
+ *    The window is one pass wide and needs a history rewrite landing inside it; the alternative - a reflog walk
+ *    per pass - buys a narrower race at a cost the oracle is not worth. Named, not fixed.
+ */
+data class GitCheckpointAdvance(val root: RootName, val observationId: ObservationId, val head: String)
 
 /**
  * What a pass actually SAW at one rooted path: the page was READ, and [observedId] is the id its frontmatter

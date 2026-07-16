@@ -31,7 +31,12 @@ class ObservationEpochTest : FunSpec({
     /** The durable token, in memory: [revoke] mints, [applyProofs] is nobody's business here. */
     class Tokens : RetirementRepository {
         private val tokens = mutableMapOf<RootName, ObservationId>()
-        override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>) = emptySet<BindingRef>()
+        override fun applyProofs(
+            proofs: List<AbsenceProof>,
+            witnessed: Set<PageId>,
+            advances: List<GitCheckpointAdvance>,
+        ) = emptySet<BindingRef>()
+        override fun gitHead(root: RootName): String? = null
         override fun observation(root: RootName) = tokens.getOrPut(root) { ObservationId(1) }
         override fun observations() = tokens.toMap()
         override fun revoke(root: RootName): ObservationId = observation(root).next().also { tokens[root] = it }

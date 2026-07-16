@@ -64,6 +64,23 @@ interface HistoryProvider {
      * adapter is always ready.
      */
     fun gateCheck()
+
+    /**
+     * The repo's current HEAD as a full object id, or null (no repo, no commits yet, a SHALLOW repo, any
+     * failure). The GIT absence oracle (C4) brackets a pass between two reads of this and diffs the range;
+     * everything about it fails CLOSED, so an inconclusive answer is null, never a licence.
+     */
+    fun currentHead(): String?
+
+    /** Whether [ancestor] is an ancestor of [descendant]. FALSE on ANY failure — an unknown sha, a non-zero exit. */
+    fun isAncestor(ancestor: String, descendant: String): Boolean
+
+    /**
+     * The `.md` tree paths DELETED between commits [from] and [to] (renames NOT resolved — a rename is a `D`
+     * of its old path, refuted later by the witness that read it under its new name), or null on ANY failure
+     * (a diff we could not fully understand is not a smaller diff, and never "no deletions").
+     */
+    fun deletedIn(from: String, to: String): Set<TreePath>?
 }
 
 /** One commit's recorded identity + timestamps + message (read shape; the history layer owns its evolution). */

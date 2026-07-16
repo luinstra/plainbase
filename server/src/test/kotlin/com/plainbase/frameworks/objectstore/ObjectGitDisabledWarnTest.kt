@@ -102,6 +102,9 @@ private val enabledHistoryStub = object : HistoryProvider {
     override fun diff(from: String, to: String, path: TreePath): FileDiff = FileDiff(from, to, TreePath.require("x.md"), "")
     override fun prepare() = Unit
     override fun gateCheck() = Unit
+    override fun currentHead(): String? = null
+    override fun isAncestor(ancestor: String, descendant: String): Boolean = false
+    override fun deletedIn(from: String, to: String): Set<TreePath>? = null
 }
 
 /** Locates `server/src/main/kotlin` (the [com.plainbase.DomainPurityTest] pattern). */

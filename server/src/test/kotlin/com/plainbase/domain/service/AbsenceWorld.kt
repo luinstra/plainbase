@@ -1,6 +1,8 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.ObservationEpoch
@@ -129,10 +131,16 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         mainDir: Path,
         extraStore: ContentStore,
         searchIndexer: SearchIndexer? = null,
+        // The C4 seams. Both histories default to the fail-closed NoOp (mints nothing, advances nothing) and
+        // `retirements` defaults to this world's real one, so every pre-C4 call site stays byte-identical; a git
+        // row injects a fake HistoryProvider, and a crash row wraps the retirement repository (a decorator).
+        mainHistory: HistoryProvider = NoOpHistoryProvider,
+        extraHistory: HistoryProvider = NoOpHistoryProvider,
+        retirements: RetirementRepository = this.retirements,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
-            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
-            IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, NoOpHistoryProvider),
+            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), mainHistory),
+            IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, extraHistory),
         ),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },

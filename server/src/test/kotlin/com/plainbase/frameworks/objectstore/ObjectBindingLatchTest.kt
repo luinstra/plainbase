@@ -1,5 +1,10 @@
 package com.plainbase.frameworks.objectstore
 
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.Commit
+import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BindingStatus
 import com.plainbase.domain.root.RootBinding
@@ -261,7 +266,37 @@ class ObjectBindingLatchTest : FunSpec({
             world.idMap.retiredBindings().map { it.id } shouldContainExactlyInAnyOrder listOf(onboardingId)
         }
     }
+
+    test("an object root's enabled mirror-git provider is never asked for the C4 absence-oracle members - the backend gate") {
+        ObjectAbsenceWorld().use { world ->
+            world.boot(handbook(), real) // a real corpus, TRUSTED and hydrated, over an OBJECT backend
+
+            // An object root's history is git-over-the-MIRROR: enabled, but OUR derived repo, never "recorded human
+            // intent" about the bucket (an offline bucket delete is not a mirror commit). The C4 mint's backend gate
+            // excludes it by construction, so if the gate filtered on `enabled` alone this spy would be asked and blow
+            // up. It is not: the rebuild completes, `lastCommits` (which every scan calls) aside, untouched.
+            world.builder(history = ThrowingGitOracleSpy).rebuild()
+        }
+    }
 })
+
+/**
+ * An ENABLED history that answers the scan's `lastCommits` inertly but BLOWS UP on the three C4 absence-oracle
+ * members - so an object root reaching any of them is a backend-gate regression, caught as a throw.
+ */
+private object ThrowingGitOracleSpy : HistoryProvider {
+    override val enabled = true
+    override fun currentHead(): String? = error("an OBJECT root must never be asked for currentHead (C4 backend gate)")
+    override fun isAncestor(ancestor: String, descendant: String): Boolean = error("an OBJECT root must never be asked isAncestor")
+    override fun deletedIn(from: String, to: String): Set<TreePath>? = error("an OBJECT root must never be asked deletedIn")
+
+    override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? = null
+    override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = emptyMap()
+    override fun log(path: TreePath, limit: Int?): List<Commit> = emptyList()
+    override fun diff(from: String, to: String, path: TreePath): FileDiff = FileDiff(from, to, path, "")
+    override fun prepare() = Unit
+    override fun gateCheck() = Unit
+}
 
 /**
  * The bucket answers every LIST honestly; the GET of ONE key fails, exactly as a transient 500 or a timeout does.

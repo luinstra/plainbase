@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.BindingLatch
@@ -101,9 +102,13 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         return builder()
     }
 
-    /** A fresh builder over the CURRENT store - a second rebuild in the same process lifetime. */
-    fun builder(): IndexBuilder = IndexBuilder(
-        sources = listOf(IndexBuilder.Source(root, store, NoOpHistoryProvider, manifests = store)),
+    /**
+     * A fresh builder over the CURRENT store - a second rebuild in the same process lifetime. [history] defaults to
+     * the fail-closed NoOp (byte-identical to every existing caller); the C4 backend-gate row injects a throwing spy
+     * to prove an OBJECT root's git-over-the-mirror provider is never asked for the absence-oracle members.
+     */
+    fun builder(history: HistoryProvider = NoOpHistoryProvider): IndexBuilder = IndexBuilder(
+        sources = listOf(IndexBuilder.Source(root, store, history, manifests = store)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },
         identity = PageIdentityService(UuidV7IdProvider(), registry::rank),

@@ -1,11 +1,29 @@
 package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.history.Commit
+import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.service.CitationFactory
+import com.plainbase.domain.service.FrontmatterPatcher
+import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.UrlAliasRegistry
+import com.plainbase.domain.service.UuidV7IdProvider
+import com.plainbase.domain.service.localRoot
+import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.markdown.FlexmarkRenderer
+import com.plainbase.frameworks.markdown.FrontmatterReader
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldNotContain
@@ -140,7 +158,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 13L
+                    version shouldBe 14L
                 }
             }
         } finally {
@@ -320,7 +338,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 13L
+                driver.queryLong("PRAGMA user_version") shouldBe 14L
                 db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
                 db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }
@@ -328,7 +346,81 @@ class AppDbMigrationTest : FunSpec({
             dir.toFile().deleteRecursively()
         }
     }
+
+    test("a HEALTHY install upgrades to v14 with an EMPTY limbo set - #22, the boot boundary the schema rows cannot prove") {
+        // #22 is the BOOT boundary, not the table: a v13 database with durable rows, whose pages are all present on
+        // disk, migrates to 14 and its FIRST pass witnesses everything - so nothing is reaped, limbo is empty, ids are
+        // stable, and the git checkpoint records a baseline that proves nothing. It cannot be an AbsenceWorld row: that
+        // harness is always the CURRENT schema in memory, so there is no v13 shape to migrate.
+        val dir = Files.createTempDirectory("plainbase-migration-c4-healthy")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            val contentDir = Files.createDirectory(dir.resolve("content"))
+            val id = PageId.require("07070707-0707-0707-0707-070707070707")
+            val idBytes = ByteArray(16) { 7 }
+            val path = TreePath.require("guides/deploy.md")
+
+            // A v13 database with ONE durable, materialized binding - and the page is present on disk carrying that id.
+            Files.copy(schemaBaseline("13.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 13") }
+                raw.prepareStatement("INSERT INTO id_map(root, path, id, materialized) VALUES ('main', 'guides/deploy.md', ?, 1)").use {
+                    it.setBytes(1, idBytes)
+                    it.executeUpdate()
+                }
+            }
+            Files.createDirectories(contentDir.resolve("guides"))
+            Files.writeString(contentDir.resolve("guides/deploy.md"), "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n")
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val registry = RootRegistry.of(listOf(localRoot("main", contentDir)))
+                val idMap = SqlDelightIdMapRepository(db)
+                val retirements = SqlDelightRetirementRepository(db)
+                val limbo = RootLimbo()
+                val builder = IndexBuilder(
+                    sources = listOf(IndexBuilder.Source(registry.main, LocalContentStore(contentDir), BaselineHistory)),
+                    frontmatterParser = FrontmatterReader(),
+                    rendererFactory = { view -> FlexmarkRenderer(view) },
+                    identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+                    patcher = FrontmatterPatcher(),
+                    idMap = idMap,
+                    aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(db)),
+                    checkpoint = SqlDelightPageCheckpointRepository(db),
+                    citations = CitationFactory(),
+                    rootRank = registry::rank,
+                    registeredRoots = setOf(RootName.MAIN),
+                    retirements = retirements,
+                    limbo = limbo,
+                )
+
+                val snapshot = builder.rebuild()
+
+                snapshot.byPath.getValue(RootedPath(RootName.MAIN, path)).id shouldBe id // witnessed, identity stable
+                idMap.retiredBindings().shouldBeEmpty() // zero proofs minted: a healthy upgrade reaps nothing
+                limbo.count(RootName.MAIN) shouldBe 0
+                retirements.gitHead(RootName.MAIN) shouldBe "baseline-head" // the checkpoint records a baseline
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
 })
+
+/** An ENABLED history whose HEAD is fixed and whose range is empty - just enough to drive the C4 baseline on boot. */
+private object BaselineHistory : HistoryProvider {
+    override val enabled = true
+    override fun currentHead(): String = "baseline-head"
+    override fun isAncestor(ancestor: String, descendant: String): Boolean = true
+    override fun deletedIn(from: String, to: String): Set<TreePath> = emptySet()
+
+    override fun commit(path: TreePath, bytes: ByteArray, author: CommitIdentity?, committer: CommitIdentity?): Commit? = null
+    override fun lastCommits(paths: List<TreePath>): Map<TreePath, Commit> = emptyMap()
+    override fun log(path: TreePath, limit: Int?): List<Commit> = emptyList()
+    override fun diff(from: String, to: String, path: TreePath): FileDiff = FileDiff(from, to, path, "")
+    override fun prepare() = Unit
+    override fun gateCheck() = Unit
+}
 
 /** Locates the committed SQLDelight schema baseline by walking up from the test CWD (Fixtures pattern). */
 private fun schemaBaseline(name: String): Path {

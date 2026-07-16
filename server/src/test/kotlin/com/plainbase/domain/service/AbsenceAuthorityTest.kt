@@ -6,6 +6,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
@@ -544,6 +545,61 @@ class AbsenceAuthorityTest : FunSpec({
                 }
                 world.idMap.bind(home, id, materialized = true) shouldBe BindOutcome.Bound // ...but the page may come home
                 world.idMap.retired(id).shouldBeNull()
+            }
+        }
+    }
+
+    // ---- C4: the git-checkpoint advance rides the SAME transaction, behind the SAME compare -------------
+
+    test("an advances-only call (no proofs) still runs the transaction and lands the checkpoint - the widened early return") {
+        withAbsenceTrees { mainDir, extraDir ->
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val token = world.retirements.observation(RootName.MAIN)
+                world.retirements.gitHead(RootName.MAIN).shouldBeNull()
+
+                // A baseline advance carries NO proofs by construction. The old `if (proofs.isEmpty()) return` skipped
+                // the transaction and silently dropped it; the widened guard (`proofs.isEmpty() && advances.isEmpty()`)
+                // lets it through.
+                world.retirements.applyProofs(
+                    proofs = emptyList(),
+                    witnessed = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, "deadbeef")),
+                ).shouldBeEmpty()
+
+                world.retirements.gitHead(RootName.MAIN) shouldBe "deadbeef"
+            }
+        }
+    }
+
+    test("an advance whose token matches lands; one whose token was revoked does not - the same compare a proof rides") {
+        withAbsenceTrees { mainDir, extraDir ->
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val minted = world.retirements.observation(RootName.MAIN)
+                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, minted, "aaaa")))
+                world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
+
+                // Revoke, then present an advance minted under the STALE token: discarded, the checkpoint holds.
+                world.retirements.revoke(RootName.MAIN)
+                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, minted, "bbbb")))
+                world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
+
+                // ...and a FRESH-token advance lands.
+                val fresh = world.retirements.observation(RootName.MAIN)
+                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, fresh, "cccc")))
+                world.retirements.gitHead(RootName.MAIN) shouldBe "cccc"
+            }
+        }
+    }
+
+    test("gitHead round-trips through upsert - a later advance overwrites the recorded head") {
+        withAbsenceTrees { mainDir, extraDir ->
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                world.retirements.gitHead(RootName.MAIN).shouldBeNull()
+                val token = world.retirements.observation(RootName.MAIN)
+                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, token, "1111")))
+                world.retirements.gitHead(RootName.MAIN) shouldBe "1111"
+                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, token, "2222")))
+                world.retirements.gitHead(RootName.MAIN) shouldBe "2222"
             }
         }
     }
