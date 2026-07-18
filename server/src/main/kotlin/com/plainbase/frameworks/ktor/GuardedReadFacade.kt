@@ -13,6 +13,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -286,7 +287,7 @@ class GuardedReadFacade(
             // scanned, so no section, so no canonical URL to redirect TO. Emit the id-derived PERMALINK there, and the
             // permalink route answers the 503 - so the promised "302, then an honest 503" holds in BOTH arms, rather
             // than only in the one that happened to have a section.
-            ?: return id.takeIf { unavailableRoot(snapshot, it) }?.permalink
+            ?: return id.takeIf { unavailableRoot(snapshot, it) }?.let { Permalink.of(root, it) }
         // A cross-root alias's TARGET may live in an unavailable root even though the route's root is fine. The 302
         // still fires and the target surface answers 503 - an accepted, documented two-step.
         return target.url ?: target.permalink

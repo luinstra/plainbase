@@ -24,13 +24,6 @@ class PageId private constructor(
     /** The canonical lowercase hyphenated text form. */
     val value: String get() = uuid.toString()
 
-    /**
-     * The permanent ID permalink (§A4's durability layer) - the ONE definition of the `/p/{id}` format,
-     * derived from the id ALONE. That purity is what lets the alias fallback emit a permalink for a page in
-     * a root that was never scanned this process, where there is no snapshot entry to read a URL from.
-     */
-    val permalink: String get() = "/p/$value"
-
     /** The 16 raw bytes, `msb||lsb` big-endian — the at-rest BLOB form (chunk 4b adapter). */
     fun toByteArray(): ByteArray = uuid.toByteArray()
 

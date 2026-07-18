@@ -5,6 +5,7 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
+import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CreateIntent
@@ -357,7 +358,7 @@ internal data class CreatedIdentity(val id: PageId, val url: String)
 internal fun createdIdentity(target: RootedPath, minted: PageId, snapshot: PageIndex): CreatedIdentity {
     val page = snapshot.byPath[target]
     val id = page?.id ?: minted
-    return CreatedIdentity(id = id, url = page?.url ?: id.permalink)
+    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(target.root, id))
 }
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */

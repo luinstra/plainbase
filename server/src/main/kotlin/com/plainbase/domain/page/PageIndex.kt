@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.PageLink
 import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /** One root's slice of a snapshot, in the builder's per-root scan order. */
@@ -200,6 +201,9 @@ data class IndexedPage(
     /** The canonical path URL on the wire (§A4), or null for a collision loser (REST `url` field). */
     val url: String? = urlPath?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) }
 
+    /** This page's real identity: the [RootedPageId] seam every id-bearing surface funnels through. */
+    val rooted: RootedPageId get() = RootedPageId(root, id)
+
     /** The permanent ID permalink — the §A4 durability layer, unaffected by any path change. */
-    val permalink: String get() = id.permalink
+    val permalink: String get() = rooted.permalink
 }
