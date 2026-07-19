@@ -27,7 +27,6 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
 import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.PageCheckpointRepository
-import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.AbsenceProof
@@ -45,6 +44,7 @@ import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.root.Witness
@@ -227,7 +227,7 @@ class IndexBuilder(
      * it had read stop existing.
      */
     fun interface PublicationListener {
-        fun published(snapshot: PageIndex, retired: Set<PageId>)
+        fun published(snapshot: PageIndex, retired: Set<RootedPageId>)
     }
 
     init {
@@ -304,7 +304,7 @@ class IndexBuilder(
         val snapshot: PageIndex,
         val witnessed: Map<RootedPath, Witness>,
         val proofs: List<AbsenceProof>,
-        val retired: Set<PageId>,
+        val retired: Set<RootedPageId>,
         val observedAt: Map<RootName, ObservationId>,
     )
 
@@ -323,11 +323,11 @@ class IndexBuilder(
         // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
         // move performed while the server was down still records its alias. Every later rebuild
         // compares against the previous published snapshot, exactly as before.
-        val previousUrlPaths =
+        val previousUrlPaths: Map<RootedPageId, TreePath?> =
             if (previous === PageIndex.EMPTY) {
                 checkpoint.load()
             } else {
-                previous.pages.associate { it.id to PreviousUrl(it.root, it.urlPath) }
+                previous.pages.associate { it.rooted to it.urlPath }
             }
 
         // D17 execution invariant (b): scan ALL sources before the FIRST resolve. Only then is the WITNESS map
@@ -377,10 +377,8 @@ class IndexBuilder(
         // under the new name. The witness is the FULL one (before the suspect-tree filter) because the question is only
         // ever "are we looking at it?", and it is GLOBAL across roots because an id seen anywhere refutes an absence
         // claimed anywhere.
-        val retired: Set<PageId> = retirements
-            .applyProofs(proofs, seen.values.mapNotNullTo(mutableSetOf()) { it.observedId }, gitMint.advances)
-            .map { it.id }
-            .toSet()
+        val retired: Set<RootedPageId> =
+            retirements.applyProofs(proofs, seen.values.mapNotNullTo(mutableSetOf()) { it.observedId }, gitMint.advances)
 
         // **A suspect tree may not DISPLACE the incumbents it does not carry** (C3). The latch guards the ABSENCE
         // half; this is the door beside it. On a root whose binding is UNRESOLVED - a swapped bucket, a first sight -
@@ -760,7 +758,8 @@ class IndexBuilder(
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
         val published = holder.load()
-        indexer.rebuild(published.snapshot, published.retired)
+        // search.db still keys by bare id (C3 roots it); bridge the rooted retired set to its ids here.
+        indexer.rebuild(published.snapshot, published.retired.mapTo(mutableSetOf()) { it.id })
         return published.snapshot.pages.size
     }
 
@@ -923,7 +922,7 @@ class IndexBuilder(
     }
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
-    private fun notifyPublished(snapshot: PageIndex, retired: Set<PageId>) {
+    private fun notifyPublished(snapshot: PageIndex, retired: Set<RootedPageId>) {
         listeners.forEach { listener ->
             try {
                 listener.published(snapshot, retired)
@@ -1284,8 +1283,9 @@ class IndexBuilder(
     }
 
     /** §A4 alias semantics for one rebuild: move detection, `redirect_from`, then the shadow sweep. */
-    private fun recordAliases(previousUrlPaths: Map<PageId, PreviousUrl>, snapshot: PageIndex) {
+    private fun recordAliases(previousUrlPaths: Map<RootedPageId, TreePath?>, snapshot: PageIndex) {
         val liveCanonicals = snapshot.byUrlPath.keys
+        val priorById: Map<PageId, List<RootedPageId>> = previousUrlPaths.keys.groupBy { it.id }
 
         // Move/rename/slug-change detection: a known id whose canonical (root, URL path) changed
         // since the previous snapshot leaves the old rooted path behind as an alias — unless a live
@@ -1298,9 +1298,16 @@ class IndexBuilder(
         // while down still gets a fresh id and no alias: the accepted §5.2 path-keyed-identity
         // trade-off, restated, not fixed here.
         for (page in snapshot.pages) {
-            val previous = previousUrlPaths[page.id] ?: continue
-            val oldUrlPath = previous.urlPath ?: continue
-            val old = RootedPath(previous.root, oldUrlPath)
+            // EXACT rooted match is the primary and stays correct once duplicate ids are legal (a same-root move; the
+            // only rooted evidence). The bare-id singleOrNull fallback is PRE-FLIP-ONLY: under UNIQUE(id) a bare-id
+            // match is exact, so it recovers a CROSS-root move (the old entry is keyed under the source root, not the
+            // page's current one). Once a bare id can name two roots singleOrNull returns null; the scheduled rework
+            // drops the fallback and requires rooted evidence.
+            val priorKey = page.rooted.takeIf { it in previousUrlPaths }
+                ?: priorById[page.id]?.singleOrNull()
+                ?: continue
+            val oldUrlPath = previousUrlPaths.getValue(priorKey) ?: continue
+            val old = RootedPath(priorKey.root, oldUrlPath) // OLD root = the prior entry's KEY root
             if (old == page.urlPath?.let { RootedPath(page.root, it) }) continue
             if (old in liveCanonicals) {
                 idMap.record(
@@ -1311,7 +1318,7 @@ class IndexBuilder(
                     ),
                 )
             } else {
-                aliasRegistry.register(old, page.id)
+                aliasRegistry.register(old, page.rooted)
             }
         }
 
@@ -1335,7 +1342,7 @@ class IndexBuilder(
                     IdentityIssue.RedirectConflict(
                         root = canonical.root,
                         path = canonical.path,
-                        message = "alias to page ${dropped.id} dropped: shadowed by a live canonical path",
+                        message = "alias to page ${dropped.target.id} dropped: shadowed by a live canonical path",
                     ),
                 )
             }
@@ -1353,15 +1360,15 @@ class IndexBuilder(
                     message = "redirect_from of ${page.path.value} ignored: a live canonical path claims it",
                 ),
             )
-            existing != null && existing != page.id -> idMap.record(
+            existing != null && existing != page.rooted -> idMap.record(
                 IdentityIssue.RedirectConflict(
                     root = target.root,
                     path = target.path,
-                    message = "redirect_from of ${page.path.value} ignored: already an alias of page $existing",
+                    message = "redirect_from of ${page.path.value} ignored: already an alias of page ${existing.id}",
                 ),
             )
-            existing == null -> aliasRegistry.register(target, page.id)
-            // existing == page.id: already registered — nothing to do.
+            existing == null -> aliasRegistry.register(target, page.rooted)
+            // existing == page.rooted: already registered — nothing to do.
         }
     }
 

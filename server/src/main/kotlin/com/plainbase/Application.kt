@@ -4,7 +4,6 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.SessionRepository
@@ -20,6 +19,7 @@ import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootShadow
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.CanonicalUrlBuilder
@@ -617,7 +617,7 @@ private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().join
  * frontmatter that minted it, so no filesystem scan can find one, which is exactly why `plainbase root`'s
  * scan-derived twin cannot see them and why this warning exists rather than being "the CLI's check, later".
  */
-private fun mainSegmentIndex(snapshot: PageIndex, aliases: Map<RootedPath, PageId>): Map<String, List<TreePath>> {
+private fun mainSegmentIndex(snapshot: PageIndex, aliases: Map<RootedPath, RootedPageId>): Map<String, List<TreePath>> {
     val section = snapshot.section(RootName.MAIN)
     return RootShadow.topLevelIndex(
         urlPaths = section.pages.mapNotNull { it.urlPath } +
@@ -678,7 +678,7 @@ internal fun mainRootUrlCollisionRefusal(snapshot: PageIndex): String? {
  */
 internal fun shadowedRootWarning(
     snapshot: PageIndex,
-    aliases: Map<RootedPath, PageId>,
+    aliases: Map<RootedPath, RootedPageId>,
     registry: RootRegistry,
 ): String? {
     val index = mainSegmentIndex(snapshot, aliases)
@@ -704,7 +704,7 @@ internal fun shadowedRootWarning(
  * hedged: a row minted AFTER the upgrade (a runtime-created `main/` dir whose page later moved) is
  * legitimately reachable at that doubled URL, and the row alone cannot tell the two apart.
  */
-internal fun deadLegacyAliasWarning(aliases: Map<RootedPath, PageId>): String? {
+internal fun deadLegacyAliasWarning(aliases: Map<RootedPath, RootedPageId>): String? {
     val main = RootName.MAIN.value
     val dead = aliases.keys
         .filter { it.root == RootName.MAIN && it.path.segments.first() == main }

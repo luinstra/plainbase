@@ -100,7 +100,11 @@ fun withRestServices(
                     citations = CitationFactory(),
                     rootRank = rootRegistry::rank,
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
-                    listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                        },
+                    ),
                     searchIndexer = searchIndexer,
                 )
                 builder.rebuild()

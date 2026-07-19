@@ -23,11 +23,10 @@ val searchModule = module {
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
     single { SearchIndexer(get(), get()) }
-    // A bound method reference conforms to the widened 2-arg SAM by arity and types, so this line is unchanged: the
-    // listener seam now HANDS each listener its delete authority (the roots the pass actually scanned) rather than
-    // trusting it to work the rule out for itself.
+    // The listener seam hands each listener its delete authority as rooted ids; SearchIndexer.sync still keys by
+    // bare id (C3 roots it), so bridge the rooted retired set to its ids here rather than in the engine.
     single<IndexBuilder.PublicationListener>(named("searchSync")) {
         val indexer = get<SearchIndexer>()
-        IndexBuilder.PublicationListener(indexer::sync)
+        IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
     }
 }

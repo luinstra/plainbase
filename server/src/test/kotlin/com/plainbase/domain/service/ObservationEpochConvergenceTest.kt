@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.withClue
@@ -55,7 +56,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                     world.idMap.retired(id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 }
                 withClue("and the sinks act on the proof the apply transaction cashed - they never re-derive it") {
-                    world.checkpoints.load().keys.contains(id) shouldBe false
+                    world.checkpoints.load().keys.contains(RootedPageId(extra, id)) shouldBe false
                     world.engine.indexedState().keys.contains(id) shouldBe false
                 }
                 withClue("limbo is EMPTY: the row is not unknown any more, it is settled") {
@@ -95,7 +96,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                 // scan - but of the DECOY, whose witness set holds three files and not one page of the corpus.
                 cold.rebuild()
                 world.idMap.retiredBindings().shouldBeEmpty()
-                world.checkpoints.load().keys shouldContainAll corpus
+                world.checkpoints.load().keys.map { it.id } shouldContainAll corpus
             }
         }
     }

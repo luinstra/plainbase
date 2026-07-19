@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
@@ -135,7 +136,7 @@ class MainRootCollisionGuardTest : FunSpec({
     }
 
     context("deadLegacyAliasWarning") {
-        val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+        val id = RootedPageId(RootName.MAIN, PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"))
         fun rooted(root: String, path: String) = RootedPath(RootName.require(root), TreePath.require(path))
 
         test("a main-root alias row under the reserved segment WARNS, naming the row with the hedged wording") {

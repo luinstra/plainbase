@@ -1,6 +1,7 @@
 package com.plainbase.domain.repository
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -41,10 +42,10 @@ interface DirtyPageRepository {
      * overwrites it, so a no-write attempt can restore a prior recovery record rather than clobber it
      * (the dirty-row-clobber fix).
      */
-    fun get(pageId: PageId): DirtyPage?
+    fun get(pageId: RootedPageId): DirtyPage?
 
     /** Clear [pageId] once ALL post-steps (the reindex, and the Git-mode commit) have succeeded. */
-    fun clear(pageId: PageId)
+    fun clear(pageId: RootedPageId)
 }
 
 /**

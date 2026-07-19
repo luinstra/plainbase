@@ -48,7 +48,11 @@ class RestHarness(
         root,
         contentStore = store,
         history = history,
-        listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+        listeners = listOf(
+            IndexBuilder.PublicationListener { snap, retired ->
+                searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+            },
+        ),
         searchIndexer = searchIndexer,
     )
 

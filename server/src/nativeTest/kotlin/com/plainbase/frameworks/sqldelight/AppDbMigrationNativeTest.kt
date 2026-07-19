@@ -3,6 +3,7 @@ package com.plainbase.frameworks.sqldelight
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
@@ -104,7 +105,53 @@ class AppDbMigrationNativeTest {
                 assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
                 assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
-                assertEquals(14L, driver.queryLongNative("PRAGMA user_version"))
+                assertEquals(15L, driver.queryLongNative("PRAGMA user_version"))
+
+                // The (root, id) composite PK enforces in-image on all three re-keyed tables: the same id under a
+                // SECOND root inserts cleanly, but the same (root, id) twice FAILS - proven with a PLAIN RAW INSERT,
+                // since the generated upsert/retire are INSERT OR REPLACE / ON CONFLICT DO UPDATE and never throw.
+                val hexX = "x'01010101010101010101010101010101'" // idX, present under 'main' post-migration
+                val hexW = "x'02020202020202020202020202020202'"
+                driver.execute(
+                    null,
+                    "INSERT INTO dirty_page(id, root, path, expected_hash, stage) VALUES ($hexX, 'extra', 'g', 'h', 'WRITING')",
+                    0,
+                )
+                assertFails {
+                    driver.execute(
+                        null,
+                        "INSERT INTO dirty_page(id, root, path, expected_hash, stage) VALUES ($hexX, 'main', 'g2', 'h', 'WRITING')",
+                        0,
+                    )
+                }
+                driver.execute(null, "INSERT INTO page_checkpoint(id, root, url_path) VALUES ($hexX, 'extra', 'g')", 0)
+                assertFails {
+                    driver.execute(null, "INSERT INTO page_checkpoint(id, root, url_path) VALUES ($hexX, 'main', 'g2')", 0)
+                }
+                driver.execute(
+                    null,
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES ($hexW, 'main', 'g', 1, 1)",
+                    0,
+                )
+                driver.execute(
+                    null,
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES ($hexW, 'extra', 'g', 1, 1)",
+                    0,
+                )
+                assertFails {
+                    driver.execute(
+                        null,
+                        "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES ($hexW, 'main', 'g2', 1, 1)",
+                        0,
+                    )
+                }
+
+                // url_alias.target_root round-trips: the seeded ('guides/old', idX) alias backfills to idX's REAL
+                // root (main, from id_map), and find() carries it back as the target's rooted id.
+                assertEquals(
+                    RootedPageId(RootName.MAIN, pageId),
+                    SqlDelightUrlAliasRepository(db).find(RootedPath(RootName.MAIN, TreePath.require("guides/old"))),
+                )
 
                 // The composite PK is live: the same relative path inserts under another root...
                 db.idMapQueries.upsertBinding(

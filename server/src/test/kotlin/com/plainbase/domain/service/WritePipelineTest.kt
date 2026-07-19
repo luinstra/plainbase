@@ -9,6 +9,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -277,7 +278,7 @@ class WritePipelineTest : FunSpec({
                     .shouldBeInstanceOf<WriteOutcome.Unreadable>()
                 harness.dirtyPages.all().shouldHaveSize(1) // mark RETAINED (expectedHash = the intended bytes')
 
-                harness.dirtyPages.clear(pageId)
+                harness.dirtyPages.clear(RootedPageId(RootName.MAIN, pageId))
                 harness.writePipeline(store = failingCreateStore(mutated = false))
                     .create(createGrantForTests(), intent)
                     .shouldBeInstanceOf<WriteOutcome.Unreadable>()

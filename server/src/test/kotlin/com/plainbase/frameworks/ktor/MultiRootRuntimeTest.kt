@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import io.kotest.assertions.withClue
@@ -471,12 +472,12 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.idMapOnly("extra", "notes/rollback.md", pageId)
                 harness.checkpoints.replace(
                     harness.checkpoints.load() +
-                        (pageId to com.plainbase.domain.repository.PreviousUrl(RootName.require("extra"), TreePath.require("rollback"))),
+                        (RootedPageId(RootName.require("extra"), pageId) to TreePath.require("rollback")),
                 )
                 harness.boot() // the first rebuild - the one that would purge
 
                 withClue("a boot-arm root was never scanned, so it is in NO section - a wholesale replace would purge it") {
-                    harness.checkpoints.load().containsKey(pageId).shouldBeTrue()
+                    harness.checkpoints.load().containsKey(RootedPageId(RootName.require("extra"), pageId)).shouldBeTrue()
                     harness.idMap.pathOf(pageId).shouldNotBeNullAnd { it.root shouldBe RootName.require("extra") }
                 }
             }
@@ -517,7 +518,7 @@ class MultiRootRuntimeTest : FunSpec({
                         "operator act - never something a routine rebuild does behind their back",
                 ) {
                     harness.checkpoints.load() shouldHaveSizeOf before
-                    harness.checkpoints.load().containsKey(pageId).shouldBeTrue()
+                    harness.checkpoints.load().containsKey(RootedPageId(RootName.require("archive"), pageId)).shouldBeTrue()
                 }
             }
         }

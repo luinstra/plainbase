@@ -155,7 +155,7 @@ class GuardedReadFacade(
             // that was never scanned (so it is in no section, and `byUrlPath` cannot see it). Re-resolve the alias -
             // only on the miss, a read already bound for 404 - and if its target's root is registered but not
             // serving, answer 503 rather than "gone".
-            aliasRegistry.find(RootedPath(root, path))?.let { requireResolvedTargetAvailable(snapshot, it) }
+            aliasRegistry.find(RootedPath(root, path))?.let { requireResolvedTargetAvailable(snapshot, it.id) }
             return null
         }
         // An alias hit resolves through the GLOBAL byId, so the page it found may live in a DIFFERENT root than the
@@ -281,13 +281,13 @@ class GuardedReadFacade(
         val id = aliasRegistry.find(rooted)
             .takeIf { rooted !in snapshot.byUrlPath } // live canonical wins (§A4)
             ?: return null
-        val target = snapshot.byId[id]
+        val target = snapshot.byId[id.id]
             // The alias target is in no section. Usually that means a stale binding (the shadow sweep has not run) and
             // today's null → SPA shell is right. But it is ALSO what a root unavailable SINCE BOOT looks like: never
             // scanned, so no section, so no canonical URL to redirect TO. Emit the id-derived PERMALINK there, and the
             // permalink route answers the 503 - so the promised "302, then an honest 503" holds in BOTH arms, rather
             // than only in the one that happened to have a section.
-            ?: return id.takeIf { unavailableRoot(snapshot, it) }?.let { Permalink.of(root, it) }
+            ?: return id.takeIf { unavailableRoot(snapshot, id.id) }?.let { Permalink.of(root, id.id) }
         // A cross-root alias's TARGET may live in an unavailable root even though the route's root is fine. The 302
         // still fires and the target surface answers 503 - an accepted, documented two-step.
         return target.url ?: target.permalink

@@ -8,6 +8,7 @@ import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -445,7 +446,8 @@ class IndexBuilderMultiRootTest : FunSpec({
                 writePage(mainDir, "notes/arrived.md", identified(contested, title = "Origin"))
                 builder.rebuild()
 
-                world.aliasRegistry.find(RootedPath(EXTRA, TreePath.require("notes/origin"))) shouldBe contested
+                world.aliasRegistry.find(RootedPath(EXTRA, TreePath.require("notes/origin"))) shouldBe
+                    RootedPageId(RootName.MAIN, contested)
                 world.aliasRegistry.find(RootedPath(RootName.MAIN, TreePath.require("notes/origin"))).shouldBeNull()
             }
         }
@@ -464,7 +466,8 @@ class IndexBuilderMultiRootTest : FunSpec({
                 writePage(mainDir, "notes/arrived.md", identified(contested, title = "Origin"))
                 world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                world.aliasRegistry.find(RootedPath(EXTRA, TreePath.require("notes/origin"))) shouldBe contested
+                world.aliasRegistry.find(RootedPath(EXTRA, TreePath.require("notes/origin"))) shouldBe
+                    RootedPageId(RootName.MAIN, contested)
             }
         }
     }

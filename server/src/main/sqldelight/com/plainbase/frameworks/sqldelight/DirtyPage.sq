@@ -12,11 +12,12 @@ import com.plainbase.domain.page.PageId;
 import com.plainbase.domain.root.RootName;
 
 CREATE TABLE dirty_page (
-  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL,
   root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
   expected_hash TEXT NOT NULL,
-  stage TEXT NOT NULL
+  stage TEXT NOT NULL,
+  PRIMARY KEY (root, id)
 );
 
 -- Indexed lookup by (root, path) for the object-mode poll's live dirty-ahead guard (MINOR-1): the guard
@@ -33,14 +34,14 @@ selectAll:
 SELECT *
 FROM dirty_page;
 
-selectById:
+selectByRootId:
 SELECT *
 FROM dirty_page
-WHERE id = :id;
+WHERE root = :root AND id = :id;
 
 isDirty:
 SELECT EXISTS(SELECT 1 FROM dirty_page WHERE root = :root AND path = :path);
 
-deleteById:
+deleteByRootId:
 DELETE FROM dirty_page
-WHERE id = :id;
+WHERE root = :root AND id = :id;

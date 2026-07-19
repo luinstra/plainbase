@@ -35,7 +35,7 @@ class ObservationEpochTest : FunSpec({
             proofs: List<AbsenceProof>,
             witnessed: Set<PageId>,
             advances: List<GitCheckpointAdvance>,
-        ) = emptySet<BindingRef>()
+        ) = emptySet<RootedPageId>()
         override fun gitHead(root: RootName): String? = null
         override fun observation(root: RootName) = tokens.getOrPut(root) { ObservationId(1) }
         override fun observations() = tokens.toMap()

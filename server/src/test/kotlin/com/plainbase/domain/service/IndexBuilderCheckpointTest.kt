@@ -2,11 +2,11 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -60,7 +60,7 @@ class IndexBuilderCheckpointTest : FunSpec({
         withTempTree(seed = { root -> writePage(root, "docs/start.md", materializedPage) }) { root ->
             RestartableHarness(root).use { harness ->
                 harness.startProcess().builder.rebuild()
-                harness.checkpoints.load() shouldContainExactly mapOf(pageId to PreviousUrl(RootName.MAIN, TreePath.require("docs/start")))
+                harness.checkpoints.load() shouldContainExactly mapOf(RootedPageId(RootName.MAIN, pageId) to TreePath.require("docs/start"))
 
                 // Server down: the page moves on disk before the next process's first rebuild.
                 Files.createDirectories(root.resolve("archive"))
@@ -69,7 +69,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 val restarted = harness.startProcess()
                 val snapshot = restarted.builder.rebuild()
                 snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
-                harness.aliases.find(rooted("docs/start")) shouldBe pageId
+                harness.aliases.find(rooted("docs/start")) shouldBe RootedPageId(RootName.MAIN, pageId)
 
                 // The acceptance criterion's wire half: the OLD canonical URL answers 301 → new.
                 testApplication {
@@ -143,7 +143,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 val loser = snapshot.byPath.getValue(rooted("a-b.md"))
 
                 harness.checkpoints.load() shouldContainExactly
-                    mapOf(winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")), loser.id to PreviousUrl(RootName.MAIN, null))
+                    mapOf(winner.rooted to TreePath.require("a-b"), loser.rooted to null)
 
                 // A second publish UPSERTS what it saw - and, since C0, DELETES only what an AbsenceProof retired.
                 // The loser's file disappears, and its row STAYS: "the scan did not find it" is not evidence that
@@ -152,8 +152,8 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.delete(root.resolve("a-b.md"))
                 harness.startProcess().builder.rebuild()
                 harness.checkpoints.load() shouldContainExactly mapOf(
-                    winner.id to PreviousUrl(RootName.MAIN, TreePath.require("a-b")),
-                    loser.id to PreviousUrl(RootName.MAIN, null),
+                    winner.rooted to TreePath.require("a-b"),
+                    loser.rooted to null,
                 )
             }
         }

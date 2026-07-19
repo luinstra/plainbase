@@ -1,9 +1,8 @@
 package com.plainbase.domain.repository
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
-import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 
 /**
  * Persistence port for the §B3 page checkpoint: the previously PUBLISHED snapshot's
@@ -19,14 +18,11 @@ import com.plainbase.domain.root.RootName
 interface PageCheckpointRepository {
 
     /** The checkpointed previous snapshot, or the empty map when none is readable (advisory — never throws). */
-    fun load(): Map<PageId, PreviousUrl>
+    fun load(): Map<RootedPageId, TreePath?>
 
     /** Replaces the whole checkpoint with [urlPaths], atomically (one transaction per publish). */
-    fun replace(urlPaths: Map<PageId, PreviousUrl>)
+    fun replace(urlPaths: Map<RootedPageId, TreePath?>)
 }
-
-/** One checkpointed page: the root it lived under and its canonical URL path (null for a collision loser). */
-data class PreviousUrl(val root: RootName, val urlPath: TreePath?)
 
 /**
  * The §B4 checkpoint publication listener body: persists the just-published [snapshot] as the next
@@ -45,7 +41,15 @@ data class PreviousUrl(val root: RootName, val urlPath: TreePath?)
  * The merge is KEYED, snapshot-wins - never a concat: a mid-run vanished root double-covers (its carried-forward
  * section supplies the same ids the retained rows do), so it must be idempotent by key.
  */
-fun PageCheckpointRepository.replaceFrom(snapshot: PageIndex, retired: Set<PageId>) {
-    val retained = load().filterKeys { it !in retired }
-    replace(retained + snapshot.pages.associate { it.id to PreviousUrl(it.root, it.urlPath) })
+fun PageCheckpointRepository.replaceFrom(snapshot: PageIndex, retired: Set<RootedPageId>) {
+    val current = snapshot.pages.associate { it.rooted to it.urlPath }
+    val liveIds = snapshot.pages.mapTo(HashSet()) { it.id }
+    // Retain a prior row unless it was retired, or (PRE-FLIP-ONLY, see the move-detection follow-up in
+    // recordAliases) its id now lives in the snapshot under a DIFFERENT (root, id): under UNIQUE(id) that can only
+    // be a cross-root move that superseded it, so keep just the current rooted entry - matching the old bare-id
+    // map's one-entry-per-id behavior. A row whose id is absent from the snapshot SURVIVES (down page / collision
+    // loser). The `it.id !in liveIds` arm misfires once duplicate ids are legal (a DOWN root A + a live B holding
+    // its own X would wrongly drop A's row); its replacement with rooted-evidence-only retention is scheduled.
+    val retained = load().filterKeys { it !in retired && (it in current || it.id !in liveIds) }
+    replace(retained + current)
 }

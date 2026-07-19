@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -74,7 +75,7 @@ class IndexBuilderNativeTest {
                 val second = builder.rebuild()
                 assertEquals("/docs/main/archive/start", second.byId.getValue(page.id).url)
                 assertNotNull(registry.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
-                assertEquals(page.id, aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
+                assertEquals(RootedPageId(RootName.MAIN, page.id), aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
             } finally {
                 Files.walk(content).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             }

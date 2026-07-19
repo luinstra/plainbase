@@ -84,7 +84,11 @@ class McpHarness(
         index = IndexHarness(
             root,
             contentStore = store,
-            listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+            listeners = listOf(
+                IndexBuilder.PublicationListener { snap, retired ->
+                    searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                },
+            ),
             searchIndexer = searchIndexer,
             rootRegistry = RootRegistry.of(listOf(localRoot("main", root, editable = editable))),
         )

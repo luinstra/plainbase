@@ -5,6 +5,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -26,6 +27,7 @@ class SqlDelightDirtyPageRepositoryTest : FunSpec({
     val main = RootName.MAIN
     val extra = RootName.require("extra")
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+    val rooted = RootedPageId(main, pageId)
     val path = RootedPath(main, TreePath.require("guides/a.md"))
 
     test("mark/all/get round-trip the root") {
@@ -33,9 +35,18 @@ class SqlDelightDirtyPageRepositoryTest : FunSpec({
             repo.mark(pageId, path, expectedHash = "sha256:abc", stage = Stage.WRITING)
             val expected = DirtyPage(pageId, path, "sha256:abc", Stage.WRITING)
             repo.all() shouldContainExactly listOf(expected)
-            repo.get(pageId) shouldBe expected
-            repo.clear(pageId)
-            repo.get(pageId).shouldBeNull()
+            repo.get(rooted) shouldBe expected
+            repo.clear(rooted)
+            repo.get(rooted).shouldBeNull()
+        }
+    }
+
+    test("get/clear are root-scoped: the same id under another root is a different journal key") {
+        withRepo { repo ->
+            repo.mark(pageId, path, expectedHash = "sha256:abc", stage = Stage.WRITING)
+            repo.get(RootedPageId(extra, pageId)).shouldBeNull()
+            repo.clear(RootedPageId(extra, pageId)) // no-op: wrong root
+            repo.get(rooted) shouldBe DirtyPage(pageId, path, "sha256:abc", Stage.WRITING)
         }
     }
 

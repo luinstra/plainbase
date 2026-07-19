@@ -50,7 +50,7 @@ class PageService(
     fun byUrlPath(snapshot: PageIndex, root: RootName, path: TreePath): PagePayload? {
         val rooted = RootedPath(root, path)
         val page = snapshot.byUrlPath[rooted]
-            ?: aliasRegistry.find(rooted)?.let { snapshot.byId[it] }
+            ?: aliasRegistry.find(rooted)?.let { snapshot.byId[it.id] }
             ?: return null
         return payload(page)
     }

@@ -323,7 +323,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
             IndexBuilder.PublicationListener(checkpoint::replaceFrom),
-            IndexBuilder.PublicationListener(searchIndexer::sync),
+            IndexBuilder.PublicationListener { snap, retired -> searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) },
         ),
         searchIndexer = searchIndexer,
     )

@@ -11,11 +11,11 @@ import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
-import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.throwables.shouldThrowAny
@@ -461,7 +461,7 @@ private class UnreadableAfterArming(private val delegate: ContentStore, private 
 /** Throws on the FIRST [applyProofs] - exactly a pre-commit crash: nothing reaches the transaction. */
 private class CrashOnce(private val delegate: RetirementRepository) : RetirementRepository by delegate {
     private var crashed = false
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<BindingRef> {
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
         if (!crashed) {
             crashed = true
             throw IllegalStateException("crash before the apply commits")
@@ -476,7 +476,7 @@ private class CrashOnce(private val delegate: RetirementRepository) : Retirement
  */
 private class BreakOnApply(private val delegate: RetirementRepository, private val onApply: () -> Unit) :
     RetirementRepository by delegate {
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<BindingRef> {
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
         onApply()
         return delegate.applyProofs(proofs, witnessed, advances)
     }
@@ -486,7 +486,7 @@ private class BreakOnApply(private val delegate: RetirementRepository, private v
 private class Recording(private val delegate: RetirementRepository) : RetirementRepository by delegate {
     val proofs = mutableListOf<AbsenceProof>()
     val advances = mutableListOf<GitCheckpointAdvance>()
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<BindingRef> {
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
         this.proofs += proofs
         this.advances += advances
         return delegate.applyProofs(proofs, witnessed, advances)

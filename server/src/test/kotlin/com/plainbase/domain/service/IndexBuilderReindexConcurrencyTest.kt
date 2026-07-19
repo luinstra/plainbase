@@ -57,7 +57,11 @@ class IndexBuilderReindexConcurrencyTest : FunSpec({
                 IndexHarness(
                     dir,
                     contentStore = gating,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     val builder = harness.builder

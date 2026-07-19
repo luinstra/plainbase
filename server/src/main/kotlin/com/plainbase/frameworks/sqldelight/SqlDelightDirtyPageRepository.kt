@@ -4,6 +4,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.repository.Stage
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -31,12 +32,12 @@ class SqlDelightDirtyPageRepository(private val db: PlainbaseDb) : DirtyPageRepo
     override fun isDirty(path: RootedPath): Boolean =
         queries.isDirty(root = path.root, path = path.path).executeAsOne()
 
-    override fun get(pageId: PageId): DirtyPage? =
-        queries.selectById(pageId).executeAsOneOrNull()?.let {
+    override fun get(pageId: RootedPageId): DirtyPage? =
+        queries.selectByRootId(root = pageId.root, id = pageId.id).executeAsOneOrNull()?.let {
             DirtyPage(pageId = it.id, path = RootedPath(it.root, it.path), expectedHash = it.expected_hash, stage = Stage.valueOf(it.stage))
         }
 
-    override fun clear(pageId: PageId) {
-        queries.deleteById(pageId)
+    override fun clear(pageId: RootedPageId) {
+        queries.deleteByRootId(root = pageId.root, id = pageId.id)
     }
 }

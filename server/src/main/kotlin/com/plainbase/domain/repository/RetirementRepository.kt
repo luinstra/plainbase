@@ -7,6 +7,7 @@ import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 
 /**
  * The **proof-apply transaction**: the ONE place in the system where an ABSENCE retires a binding, and the
@@ -33,8 +34,8 @@ import com.plainbase.domain.root.RootName
 interface RetirementRepository {
 
     /**
-     * Retires every binding an [AbsenceProof] covers, and returns the ids actually retired (which is what the
-     * publication sinks then act on - they never re-derive the authority for themselves).
+     * Retires every binding an [AbsenceProof] covers, and returns the rooted ids actually retired (which is what
+     * the publication sinks then act on - they never re-derive the authority for themselves).
      *
      * A proof is applied only when ALL of these hold, re-checked INSIDE the transaction:
      *  - it **SURVIVES [witnessed]** ([AbsenceProof.survives]) - an INFERRED absence is a conclusion drawn from a gap
@@ -74,7 +75,7 @@ interface RetirementRepository {
         proofs: List<AbsenceProof>,
         witnessed: Set<PageId>,
         advances: List<GitCheckpointAdvance> = emptyList(),
-    ): Set<BindingRef>
+    ): Set<RootedPageId>
 
     /** [root]'s recorded GIT checkpoint HEAD (C4), or null when no baseline has been written for it yet. */
     fun gitHead(root: RootName): String?
@@ -103,7 +104,7 @@ object NoRetirements : RetirementRepository {
         proofs: List<AbsenceProof>,
         witnessed: Set<PageId>,
         advances: List<GitCheckpointAdvance>,
-    ): Set<BindingRef> = emptySet()
+    ): Set<RootedPageId> = emptySet()
     override fun gitHead(root: RootName): String? = null
     override fun observation(root: RootName): ObservationId = ObservationId(0)
     override fun observations(): Map<RootName, ObservationId> = emptyMap()

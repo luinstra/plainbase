@@ -1,8 +1,8 @@
 package com.plainbase.frameworks.sqldelight
 
-import com.plainbase.domain.page.PageId
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.PageCheckpointRepository
-import com.plainbase.domain.repository.PreviousUrl
+import com.plainbase.domain.root.RootedPageId
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
@@ -20,17 +20,17 @@ class SqlDelightPageCheckpointRepository(private val db: PlainbaseDb) : PageChec
 
     private val queries get() = db.pageCheckpointQueries
 
-    override fun load(): Map<PageId, PreviousUrl> = try {
-        queries.selectAll().executeAsList().associate { it.id to PreviousUrl(it.root, it.url_path) }
+    override fun load(): Map<RootedPageId, TreePath?> = try {
+        queries.selectAll().executeAsList().associate { RootedPageId(it.root, it.id) to it.url_path }
     } catch (e: Exception) {
         logger.warn(e) { "page_checkpoint unreadable; continuing without down-time move aliases (advisory, §B3)" }
         emptyMap()
     }
 
-    override fun replace(urlPaths: Map<PageId, PreviousUrl>) {
+    override fun replace(urlPaths: Map<RootedPageId, TreePath?>) {
         db.transaction {
             queries.deleteAll()
-            urlPaths.forEach { (id, previous) -> queries.insertRow(id = id, root = previous.root, urlPath = previous.urlPath) }
+            urlPaths.forEach { (rooted, urlPath) -> queries.insertRow(id = rooted.id, root = rooted.root, urlPath = urlPath) }
         }
     }
 

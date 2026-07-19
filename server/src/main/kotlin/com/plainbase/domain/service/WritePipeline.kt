@@ -18,6 +18,7 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -82,7 +83,7 @@ class WritePipeline(
         // Capture any prior dirty row (a real WrittenButUnindexed recovery record from an earlier
         // attempt) BEFORE the write-ahead mark overwrites it. A NO-WRITE outcome restores it rather
         // than clobbering/clearing it, so a not-actually-written attempt never destroys a prior record.
-        val prior = dirtyPages.get(intent.pageId)
+        val prior = dirtyPages.get(RootedPageId(intent.root, intent.pageId))
 
         // (1) Write-ahead: mark dirty with the new bytes' hash BEFORE the disk write.
         dirtyPages.mark(
@@ -101,14 +102,14 @@ class WritePipeline(
             // write-ahead mark itself: leaving it would journal a WRITING row whose expectedHash names bytes that
             // never touched disk - a permanently misleading recovery record minted by a request that wrote nothing,
             // and it would have CLOBBERED any real prior record on the way. Restore, then rethrow: the 503 still lands.
-            restoreOrClear(intent.pageId, prior)
+            restoreOrClear(RootedPageId(intent.root, intent.pageId), prior)
             throw e
         }
         return when (cas) {
             // Nothing was written for Deleted/Mismatch and a non-mutated Unreadable — restore the prior
             // recovery record, or clear.
             is CasResult.Deleted -> {
-                restoreOrClear(intent.pageId, prior)
+                restoreOrClear(RootedPageId(intent.root, intent.pageId), prior)
                 // **A4's live instance** (C1). `CasResult.Deleted` means the CAS resolved NO FILE to swap - a
                 // no-bytes observation, arriving by a different road than a classified read, and it gets the same
                 // answer: only the durable INDEX may turn it into "this page was deleted". Reporting `page_deleted`
@@ -121,7 +122,7 @@ class WritePipeline(
                 conflict(intent, reason = "page_deleted", current = null)
             }
             is CasResult.Mismatch -> {
-                restoreOrClear(intent.pageId, prior)
+                restoreOrClear(RootedPageId(intent.root, intent.pageId), prior)
                 conflict(intent, reason = "content_changed", current = cas.currentBytes)
             }
             is CasResult.Unreadable -> {
@@ -129,7 +130,7 @@ class WritePipeline(
                 // the file) KEEPS the write-ahead mark set at (1) — expectedHash = the INTENDED bytes'
                 // hash — so reconcile commits a fully-landed copy or drift-skips a partial. Only a
                 // NON-mutated Unreadable (nothing landed) restores-or-clears.
-                if (!cas.targetMutated) restoreOrClear(intent.pageId, prior)
+                if (!cas.targetMutated) restoreOrClear(RootedPageId(intent.root, intent.pageId), prior)
                 WriteOutcome.Unreadable(cas.cause)
             }
             is CasResult.Written -> commitAndIndex(intent, newHash = cas.newHash)
@@ -191,23 +192,23 @@ class WritePipeline(
             // The write()-arm rule, for the create: a root-loss THROW wrote nothing, so it clears the write-ahead mark
             // (a fresh pageId has no prior row to restore) rather than journaling a WRITING row for a create that
             // never happened. Then rethrow - the 503 still reaches the wire.
-            dirtyPages.clear(intent.pageId)
+            dirtyPages.clear(RootedPageId(intent.root, intent.pageId))
             throw e
         }
         return when (create) {
             is CreateResult.Exists -> {
-                dirtyPages.clear(intent.pageId)
+                dirtyPages.clear(RootedPageId(intent.root, intent.pageId))
                 WriteOutcome.AlreadyExists(create.path)
             }
             is CreateResult.Rejected -> {
-                dirtyPages.clear(intent.pageId) // an uncreatable location — NOTHING written
+                dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // an uncreatable location — NOTHING written
                 WriteOutcome.InvalidLocation(create.reason)
             }
             is CreateResult.Unreadable -> {
                 // A mutated target (the authority may already hold the created bytes, Q8b's create twin)
                 // KEEPS the write-ahead mark set at (1), mirroring write()'s CAS arm, so reconcile commits
                 // a fully-landed create or drift-skips. Only a nothing-landed Unreadable clears.
-                if (!create.targetMutated) dirtyPages.clear(intent.pageId)
+                if (!create.targetMutated) dirtyPages.clear(RootedPageId(intent.root, intent.pageId))
                 WriteOutcome.Unreadable(create.cause)
             }
             is CreateResult.Created -> createAndIndex(intent, newHash = create.newHash)
@@ -244,7 +245,7 @@ class WritePipeline(
             // itself the window in which the D17 contest can hand this id to another root, and an id-addressed
             // reindex would then index a different root's file than the one this create wrote.
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
-            dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
+            dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
         } catch (e: Exception) {
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
@@ -311,7 +312,7 @@ class WritePipeline(
         // DIFFERENT root (the D17 contest re-awarding it) leaves this row just as dangling as an absent id
         // would, and a bare-pageId probe would read it as live and 409 a create that should have succeeded.
         val aliasTarget = aliasRegistry.find(RootedPath(intent.root, pageUrl))
-        if (aliasTarget != null && snapshot.byId[aliasTarget]?.root == intent.root) return pageUrl.value
+        if (aliasTarget != null && snapshot.byId[aliasTarget.id]?.root == intent.root) return pageUrl.value
         return null
     }
 
@@ -321,7 +322,7 @@ class WritePipeline(
      * attempt's hash, but nothing was actually written, so the earlier on-disk-but-unindexed recovery
      * record must survive. With no prior row, the page simply clears (nothing to reconcile).
      */
-    private fun restoreOrClear(pageId: PageId, prior: DirtyPage?) {
+    private fun restoreOrClear(pageId: RootedPageId, prior: DirtyPage?) {
         if (prior != null) {
             dirtyPages.mark(prior.pageId, prior.path, expectedHash = prior.expectedHash, stage = prior.stage)
         } else {
@@ -413,7 +414,7 @@ class WritePipeline(
                 // ungated and runs at boot against a snapshot the startup rebuild has already published, so an
                 // id-addressed reindex here would be the same cross-root re-derivation the write path forbids.
                 indexBuilder.reindex(page.path) // tolerated to throw only if the page truly vanished — caught below
-                dirtyPages.clear(page.pageId)
+                dirtyPages.clear(RootedPageId(page.path.root, page.pageId))
             } catch (e: Exception) {
                 markIfRootGone(root)
                 logger.error(e) { "reconciliation of ${page.path.path.value} failed; leaving it dirty for the next startup" }
@@ -455,7 +456,7 @@ class WritePipeline(
             // to - never by the page id, which a concurrent rebuild's D17 contest can re-award to another root
             // between the CAS and this call, sending the reindex at a file these bytes never touched.
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
-            dirtyPages.clear(intent.pageId) // every post-step succeeded — clear the write-ahead mark
+            dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
         } catch (e: Exception) {
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;

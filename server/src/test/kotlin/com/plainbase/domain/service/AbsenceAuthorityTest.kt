@@ -9,6 +9,7 @@ import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.withClue
@@ -70,7 +71,7 @@ class AbsenceAuthorityTest : FunSpec({
                     world.idMap.retiredBindings().shouldBeEmpty()
                 }
                 withClue("the checkpoint rows - the down-time-move alias fact - survive a view they were not in") {
-                    world.checkpoints.load().keys shouldContainAll corpus
+                    world.checkpoints.load().keys.map { it.id } shouldContainAll corpus
                 }
                 withClue("and the search rows, which the sync listener deletes off the very same authority") {
                     world.engine.indexedState().keys shouldContainAll corpus
@@ -155,7 +156,7 @@ class AbsenceAuthorityTest : FunSpec({
 
                 withClue("having once seen a corpus is not a licence to believe it is gone now") {
                     world.idMap.pathOf(rollback) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
-                    world.checkpoints.load().keys shouldContainAll listOf(rollback)
+                    world.checkpoints.load().keys.map { it.id } shouldContainAll listOf(rollback)
                     world.engine.indexedState().keys shouldContainAll listOf(rollback)
                 }
             }
@@ -313,7 +314,7 @@ class AbsenceAuthorityTest : FunSpec({
                     // A retirement manufactured for SETUP: no scan ran, so this observation saw nothing. (And OPERATOR
                     // is not an INFERENCE from not-seeing, so no witness could refute it anyway - see ProofSource.)
                     witnessed = emptySet(),
-                ) shouldBe setOf(BindingRef(TreePath.require("guides/deploy.md"), old))
+                ) shouldBe setOf(RootedPageId(RootName.MAIN, old))
 
                 writePage(mainDir, "guides/deploy.md", "# A totally different page\n\nbody\n")
                 val snapshot = builder.rebuild()
@@ -490,7 +491,8 @@ class AbsenceAuthorityTest : FunSpec({
                 // `reconcile` would be refused by the very copy it was run to resolve. The same holds for API_DELETE:
                 // "we CAUSED this" is not an observation, so no observation can refute it.
                 withClue("a CAUSED or ACCEPTED absence is not an inference, so no amount of looking can refute it") {
-                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.OPERATOR)), witnessed = setOf(id)) shouldBe setOf(binding)
+                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.OPERATOR)), witnessed = setOf(id)) shouldBe
+                        setOf(RootedPageId(RootName.MAIN, id))
                     world.idMap.retired(id).shouldNotBeNull()
                 }
             }

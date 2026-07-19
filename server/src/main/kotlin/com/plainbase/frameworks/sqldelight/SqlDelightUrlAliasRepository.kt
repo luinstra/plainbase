@@ -1,8 +1,8 @@
 package com.plainbase.frameworks.sqldelight
 
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.UrlAlias
 import com.plainbase.domain.repository.UrlAliasRepository
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -16,21 +16,23 @@ class SqlDelightUrlAliasRepository(private val db: PlainbaseDb) : UrlAliasReposi
 
     private val queries get() = db.idMapQueries
 
-    override fun register(path: RootedPath, id: PageId) {
-        queries.upsertAlias(root = path.root, path = path.path, id = id)
+    override fun register(path: RootedPath, target: RootedPageId) {
+        queries.upsertAlias(root = path.root, path = path.path, id = target.id, targetRoot = target.root)
     }
 
-    override fun find(path: RootedPath): PageId? =
-        queries.selectAliasId(root = path.root, path = path.path).executeAsOneOrNull()
+    override fun find(path: RootedPath): RootedPageId? =
+        queries.selectAliasTarget(root = path.root, path = path.path).executeAsOneOrNull()?.let { RootedPageId(it.target_root, it.id) }
 
     override fun aliases(): List<UrlAlias> =
-        queries.selectAllAliases().executeAsList().map { UrlAlias(path = RootedPath(it.root, it.path), id = it.id) }
+        queries.selectAllAliases().executeAsList().map {
+            UrlAlias(path = RootedPath(it.root, it.path), target = RootedPageId(it.target_root, it.id))
+        }
 
     override fun dropShadowed(canonicalPath: RootedPath): UrlAlias? =
         db.transactionWithResult {
-            queries.selectAliasId(root = canonicalPath.root, path = canonicalPath.path).executeAsOneOrNull()?.let { shadowed ->
+            queries.selectAliasTarget(root = canonicalPath.root, path = canonicalPath.path).executeAsOneOrNull()?.let { shadowed ->
                 queries.deleteAlias(root = canonicalPath.root, path = canonicalPath.path)
-                UrlAlias(path = canonicalPath, id = shadowed)
+                UrlAlias(path = canonicalPath, target = RootedPageId(shadowed.target_root, shadowed.id))
             }
         }
 }

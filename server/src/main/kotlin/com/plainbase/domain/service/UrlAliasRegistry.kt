@@ -2,9 +2,9 @@
 
 package com.plainbase.domain.service
 
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.UrlAlias
 import com.plainbase.domain.repository.UrlAliasRepository
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -26,18 +26,18 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  */
 class UrlAliasRegistry(private val repository: UrlAliasRepository) {
 
-    private val aliases = AtomicReference(repository.aliases().associate { it.path to it.id })
+    private val aliases = AtomicReference(repository.aliases().associate { it.path to it.target })
 
-    /** The page aliased at [path], or null when no alias claims it. */
-    fun find(path: RootedPath): PageId? = aliases.load()[path]
+    /** The rooted page aliased at [path], or null when no alias claims it. */
+    fun find(path: RootedPath): RootedPageId? = aliases.load()[path]
 
     /** Every registered alias, as the current immutable view. */
-    fun all(): Map<RootedPath, PageId> = aliases.load()
+    fun all(): Map<RootedPath, RootedPageId> = aliases.load()
 
-    /** Registers [path] as an alias of the page [id], replacing any alias previously at that rooted path. */
-    fun register(path: RootedPath, id: PageId) {
-        repository.register(path, id)
-        aliases.store(aliases.load() + (path to id))
+    /** Registers [path] as an alias of the page [target], replacing any alias previously at that rooted path. */
+    fun register(path: RootedPath, target: RootedPageId) {
+        repository.register(path, target)
+        aliases.store(aliases.load() + (path to target))
     }
 
     /**

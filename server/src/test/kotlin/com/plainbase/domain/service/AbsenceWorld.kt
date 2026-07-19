@@ -154,7 +154,9 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         registeredRoots = registry.roots.map { it.name }.toSet(),
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
-            searchIndexer?.let { indexer -> IndexBuilder.PublicationListener(indexer::sync) },
+            searchIndexer?.let { indexer ->
+                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
+            },
         ),
         searchIndexer = searchIndexer,
         availability = availability,

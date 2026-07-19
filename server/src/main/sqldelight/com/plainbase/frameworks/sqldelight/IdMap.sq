@@ -64,22 +64,27 @@ CREATE TABLE identity_issue (
 -- No GC. A row per page that ever existed is nothing, and a retention horizon is just soft-retirement
 -- becoming hard on a timer - i.e. the permalink-destroyer this table exists to prevent.
 CREATE TABLE retired_binding (
-  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL,
   root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
   materialized INTEGER AS Boolean NOT NULL,
-  retired_at INTEGER NOT NULL
+  retired_at INTEGER NOT NULL,
+  PRIMARY KEY (root, id)
 );
 
--- An old canonical URL path -> the page's id (§A4), keyed per root: URL space is per-root, so the
--- same old path may alias different pages under different roots. The value is always the PAGE id,
--- never another alias, so chains collapse by construction (one hop). Rows are written by chunk 5's
--- IndexBuilder (move detection) and redirect_from registration. Documented derived-state
--- exception: NOT rebuildable from the tree alone — losing DATA_DIR loses old-URL continuity.
+-- An old canonical URL path -> the page's rooted id (§A4), keyed per root: URL space is per-root, so
+-- the same old path may alias different pages under different roots. The value is always a PAGE
+-- (target_root, id), never another alias, so chains collapse by construction (one hop). target_root
+-- names the root that holds the target page, so a resolved alias yields a (root, id) rather than a
+-- bare id (an alias may target a page in a DIFFERENT root than the one whose URL space it lives in).
+-- Rows are written by chunk 5's IndexBuilder (move detection) and redirect_from registration.
+-- Documented derived-state exception: NOT rebuildable from the tree alone — losing DATA_DIR loses
+-- old-URL continuity.
 CREATE TABLE url_alias (
   root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
   id BLOB AS PageId NOT NULL,
+  target_root TEXT AS RootName NOT NULL DEFAULT 'main',
   PRIMARY KEY (root, path)
 );
 
@@ -142,7 +147,7 @@ FROM retired_binding;
 retire:
 INSERT INTO retired_binding(id, root, path, materialized, retired_at)
 VALUES (:id, :root, :path, :materialized, :retiredAt)
-ON CONFLICT(id) DO UPDATE SET root = excluded.root, path = excluded.path, materialized = excluded.materialized;
+ON CONFLICT(root, id) DO UPDATE SET path = excluded.path, materialized = excluded.materialized;
 
 -- The UN-RETIREMENT: the page came home to its OWN (root, path) and reclaims the id it earned.
 unretire:
@@ -173,13 +178,16 @@ selectAllIssues:
 SELECT *
 FROM identity_issue;
 
+-- The DO UPDATE arm must re-set target_root alongside id: re-pointing an existing alias path to a
+-- different page (possibly in a different root) has to carry the new target's root, or the row keeps
+-- the STALE target_root and the alias resolves to the wrong root.
 upsertAlias:
-INSERT INTO url_alias(root, path, id)
-VALUES (:root, :path, :id)
-ON CONFLICT(root, path) DO UPDATE SET id = excluded.id;
+INSERT INTO url_alias(root, path, id, target_root)
+VALUES (:root, :path, :id, :targetRoot)
+ON CONFLICT(root, path) DO UPDATE SET id = excluded.id, target_root = excluded.target_root;
 
-selectAliasId:
-SELECT id
+selectAliasTarget:
+SELECT target_root, id
 FROM url_alias
 WHERE root = :root AND path = :path;
 

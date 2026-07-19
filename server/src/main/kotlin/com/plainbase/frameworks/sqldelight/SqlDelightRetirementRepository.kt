@@ -3,10 +3,10 @@ package com.plainbase.frameworks.sqldelight
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
-import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.time.Clock
 
@@ -29,13 +29,13 @@ class SqlDelightRetirementRepository(
     private val dirty get() = db.dirtyPageQueries
     private val gitCheckpoints get() = db.gitCheckpointQueries
 
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<BindingRef> {
+    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
         // A baseline or empty-reap advance (C4) arrives with NO proofs by construction, so the empty-list guard
         // must check BOTH lists or the advance would never reach the transaction that lands the checkpoint.
         if (proofs.isEmpty() && advances.isEmpty()) return emptySet()
         return db.transactionWithResult {
             val retiredAt = clock.now().toEpochMilliseconds()
-            val applied = mutableSetOf<BindingRef>()
+            val applied = mutableSetOf<RootedPageId>()
             for (minted in proofs) {
                 // REFUTATION, before anything else: an INFERRED absence is a conclusion drawn from a gap in what we
                 // observed, and SEEING the page refutes it. A renamed page's old path is "absent" to every source we
@@ -80,12 +80,12 @@ class SqlDelightRetirementRepository(
                         retiredAt = retiredAt,
                     )
                     idMap.deleteBinding(root = proof.root, path = ref.path)
-                    checkpoints.deleteRow(binding.id)
+                    checkpoints.deleteRow(root = proof.root, id = binding.id)
                     // The dirty_page row is an interrupted save's ONLY recovery record, and it is USER CONTENT.
                     // It is cleared HERE, under the proof that retires the binding it belongs to, and NOWHERE
                     // else - never on a bare "the file was not there" read (ledger A1's worst consequence).
-                    dirty.deleteById(binding.id)
-                    applied += ref
+                    dirty.deleteByRootId(root = proof.root, id = binding.id)
+                    applied += RootedPageId(proof.root, ref.id)
                 }
             }
             // The GIT checkpoint advances (C4), in the SAME transaction and behind the IDENTICAL freshness compare

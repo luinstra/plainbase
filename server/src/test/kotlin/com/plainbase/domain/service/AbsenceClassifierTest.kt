@@ -7,6 +7,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.assertions.throwables.shouldThrow
@@ -76,7 +77,7 @@ class AbsenceClassifierTest : FunSpec({
             pipeline.reconcileDirtyPages()
 
             withClue("nothing but an absence PROOF may destroy it, and in C0/C1 nothing mints one") {
-                world.dirtyPages.get(id).shouldNotBeNull()
+                world.dirtyPages.get(RootedPageId(bound.root, id)).shouldNotBeNull()
             }
         }
     }

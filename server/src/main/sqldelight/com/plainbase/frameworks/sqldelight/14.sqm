@@ -1,0 +1,58 @@
+-- v14 -> v15: per-root identity C2. The three independent-table PKs re-key to (root, id) so a duplicate id
+-- under a future extra root cannot collide a row; url_alias gains a TARGET root so a resolved alias names a
+-- (root, id) rather than a bare id. id_map is UNTOUCHED (UNIQUE(id) still holds through C4). SQLite cannot
+-- ALTER a PRIMARY KEY, so the three PK tables rebuild; url_alias takes the ADD COLUMN idiom (10.sqm:67), and
+-- its target_root is BACKFILLED from the id's real root (id_map, then retired_binding), NOT defaulted to
+-- 'main' - a durable alias may target an extra-root page, and 'main' would silently retarget it. A target
+-- absent from BOTH tables is a dangling alias (retained, not shadow-swept; it resolves to no page): its
+-- COALESCE-to-'main' is a harmless placeholder. The retired_binding subquery is a one-shot full scan (id is
+-- the 2nd PK column). Plain migration SQL. verifyMigrations cross-checks this against schema/15.db.
+
+CREATE TABLE retired_binding_v15 (
+  id BLOB NOT NULL,
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  materialized INTEGER NOT NULL,
+  retired_at INTEGER NOT NULL,
+  PRIMARY KEY (root, id)
+);
+INSERT INTO retired_binding_v15 SELECT id, root, path, materialized, retired_at FROM retired_binding;
+DROP TABLE retired_binding;
+ALTER TABLE retired_binding_v15 RENAME TO retired_binding;
+
+CREATE TABLE dirty_page_v15 (
+  id BLOB NOT NULL,
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  expected_hash TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  PRIMARY KEY (root, id)
+);
+INSERT INTO dirty_page_v15 SELECT id, root, path, expected_hash, stage FROM dirty_page;
+-- Drop the index explicitly before the table (a real DROP TABLE cascades to it, but the migration
+-- verifier keeps the same-named index registered) and recreate it against the rebuilt table.
+DROP INDEX dirty_page_root_path;
+DROP TABLE dirty_page;
+ALTER TABLE dirty_page_v15 RENAME TO dirty_page;
+CREATE INDEX dirty_page_root_path ON dirty_page(root, path);
+
+CREATE TABLE page_checkpoint_v15 (
+  id BLOB NOT NULL,
+  root TEXT NOT NULL,
+  url_path TEXT,
+  PRIMARY KEY (root, id)
+);
+INSERT INTO page_checkpoint_v15 SELECT id, root, url_path FROM page_checkpoint;
+DROP TABLE page_checkpoint;
+ALTER TABLE page_checkpoint_v15 RENAME TO page_checkpoint;
+
+-- url_alias VALUE gains a target root (PK (root, path) unchanged, so ADD COLUMN). The DEFAULT serves only
+-- the schema cross-check + new inserts; existing rows are backfilled to the id's REAL root: id_map first,
+-- then retired_binding for a retired target, both unique under UNIQUE(id); COALESCE to 'main' only for a
+-- dangling target that is neither bound nor retired (retained + harmless, see the header note).
+ALTER TABLE url_alias ADD COLUMN target_root TEXT NOT NULL DEFAULT 'main';
+UPDATE url_alias SET target_root = COALESCE(
+  (SELECT root FROM id_map WHERE id_map.id = url_alias.id),
+  (SELECT root FROM retired_binding WHERE retired_binding.id = url_alias.id),
+  'main'
+);

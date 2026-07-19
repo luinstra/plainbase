@@ -72,8 +72,8 @@ class IndexBuilderFixtureTest : FunSpec({
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
             val deployGuide = snapshot.byPath.getValue(rooted("guides/deploy-guide.md"))
-            harness.registry.find(rooted("old/deployment")) shouldBe deployGuide.id
-            harness.aliases.find(rooted("old/deployment")) shouldBe deployGuide.id // persisted, not just in-memory
+            harness.registry.find(rooted("old/deployment")) shouldBe deployGuide.rooted
+            harness.aliases.find(rooted("old/deployment")) shouldBe deployGuide.rooted // persisted, not just in-memory
         }
     }
 

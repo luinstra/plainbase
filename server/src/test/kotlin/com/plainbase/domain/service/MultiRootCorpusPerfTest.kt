@@ -114,7 +114,11 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
         val indexer = SearchIndexer(provider, SectionSplitter())
         IndexHarness(
             trees.first(),
-            listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+            listeners = listOf(
+                IndexBuilder.PublicationListener { snap, retired ->
+                    indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                },
+            ),
             searchIndexer = indexer,
             rootRegistry = registry,
             sources = sources,

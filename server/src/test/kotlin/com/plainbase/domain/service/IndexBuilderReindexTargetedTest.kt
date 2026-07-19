@@ -6,10 +6,10 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.PageCheckpointRepository
-import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -198,7 +198,7 @@ private class CountingSearchProvider : SearchProvider {
 private class CountingCheckpoint(private val delegate: PageCheckpointRepository) : PageCheckpointRepository {
     var replaceCalls = 0
     override fun load() = delegate.load()
-    override fun replace(urlPaths: Map<PageId, PreviousUrl>) {
+    override fun replace(urlPaths: Map<RootedPageId, TreePath?>) {
         replaceCalls += 1
         delegate.replace(urlPaths)
     }

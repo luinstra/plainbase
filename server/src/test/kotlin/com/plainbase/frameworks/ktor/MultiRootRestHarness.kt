@@ -6,7 +6,6 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.repository.PreviousUrl
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
@@ -15,6 +14,7 @@ import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.CommitGlob
@@ -116,7 +116,11 @@ class MultiRootRestHarness(
         rootRegistry = registry,
         availability = availability,
         sources = roots.map { IndexBuilder.Source(it, storesByRoot.getValue(it.name), NoOpHistoryProvider) },
-        listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+        listeners = listOf(
+            IndexBuilder.PublicationListener { snap, retired ->
+                searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+            },
+        ),
         searchIndexer = searchIndexer,
     )
 
@@ -212,7 +216,7 @@ class MultiRootRestHarness(
         require(registry.byName(root) == null) { "'$name' must NOT be in the registry - that is what makes it detached" }
         val rooted = RootedPath(root, TreePath.require(path))
         idMap.bind(rooted, id, materialized = false)
-        checkpoints.replace(checkpoints.load() + (id to PreviousUrl(root, TreePath.require(path.removeSuffix(".md")))))
+        checkpoints.replace(checkpoints.load() + (RootedPageId(root, id) to TreePath.require(path.removeSuffix(".md"))))
     }
 
     /**

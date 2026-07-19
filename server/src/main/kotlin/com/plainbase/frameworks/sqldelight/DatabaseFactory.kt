@@ -38,6 +38,7 @@ object DatabaseFactory {
             rootAdapter = RootNameColumnAdapter,
             pathAdapter = TreePathColumnAdapter,
             idAdapter = PageIdColumnAdapter,
+            target_rootAdapter = RootNameColumnAdapter,
         ),
         page_checkpointAdapter = Page_checkpoint.Adapter(
             idAdapter = PageIdColumnAdapter,

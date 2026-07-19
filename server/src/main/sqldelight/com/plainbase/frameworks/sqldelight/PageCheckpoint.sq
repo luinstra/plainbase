@@ -11,12 +11,14 @@ import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
 import com.plainbase.domain.root.RootName;
 
--- PK stays id (ids are globally unique across roots); root qualifies the root-relative url_path
--- (multi-root C2, ADR-0011 D14).
+-- PK is (root, id): the row is keyed by the page's real (root, id) identity so a duplicate id under a
+-- future extra root cannot collide a checkpoint row (ADR-0011 D14). root also qualifies the
+-- root-relative url_path.
 CREATE TABLE page_checkpoint (
-  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL,
   root TEXT AS RootName NOT NULL,
-  url_path TEXT AS TreePath
+  url_path TEXT AS TreePath,
+  PRIMARY KEY (root, id)
 );
 
 selectAll:
@@ -31,7 +33,8 @@ INSERT INTO page_checkpoint(id, root, url_path)
 VALUES (:id, :root, :urlPath);
 
 -- The proof-apply transaction's arm: a checkpoint row dies WITH the binding it belongs to, under the
--- same AbsenceProof, never on its own inference (C0).
+-- same AbsenceProof, never on its own inference (C0). Root-scoped so the retirement of one root's
+-- binding cannot reap a same-id row under another root.
 deleteRow:
 DELETE FROM page_checkpoint
-WHERE id = :id;
+WHERE root = :root AND id = :id;

@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
@@ -89,7 +90,7 @@ class ShadowedRootWarningTest : FunSpec({
         world({ main ->
             Files.writeString(main.resolve("readme.md"), "---\ntitle: R\n---\n\n# R\n")
         }) { w ->
-            val aliases = mapOf(RootedPath(RootName.MAIN, TreePath.require("guides/old-deploy")) to id)
+            val aliases = mapOf(RootedPath(RootName.MAIN, TreePath.require("guides/old-deploy")) to RootedPageId(RootName.MAIN, id))
             val warning = shadowedRootWarning(w.snapshot, aliases, w.registry)
             warning.shouldNotBeNull()
             warning shouldContain "guides/old-deploy"
@@ -100,7 +101,7 @@ class ShadowedRootWarningTest : FunSpec({
         // The filter is `it.root == RootName.MAIN`, not "any alias anywhere" - an extra root's rows describe ITS
         // url space, which main's segment index has no business reading.
         world({ main -> Files.writeString(main.resolve("readme.md"), "---\ntitle: R\n---\n\n# R\n") }) { w ->
-            val aliases = mapOf(RootedPath(RootName.require("guides"), TreePath.require("guides/x")) to id)
+            val aliases = mapOf(RootedPath(RootName.require("guides"), TreePath.require("guides/x")) to RootedPageId(RootName.MAIN, id))
             shadowedRootWarning(w.snapshot, aliases, w.registry).shouldBeNull()
         }
     }

@@ -10,6 +10,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
@@ -26,6 +27,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -158,7 +160,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 14L
+                    version shouldBe 15L
                 }
             }
         } finally {
@@ -276,6 +278,129 @@ class AppDbMigrationTest : FunSpec({
         }
     }
 
+    test("v14 baseline migrates to v15: three PKs re-key to (root, id), url_alias.target_root backfilled from the id's REAL root") {
+        // On a real committed v14 baseline, seed the three re-keyed tables (v14 shapes) plus the two url_alias
+        // backfill branches through raw JDBC, migrate via the production factory, then prove: every row survives,
+        // the composite (root, id) PK is live (same id/two roots OK, same (root, id) twice FAILS via a plain raw
+        // insert), and each alias's target_root is DERIVED from its id's real root (id_map, then retired_binding),
+        // never blanket-stamped 'main'. Initial RED: verifyMigrations fails until schema/15.db is regenerated;
+        // back-out = delete 14.sqm and the version assertions flip back to green.
+        val dir = Files.createTempDirectory("plainbase-migration-c2")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("14.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            val idX = ByteArray(16) { 1 } // a live main binding's row set (dirty_page + page_checkpoint)
+            val idW = ByteArray(16) { 2 } // a retired main tombstone
+            val idY = ByteArray(16) { 3 } // an id_map-arm alias target (bound under extra)
+            val idZ = ByteArray(16) { 4 } // a retired_binding-arm alias target (retired under extra, no binding)
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 14") }
+                raw.prepareStatement(
+                    "INSERT INTO dirty_page(id, root, path, expected_hash, stage) VALUES (?, 'main', 'guides/a.md', 'sha256:abc', 'WRITING')",
+                ).use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement("INSERT INTO page_checkpoint(id, root, url_path) VALUES (?, 'main', 'guides/a')").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement(
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, 'main', 'guides/gone.md', 1, 123)",
+                ).use {
+                    it.setBytes(1, idW)
+                    it.executeUpdate()
+                }
+                // id_map arm: a binding under 'extra' for idY + a main-root alias pointing at idY.
+                raw.prepareStatement("INSERT INTO id_map(root, path, id, materialized) VALUES ('extra', 'guides/y.md', ?, 1)").use {
+                    it.setBytes(1, idY)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement("INSERT INTO url_alias(root, path, id) VALUES ('main', 'old', ?)").use {
+                    it.setBytes(1, idY)
+                    it.executeUpdate()
+                }
+                // retired_binding arm: idZ retired under 'extra' with NO id_map binding + a main-root alias at idZ.
+                raw.prepareStatement(
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, 'extra', 'guides/z.md', 0, 456)",
+                ).use {
+                    it.setBytes(1, idZ)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement("INSERT INTO url_alias(root, path, id) VALUES ('main', 'older', ?)").use {
+                    it.setBytes(1, idZ)
+                    it.executeUpdate()
+                }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                driver.queryLong("PRAGMA user_version") shouldBe 15L
+
+                // (i) every seeded row survives the rebuild.
+                val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
+                dirty.root shouldBe RootName.MAIN
+                dirty.path.value shouldBe "guides/a.md"
+                db.pageCheckpointQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
+                db.idMapQueries.selectAllRetired().executeAsList().map { it.root }
+                    .shouldContainExactlyInAnyOrder(RootName.MAIN, RootName.require("extra"))
+
+                // (iii) each alias's target_root is DERIVED from its id's real root, never blanket 'main'.
+                val aliases = SqlDelightUrlAliasRepository(db)
+                aliases.find(RootedPath(RootName.MAIN, TreePath.require("old"))) shouldBe
+                    RootedPageId(RootName.require("extra"), PageId.require("03030303-0303-0303-0303-030303030303"))
+                aliases.find(RootedPath(RootName.MAIN, TreePath.require("older"))) shouldBe
+                    RootedPageId(RootName.require("extra"), PageId.require("04040404-0404-0404-0404-040404040404"))
+            }
+
+            // (ii) the composite (root, id) PK is LIVE: same id under a SECOND root inserts cleanly into each of the
+            // three tables, but the SAME (root, id) twice FAILS - proven with a PLAIN RAW INSERT, since the generated
+            // upsert/retire are INSERT OR REPLACE / ON CONFLICT DO UPDATE and never throw.
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.prepareStatement(
+                    "INSERT INTO dirty_page(id, root, path, expected_hash, stage) VALUES (?, 'extra', 'guides/a.md', 'h', 'WRITING')",
+                ).use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement("INSERT INTO page_checkpoint(id, root, url_path) VALUES (?, 'extra', 'guides/a')").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.prepareStatement(
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, 'other', 'g', 1, 1)",
+                ).use {
+                    it.setBytes(1, idW)
+                    it.executeUpdate()
+                }
+                shouldThrowAny {
+                    raw.prepareStatement(
+                        "INSERT INTO dirty_page(id, root, path, expected_hash, stage) VALUES (?, 'main', 'guides/dup.md', 'h', 'WRITING')",
+                    ).use {
+                        it.setBytes(1, idX)
+                        it.executeUpdate()
+                    }
+                }
+                shouldThrowAny {
+                    raw.prepareStatement("INSERT INTO page_checkpoint(id, root, url_path) VALUES (?, 'main', 'dup')").use {
+                        it.setBytes(1, idX)
+                        it.executeUpdate()
+                    }
+                }
+                shouldThrowAny {
+                    raw.prepareStatement(
+                        "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, 'main', 'dup', 1, 1)",
+                    ).use {
+                        it.setBytes(1, idW)
+                        it.executeUpdate()
+                    }
+                }
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
     test("an interrupted migration rolls back whole: the DB stays intact at v10 and a retry after fixing succeeds") {
         // The generated Schema.migrate issues bare per-statement executes; DatabaseFactory wraps the
         // chain + the user_version bump in ONE transaction. Inject a failure MID-sequence: dirty_page
@@ -338,7 +463,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 14L
+                driver.queryLong("PRAGMA user_version") shouldBe 15L
                 db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
                 db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }

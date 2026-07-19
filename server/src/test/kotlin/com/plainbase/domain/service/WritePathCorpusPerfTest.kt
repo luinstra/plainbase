@@ -63,7 +63,11 @@ class WritePathCorpusPerfTest : FunSpec({
                 IndexHarness(
                     root,
                     contentStore = observing,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)), // rebuild's serve-shape engine sync
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                        },
+                    ), // rebuild's serve-shape engine sync
                     searchIndexer = indexer, // reindex's propagating syncPage
                 ).use { harness ->
                     harness.builder.rebuild()
@@ -142,7 +146,11 @@ class WritePathCorpusPerfTest : FunSpec({
                 val indexer = SearchIndexer(provider, SectionSplitter())
                 IndexHarness(
                     root,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     harness.builder.rebuild()
@@ -184,7 +192,11 @@ class WritePathCorpusPerfTest : FunSpec({
                 IndexHarness(
                     root,
                     contentStore = counting,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     // The serve shape, assembled as WatchingRestHarness/Application.serve() wire it:

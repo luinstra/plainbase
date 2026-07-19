@@ -69,7 +69,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 val vanishing = VanishingScan(LocalContentStore(extraDir))
                 val builder = world.builder(mainDir, vanishing)
                 val rollback = builder.rebuild().byPath.getValue(rollbackPath).id
-                world.checkpoints.load().keys shouldContain rollback
+                world.checkpoints.load().keys.map { it.id } shouldContain rollback
 
                 vanishing.arm()
                 val second = builder.rebuild()
@@ -79,7 +79,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 }
                 world.availability.current().isAvailable(extra) shouldBe false
                 withClue("the checkpoint replace deletes exactly what the pass had authority over, and it had none here") {
-                    world.checkpoints.load().keys shouldContain rollback
+                    world.checkpoints.load().keys.map { it.id } shouldContain rollback
                 }
                 withClue("the id_map binding is durable state under the same rule") {
                     world.idMap.pathOf(rollback) shouldBe rollbackPath
@@ -136,7 +136,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 // Run 1: the corpus is there, and its rows go durable.
                 val warm = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = warm.rebuild().byPath.getValue(rollbackPath).id
-                world.checkpoints.load().keys shouldContain rollback
+                world.checkpoints.load().keys.map { it.id } shouldContain rollback
 
                 // The outage, and the shape that matters: the volume is unmounted while the server is DOWN, so what
                 // the next boot finds at the path is an EMPTY DIRECTORY (a mount point, a bind mount the container
@@ -148,7 +148,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 cold.rebuild()
 
                 withClue("the checkpoint replace would have purged the whole root - it must have had NO authority here") {
-                    world.checkpoints.load().keys shouldContain rollback
+                    world.checkpoints.load().keys.map { it.id } shouldContain rollback
                 }
                 withClue("the id_map binding is the permalink: losing it re-mints /p/{id} for a page that still exists") {
                     world.idMap.pathOf(rollback) shouldBe rollbackPath
@@ -190,7 +190,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     builder.current.section(extra).pages.shouldBeEmpty()
                 }
                 withClue("the durable rows are carried, not destroyed: an unmount and an rm -rf look identical from here") {
-                    world.checkpoints.load().keys shouldContain rollback
+                    world.checkpoints.load().keys.map { it.id } shouldContain rollback
                     world.engine.indexedState().keys shouldContain rollback
                     world.idMap.pathOf(rollback) shouldBe rollbackPath
                 }
@@ -369,7 +369,9 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         retirements = retirements,
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
-            searchIndexer?.let { indexer -> IndexBuilder.PublicationListener(indexer::sync) },
+            searchIndexer?.let { indexer ->
+                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
+            },
         ),
         searchIndexer = searchIndexer,
         availability = availability,
