@@ -47,7 +47,7 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             contentStore = store,
             listeners = listOf(
                 IndexBuilder.PublicationListener { snap, retired ->
-                    searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                    searchIndexer.sync(snap, retired)
                 },
             ),
             searchIndexer = searchIndexer,

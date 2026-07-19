@@ -102,7 +102,7 @@ fun withRestServices(
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                     listeners = listOf(
                         IndexBuilder.PublicationListener { snap, retired ->
-                            searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                            searchIndexer.sync(snap, retired)
                         },
                     ),
                     searchIndexer = searchIndexer,

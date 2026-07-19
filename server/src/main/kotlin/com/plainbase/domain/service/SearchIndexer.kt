@@ -1,18 +1,18 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.page.IndexedPage
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.SearchProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
  * Engine-truth diff sync (§B4): [sync] reconciles a published [PageIndex] snapshot against
  * [SearchProvider.indexedState] — the engine's OWN record of what it holds — upserting pages the
- * engine lacks or holds stale (`contentHash` covers every in-file change, root+path cover moves,
- * cross-root included) and deleting pages the snapshot no longer has. An unchanged corpus makes
- * ZERO engine calls beyond the state read (the no-op fast path). The diff stays pageId-keyed:
- * ids are global across roots under the D17 winner policy, so one engine row per page still holds.
+ * engine lacks or holds stale (`contentHash` covers every in-file change, path covers a within-root
+ * move) and deleting pages the snapshot no longer has. An unchanged corpus makes ZERO engine calls
+ * beyond the state read (the no-op fast path). The diff is keyed by `(root, id)`: two roots holding
+ * one id are independent engine rows, each reconciled on its own.
  *
  * Diffing against engine truth instead of a previous in-memory snapshot is what makes the FIRST
  * sync after startup reconcile everything that changed while down, and a deleted engine database
@@ -43,14 +43,12 @@ class SearchIndexer(
      *    generation swap), the carried page is re-upserted from the carried section, which is the §B4 self-heal
      *    working as designed: the content is still known; only the disk is gone.
      */
-    fun sync(snapshot: PageIndex, retired: Set<PageId>) {
+    fun sync(snapshot: PageIndex, retired: Set<RootedPageId>) {
         val engineState = provider.indexedState()
         val stale = engineState.keys.intersect(retired)
         val changed = snapshot.pages.filter { page ->
-            val state = engineState[page.id]
-            // The root check keeps the engine's root column live: a cross-root move with an
-            // unchanged relative path and hash must still re-upsert.
-            state == null || state.contentHash != page.contentHash || state.path != page.path || state.root != page.root
+            val state = engineState[page.rooted]
+            state == null || state.contentHash != page.contentHash || state.path != page.path
         }
         if (stale.isEmpty() && changed.isEmpty()) {
             logger.debug { "search sync: engine matches the snapshot, nothing to do" }
@@ -88,7 +86,7 @@ class SearchIndexer(
      * root was already immune (its carried section IS in the snapshot, so the swap regenerates its rows), and a
      * DETACHED root's rows are retained exactly as [sync] retains them.
      */
-    fun rebuild(snapshot: PageIndex, retired: Set<PageId>) {
+    fun rebuild(snapshot: PageIndex, retired: Set<RootedPageId>) {
         provider.rebuild(snapshot.pages.asSequence().map(splitter::split), retired = retired)
         logger.info { "search reindex: rebuilt the engine for ${snapshot.pages.size} page(s)" }
     }

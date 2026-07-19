@@ -95,7 +95,7 @@ class SearchEquivalenceTest : FunSpec({
 
 private fun listenerOf(indexer: SearchIndexer) =
     com.plainbase.domain.service.IndexBuilder.PublicationListener { snap, retired ->
-        indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+        indexer.sync(snap, retired)
     }
 
 private fun deleteIndexFiles(dir: Path) {

@@ -308,7 +308,7 @@ object NativeSpike {
                 // Per-page replace + indexedState (the engine-truth diff base).
                 provider.index(listOf(spikeWelcomePage(contentHash = "sha256:replaced", body = "deploy on metal only")))
                 require(provider.search(SearchQuery("kubernetes", 10, 0)).total == 0L) { "replaced section still matches" }
-                val state = provider.indexedState().mapKeys { it.key.value }
+                val state = provider.indexedState().mapKeys { it.key.id.value }
                 require(state[SPIKE_WELCOME_ID]?.contentHash == "sha256:replaced") { "indexedState stale: $state" }
             }
             val journalMode = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { probe ->

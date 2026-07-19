@@ -154,7 +154,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     world.idMap.pathOf(rollback) shouldBe rollbackPath
                 }
                 withClue("and the search rows, which the sync listener deletes off the same authority set") {
-                    world.engine.indexedState().keys shouldContain rollback
+                    world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
                 val down = world.availability.current().unavailable[extra]
                 withClue("an empty VIEW must not be SERVED as a live corpus: 503 (the pages exist), never 404") {
@@ -181,7 +181,7 @@ class RootDeleteAuthorityTest : FunSpec({
             AuthorityWorld(mainDir, extraDir).use { world ->
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = builder.rebuild().byPath.getValue(rollbackPath).id
-                world.engine.indexedState().keys shouldContain rollback
+                world.engine.indexedState().keys.map { it.id } shouldContain rollback
 
                 Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 builder.rebuild()
@@ -191,7 +191,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 }
                 withClue("the durable rows are carried, not destroyed: an unmount and an rm -rf look identical from here") {
                     world.checkpoints.load().keys.map { it.id } shouldContain rollback
-                    world.engine.indexedState().keys shouldContain rollback
+                    world.engine.indexedState().keys.map { it.id } shouldContain rollback
                     world.idMap.pathOf(rollback) shouldBe rollbackPath
                 }
             }
@@ -259,7 +259,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 // Run 1: both roots there, both indexed into the real engine.
                 val warm = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = warm.rebuild().byPath.getValue(rollbackPath).id
-                world.engine.indexedState().keys shouldContain rollback
+                world.engine.indexedState().keys.map { it.id } shouldContain rollback
 
                 // Run 2: a RESTART with extra's disk unplugged. A fresh builder has no previous snapshot to carry,
                 // so the root is not merely skipped - it is absent from the corpus entirely, which is precisely
@@ -268,16 +268,16 @@ class RootDeleteAuthorityTest : FunSpec({
                 val cold = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 cold.rebuild().section(extra).pages shouldBe emptyList()
                 withClue("the SYNC listener already respected the authority set") {
-                    world.engine.indexedState().keys shouldContain rollback
+                    world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
 
                 cold.rebuildSearchIndex() // the admin `reindex` route / the `plainbase reindex` CLI
 
                 withClue("search.db is derived state, but an operator's reindex must not purge a root's index behind an outage") {
-                    world.engine.indexedState().keys shouldContain rollback
+                    world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
                 withClue("and the swap still re-derived everything it DID scan") {
-                    world.engine.indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, extra)
+                    world.engine.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, extra)
                 }
             }
         }
@@ -370,7 +370,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer ->
-                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
+                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired) }
             },
         ),
         searchIndexer = searchIndexer,

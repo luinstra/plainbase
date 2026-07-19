@@ -758,8 +758,7 @@ class IndexBuilder(
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
         val published = holder.load()
-        // search.db still keys by bare id (C3 roots it); bridge the rooted retired set to its ids here.
-        indexer.rebuild(published.snapshot, published.retired.mapTo(mutableSetOf()) { it.id })
+        indexer.rebuild(published.snapshot, published.retired)
         return published.snapshot.pages.size
     }
 

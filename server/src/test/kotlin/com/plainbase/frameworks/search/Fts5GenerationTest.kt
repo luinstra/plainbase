@@ -142,7 +142,7 @@ class Fts5GenerationTest : FunSpec({
                 }
             }
 
-            // §B4's promise: the next rebuild repairs for free — no (generation, page_id) wedge.
+            // §B4's promise: the next rebuild repairs for free — no (generation, root, page_id) wedge.
             provider.rebuild(corpusB.asSequence())
             val healed = provider.search(query("genprobe", limit = 50))
             healed.total shouldBe 5L
@@ -177,7 +177,7 @@ class Fts5GenerationTest : FunSpec({
                 }
             }
 
-            provider.rebuild(corpusA.asSequence()) // would hit the (generation, page_id) PK without the sweep
+            provider.rebuild(corpusA.asSequence()) // would hit the (generation, root, page_id) PK without the sweep
             val results = provider.search(query("genprobe", limit = 50))
             results.total shouldBe 3L
             results.hits.map { it.pageId }.toSet() shouldBe corpusA.map { it.pageId }.toSet()

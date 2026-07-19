@@ -364,10 +364,10 @@ private class TogglingSearchProvider : SearchProvider {
         pages.forEach { indexedPageIds += it.pageId }
     }
 
-    override fun delete(ids: Collection<PageId>) = Unit
+    override fun delete(ids: Collection<RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) = pages.forEach { indexedPageIds += it.pageId }
-    override fun indexedState(): Map<PageId, PageSearchState> = emptyMap()
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) = pages.forEach { indexedPageIds += it.pageId }
+    override fun indexedState(): Map<RootedPageId, PageSearchState> = emptyMap()
 }
 
 /** A real LocalContentStore over [root] — the delegate behind a CAS-failing test stand-in. */

@@ -59,7 +59,7 @@ class IndexBuilderReindexConcurrencyTest : FunSpec({
                     contentStore = gating,
                     listeners = listOf(
                         IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                            indexer.sync(snap, retired)
                         },
                     ),
                     searchIndexer = indexer,

@@ -1,7 +1,6 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
@@ -174,14 +173,14 @@ private class CountingSearchProvider : SearchProvider {
         lastIndexSize = pages.size
     }
 
-    override fun delete(ids: Collection<PageId>) = Unit
+    override fun delete(ids: Collection<RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(hits = emptyList(), total = 0L)
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) {
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) {
         rebuildCalls += 1
         pages.count() // drain
     }
 
-    override fun indexedState(): Map<PageId, PageSearchState> {
+    override fun indexedState(): Map<RootedPageId, PageSearchState> {
         indexedStateCalls += 1
         return emptyMap()
     }

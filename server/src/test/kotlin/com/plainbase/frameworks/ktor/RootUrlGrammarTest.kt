@@ -161,11 +161,11 @@ class RootUrlGrammarTest : FunSpec({
 /** A no-op SearchProvider for grammar tests that never touch search (the RestRedirectTest idiom). */
 private fun noopSearchProvider() = object : com.plainbase.domain.search.SearchProvider {
     override fun index(pages: List<com.plainbase.domain.search.PageDocuments>) = Unit
-    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.root.RootedPageId>) = Unit
     override fun search(query: com.plainbase.domain.search.SearchQuery) = com.plainbase.domain.search.SearchResults(0, emptyList())
     override fun rebuild(
         pages: Sequence<com.plainbase.domain.search.PageDocuments>,
-        retired: Set<com.plainbase.domain.page.PageId>?,
+        retired: Set<com.plainbase.domain.root.RootedPageId>?,
     ) = Unit
-    override fun indexedState() = emptyMap<com.plainbase.domain.page.PageId, com.plainbase.domain.search.PageSearchState>()
+    override fun indexedState() = emptyMap<com.plainbase.domain.root.RootedPageId, com.plainbase.domain.search.PageSearchState>()
 }

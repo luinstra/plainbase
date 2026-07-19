@@ -65,7 +65,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     contentStore = observing,
                     listeners = listOf(
                         IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                            indexer.sync(snap, retired)
                         },
                     ), // rebuild's serve-shape engine sync
                     searchIndexer = indexer, // reindex's propagating syncPage
@@ -148,7 +148,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     root,
                     listeners = listOf(
                         IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                            indexer.sync(snap, retired)
                         },
                     ),
                     searchIndexer = indexer,
@@ -194,7 +194,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     contentStore = counting,
                     listeners = listOf(
                         IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                            indexer.sync(snap, retired)
                         },
                     ),
                     searchIndexer = indexer,

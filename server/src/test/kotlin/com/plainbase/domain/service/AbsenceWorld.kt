@@ -155,7 +155,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer ->
-                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
+                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired) }
             },
         ),
         searchIndexer = searchIndexer,

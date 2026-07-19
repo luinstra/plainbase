@@ -353,7 +353,7 @@ class MultiRootRuntimeTest : FunSpec({
         twoRoots { main, extra ->
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
-                harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
+                harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeTrue()
 
                 // The boot rebuild WITNESSED this page, and the root has been under observation ever since (the
                 // harness declares it exactly where serve() does - at the watcher install). This is an operator's
@@ -365,7 +365,7 @@ class MultiRootRuntimeTest : FunSpec({
                     harness.builder.current.byId.containsKey(extraPage).shouldBeFalse()
                 }
                 withClue("and now the DURABLE state follows it, because the epoch PROVED it gone") {
-                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeFalse()
+                    harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeFalse()
                     harness.idMap.pathOf(extraPage).shouldBeNull()
                     harness.idMap.retired(extraPage).shouldNotBeNull() // a TOMBSTONE: /p/{id} is 410, never 404
                 }
@@ -389,7 +389,7 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.builder.rebuild()
 
                 withClue("NOTHING durable dies: the tail of a storm waits for real evidence, it is not inferred away") {
-                    harness.searchProvider.indexedState().keys.contains(extraPage).shouldBeTrue()
+                    harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeTrue()
                     harness.idMap.pathOf(extraPage).shouldNotBeNull()
                     harness.idMap.retiredBindings().shouldBeEmpty()
                 }

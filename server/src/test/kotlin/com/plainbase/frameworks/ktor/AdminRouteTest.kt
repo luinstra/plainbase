@@ -101,12 +101,12 @@ private class FailThenPassProvider : SearchProvider {
     val fail = AtomicBoolean(false)
 
     override fun index(pages: List<PageDocuments>) = Unit
-    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.root.RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.page.PageId>?) {
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.root.RootedPageId>?) {
         if (fail.load()) throw IllegalStateException("rebuild blew up (deliberately)")
     }
-    override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
+    override fun indexedState(): Map<com.plainbase.domain.root.RootedPageId, PageSearchState> = emptyMap()
 }
 
 /** A search engine whose [rebuild] runs [onRebuild] — used to park the first reindex so the second sees InFlight. */
@@ -114,10 +114,10 @@ private class BlockingProvider : SearchProvider {
     var onRebuild: () -> Unit = {}
 
     override fun index(pages: List<PageDocuments>) = Unit
-    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.root.RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.page.PageId>?) = onRebuild()
-    override fun indexedState(): Map<com.plainbase.domain.page.PageId, PageSearchState> = emptyMap()
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<com.plainbase.domain.root.RootedPageId>?) = onRebuild()
+    override fun indexedState(): Map<com.plainbase.domain.root.RootedPageId, PageSearchState> = emptyMap()
 }
 
 /**

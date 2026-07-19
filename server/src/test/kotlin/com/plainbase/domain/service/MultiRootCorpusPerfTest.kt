@@ -116,7 +116,7 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
             trees.first(),
             listeners = listOf(
                 IndexBuilder.PublicationListener { snap, retired ->
-                    indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id })
+                    indexer.sync(snap, retired)
                 },
             ),
             searchIndexer = indexer,

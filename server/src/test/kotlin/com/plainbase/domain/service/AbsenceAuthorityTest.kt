@@ -74,7 +74,7 @@ class AbsenceAuthorityTest : FunSpec({
                     world.checkpoints.load().keys.map { it.id } shouldContainAll corpus
                 }
                 withClue("and the search rows, which the sync listener deletes off the very same authority") {
-                    world.engine.indexedState().keys shouldContainAll corpus
+                    world.engine.indexedState().keys.map { it.id } shouldContainAll corpus
                 }
                 withClue("every unaccounted row is in LIMBO: carried, not destroyed, and self-healing on return") {
                     world.limbo.count(extra) shouldBe 500
@@ -157,7 +157,7 @@ class AbsenceAuthorityTest : FunSpec({
                 withClue("having once seen a corpus is not a licence to believe it is gone now") {
                     world.idMap.pathOf(rollback) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
                     world.checkpoints.load().keys.map { it.id } shouldContainAll listOf(rollback)
-                    world.engine.indexedState().keys shouldContainAll listOf(rollback)
+                    world.engine.indexedState().keys.map { it.id } shouldContainAll listOf(rollback)
                 }
             }
         }

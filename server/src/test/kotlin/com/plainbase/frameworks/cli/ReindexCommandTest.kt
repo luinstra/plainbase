@@ -99,7 +99,7 @@ class ReindexCommandTest : FunSpec({
                 val provider = Fts5SearchProvider(db)
                 // The regression this pins: a main-only source list would leave the engine holding `main` alone,
                 // because the rebuild is a GENERATION SWAP - every root it does not see is deleted from the index.
-                provider.indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
                 provider.search(SearchQuery(text = "capacitor", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
             }
@@ -118,7 +118,7 @@ class ReindexCommandTest : FunSpec({
 
             // Nothing was swapped: the vanished root's documents are still in the engine, and come back when it does.
             SearchDb(config.searchDatabasePath).use { db ->
-                Fts5SearchProvider(db).indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
             }
         }
     }
@@ -141,7 +141,7 @@ class ReindexCommandTest : FunSpec({
             // The swap never happened: handbook's documents are still searchable, exactly as for a root nobody touched.
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
-                provider.indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
             }
         }
@@ -159,7 +159,7 @@ class ReindexCommandTest : FunSpec({
             err shouldContain "nothing was written"
 
             SearchDb(config.searchDatabasePath).use { db ->
-                Fts5SearchProvider(db).indexedState().values.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
             }
         }
     }

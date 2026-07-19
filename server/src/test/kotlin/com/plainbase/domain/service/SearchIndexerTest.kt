@@ -8,6 +8,7 @@ import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.RootSection
 import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -33,13 +34,15 @@ import io.mockk.verify
  * a sync deletes nothing at all. The UPSERT side is untouched.
  */
 // C0's steady state: no proof source exists yet, so no page is ever retired and no engine row is ever deleted.
-private val NO_PROOF = emptySet<PageId>()
+private val NO_PROOF = emptySet<RootedPageId>()
 
 class SearchIndexerTest : FunSpec({
 
     val idA = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val idB = PageId.require("0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01")
     val idC = PageId.require("0197c2d1-6f3b-7c45-8d2e-3a7b9f5c8e02")
+
+    fun rooted(id: PageId, root: RootName = RootName.MAIN) = RootedPageId(root, id)
 
     fun hash(seed: Char) = "sha256:" + seed.toString().repeat(64)
 
@@ -63,9 +66,9 @@ class SearchIndexerTest : FunSpec({
 
     fun snapshot(vararg pages: IndexedPage) = PageIndex(listOf(RootSection(RootName.MAIN, pages.toList(), emptyList(), emptySet())))
 
-    fun state(page: IndexedPage) = PageSearchState(contentHash = page.contentHash, root = page.root, path = page.path)
+    fun state(page: IndexedPage) = PageSearchState(contentHash = page.contentHash, path = page.path)
 
-    fun harness(engineState: Map<PageId, PageSearchState>): Pair<SearchProvider, SearchIndexer> {
+    fun harness(engineState: Map<RootedPageId, PageSearchState>): Pair<SearchProvider, SearchIndexer> {
         val provider = mockk<SearchProvider>()
         every { provider.indexedState() } returns engineState
         justRun { provider.index(any()) }
@@ -90,7 +93,7 @@ class SearchIndexerTest : FunSpec({
         val before = page(idA, "a.md", hash('a'))
         val after = page(idA, "a.md", hash('b'))
         val same = page(idB, "b.md", hash('c'))
-        val (provider, indexer) = harness(mapOf(idA to state(before), idB to state(same)))
+        val (provider, indexer) = harness(mapOf(rooted(idA) to state(before), rooted(idB) to state(same)))
 
         indexer.sync(snapshot(after, same), NO_PROOF)
 
@@ -104,7 +107,7 @@ class SearchIndexerTest : FunSpec({
     test("move: a path change WITHOUT a content change still re-indexes (path rides the documents)") {
         val before = page(idA, "old/a.md", hash('a'))
         val moved = page(idA, "new/a.md", hash('a'))
-        val (provider, indexer) = harness(mapOf(idA to state(before)))
+        val (provider, indexer) = harness(mapOf(rooted(idA) to state(before)))
 
         indexer.sync(snapshot(moved), NO_PROOF)
 
@@ -114,10 +117,11 @@ class SearchIndexerTest : FunSpec({
         indexed.captured.single().path shouldBe TreePath.require("new/a.md")
     }
 
-    test("root-only change: same hash, same relative path, different root still re-upserts (the engine's root column must not go stale)") {
+    test("root-only change: same hash, same relative path, different root still re-upserts (the engine key distinguishes roots)") {
         val current = page(idA, "a.md", hash('a'))
-        val engineThinks = PageSearchState(contentHash = current.contentHash, root = RootName.require("extra"), path = current.path)
-        val (provider, indexer) = harness(mapOf(idA to engineThinks))
+        val engineThinks = PageSearchState(contentHash = current.contentHash, path = current.path)
+        // The engine holds id A under a DIFFERENT root, so `engineState[page.rooted]` misses and re-upserts.
+        val (provider, indexer) = harness(mapOf(RootedPageId(RootName.require("extra"), idA) to engineThinks))
 
         indexer.sync(snapshot(current), NO_PROOF)
 
@@ -140,14 +144,14 @@ class SearchIndexerTest : FunSpec({
     test("delete: a RETIRED page is deleted; nothing is indexed") {
         val kept = page(idA, "a.md", hash('a'))
         val gone = page(idB, "b.md", hash('b'))
-        val (provider, indexer) = harness(mapOf(idA to state(kept), idB to state(gone)))
+        val (provider, indexer) = harness(mapOf(rooted(idA) to state(kept), rooted(idB) to state(gone)))
 
-        indexer.sync(snapshot(kept), retired = setOf(idB))
+        indexer.sync(snapshot(kept), retired = setOf(rooted(idB)))
 
-        val deleted = slot<Collection<PageId>>()
+        val deleted = slot<Collection<RootedPageId>>()
         verify(exactly = 1) { provider.delete(capture(deleted)) }
         verify(exactly = 0) { provider.index(any()) }
-        deleted.captured.toSet() shouldBe setOf(idB)
+        deleted.captured.toSet() shouldBe setOf(rooted(idB))
     }
 
     // THE SAFETY FLOOR (C0), and the counterpart to the row above: the two inputs are IDENTICAL except for the
@@ -157,7 +161,7 @@ class SearchIndexerTest : FunSpec({
     test("a page gone from the snapshot with NO proof is KEPT - absence is not evidence") {
         val kept = page(idA, "a.md", hash('a'))
         val unwitnessed = page(idB, "b.md", hash('b'))
-        val (provider, indexer) = harness(mapOf(idA to state(kept), idB to state(unwitnessed)))
+        val (provider, indexer) = harness(mapOf(rooted(idA) to state(kept), rooted(idB) to state(unwitnessed)))
 
         indexer.sync(snapshot(kept), NO_PROOF)
 
@@ -168,7 +172,7 @@ class SearchIndexerTest : FunSpec({
     test("unchanged corpus: the no-op fast path makes ZERO engine calls beyond the state read") {
         val a = page(idA, "a.md", hash('a'))
         val b = page(idB, "b.md", hash('b'))
-        val (provider, indexer) = harness(mapOf(idA to state(a), idB to state(b)))
+        val (provider, indexer) = harness(mapOf(rooted(idA) to state(a), rooted(idB) to state(b)))
 
         indexer.sync(snapshot(a, b), NO_PROOF)
 
@@ -180,21 +184,22 @@ class SearchIndexerTest : FunSpec({
         val unchanged = page(idA, "a.md", hash('a'))
         val changed = page(idB, "b.md", hash('e'))
         val added = page(idC, "c.md", hash('c'))
+        val idD = PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03")
         val engineState = mapOf(
-            idA to state(unchanged),
-            idB to PageSearchState(hash('b'), RootName.MAIN, TreePath.require("b.md")),
-            PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03") to PageSearchState(hash('d'), RootName.MAIN, TreePath.require("d.md")),
+            rooted(idA) to state(unchanged),
+            rooted(idB) to PageSearchState(hash('b'), TreePath.require("b.md")),
+            rooted(idD) to PageSearchState(hash('d'), TreePath.require("d.md")),
         )
         val (provider, indexer) = harness(engineState)
 
-        indexer.sync(snapshot(unchanged, changed, added), retired = setOf(PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03")))
+        indexer.sync(snapshot(unchanged, changed, added), retired = setOf(rooted(idD)))
 
         val indexed = slot<List<PageDocuments>>()
-        val deleted = slot<Collection<PageId>>()
+        val deleted = slot<Collection<RootedPageId>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
         verify(exactly = 1) { provider.delete(capture(deleted)) }
         indexed.captured.map { it.pageId }.toSet() shouldBe setOf(idB, idC)
-        deleted.captured.toSet() shouldBe setOf(PageId.require("0197d3e2-7a4c-7d56-9e3f-4b8c0a6d9f03"))
+        deleted.captured.toSet() shouldBe setOf(rooted(idD))
     }
 
     test("self-healing framing: an emptied engine state means a FULL upsert, no special path") {

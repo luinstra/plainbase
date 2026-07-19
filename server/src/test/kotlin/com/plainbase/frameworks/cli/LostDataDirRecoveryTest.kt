@@ -137,7 +137,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 projected(capture(boot.provider), snapshotB) shouldBe projected(answersA, snapshotA)
 
                 // Search fully populated as a side effect of the boot rebuild — no manual reindex step.
-                boot.provider.indexedState().keys shouldBe snapshotB.pages.map { it.id }.toSet()
+                boot.provider.indexedState().keys shouldBe snapshotB.pages.map { it.rooted }.toSet()
             }
         }
     }
@@ -323,7 +323,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
             IndexBuilder.PublicationListener(checkpoint::replaceFrom),
-            IndexBuilder.PublicationListener { snap, retired -> searchIndexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) },
+            IndexBuilder.PublicationListener { snap, retired -> searchIndexer.sync(snap, retired) },
         ),
         searchIndexer = searchIndexer,
     )

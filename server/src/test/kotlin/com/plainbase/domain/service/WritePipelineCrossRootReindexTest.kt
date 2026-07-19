@@ -8,6 +8,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -202,8 +203,8 @@ private class RecordingSearchProvider : SearchProvider {
     val indexed = mutableSetOf<PageId>()
 
     override fun index(pages: List<PageDocuments>) = pages.forEach { indexed += it.pageId }
-    override fun delete(ids: Collection<PageId>) = Unit
+    override fun delete(ids: Collection<RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<PageId>?) = pages.forEach { indexed += it.pageId }
-    override fun indexedState(): Map<PageId, PageSearchState> = emptyMap()
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) = pages.forEach { indexed += it.pageId }
+    override fun indexedState(): Map<RootedPageId, PageSearchState> = emptyMap()
 }

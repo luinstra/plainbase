@@ -57,7 +57,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                 }
                 withClue("and the sinks act on the proof the apply transaction cashed - they never re-derive it") {
                     world.checkpoints.load().keys.contains(RootedPageId(extra, id)) shouldBe false
-                    world.engine.indexedState().keys.contains(id) shouldBe false
+                    world.engine.indexedState().keys.map { it.id }.contains(id) shouldBe false
                 }
                 withClue("limbo is EMPTY: the row is not unknown any more, it is settled") {
                     world.limbo.count(extra) shouldBe 0

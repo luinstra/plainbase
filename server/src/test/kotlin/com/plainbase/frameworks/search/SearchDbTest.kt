@@ -55,7 +55,7 @@ class SearchDbTest : FunSpec({
                         SearchIndexer(provider, SectionSplitter()).sync(snapshot, retired = emptySet())
                         provider.search(query("kubernetes")).total shouldBe 1L
                         provider.search(query("terraform")).total shouldBe 1L
-                        provider.indexedState().keys shouldBe snapshot.pages.map { it.id }.toSet()
+                        provider.indexedState().keys shouldBe snapshot.pages.map { it.rooted }.toSet()
                     }
                 }
             }

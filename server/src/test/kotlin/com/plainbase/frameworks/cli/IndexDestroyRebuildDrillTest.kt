@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.cli
 
-import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
@@ -42,7 +42,7 @@ class IndexDestroyRebuildDrillTest : FunSpec({
             // Build the pre-disaster install: both DBs file-backed, populated through the real CLI graph.
             captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
             val before: List<ReindexEquivalence.QueryAnswer>
-            val beforeState: Map<PageId, PageSearchState>
+            val beforeState: Map<RootedPageId, PageSearchState>
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 before = capture(provider)

@@ -12,7 +12,7 @@ import io.kotest.matchers.shouldBe
  * S8 — kill `search.db` and `reindex`), capture again, and compare with the ENGINE'S comparator:
  *
  *  - **Embedded** ([exactOrderedSequence]): the exact ordered hit sequence, byte for byte — the
- *    deterministic tiebreak (§A4: score DESC, page id, heading id) plus deterministic scoring
+ *    deterministic tiebreak (§A4: score DESC, root, page id, heading id) plus deterministic scoring
  *    make anything less than exact equality a real regression.
  *  - **A future engine** joins by passing its own [Comparator] when it subclasses the contract —
  *    pinned-but-reviewable per §A6 tier 2 (Appendix G), never by loosening the embedded one.

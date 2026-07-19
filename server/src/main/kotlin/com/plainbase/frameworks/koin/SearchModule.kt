@@ -23,10 +23,10 @@ val searchModule = module {
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
     single { SearchIndexer(get(), get()) }
-    // The listener seam hands each listener its delete authority as rooted ids; SearchIndexer.sync still keys by
-    // bare id (C3 roots it), so bridge the rooted retired set to its ids here rather than in the engine.
+    // The listener seam hands each listener its delete authority as rooted ids, and SearchIndexer.sync now keys
+    // by (root, id) too, so the rooted retired set flows straight through.
     single<IndexBuilder.PublicationListener>(named("searchSync")) {
         val indexer = get<SearchIndexer>()
-        IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired.mapTo(mutableSetOf()) { it.id }) }
+        IndexBuilder.PublicationListener(indexer::sync)
     }
 }
