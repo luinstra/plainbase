@@ -312,7 +312,7 @@ class WritePipeline(
         // DIFFERENT root (the D17 contest re-awarding it) leaves this row just as dangling as an absent id
         // would, and a bare-pageId probe would read it as live and 409 a create that should have succeeded.
         val aliasTarget = aliasRegistry.find(RootedPath(intent.root, pageUrl))
-        if (aliasTarget != null && snapshot.byId[aliasTarget.id]?.root == intent.root) return pageUrl.value
+        if (aliasTarget != null && snapshot.pageAt(RootedPageId(intent.root, aliasTarget.id)) != null) return pageUrl.value
         return null
     }
 

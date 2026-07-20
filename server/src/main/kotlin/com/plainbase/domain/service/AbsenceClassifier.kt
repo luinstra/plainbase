@@ -7,6 +7,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -53,14 +54,6 @@ class AbsenceClassifier(private val idMap: IdMapRepository) {
         if (idMap.find(target) != null) ContentRead.AbsenceUnknown else ContentRead.ConfirmedAbsent
 
     /**
-     * The id-addressed twin: the page is not in the snapshot the pass published - does the durable index still
-     * BIND that id? Same rule, same authority, keyed by the identity rather than by the location, because an
-     * id-addressed read (`/api/v1/pages/{id}`, `/p/{id}`) has no path to ask about until the index gives it one.
-     */
-    fun absenceOf(id: PageId): ContentRead =
-        if (idMap.pathOf(id) != null) ContentRead.AbsenceUnknown else ContentRead.ConfirmedAbsent
-
-    /**
      * **The gate every id-addressed surface owes, and the shape the 404 lie actually took.** A page MISSING FROM THE
      * SNAPSHOT while the durable index still BINDS it is not a page that does not exist - it is a page the last pass
      * could not read - and each of the three guarded facades used to resolve exactly that state into its own flavor
@@ -74,10 +67,15 @@ class AbsenceClassifier(private val idMap: IdMapRepository) {
      * [root] is the id's OWNING root, already resolved and already availability-gated by the caller: root-down
      * outranks absence (if the disk is gone we know nothing at all), so `RootUnavailable` fires first and this is
      * only ever asked about a root that is UP.
+     *
+     * ROOTED (C4 leak fix): the snapshot presence check and the durable-binding check both key on [root], not on
+     * the bare id. A page present under a DIFFERENT root than [root] is not this ([root], id)'s presence, and a
+     * durable binding under a different root is not this root's limbo - so the pinned-write / cross-root-move
+     * window resolves 503-vs-404 by the root the caller actually gated on, never by whoever else holds the id.
      */
     fun requireVerifiedAbsence(root: RootName, id: PageId, snapshot: PageIndex) {
-        if (id in snapshot.byId) return
-        if (absenceOf(id) == ContentRead.AbsenceUnknown) throw AbsenceUnverified(root, id.value)
+        if (snapshot.pageAt(RootedPageId(root, id)) != null) return
+        if (root in idMap.rootsHoldingId(id)) throw AbsenceUnverified(root, id.value)
     }
 }
 

@@ -38,7 +38,8 @@ sealed interface ProposeCommandParse {
  * falling through to the facade's fail-closed `editableOf` and answering 403 `root_not_editable` for a root that
  * does not exist. It is also why a create's root is REQUIRED here rather than in a schema: the MCP tool's flat
  * input schema cannot demand a field for one operation and forbid it for the other, so the rule lives in the one
- * place both surfaces pass through. An EDIT needs no root at all - it is resolved from the page id.
+ * place both surfaces pass through. An EDIT's root is an OPTIONAL disambiguation pin (C4), grammar-checked only:
+ * omitted, the facade resolves it from the page id; named, the facade durable-validates it AFTER the auth gate.
  */
 internal fun parseProposeCommand(request: ProposeChangeRequest, roots: Set<RootName>): ProposeCommandParse {
     // Shared field validation.
@@ -62,6 +63,15 @@ private fun parseEditCommand(request: ProposeChangeRequest): ProposeCommandParse
     val clientTargetPath = request.targetPath?.let { raw ->
         TreePath.of(raw) ?: return ProposeCommandParse.Invalid("target_path is not a valid content-relative path: '$raw'")
     }
+    // The optional edit `root` pin (C4, 5.2a #6): GRAMMAR only - `RootName.of`, NOT `RootName.registered`. An
+    // unregistered-but-legal slug must NOT leak a root's existence pre-auth; the facade durable-validates it AFTER
+    // checkEdit (a pin that holds no live binding answers StaleBase). A create's root stays REQUIRED + registered
+    // (parseCreateCommand, 5.2a #9): a required authoritative field for a NEW page leaks nothing.
+    val editRoot = request.root?.let {
+        // The message names the BODY field, not `?root=`: this pin arrives in the propose JSON, and an agent sent
+        // hunting for a query string it never sent is an agent that cannot fix its request.
+        RootName.of(it) ?: return ProposeCommandParse.Invalid("root must be a valid root name: '$it'", ErrorCodes.INVALID_ROOT)
+    }
     return ProposeCommandParse.Ok(
         ProposeCommand.Edit(
             pageId = pageId,
@@ -69,6 +79,7 @@ private fun parseEditCommand(request: ProposeChangeRequest): ProposeCommandParse
             clientTargetPath = clientTargetPath,
             proposedContent = request.proposedContent.encodeToByteArray(),
             rationale = request.rationale,
+            root = editRoot,
         ),
     )
 }

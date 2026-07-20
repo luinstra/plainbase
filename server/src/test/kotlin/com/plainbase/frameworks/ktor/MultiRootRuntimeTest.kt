@@ -484,6 +484,91 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
+    // ---- alias targets: the stored root is a CLAIM, the durable binding is the proof --------------
+
+    test("a DANGLING alias (target id unbound) whose stored root is DOWN: by-path 404 and /docs serves the shell - never a 503/redirect") {
+        twoRoots(seedExtra = false) { main, extra ->
+            val missing = extra.resolve("gone-forever")
+            val deadId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b70")
+            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+                harness.boot()
+                // The alias row LINGERS after its target page was deleted (no live binding anywhere). Its stored root
+                // being down must not resurrect the row into a 503 or a redirect-to-nowhere: the row's root is only a
+                // CLAIM about where the target lives, and only a target that still durably binds there earns the 503.
+                harness.index.registry.register(
+                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/dead")),
+                    RootedPageId(RootName.require("extra"), deadId),
+                )
+                io.ktor.server.testing.testApplication {
+                    application { plainbaseModule(harness.services) }
+                    withClue("by-path: a dangling alias is the plain 404, not the stored root's 503") {
+                        client.get("/api/v1/pages/by-path/main/old/dead").status shouldBe HttpStatusCode.NotFound
+                    }
+                    withClue("/docs: a dangling alias falls through to the shell, never a redirect to a permalink that 404s") {
+                        val noFollow = createClient { followRedirects = false }
+                        noFollow.get("/docs/main/old/dead").status shouldBe HttpStatusCode.OK // the SPA shell
+                    }
+                }
+            }
+        }
+    }
+
+    test("a LIVE cross-root alias whose target root is DOWN keeps the promise: by-path 503, /docs redirects then the permalink 503s") {
+        twoRoots(seedExtra = false) { main, extra ->
+            val missing = extra.resolve("gone-forever")
+            val liveId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b71")
+            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+                // The target still durably binds under the boot-down extra (the idMapOnly boot arm) - the alias's
+                // stored root claim is PROVEN, so the honest answer is retryable, never "gone".
+                harness.idMapOnly("extra", "notes/live.md", liveId)
+                harness.boot()
+                harness.index.registry.register(
+                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/live")),
+                    RootedPageId(RootName.require("extra"), liveId),
+                )
+                io.ktor.server.testing.testApplication {
+                    application { plainbaseModule(harness.services) }
+                    withClue("by-path: the alias target's root is down - 503 root_unavailable, never 404") {
+                        val res = client.get("/api/v1/pages/by-path/main/old/live")
+                        res.status shouldBe HttpStatusCode.ServiceUnavailable
+                        res.errorCode() shouldBe "root_unavailable"
+                    }
+                    withClue("/docs: the redirect-then-honest-503 two-step - the alias 301s to the permalink, which 503s") {
+                        val noFollow = createClient { followRedirects = false }
+                        val redirect = noFollow.get("/docs/main/old/live")
+                        redirect.status shouldBe HttpStatusCode.MovedPermanently
+                        redirect.headers[HttpHeaders.Location] shouldBe "/p/${liveId.value}"
+                        noFollow.get("/p/${liveId.value}").status shouldBe HttpStatusCode.ServiceUnavailable
+                    }
+                }
+            }
+        }
+    }
+
+    test("a LIVE cross-root alias whose target root is UP but whose page is unwitnessed: by-path 503 absence_unverified") {
+        twoRoots { main, extra ->
+            val limboId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b72")
+            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+                harness.boot()
+                // Both roots are SERVING, so the root-down arm has nothing to say - and the alias target is bound in
+                // `extra` yet in no section (bound after the publish, never witnessed by a scan). That is LIMBO, and
+                // C1's rule is that a page we still bind and did not witness is never reported gone: the honest answer
+                // is the retryable 503 `absence_unverified`, NOT the plain 404 this arm used to fall through to.
+                harness.idMapOnly("extra", "notes/limbo.md", limboId)
+                harness.index.registry.register(
+                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/limbo")),
+                    RootedPageId(RootName.require("extra"), limboId),
+                )
+                io.ktor.server.testing.testApplication {
+                    application { plainbaseModule(harness.services) }
+                    val res = client.get("/api/v1/pages/by-path/main/old/limbo")
+                    res.status shouldBe HttpStatusCode.ServiceUnavailable
+                    res.errorCode() shouldBe "absence_unverified"
+                }
+            }
+        }
+    }
+
     // ---- a DETACHED root: its name is gone from roots{}, its rows are not ------------------------
 
     test("a DETACHED root (rows in the DB, name gone from roots{}) serves 404 on its permalink and boots cleanly") {

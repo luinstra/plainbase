@@ -88,6 +88,13 @@ class PageIndex(sections: List<RootSection>) {
         check(byId.size == pages.size) { "duplicate page id in snapshot" }
     }
 
+    /**
+     * The page at [rooted]'s exact ([root], [id]) identity, or null. Total shim over the global [byId] that also
+     * checks the root, so a resolved bare id served under one root never pairs with a page the snapshot holds under
+     * another (the C4-safe form of the dup-sensitive global [byId] above; the per-root `SectionView.byId` flip is C5).
+     */
+    fun pageAt(rooted: RootedPageId): IndexedPage? = byId[rooted.id]?.takeIf { it.root == rooted.root }
+
     /** [root]'s slice; TOTAL - an unknown root yields an empty section, mirroring [view]. */
     fun section(root: RootName): RootSection =
         sectionsByRoot[root] ?: RootSection(root, emptyList(), emptyList(), emptySet())

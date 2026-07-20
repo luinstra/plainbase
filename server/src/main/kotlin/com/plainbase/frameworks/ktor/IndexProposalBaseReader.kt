@@ -4,6 +4,7 @@ import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IndexBuilder
@@ -36,7 +37,7 @@ class IndexProposalBaseReader(
 ) : ProposalBaseReader {
 
     override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
-        indexBuilder.current.byId[pageId]?.takeIf { it.root == root }?.let { RootedPath(it.root, it.path) }
+        indexBuilder.current.pageAt(RootedPageId(root, pageId))?.let { RootedPath(it.root, it.path) }
 
     override fun currentBytes(target: RootedPath): ContentRead = absence.read(stores(target.root), target)
 

@@ -480,6 +480,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     filename: String,
                     bytes: ByteArray,
                     hasher: (ByteArray) -> String,
+                    expectedRoot: com.plainbase.domain.root.RootName?,
                 ) = error("unused")
                 override fun rescan(principal: Principal) = error("unused")
                 override fun reindex(principal: Principal) = error("unused")
@@ -879,7 +880,14 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 val page = harness.builder.current.pages.single()
                 facade.propose(
                     agent,
-                    com.plainbase.domain.service.ProposeCommand.Edit(page.id, page.contentHash, null, editedBody.toByteArray(), "r"),
+                    com.plainbase.domain.service.ProposeCommand.Edit(
+                        page.id,
+                        page.contentHash,
+                        null,
+                        editedBody.toByteArray(),
+                        "r",
+                        root = null,
+                    ),
                 )
                 val pid = harness.proposalRepository.all().single().id
                 facade.approve(admin, pid).shouldBeAppliedClean()

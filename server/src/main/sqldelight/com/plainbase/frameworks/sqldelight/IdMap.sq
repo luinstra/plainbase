@@ -72,6 +72,11 @@ CREATE TABLE retired_binding (
   PRIMARY KEY (root, id)
 );
 
+-- The PK is (root, id), so a bare `WHERE id = ?` was an UNINDEXED SCAN - and the retired-root resolution fires on
+-- EVERY live None (every unknown-id bare permalink), so a `/p/{random-uuid}` scanner flood paid O(tombstones). This
+-- index serves selectRetiredRootsHoldingId; it is additive (table/PK/columns untouched).
+CREATE INDEX retired_binding_id ON retired_binding(id);
+
 -- An old canonical URL path -> the page's rooted id (§A4), keyed per root: URL space is per-root, so
 -- the same old path may alias different pages under different roots. The value is always a PAGE
 -- (target_root, id), never another alias, so chains collapse by construction (one hop). target_root
@@ -97,6 +102,28 @@ selectPathById:
 SELECT root, path
 FROM id_map
 WHERE id = :id;
+
+-- The bare-id resolver's LIVE claimant list (Option B). Index-served by id_map.id UNIQUE in C4. Shaped
+-- List<RootName> for the C5 multiplicity the One/Ambiguous/None contract already models; under UNIQUE(id) it is
+-- always 0 or 1 rows.
+selectRootsHoldingId:
+SELECT root
+FROM id_map
+WHERE id = :id;
+
+-- The retired-claimant list, index-served by retired_binding_id. Feeds the permalink tombstone arm (410) after a
+-- live None.
+selectRetiredRootsHoldingId:
+SELECT root
+FROM retired_binding
+WHERE id = :id;
+
+-- One tombstone by its full (root, id) key - the resolved retirement's last-known path (index-served by the
+-- root-leading PK).
+selectRetiredAt:
+SELECT *
+FROM retired_binding
+WHERE root = :root AND id = :id;
 
 -- The whole incumbent row, not just its key: the C0 bind gate has to ask whether it may DISPLACE this
 -- binding, and that question is about the binding, not about a path.

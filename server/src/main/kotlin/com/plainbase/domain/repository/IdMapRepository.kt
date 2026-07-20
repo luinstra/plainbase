@@ -40,8 +40,27 @@ interface IdMapRepository {
     /** The binding for [path], or null when the rooted path is unmapped. */
     fun find(path: RootedPath): IdBinding?
 
-    /** The rooted path currently bound to [id] (the 4a `ownerOf` seam), or null when the id is unbound. */
+    /**
+     * The rooted path currently bound to [id], or null when the id is unbound - a bare-id, ROOT-AGNOSTIC lookup
+     * retained as a TEST assertion helper. It has no production callers and must not gain one: answering "where is
+     * this id?" without being told which root to ask is exactly the cross-root pairing C4 closed, and a read or write
+     * path that reached for it would resolve to whichever root happens to hold the id rather than the one it gated
+     * on. Production asks [rootsHoldingId] (the durable claimant list) or `PageRootResolver.resolve`/`resolvePinned`.
+     */
     fun pathOf(id: PageId): RootedPath?
+
+    /**
+     * Every root holding a LIVE binding for [id] - the Option B bare-id resolver's durable claimant list (C4). Under
+     * `UNIQUE(id)` it is always 0 or 1 names; the List shape carries the C5 multiplicity the One/Ambiguous/None
+     * contract already models.
+     */
+    fun rootsHoldingId(id: PageId): List<RootName>
+
+    /** Every root holding a TOMBSTONE for [id] (C4) - the retired-claimant list behind the permalink 410 arm. */
+    fun retiredRootsHoldingId(id: PageId): List<RootName>
+
+    /** The tombstone at the full ([root], [id]) key, or null - the resolved retirement's last-known path (C4). */
+    fun retiredAt(root: RootName, id: PageId): RetiredBinding?
 
     /** The whole binding currently holding [id] - the `ownerOf` seam again, for callers that must ask whether
      *  they may DISPLACE it, which is a question about the binding and not about a path. */

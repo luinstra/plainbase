@@ -160,7 +160,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 15L
+                    version shouldBe 16L
                 }
             }
         } finally {
@@ -335,7 +335,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 15L
+                driver.queryLong("PRAGMA user_version") shouldBe 16L
 
                 // (i) every seeded row survives the rebuild.
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
@@ -394,6 +394,47 @@ class AppDbMigrationTest : FunSpec({
                         it.setBytes(1, idW)
                         it.executeUpdate()
                     }
+                }
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    test("v15 baseline migrates to v16: the retired_binding_id index is created, rows/schema otherwise unchanged") {
+        // C4 INDEX-ONLY migration (15.sqm): seed a retired_binding row on a real committed v15 baseline, migrate via
+        // the production factory, and prove version 16, the row survives (queried through the NEW selectRetired*
+        // seam), AND the retired_binding_id index EXISTS. Initial RED: verifyMigrations fails until schema/16.db is
+        // regenerated; the index assertion reds if 15.sqm's CREATE INDEX is dropped.
+        val dir = Files.createTempDirectory("plainbase-migration-c4-index")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("15.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            val idW = ByteArray(16) { 5 }
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 15") }
+                raw.prepareStatement(
+                    "INSERT INTO retired_binding(id, root, path, materialized, retired_at) VALUES (?, 'main', 'guides/gone.md', 1, 99)",
+                ).use {
+                    it.setBytes(1, idW)
+                    it.executeUpdate()
+                }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                driver.queryLong("PRAGMA user_version") shouldBe 16L
+                val id = PageId.require("05050505-0505-0505-0505-050505050505")
+                // The row survives and is reachable through the C4 index-served retired-claimant SELECT.
+                db.idMapQueries.selectRetiredRootsHoldingId(id).executeAsList().shouldContainExactly(listOf(RootName.MAIN))
+            }
+
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { statement ->
+                    val indexes = statement.executeQuery("SELECT name FROM sqlite_master WHERE type='index'").use { rows ->
+                        buildList { while (rows.next()) add(rows.getString(1)) }
+                    }
+                    indexes shouldContain "retired_binding_id"
                 }
             }
         } finally {
@@ -463,7 +504,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 15L
+                driver.queryLong("PRAGMA user_version") shouldBe 16L
                 db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
                 db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }

@@ -34,6 +34,13 @@ class SqlDelightIdMapRepository(
     override fun pathOf(id: PageId): RootedPath? =
         queries.selectPathById(id).executeAsOneOrNull()?.let { RootedPath(it.root, it.path) }
 
+    override fun rootsHoldingId(id: PageId): List<RootName> = queries.selectRootsHoldingId(id).executeAsList()
+
+    override fun retiredRootsHoldingId(id: PageId): List<RootName> = queries.selectRetiredRootsHoldingId(id).executeAsList()
+
+    override fun retiredAt(root: RootName, id: PageId): RetiredBinding? =
+        queries.selectRetiredAt(root = root, id = id).executeAsOneOrNull()?.toRetired()
+
     override fun binding(id: PageId): IdBinding? = queries.selectBindingById(id).executeAsOneOrNull()?.toBinding()
 
     override fun retired(id: PageId): RetiredBinding? = queries.selectRetired(id).executeAsOneOrNull()?.toRetired()

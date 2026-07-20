@@ -64,6 +64,36 @@ class RestRoutingTest : FunSpec({
         }
     }
 
+    test("route precedence: /p/r/{root}/{id} is the ROOTED permalink, never the bare route binding id='r'") {
+        restTest(Fixtures.demoDocs, seed) {
+            val client = restClient()
+            // The bare `/p/{id}/{trailing...}` route also MATCHES this shape, with id='r' and trailing
+            // 'main/<id>'. Ktor's constant-outranks-parameter rule is what stops it, and this pins the rule
+            // directly: a future route reorder must fail HERE, not as a puzzling 302-matrix failure elsewhere.
+            val rooted = client.get("/p/r/main/$deployGuideId")
+            rooted.status shouldBe HttpStatusCode.Found
+            rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+
+            // The same proof from the failing side: the 400 must name the ID segment as the bad UUID. Were the
+            // bare route winning, id would be 'r' and the message would say so (and a 302 would be impossible).
+            val badId = client.get("/p/r/main/not-a-uuid")
+            badId.status shouldBe HttpStatusCode.BadRequest
+            badId.bodyAsText() shouldContain "not-a-uuid"
+        }
+    }
+
+    test("the ROOTED permalink tolerates a trailing slug exactly like the bare form") {
+        restTest(Fixtures.demoDocs, seed) {
+            val client = restClient()
+            // The 300 hands clients `/p/r/{root}/{id}` URLs, and a client that decorates a permalink with a slug
+            // decorates that one too. Without its own trailing form it fell into the bare `/p/{id}/{trailing...}`
+            // tailcard with id='r' and answered 400 invalid_page_id: 'r'.
+            val trailing = client.get("/p/r/main/$deployGuideId/stale-slug")
+            trailing.status shouldBe HttpStatusCode.Found
+            trailing.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+        }
+    }
+
     test("GET /docs/main/guides/deploy-guide serves the SPA shell with 200 (the SPA fetches via by-path)") {
         restTest(Fixtures.demoDocs, seed) {
             val response = client.get("/docs/main/guides/deploy-guide")

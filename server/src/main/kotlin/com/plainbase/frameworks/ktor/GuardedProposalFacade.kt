@@ -7,16 +7,19 @@ import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.Action
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
+import com.plainbase.domain.service.IdResolution
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PageRootResolver
@@ -40,6 +43,7 @@ import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
 import com.plainbase.domain.service.WriteClass
 import com.plainbase.domain.service.WriteOrigin
+import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 
 /**
  * The frameworks-side [ProposalFacade] impl (P1a, the A3 choke point — the [GuardedReadFacade] shape): it holds the
@@ -47,9 +51,13 @@ import com.plainbase.domain.service.WriteOrigin
  * `check*` FIRST, and passes the minted grant INTO the grant-demanded [ProposalService] method (the demanded-value
  * floor). It lets [com.plainbase.domain.service.AccessDenied] propagate (the route maps it to 401/403).
  *
- *  - `propose` routes the operation: `Edit` -> `checkEdit` -> `proposeEdit(editGrant, …)`; `Create` -> `checkCreate`
- *    -> `proposeCreate(createGrant, …)`. The author snapshot is resolved from the `Principal` only AFTER the matching
- *    `check*` mints its grant — a denied propose does no labeler lookup before the deny is audited+thrown.
+ *  - `propose` routes the operation: `Edit` -> `proposeEdit`; `Create` -> `checkCreate` -> `proposeCreate(createGrant,
+ *    …)`. An EDIT is RESOLVE-then-GATE (the owner-ratified C4 order, the [GuardedMutatingFacade] write order applied to
+ *    a propose): the pin is durable-validated (or the id resolved id_map-first) to DERIVE the root, and `checkEdit` then
+ *    fires on that root as the FIRST authorization and the FIRST audit, before any arm returns an answer. Resolving is
+ *    not a read the caller receives, and gating on a root derived after the fact is what lets the audit row name the
+ *    root the proposal was actually filed against. The author snapshot is resolved from the `Principal` only AFTER the
+ *    matching `check*` mints its grant — a denied propose does no labeler lookup before the deny is audited+thrown.
  *  - `reject` -> `checkApprove` -> `proposalService.reject(approveGrant, …)` (the status transition only).
  *  - `list`/`get` -> `checkRead`.
  */
@@ -79,9 +87,10 @@ class GuardedProposalFacade(
         }
 
     /**
-     * The rooted EDIT-propose (the [GuardedMutatingFacade] write ordering, applied to a propose): ONE snapshot, the
-     * root resolved from it, the gate on that root, then the availability throw - and the GATED target THREADED into
-     * the service rather than re-resolved there.
+     * The rooted EDIT-propose (the [GuardedMutatingFacade] write ordering, applied to a propose): ONE snapshot; the root
+     * derived id_map-FIRST (a pin durable-validated, a bare edit resolved from the durable claimant - NOT read off the
+     * snapshot); `checkEdit` on that derived root as the first authorization and first audit; then the availability
+     * throw - and the GATED target THREADED into the service rather than re-resolved there.
      *
      * Threading is the point. `ProposalService` used to call `baseReader.pathOf` itself, which is a FRESH read of the
      * published snapshot: a rebuild landing between the gate and the service call could re-award the id to another
@@ -91,27 +100,42 @@ class GuardedProposalFacade(
      */
     private fun proposeEdit(principal: Principal, command: ProposeCommand.Edit): ProposeOutcome {
         val snapshot = indexBuilder.current
-        val root = resolver.rootOf(snapshot, command.pageId)
-        val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(root, ProposalCommandResource.PROPOSE))
-        // No registered root owns the id (unknown, or bound only under a detached root) -> StaleBase FROM HERE: the
-        // service is never called, so it can never re-resolve a target the gate did not see.
-        if (root == null) return ProposeOutcome.StaleBase
-        requireAvailable(root)
-        // A page we still BIND and did not witness is not a moved base - it is a page we could not read (C1). `StaleBase`
-        // would tell the agent to re-read a base that is not there to be re-read, and then to propose against whatever
-        // it found instead. 503: come back when we can see it.
-        absence.requireVerifiedAbsence(root, command.pageId, snapshot)
-        val target = snapshot.byId[command.pageId]?.let { RootedPath(it.root, it.path) } ?: return ProposeOutcome.StaleBase
-        return proposals.proposeEdit(
-            grant = grant,
-            pageId = command.pageId,
-            target = target,
-            baseHash = command.baseHash,
-            clientTargetPath = command.clientTargetPath,
-            proposedContent = command.proposedContent,
-            rationale = command.rationale,
-            author = labeler.resolve(principal),
+        // RESOLVE-then-checkEdit-then-branch (audit ONCE, on the resolved root). A pinned edit-root is durable-VALIDATED
+        // (registered-and-live) rather than trusted; a bare edit resolves id_map-first.
+        val res: IdResolution = command.root?.let { resolver.resolvePinned(it, command.pageId) }
+            ?: resolver.resolve(command.pageId)
+        val grant = policy.checkEdit(
+            principal,
+            WriteClass.PageEdit,
+            RootedResource((res as? IdResolution.One)?.root, ProposalCommandResource.PROPOSE),
         )
+        return when (res) {
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(command.pageId, res.candidates)
+            // No registered root owns the id (unknown, tombstoned, detached, or a pin that no longer holds it) ->
+            // StaleBase FROM HERE: the service is never called, so it can never re-resolve a target the gate did not
+            // see. A TOMBSTONED id deliberately lands here too - the propose vocabulary has no page_deleted (that is
+            // the CAS write's frozen 409), and StaleBase is the same answer a retired target has always gotten on
+            // this surface.
+            IdResolution.None -> ProposeOutcome.StaleBase
+            is IdResolution.One -> {
+                requireAvailable(res.root)
+                // A page we still BIND and did not witness is not a moved base - it is a page we could not read (C1).
+                // `StaleBase` would tell the agent to re-read a base that is not there; 503: come back when we see it.
+                absence.requireVerifiedAbsence(res.root, command.pageId, snapshot)
+                val target = snapshot.pageAt(RootedPageId(res.root, command.pageId))?.let { RootedPath(it.root, it.path) }
+                    ?: return ProposeOutcome.StaleBase
+                proposals.proposeEdit(
+                    grant = grant,
+                    pageId = command.pageId,
+                    target = target,
+                    baseHash = command.baseHash,
+                    clientTargetPath = command.clientTargetPath,
+                    proposedContent = command.proposedContent,
+                    rationale = command.rationale,
+                    author = labeler.resolve(principal),
+                )
+            }
+        }
     }
 
     /**
@@ -303,7 +327,12 @@ class GuardedProposalFacade(
  */
 private fun SaveResult.toWriteOutcome(): WriteOutcome = when (this) {
     is SaveResult.Written -> outcome
-    SaveResult.PageNotFound -> WriteOutcome.Conflict(reason = "page_deleted", currentContent = null, currentHash = null, currentPath = null)
+    SaveResult.PageNotFound -> WriteOutcome.Conflict(
+        reason = WriteConflictReason.PAGE_DELETED,
+        currentContent = null,
+        currentHash = null,
+        currentPath = null,
+    )
     SaveResult.IdMismatch -> WriteOutcome.UnsupportedEdit(field = "id")
     // P5: a degrade is DIRECT_PUT-only. The apply path passes WriteOrigin.PROPOSAL_APPLY, so GuardedMutatingFacade.save
     // NEVER enters the agent direct-commit/degrade decision here — these arms are unreachable BY THE ORIGIN

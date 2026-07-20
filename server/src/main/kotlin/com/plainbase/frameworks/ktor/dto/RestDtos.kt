@@ -148,6 +148,13 @@ object ErrorCodes {
     /** 400: a request named a root that is not a legal slug, or names no configured root. */
     const val INVALID_ROOT: String = "invalid_root"
 
+    /**
+     * 409 (REST) / 300 (permalink): a bare page id is held by more than one root and the caller named none, so the
+     * server cannot pick one. The body carries the candidate roots + their per-root URLs; the caller retries with a
+     * `root`. FAKE-only under `UNIQUE(id)` (no real row produces it until C5), but the contract ships in C4.
+     */
+    const val AMBIGUOUS_PAGE_ID: String = "ambiguous_page_id"
+
     // ---- A3: the authorization vocabulary (append-only) ----------------------------------------------
 
     /** 401: no (or anonymous) credential on a gated route under auth-on — the client must authenticate. */

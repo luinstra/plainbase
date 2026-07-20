@@ -45,9 +45,16 @@ import io.ktor.server.routing.route
  * document through a string and made a BOM/invalid-UTF-8 file un-`PUT`-able forever.
  *
  * Every rejection is explicit and golden-pinnable — never a Ktor-default 500. The order matters:
- * id-shape → media type → `If-Match` shape → body-cap (streamed) → the guarded facade `save`. The facade owns
- * the AUTHORIZATION order from there: the audited EDIT check FIRST (so a denied PUT writes a denied-EDIT audit
- * row, never swallowed by an unaudited read), THEN the snapshot index lookup + the id-tamper check + pipeline.
+ * id-shape → `?root=` GRAMMAR (a malformed or repeated pin is 400 `invalid_root`, the sole pre-auth exception;
+ * registration is NOT checked here) → media type → `If-Match` shape → body-cap (streamed) → the guarded facade `save`.
+ *
+ * The facade owns the AUTHORIZATION order from there, and it is RESOLVE-then-GATE (the owner-ratified C4 order): it
+ * durable-validates the caller's pin, or resolves the id's owning root id_map-first, and only THEN runs `checkEdit`,
+ * which is still the FIRST authorization and the FIRST audit, before the snapshot lookup, the id-tamper check and the
+ * pipeline. The resolve that precedes it is not a read the caller receives; it DERIVES the resource being authorized,
+ * which is what lets the audit row name the root the write actually landed in. The naive alternative (resolve, 404 on
+ * a miss, then gate) would turn today's anonymous 401 into an existence oracle - 401 for a real id, 404 for a bogus
+ * one - and drop the denied-EDIT audit row entirely. See `GuardedMutatingFacade` for the full ordering.
  */
 fun Route.pageWriteRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
@@ -55,6 +62,10 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@put
             call.guarded {
                 val id = call.pageId() ?: return@guarded
+
+                // C4 `?root=` pin: grammar-parsed (malformed -> 400 pre-auth); the facade durable-validates it AFTER
+                // checkEdit, so an unregistered/non-owner pin -> the audited 404 (5.2a #4).
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
 
                 // (2) Media type — RAW body must be text/markdown.
                 if (call.request.contentType().withoutParameters() != ContentType.parse("text/markdown")) {
@@ -89,7 +100,7 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 // Written outcome renders through the frozen wire mapping, applying the retry-idempotency shim (stale
                 // base_hash but on-disk == submitted → 200 no-op).
                 val submittedHash = CITATIONS.contentHash(bytes)
-                when (val result = ctx.mutate.save(principal, SaveRequest(id, baseHash, bytes))) {
+                when (val result = ctx.mutate.save(principal, SaveRequest(id, baseHash, bytes, expectedRoot = pin.root))) {
                     SaveResult.PageNotFound ->
                         call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                     SaveResult.IdMismatch -> call.respondUnsupportedEdit("id")
@@ -129,6 +140,9 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 // (1) Page id — the shared §A4 canonical gate (400 invalid_page_id on a bad shape).
                 val id = call.pageId() ?: return@guarded
 
+                // C4 `?root=` pin (5.2a #5): grammar-parsed here, durable-validated in the facade AFTER checkEdit.
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+
                 // (2) Filename — the strict decode→NFC→cap→reject pipeline; the SOLE single-segment validator.
                 val filename = call.assetFilename()
                     ?: return@guarded call.respondError(
@@ -145,7 +159,16 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 // from the snapshot, the stale-page recheck, the no-clobber writeAssetExclusive(grant, …), and the
                 // post-write rebuild (the ungated internal rebuild — part of the write). It returns an
                 // AssetWriteOutcome the route maps to status; no raw mutator/snapshot access lives here.
-                when (val outcome = ctx.mutate.writeAsset(principal, id, filename, bytes, CITATIONS::contentHash)) {
+                when (
+                    val outcome = ctx.mutate.writeAsset(
+                        principal,
+                        id,
+                        filename,
+                        bytes,
+                        CITATIONS::contentHash,
+                        expectedRoot = pin.root,
+                    )
+                ) {
                     is AssetWriteOutcome.Created ->
                         call.respondRest(
                             AssetUploadResponse.serializer(),

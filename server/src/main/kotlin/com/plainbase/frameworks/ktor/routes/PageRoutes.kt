@@ -74,7 +74,10 @@ fun Route.pageRoutes(ctx: RouteContext) {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
                 val id = call.pageId() ?: return@guarded
-                val payload = ctx.read.pageById(principal, id)
+                // C4 `?root=` pin: grammar-parsed here (malformed -> 400 pre-auth); registration/ownership defers to
+                // the facade (unregistered/non-owner -> the audited 404 below, AFTER checkRead).
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val payload = ctx.read.pageById(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 val dto = payload.toDto()
                 call.setContentHashETag(dto.contentHash)
@@ -85,7 +88,8 @@ fun Route.pageRoutes(ctx: RouteContext) {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
                 val id = call.pageId() ?: return@guarded
-                val payload = ctx.read.pageHtml(principal, id)
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val payload = ctx.read.pageHtml(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 call.respondRest(PageHtmlResponse.serializer(), payload.toDto())
             }
@@ -96,7 +100,8 @@ fun Route.pageRoutes(ctx: RouteContext) {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
                 val id = call.pageId() ?: return@guarded
-                val report = ctx.read.validateLinks(principal, id)
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val report = ctx.read.validateLinks(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 call.respondRest(ValidateLinksResponse.serializer(), report.toDto())
             }
@@ -107,7 +112,8 @@ fun Route.pageRoutes(ctx: RouteContext) {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
                 val id = call.pageId() ?: return@guarded
-                val page = ctx.read.pageMetadata(principal, id)
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val page = ctx.read.pageMetadata(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 call.respondRest(PageMetadataResponse.serializer(), page.toMetadataDto())
             }

@@ -17,12 +17,15 @@ import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.AssetReadOutcome
+import com.plainbase.domain.service.IdResolution
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LinkChecker
 import com.plainbase.domain.service.LinkReport
@@ -86,22 +89,22 @@ class GuardedReadFacade(
     /** The shared exit boundary for a rooted BACKEND call - here, the two git reads (see [history]/[diff]). */
     private val rootLoss = RootLossClassifier(availability)
 
-    override fun pageById(principal: Principal, id: PageId): PagePayload? {
+    override fun pageById(principal: Principal, id: PageId, root: RootName?): PagePayload? {
         policy.checkRead(principal, id.value)
-        val snapshot = gatedSnapshot(id) ?: return null
-        return pageService.byId(snapshot, id)
+        val (snapshot, resolved) = gatedSnapshot(id, root) ?: return null
+        return pageService.pageAt(snapshot, RootedPageId(resolved, id))
     }
 
-    override fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload? {
+    override fun pageHtml(principal: Principal, id: PageId, root: RootName?): PageHtmlPayload? {
         policy.checkRead(principal, id.value)
-        val snapshot = gatedSnapshot(id) ?: return null
-        return pageService.htmlById(snapshot, id)
+        val (snapshot, resolved) = gatedSnapshot(id, root) ?: return null
+        return pageService.htmlAt(snapshot, RootedPageId(resolved, id))
     }
 
-    override fun validateLinks(principal: Principal, id: PageId): LinkReport? {
+    override fun validateLinks(principal: Principal, id: PageId, root: RootName?): LinkReport? {
         policy.checkRead(principal, id.value) // FIRST — existence never leaks (the A3 gate)
-        val snapshot = gatedSnapshot(id) ?: return null
-        val page = snapshot.byId[id] ?: return null // unknown page → 404 (the route maps null)
+        val (snapshot, resolved) = gatedSnapshot(id, root) ?: return null
+        val page = snapshot.pageAt(RootedPageId(resolved, id)) ?: return null // unknown page → 404 (the route maps null)
         // The EXISTING whole-index check, FILTERED to this page (D-A): LinkChecker.check is the one resolution model;
         // this aggregates it, it never re-resolves.
         //
@@ -114,35 +117,58 @@ class GuardedReadFacade(
         return LinkReport(linkChecker.check(snapshot).broken.filter { it.page == RootedPath(page.root, page.path) })
     }
 
-    override fun pageMetadata(principal: Principal, id: PageId): IndexedPage? {
+    override fun pageMetadata(principal: Principal, id: PageId, root: RootName?): IndexedPage? {
         policy.checkRead(principal, id.value) // FIRST
-        val snapshot = gatedSnapshot(id) ?: return null
-        return snapshot.byId[id]
+        val (snapshot, resolved) = gatedSnapshot(id, root) ?: return null
+        return snapshot.pageAt(RootedPageId(resolved, id))
     }
 
+    /** The snapshot the read serves from, paired with the RESOLVED owning root (so the caller keys on the exact identity). */
+    private data class RootedSnapshot(val snapshot: PageIndex, val root: RootName)
+
     /**
-     * The shared id-addressed read shape (ADR-0011 D5): resolve the id's OWNING root against ONE snapshot, throw if
-     * that root is not serving, and otherwise hand the SAME snapshot back for the caller's own resolve. A null result
-     * means "no registered root owns this id" - an unknown id, or a binding under a detached root - which is the
-     * caller's existing 404.
+     * The shared id-addressed read shape (ADR-0011 D5 + the C4 read split). With no [pinnedRoot] the OWNING root is
+     * resolved id_map-FIRST (Option B): a durable point-SELECT every call, so a root unavailable SINCE BOOT (in no
+     * snapshot section) still resolves to 503, never the 404 that tells an agent an unmounted page is GONE. A bare id
+     * held by more than one root throws [AmbiguousPageId] (the funnel's 409).
      *
-     * The `id_map` fallback inside `rootOf` is what this exists for: a root unavailable SINCE BOOT was never scanned,
-     * so it has NO section, so a snapshot-only lookup misses and every one of these surfaces would answer **404** -
-     * telling an agent the page is GONE when the truth is that the disk is unmounted. That is the exact lie D5
-     * forbids, and only the persisted binding can tell the two apart. It costs nothing on the hot path: the DB read
-     * fires only on a snapshot miss, i.e. on a read already bound for a 404.
+     * With a [pinnedRoot] the read is COHERENT-STALE (snapshot-first): a snapshot HIT serves that root's published
+     * bytes with NO durable check (safe - the id-level checkRead already ran, the content is what the caller already
+     * had, and it self-heals at the next publish), and only a snapshot MISS consults the durable binding to tell 503
+     * (still bound here) from 404 (non-owner/tombstone/absent). An unregistered pin is 404 AFTER checkRead.
+     *
+     * A null result is the caller's 404. This NEVER emits 410 (the permalink arm owns tombstones).
      */
-    private fun gatedSnapshot(id: PageId): PageIndex? {
+    private fun gatedSnapshot(id: PageId, pinnedRoot: RootName?): RootedSnapshot? {
         val snapshot = indexBuilder.current
-        val root = resolver.rootOf(snapshot, id) ?: return null
+        if (pinnedRoot != null) {
+            if (registry.byName(pinnedRoot) == null) return null // unregistered/detached pin -> 404 (AFTER checkRead)
+            when {
+                // PRESENT under the pin (coherent-stale, hot); carried-down root -> 503.
+                snapshot.pageAt(RootedPageId(pinnedRoot, id)) != null -> requireAvailable(pinnedRoot)
+                // LIVE-miss: the pin durably binds it but its bytes are not in the snapshot -> 503 limbo. The
+                // classifier re-reads `rootsHoldingId` that `bindsLive` just read - an accepted second point-SELECT,
+                // not an oversight: this is the RARE miss branch, and collapsing it would put the C1 rule back in the
+                // caller. The hot pinned HIT above pays neither.
+                resolver.bindsLive(pinnedRoot, id) -> {
+                    requireAvailable(pinnedRoot)
+                    absence.requireVerifiedAbsence(pinnedRoot, id, snapshot)
+                }
+                else -> return null // non-owner / tombstone / absent -> 404
+            }
+            return RootedSnapshot(snapshot, pinnedRoot)
+        }
+        val root = when (val res = resolver.resolve(id)) {
+            IdResolution.None -> return null
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(id, res.candidates)
+            is IdResolution.One -> res.root
+        }
         requireAvailable(root)
-        // **The 404 lie, at its source (C1).** A page in the durable index and NOT in the published snapshot is a
-        // page whose bytes the last pass could not produce - and every id-addressed read above then resolved it to
-        // `null`, i.e. told the caller it does not exist. The root is up (the gate just said so) and the binding is
-        // live, so the honest answer is "come back later" - and it is a DIFFERENT answer from `root_unavailable`,
-        // because the disk is fine.
+        // **The 404 lie, at its source (C1).** A page the durable index binds and the snapshot lacks is a page whose
+        // bytes the last pass could not produce; the root is up and the binding is live, so the honest answer is
+        // "come back later" (503 absence_unverified), a DIFFERENT answer from root_unavailable.
         absence.requireVerifiedAbsence(root, id, snapshot)
-        return snapshot
+        return RootedSnapshot(snapshot, root)
     }
 
     override fun pageByUrlPath(principal: Principal, root: RootName, path: TreePath): PagePayload? {
@@ -154,12 +180,26 @@ class GuardedReadFacade(
             // A by-path MISS is not necessarily a miss: the path may be an ALIAS whose target page lives in a root
             // that was never scanned (so it is in no section, and `byUrlPath` cannot see it). Re-resolve the alias -
             // only on the miss, a read already bound for 404 - and if its target's root is registered but not
-            // serving, answer 503 rather than "gone".
-            aliasRegistry.find(RootedPath(root, path))?.let { requireResolvedTargetAvailable(snapshot, it.id) }
+            // serving, answer 503 rather than "gone". `find` returns the target's OWN root (a cross-root alias), so
+            // gate on that root, not the route's. The row's stored root is a CLAIM, not proof: a DANGLING alias
+            // (target id deleted, row lingering ahead of the sweep) must fall through to the plain 404, so only a
+            // target that still durably BINDS there earns anything but the 404.
+            //
+            // A still-binding target owes BOTH answers, in [gatedSnapshot]'s order: not-serving is 503
+            // `root_unavailable`, and a root that IS serving a page it still binds but never witnessed is 503
+            // `absence_unverified`. Without the second, an alias into a limbo page fell through to the plain 404 -
+            // the one answer C1 says we may never give for a page we still bind.
+            aliasRegistry.find(RootedPath(root, path))?.let {
+                if (registry.byName(it.root) != null && resolver.bindsLive(it.root, it.id)) {
+                    requireAvailable(it.root)
+                    absence.requireVerifiedAbsence(it.root, it.id, snapshot)
+                }
+            }
             return null
         }
-        // An alias hit resolves through the GLOBAL byId, so the page it found may live in a DIFFERENT root than the
-        // one the route named and the gate checked - and a vanished root's section is CARRIED FORWARD, so without
+        // An alias hit resolves through `pageAt`, keyed by the ALIAS ROW's own (root, id) - so the page it found may
+        // live in a DIFFERENT root than the one the route named and the gate checked (a cross-root alias), and a
+        // vanished root's section is CARRIED FORWARD, so without
         // this the facade would serve its stale bytes with a 200. Gate the root we are actually about to serve.
         requireAvailable(payload.page.root)
         return payload
@@ -254,17 +294,48 @@ class GuardedReadFacade(
     override fun permalink(principal: Principal, id: PageId): PermalinkResolution {
         policy.checkRead(principal, id.value)
         val snapshot = indexBuilder.current
-        // No LIVE binding: the id may still be TOMBSTONED, and a retired id is reserved forever - so it answers
-        // 410 Gone naming its last-known path, never the 404 that tells an agent the citation was never real.
-        val root = resolver.rootOf(snapshot, id)
-            ?: return resolver.retirementOf(id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
-        requireAvailable(root)
-        // A live binding with no page in the snapshot is LIMBO, not Unknown (C1): the permalink is the ONE promise
-        // §A4 makes to an agent, and answering 404 for a page we still bind - because a mount came up empty - is the
-        // failure mode the whole absence-authority redesign exists to end.
-        absence.requireVerifiedAbsence(root, id, snapshot)
-        val page = snapshot.byId[id] ?: return PermalinkResolution.Unknown
-        return page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
+        // Bare permalink, id_map-FIRST (Option B, arm order per the matrix): a durable claimant decides LIVE first;
+        // only a live None consults tombstones (410, never the 404 that tells an agent the citation was never real).
+        return when (val live = resolver.resolve(id)) {
+            is IdResolution.One -> {
+                requireAvailable(live.root)
+                // A live binding with no page in the snapshot is LIMBO, not Unknown (C1): answering 404 for a page we
+                // still bind - because a mount came up empty - is the failure mode this redesign exists to end.
+                absence.requireVerifiedAbsence(live.root, id, snapshot)
+                val page = snapshot.pageAt(RootedPageId(live.root, id))
+                    ?: return PermalinkResolution.Unknown
+                page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
+            }
+            is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(live.candidates)
+            IdResolution.None -> when (val dead = resolver.resolveRetired(id)) {
+                is IdResolution.One ->
+                    resolver.retirementAt(dead.root, id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
+                is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(dead.candidates)
+                IdResolution.None -> PermalinkResolution.Unknown
+            }
+        }
+    }
+
+    override fun permalinkAt(principal: Principal, root: RootName, id: PageId): PermalinkResolution {
+        policy.checkRead(principal, id.value)
+        if (registry.byName(root) == null) return PermalinkResolution.Unknown // unregistered/detached -> 404 (AFTER checkRead)
+        val snapshot = indexBuilder.current
+        // Snapshot-first PRESENT read (coherent-stale, hot): a hit under the pin serves that root's published bytes,
+        // with a durable consult only on a miss.
+        val page = snapshot.pageAt(RootedPageId(root, id))
+        if (page != null) {
+            requireAvailable(root)
+            return page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
+        }
+        // LIVE-miss: 503 - and through the CLASSIFIER, which is where the C1 rule lives. Re-deriving it inline here
+        // would also quietly ignore an INJECTED classifier that [gatedSnapshot] honors (the C4 window fixtures thread
+        // a fake one), so the two pinned-miss arms would answer from different rules.
+        if (resolver.bindsLive(root, id)) {
+            requireAvailable(root)
+            absence.requireVerifiedAbsence(root, id, snapshot)
+        }
+        // Not present, not live-bound here: a tombstone at (root, id) is 410, otherwise absent -> 404.
+        return resolver.retirementAt(root, id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
     }
 
     override fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String? {
@@ -281,26 +352,22 @@ class GuardedReadFacade(
         val id = aliasRegistry.find(rooted)
             .takeIf { rooted !in snapshot.byUrlPath } // live canonical wins (§A4)
             ?: return null
-        val target = snapshot.byId[id.id]
+        val target = snapshot.pageAt(id)
             // The alias target is in no section. Usually that means a stale binding (the shadow sweep has not run) and
             // today's null → SPA shell is right. But it is ALSO what a root unavailable SINCE BOOT looks like: never
-            // scanned, so no section, so no canonical URL to redirect TO. Emit the id-derived PERMALINK there, and the
-            // permalink route answers the 503 - so the promised "302, then an honest 503" holds in BOTH arms, rather
-            // than only in the one that happened to have a section.
-            ?: return id.takeIf { unavailableRoot(snapshot, id.id) }?.let { Permalink.of(root, id.id) }
+            // scanned, so no section, so no canonical URL to redirect TO. Emit the id-derived PERMALINK there (the
+            // target's OWN root), and the permalink route answers the 503 - so the promised "302, then an honest 503"
+            // holds in BOTH arms, rather than only in the one that happened to have a section. Only for a target that
+            // still durably BINDS under that root, though: a DANGLING alias (target id deleted, row lingering) must
+            // stay null → shell, never a redirect to a permalink that 404s.
+            ?: return id.takeIf {
+                registry.byName(id.root) != null &&
+                    resolver.statusOf(id.root, availability.current()) == RootStatus.UNAVAILABLE &&
+                    resolver.bindsLive(id.root, id.id)
+            }?.let { Permalink.of(id.root, id.id) }
         // A cross-root alias's TARGET may live in an unavailable root even though the route's root is fine. The 302
         // still fires and the target surface answers 503 - an accepted, documented two-step.
         return target.url ?: target.permalink
-    }
-
-    /** True iff [id] resolves to a REGISTERED root that is not serving (a detached or unknown id answers false). */
-    private fun unavailableRoot(snapshot: PageIndex, id: PageId): Boolean =
-        resolver.rootOf(snapshot, id)?.let { resolver.statusOf(it, availability.current()) == RootStatus.UNAVAILABLE } == true
-
-    /** Throw 503 when [id]'s resolved root is registered but not serving; a detached/unknown id is left to the 404 arm. */
-    private fun requireResolvedTargetAvailable(snapshot: PageIndex, id: PageId) {
-        val root = resolver.rootOf(snapshot, id) ?: return
-        requireAvailable(root)
     }
 
     /**

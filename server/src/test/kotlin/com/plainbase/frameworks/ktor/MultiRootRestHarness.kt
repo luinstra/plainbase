@@ -17,12 +17,15 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.koin.HistoryProviders
@@ -70,6 +73,14 @@ class MultiRootRestHarness(
      * the rows whose whole subject is what happens with NOBODY driving anything - an idle root that goes away.
      */
     private val liveWatchers: Boolean = false,
+    /**
+     * C4 window fixtures: build the resolver over an [AmbiguousIdMap] FAKE (posing the Ambiguous arm / a cross-root
+     * MOVE the real adapter cannot make). Receives the [IndexHarness] AFTER the first rebuild, so the factory can read
+     * the seeded page id off `index.builder.current`. Defaults to the real resolver.
+     */
+    private val resolverFactory: ((IndexHarness) -> PageRootResolver)? = null,
+    /** The classifier twin of [resolverFactory] (FIX 1): inject the SAME FAKE so the 503 limbo path fires. */
+    private val absenceFactory: ((IndexHarness) -> AbsenceClassifier)? = null,
 ) : AutoCloseable {
 
     val registry: RootRegistry = RootRegistry.of(roots)
@@ -157,6 +168,8 @@ class MultiRootRestHarness(
             agentDirectCommitGlobs = globList,
             extract = extractor,
             convergence = convergence,
+            resolver = resolverFactory?.invoke(index) ?: PageRootResolver(index.idMap, registry),
+            absence = absenceFactory?.invoke(index) ?: index.absence,
         )
         return this
     }
@@ -228,6 +241,21 @@ class MultiRootRestHarness(
         idMap.bind(RootedPath(RootName.require(root), TreePath.require(path)), id, materialized = false)
     }
 
+    /**
+     * Creates a TOMBSTONE for [id] under a DETACHED root (C4, the CLASS-A line-280 case): bind [id] at
+     * ([name], [path]), then bind a DIFFERENT id at the SAME (root, path) - the displacement retires [id]. The root is
+     * not in the registry, so `resolveRetired` filters it out and the permalink answers 404 (never the old 410). Uses
+     * only the PUBLIC double-`bind`, no raw `retire`.
+     */
+    fun detachedTombstone(name: String, path: String, id: PageId) {
+        val root = RootName.require(name)
+        require(registry.byName(root) == null) { "'$name' must NOT be in the registry - that is what makes it detached" }
+        val rooted = RootedPath(root, TreePath.require(path))
+        idMap.bind(rooted, id, materialized = false)
+        idMap.bind(rooted, UuidV7IdProvider().next(), materialized = false)
+        require(idMap.retired(id) != null) { "expected '$id' to be tombstoned by the displacing bind" }
+    }
+
     override fun close() {
         watchers.forEach { it.close() } // watchers first: a live one can still schedule a rebuild through the index
         scheduler?.close()
@@ -253,9 +281,11 @@ fun multiRootTest(
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     histories: ((RootName) -> HistoryProvider)? = null,
     liveWatchers: Boolean = false,
+    resolverFactory: ((IndexHarness) -> PageRootResolver)? = null,
+    absenceFactory: ((IndexHarness) -> AbsenceClassifier)? = null,
     block: suspend ApplicationTestBuilder.(MultiRootRestHarness) -> Unit,
 ) {
-    MultiRootRestHarness(roots, globs, enforced, extract, histories, liveWatchers).use { harness ->
+    MultiRootRestHarness(roots, globs, enforced, extract, histories, liveWatchers, resolverFactory, absenceFactory).use { harness ->
         harness.boot()
         testApplication {
             application { plainbaseModule(harness.services) }

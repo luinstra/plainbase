@@ -40,7 +40,10 @@ fun Route.historyRoutes(ctx: RouteContext) {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {
                 val id = call.pageId() ?: return@guarded
-                val page = ctx.read.pageById(principal, id)
+                // C4 `?root=` pin threaded to pageById: a non-owner/unregistered pin 404s AFTER checkRead, before any
+                // git read (the deferred-registration sweep, 5.2a #2).
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val page = ctx.read.pageById(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 // Bound the response by default (defense-in-depth over the GitExecutor byte cap): a page with very
                 // deep history would otherwise return an unbounded list. DEFAULT_HISTORY_LIMIT newest-first commits
@@ -66,7 +69,8 @@ fun Route.historyRoutes(ctx: RouteContext) {
                 val id = call.pageId() ?: return@guarded
                 val from = call.commitRef("from") ?: return@guarded
                 val to = call.commitRef("to") ?: return@guarded
-                val page = ctx.read.pageById(principal, id)
+                val pin = call.pinnedRootOrRefuse() ?: return@guarded
+                val page = ctx.read.pageById(principal, id, pin.root)
                     ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${id.value}")
                 // Off Git the no-op provider returns an empty diff; the flag tells the client to render its own
                 // "Git off" copy rather than treat the empty diff as a real one.

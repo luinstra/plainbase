@@ -52,7 +52,9 @@ fun Route.proposalRoutes(ctx: RouteContext) {
     route("/api/v1/changes") {
         post {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            call.guarded {
+            // This surface's root pin is the propose body's own `root` field, not `?root=` - so an ambiguity 409 here
+            // names that field instead of handing back a query url the caller could not have sent.
+            call.guarded(AmbiguityRemedy.BodyPin("root")) {
                 if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
                     return@guarded call.respondError(
                         HttpStatusCode.UnsupportedMediaType,

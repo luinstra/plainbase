@@ -76,6 +76,15 @@ sealed interface ProposeCommand {
     /**
      * An edit proposal: [pageId] is authoritative; [clientTargetPath] is the optional client path the service
      * checks against the server-resolved target.
+     *
+     * [root] is the OPTIONAL `?root=` pin (C4), GRAMMAR-parsed at the route (a malformed slug is a 400; an
+     * unregistered one defers to the facade's post-`checkEdit` durable-validate). Null resolves the owning root
+     * id_map-first; a present pin is durable-validated (registered-and-live) and a pin that does not hold the id
+     * answers `StaleBase`. The degrade path also sets it (CLASS-D: the auto-proposal keeps the write's pin).
+     *
+     * NO default, matching [SaveRequest.expectedRoot] and [MutatingFacade.writeAsset]: a pin's only possible default is
+     * the permissive unpinned one, so an omitted pin is a compile error rather than a silent widening of which root a
+     * proposal may be filed against. Every construction site names it.
      */
     data class Edit(
         val pageId: PageId,
@@ -83,6 +92,7 @@ sealed interface ProposeCommand {
         val clientTargetPath: TreePath?,
         val proposedContent: ByteArray,
         val rationale: String,
+        val root: RootName?,
     ) : ProposeCommand
 
     /**

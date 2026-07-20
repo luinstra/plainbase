@@ -29,11 +29,12 @@ import kotlinx.serialization.Serializable
  * `create`: [root] + [targetPath] are required + authoritative, [pageId]/[baseHash] are null. [proposedContent] is
  * the UTF-8 markdown SOURCE TEXT (the route encodes it to bytes for storage/hash/diff).
  *
- * [root] applies to a CREATE only - an edit's root is never declared, it is resolved from the page id - and on a
- * create it is REQUIRED, never defaulted: it decides which root's disk the applied bytes land on and which root's
- * editable/glob policy the proposal is judged against, so an omitted root is a 400, never permission to write to
- * `main`. It stays nullable in the shape because an EDIT legitimately omits it; the shared parser is what makes
- * it mandatory where it matters, so REST and MCP cannot drift. An unknown name is a 400 `invalid_root`.
+ * [root] on a create is REQUIRED, never defaulted: it decides which root's disk the applied bytes land on and
+ * which root's editable/glob policy the proposal is judged against, so an omitted root is a 400, never permission
+ * to write to `main`; an unknown name is a 400 `invalid_root`. On an EDIT it is an OPTIONAL disambiguation pin
+ * (C4): omitted, the root resolves id_map-first from the page id; named - the retry a 409 `ambiguous_page_id`
+ * directs - it is grammar-checked here and durable-validated AFTER the auth gate. The shared parser enforces both
+ * shapes, so REST and MCP cannot drift.
  */
 @Serializable
 data class ProposeChangeRequest(

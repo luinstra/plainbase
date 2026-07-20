@@ -7,6 +7,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
@@ -14,16 +15,19 @@ import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AgentWriteDecision
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.AssetWriteOutcome
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.domain.service.FrontmatterPatcher
+import com.plainbase.domain.service.IdResolution
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.MutatingFacade
 import com.plainbase.domain.service.PageRootResolver
@@ -44,6 +48,7 @@ import com.plainbase.domain.service.WriteOrigin
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.domain.service.agentWriteDecision
 import com.plainbase.domain.service.syntheticEmail
+import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
@@ -58,15 +63,19 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * INTERNAL post-write `IndexBuilder.rebuild()` uses the UNGATED no-arg overload (it is part of the EDIT write,
  * not a manage admin action).
  *
- * **The rooted write ordering (ADR-0011 D5/D6), for every id-addressed mutating entry:**
- *  1. read `indexBuilder.current` ONCE into a local, and resolve the target's owning root from it (falling back to
- *     the persisted `id_map` binding on a miss - which is the ONLY thing that can answer for a root that was never
- *     scanned this process);
+ * **The rooted write ordering (ADR-0011 D5/D6 + the C4 pinned split), for every id-addressed mutating entry:**
+ *  1. read `indexBuilder.current` ONCE into a local; resolve the owning root id_map-FIRST (Option B) on a bare
+ *     write, or durable-VALIDATE the caller's pin (registered-and-live `bindsLive`, never trusted blind);
  *  2. GATE on that root - rooted when a registered root owns the target, UNROOTED when none does;
- *  3. no owner -> the entry's existing not-found outcome. No write;
+ *  3. no owner -> the entry's existing not-found outcome, and no write. On the two page-CONTENT entries ([save] /
+ *     [directSave]) a BARE write against a TOMBSTONED id is the frozen 409 `page_deleted` instead - but ONLY there:
+ *     that 409 is a [WriteOutcome.Conflict] carrying current_content/current_hash/current_path, and an asset write
+ *     has no analogue for any of the three, so [writeAsset] keeps its [AssetWriteOutcome.PageMissing] 404;
  *  4. root not serving -> 503;
- *  5. otherwise resolve the page from the SAME snapshot; still absent -> not-found (a stale binding under a LIVE
- *     root: the root is up and serving, so 404 is honest).
+ *  5. otherwise resolve the page from the SAME snapshot; a live binding whose page is absent from it is 503
+ *     `absence_unverified` via the classifier (C1), and only a verified absence is the honest not-found - which then
+ *     goes through the SAME [goneOrNotFound] step (3) uses, so the unbind-race arm and the no-owner arm answer one
+ *     vocabulary for one domain fact instead of 404-vs-409 depending on which road reached it.
  *
  * Two consequences are deliberate. The gate PRECEDES availability, so a non-editable unavailable root answers 403
  * rather than 503 - a write that could never be authorized should not be reported as a transient outage. And the
@@ -124,54 +133,70 @@ class GuardedMutatingFacade(
         // commit, EDIT@"proposal" on a degrade).
         val mode = policy.agentModeFor(principal)
 
-        // ONE snapshot read, threaded through everything below (see the class doc).
+        // ONE snapshot read, threaded through everything below (see the class doc). The owning root is resolved
+        // id_map-FIRST (Option B): a pinned agent PUT durable-validates the pin (registered-and-live), a bare one
+        // resolves the durable claimant. Ambiguous/None audit ONCE with the bare (null-root) resource then answer,
+        // so a degrading agent is never audited twice (the gate-the-chosen-branch rule below).
+        //
+        // The null root on a REJECTED PINNED write is a known forensic gap, NOT an oversight: the ledger row loses the
+        // root the caller asserted. It cannot be closed by passing the named root here, because RootedResource.root is
+        // an AUTHORIZATION input, not a label - PolicyService.kt:154 denies ROOT_NOT_EDITABLE on it, so a ghost or
+        // read-only pin would start answering 403 instead of its ratified 404/stale_base. Closing it needs an audit-only
+        // root channel through the gate. See the round-6 ledger entry.
         val snapshot = indexBuilder.current
-        val root = resolver.rootOf(snapshot, request.pageId)
-
-        // Missing-page COMMIT → 404 DIRECT (never a StaleBase degrade): there is no content to smuggle and no
-        // applyable proposal to mint. Audit EDIT@pageId then return PageNotFound (a READ_ONLY agent denies here → 403).
-        // A NON-degrading branch, so its single gate is not in tension with the gate-the-chosen-branch rule below.
-        val current = snapshot.byId[request.pageId] ?: run {
-            policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(root, request.pageId.value))
-            // The boot arm reaches HERE precisely because the page is absent from the snapshot - its root was never
-            // scanned - so the 503 must be answered after the gate and before the 404, or an agent is told "gone".
-            // And the SAME is true of a page whose root is up and whose binding we still hold (C1): the pass could
-            // not read it, which is not the same fact as its being deleted, and an agent told "gone" for a page in
-            // limbo drops its citations for a page that is coming back.
-            root?.let {
-                requireAvailable(it)
-                absence.requireVerifiedAbsence(it, request.pageId, snapshot)
+        val res: IdResolution = request.expectedRoot?.let { resolver.resolvePinned(it, request.pageId) }
+            ?: resolver.resolve(request.pageId)
+        return when (res) {
+            is IdResolution.Ambiguous -> {
+                policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(null, request.pageId.value))
+                throw AmbiguousPageId(request.pageId, res.candidates)
             }
-            return SaveResult.PageNotFound
-        }
-
-        // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME server-
-        // resolved current.path the pipeline writes (smuggling closed by construction), in the page's OWN root - a
-        // glob declared for main authorizes nothing in an extra root.
-        val decision = if (mode == null) {
-            AgentWriteDecision.DegradeToProposal(current.path)
-        } else {
-            agentWriteDecision(mode, agentDirectCommitGlobs, current.root, current.path)
-        }
-        return when (decision) {
-            // DirectCommit: audit EDIT@pageId, then the EXISTING direct write over the SAME `current` object the
-            // decision matched - so decision.targetPath === the WriteIntent's path by construction. The
-            // agent's resolved identity threads in as BOTH git author AND committer (its commit is agent-attributed,
-            // matching the audit row - never the server "Plainbase" default).
-            //
-            // The gate fires on the CHOSEN BRANCH, not up front, and that is load-bearing: a degrade then calls
-            // `propose`, whose own checkEdit writes a SECOND audit row - so a pre-gate here would audit a degrading
-            // agent TWICE and break the audits-exactly-once invariant. The degrade branch's own gate and its own
-            // availability check fire inside `propose`, which 503s before it persists anything - so "an agent never
-            // gets a proposal filed against a base its store cannot read" still holds, it just arrives via the
-            // propose gate rather than a duplicate pre-gate.
-            is AgentWriteDecision.DirectCommit -> {
-                val identity = agentCommitIdentity(principal)
-                val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(current.root, request.pageId.value))
-                requireAvailable(current.root)
-                directWriteResolved(grant, request, current, identity, identity)
+            // Missing-owner: audit EDIT@pageId (a READ_ONLY agent denies → 403), then the SAME frozen C1 vocabulary
+            // as [directSave]'s bare None arm - deliberately, ONE vocabulary per endpoint regardless of principal. A
+            // BARE write whose id is TOMBSTONED is 409 page_deleted (proven gone, never never-existed); only a
+            // genuinely-unknown id (or a pin that no longer binds it) is the direct 404 - never a StaleBase degrade,
+            // there is no content to smuggle and no applyable proposal to mint.
+            IdResolution.None -> {
+                policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(null, request.pageId.value))
+                goneOrNotFound(request.pageId, request.expectedRoot)
             }
-            is AgentWriteDecision.DegradeToProposal -> degradeToProposal(principal, request)
+            is IdResolution.One -> {
+                val current = snapshot.pageAt(RootedPageId(res.root, request.pageId)) ?: run {
+                    // The page durably binds under res.root but is absent from the snapshot: a concurrent unbind race
+                    // fallback (resolve read a claimant at T1; requireVerifiedAbsence re-reads at T2). Audit EDIT@page,
+                    // then 503-before-404 so a boot-unavailable or limbo page is never reported as gone (C1).
+                    // This arm and the None arm now AGREE: both end in [goneOrNotFound], so a bare write that loses the
+                    // race is told the same frozen 409 page_deleted the common path tells it, for the same domain fact.
+                    policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(res.root, request.pageId.value))
+                    requireAvailable(res.root)
+                    absence.requireVerifiedAbsence(res.root, request.pageId, snapshot)
+                    return goneOrNotFound(request.pageId, request.expectedRoot)
+                }
+                // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME
+                // server-resolved current.path the pipeline writes (smuggling closed by construction), in the page's
+                // OWN root - a glob declared for main authorizes nothing in an extra root. DECIDE FIRST, then gate the
+                // chosen branch: a degrade calls `propose`, whose own checkEdit writes the ONE audit row, so a pre-gate
+                // here would audit a degrading agent TWICE.
+                val decision = if (mode == null) {
+                    AgentWriteDecision.DegradeToProposal(current.path)
+                } else {
+                    agentWriteDecision(mode, agentDirectCommitGlobs, current.root, current.path)
+                }
+                when (decision) {
+                    // DirectCommit: audit EDIT@pageId once, then the direct write over the SAME `current` the decision
+                    // matched (decision.targetPath === WriteIntent.path). The agent's resolved identity is BOTH git
+                    // author AND committer (agent-attributed, matching the audit row).
+                    is AgentWriteDecision.DirectCommit -> {
+                        val identity = agentCommitIdentity(principal)
+                        val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(current.root, request.pageId.value))
+                        requireAvailable(current.root)
+                        directWriteResolved(grant, request, current, identity, identity)
+                    }
+                    // The degrade keeps the pin (CLASS-D): its proposal is filed against current.root, and `propose`'s
+                    // own checkEdit + availability check fire inside it (one audit, 503 before persisting).
+                    is AgentWriteDecision.DegradeToProposal -> degradeToProposal(principal, request, current.root)
+                }
+            }
         }
     }
 
@@ -184,35 +209,70 @@ class GuardedMutatingFacade(
         // would turn today's anonymous 401 into an existence oracle - 401 for a real id, 404 for a bogus one - and
         // drop the denied-EDIT audit row this arm guarantees.)
         val snapshot = indexBuilder.current
-        // A PINNED root (the proposal-apply path) IS the answer — it was decided at propose time, shown to the approving
-        // admin and gated on; re-deriving it from the id would be exactly the re-derivation that lets a D17 cross-root
-        // id reassignment walk an approved edit into an unreviewed repository. A bare PUT has no pin: the id is the
-        // address, so it resolves (see [SaveRequest.expectedRoot]).
-        val root = request.expectedRoot ?: resolver.rootOf(snapshot, request.pageId)
-        val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(root, request.pageId.value))
-
-        // No registered root owns this id (unknown, or bound only under a detached root) -> today's 404, gated and
-        // audited first. Otherwise: 503 before 404, so a boot-unavailable root never reports its pages as gone.
-        if (root == null) return SaveResult.PageNotFound
-        requireAvailable(root)
-
-        // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route never
-        // invents a path. The git attribution is whatever the request carried (the apply path's proposer/approver).
-        //
-        // "A stale binding under a LIVE root lands here, and 404 is the honest answer" is what this used to say, and
-        // it was WRONG in the one direction that costs a corpus (C1): a live binding whose page is missing from the
-        // snapshot means the pass could not read it, not that it is gone. The classifier decides, and it 503s.
-        val current = snapshot.byId[request.pageId]
-            ?: run {
-                absence.requireVerifiedAbsence(root, request.pageId, snapshot)
-                return SaveResult.PageNotFound
+        // RESOLVE-then-checkEdit-then-branch (audit EXACTLY once). A PINNED root (the proposal-apply path) IS the
+        // answer, but it is durable-VALIDATED (registered-and-live) rather than trusted blind: re-deriving it from the
+        // id would let a D17 cross-root reassignment walk an approved edit into an unreviewed repository, while a pin
+        // that no longer binds the id reads as gone from the approved root (see [SaveRequest.expectedRoot]). A bare PUT
+        // has no pin: the id is the address, so it resolves id_map-first.
+        val res: IdResolution = request.expectedRoot?.let { resolver.resolvePinned(it, request.pageId) }
+            ?: resolver.resolve(request.pageId)
+        val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource((res as? IdResolution.One)?.root, request.pageId.value))
+        return when (res) {
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(request.pageId, res.candidates)
+            // No LIVE registered root owns this id. On a BARE write, a TOMBSTONED id (any registered retired claimant)
+            // is the frozen C1 answer: 409 page_deleted, current_* null - a page PROVEN gone is reported as deleted,
+            // never as never-existed. Only a genuinely-unknown id (or a pin that no longer binds it - the pinned
+            // fresh-fail-closed arm, which the apply path's toWriteOutcome maps to its own page_deleted) is 404.
+            IdResolution.None -> goneOrNotFound(request.pageId, request.expectedRoot)
+            is IdResolution.One -> {
+                requireAvailable(res.root)
+                // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route
+                // never invents a path. But 503 before 404: a live binding whose page is missing from the snapshot
+                // means the pass could not read it, not that it is gone (C1). pageAt keys on (res.root, id), so a page
+                // held under a DIFFERENT root (a D17 re-award between propose and apply) is already a miss here.
+                // This arm and the None arm AGREE (they ask the same [goneOrNotFound]): a bare write that loses the
+                // unbind race answers the frozen 409 page_deleted, not a 404 claiming the page never existed.
+                val current = snapshot.pageAt(RootedPageId(res.root, request.pageId))
+                    ?: run {
+                        absence.requireVerifiedAbsence(res.root, request.pageId, snapshot)
+                        return goneOrNotFound(request.pageId, request.expectedRoot)
+                    }
+                directWriteResolved(grant, request, current, request.author, request.committer)
             }
-        // Present, but under a DIFFERENT root than the pinned one (a D17 cross-root re-award between propose and
-        // apply): NOT an absence at all - the page is right there, in a repository this write was never authorized
-        // against. From the root this save was gated on, it is gone, and 404 stays the honest answer.
-        if (current.root != root) return SaveResult.PageNotFound
-        return directWriteResolved(grant, request, current, request.author, request.committer)
+        }
     }
+
+    /**
+     * **"No live page here" resolved into the ONE honest vocabulary, for every page-CONTENT arm that reaches it.** A
+     * BARE write ([expectedRoot] null) against an id some registered root has TOMBSTONED is the frozen 409
+     * `page_deleted` with current_* null: the page is PROVEN gone, and saying 404 would tell the caller it never
+     * existed - the precise lie C1 exists to prevent, and the one that makes an agent discard live citations.
+     *
+     * Both callers per entry ask this: the common [IdResolution.None] arm AND the [IdResolution.One] fallback where the
+     * page resolved live but was absent from the snapshot (the unbind race between `resolve` at T1 and the re-check at
+     * T2). Those two are the SAME domain fact reached by different roads, so they must not answer differently - they
+     * used to, and three review seats called it.
+     *
+     * The consult sits AFTER the caller's availability gate and AFTER `requireVerifiedAbsence`, deliberately: a page in
+     * LIMBO must still 503 before anything here decides it is gone. Only an absence someone has actually PROVEN gets to
+     * be reported at all, and only then does the tombstone pick which of the two "gone" answers is true.
+     *
+     * A PINNED request keeps its 404 (the ratified endpoint table): the caller asserted a root, and the honest answer to
+     * "is it in THAT root" is no - a 409 would describe a different question than the one asked.
+     */
+    private fun goneOrNotFound(pageId: PageId, expectedRoot: RootName?): SaveResult =
+        if (expectedRoot == null && resolver.resolveRetired(pageId) != IdResolution.None) {
+            SaveResult.Written(
+                WriteOutcome.Conflict(
+                    reason = WriteConflictReason.PAGE_DELETED,
+                    currentContent = null,
+                    currentHash = null,
+                    currentPath = null,
+                ),
+            )
+        } else {
+            SaveResult.PageNotFound
+        }
 
     /**
      * The agent's git commit identity for a DIRECT commit (b1): the C4 labeler's snapshot label + the PINNED synthetic
@@ -283,11 +343,14 @@ class GuardedMutatingFacade(
      * a human reviewer who rejects the rename-proposal, rather than being rejected inline. Out-of-glob writes are
      * ALWAYS human-gated, so this is the desired behavior, not a silent divergence from the direct path.
      */
-    private fun degradeToProposal(principal: Principal, request: SaveRequest): SaveResult {
+    private fun degradeToProposal(principal: Principal, request: SaveRequest, root: RootName): SaveResult {
         val outcome = proposals().propose(
             principal,
             ProposeCommand.Edit(
                 pageId = request.pageId,
+                // CLASS-D: the degrade PINS the root the decision matched, so the propose gate durable-validates the
+                // SAME root the write would have landed in, never a re-resolve that could drift across a D17 window.
+                root = root,
                 baseHash = request.baseHash,
                 clientTargetPath = null, // server-resolved; never a client-divergence path
                 proposedContent = request.bytes,
@@ -372,22 +435,25 @@ class GuardedMutatingFacade(
         filename: String,
         bytes: ByteArray,
         hasher: (ByteArray) -> String,
+        expectedRoot: RootName?,
     ): AssetWriteOutcome {
-        // ONE snapshot read, threaded through the gate and the page resolve (the class doc's rule).
+        // ONE snapshot read, threaded through the gate and the page resolve (the class doc's rule). RESOLVE (pin
+        // durable-validated, else id_map-first) -> single EDIT-gate on the resolved (root, id) -> branch. The grant
+        // authorizes the asset write AND the internal post-write rebuild (reached via the ungated no-arg overload).
         val snapshot = indexBuilder.current
-        val root = resolver.rootOf(snapshot, pageId)
-
-        // EDIT-gate on the page id (the asset belongs to the page); the grant authorizes the asset write AND the
-        // internal post-write rebuild (the rebuild is part of the write, reached via the ungated no-arg overload).
-        val grant = policy.checkEdit(principal, WriteClass.AssetWrite, RootedResource(root, pageId.value))
-
-        // Resolve the page's folder from the published snapshot; an unknown id is a missing page - but 503 before
-        // 404, so a boot-unavailable root's page is never reported as gone.
-        if (root == null) return AssetWriteOutcome.PageMissing
-        requireAvailable(root)
-        // ...and 503 before 404 for a page we still BIND but did not witness, for the same reason (C1).
-        absence.requireVerifiedAbsence(root, pageId, snapshot)
-        val page = snapshot.byId[pageId] ?: return AssetWriteOutcome.PageMissing
+        val res: IdResolution = expectedRoot?.let { resolver.resolvePinned(it, pageId) }
+            ?: resolver.resolve(pageId)
+        val grant = policy.checkEdit(principal, WriteClass.AssetWrite, RootedResource((res as? IdResolution.One)?.root, pageId.value))
+        val page = when (res) {
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(pageId, res.candidates)
+            IdResolution.None -> return AssetWriteOutcome.PageMissing
+            is IdResolution.One -> {
+                requireAvailable(res.root)
+                // 503 before 404 for a page we still BIND but did not witness, for the same reason (C1).
+                absence.requireVerifiedAbsence(res.root, pageId, snapshot)
+                snapshot.pageAt(RootedPageId(res.root, pageId)) ?: return AssetWriteOutcome.PageMissing
+            }
+        }
         val store = stores(page.root)
 
         // Snapshot membership ≠ disk reality: re-check the page file on disk so we don't write an asset (and

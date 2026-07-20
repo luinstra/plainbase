@@ -7,12 +7,16 @@ import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.Source
+import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
+import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
+import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
@@ -337,8 +341,8 @@ internal sealed interface ExtractedPrincipal {
 }
 
 /**
- * Runs [body] under the A3 choke point, mapping the two facade-thrown conditions to their frozen envelopes — and it
- * is the ONE place either mapping lives, so a route never catches or re-mints them:
+ * Runs [body] under the A3 choke point, mapping the four facade-thrown conditions to their frozen envelopes — and it
+ * is the ONE place any of those mappings lives, so a route never catches or re-mints them:
  *  - [AccessDenied] with [DenyReason.POLICY] → 401 `unauthorized` for an [Principal.Anonymous] (no credential),
  *    403 `forbidden` for an authenticated-but-unauthorized principal (the role×action matrix denied it);
  *  - [AccessDenied] with [DenyReason.ROOT_NOT_EDITABLE] → 403 `root_not_editable` (the root refuses page writes in
@@ -347,11 +351,13 @@ internal sealed interface ExtractedPrincipal {
  *  - [AbsenceUnverified] → 503 `absence_unverified` + [ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS] (C1) — a HEALTHY
  *    root holding ONE page whose absence nobody has proven. A separate code, because it is a separate fact and a
  *    separate remedy: nothing to restore, nothing to restart, and it clears itself.
+ *  - [AmbiguousPageId] → 409 `ambiguous_page_id` + one candidate root/URL per holding root (C4). The ONE arm here
+ *    that is thrown AFTER the resolve rather than before it, because ambiguity is a fact about the resolution.
  *
- * All are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
+ * The other three are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
  * a denied read never leaks page existence and an unauthenticated prober never learns a root's topology.
  */
-internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
+internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin, body: () -> Unit) {
     try {
         body()
     } catch (denied: AccessDenied) {
@@ -392,7 +398,80 @@ internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
                 "the page or its citations; retry shortly. If its file really is gone for good, the page converges once an " +
                 "absence proof arrives (a git commit, a completed observation, or `plainbase root reconcile`).",
         )
+    } catch (ambiguous: AmbiguousPageId) {
+        // 409 (§5-sanctioned): a bare id held by more than one root. The candidates let a client retry pinned; rank
+        // order is the resolver's; NO Link headers (that is the permalink 300's shape, not REST's).
+        //
+        // The retry target is DERIVED from the request that threw, never a constant: this funnel serves the page read,
+        // the PUT, /history, /diff, validate-links and the asset upload, and a hardcoded `/api/v1/pages/{id}?root=` was
+        // simply the wrong endpoint for most of them. A body-pin surface gets no url at all - see [AmbiguityRemedy].
+        //
+        // Ambiguity is TRANSIENT state: it ends the moment the duplicate is resolved, so no intermediary may hold on to
+        // it (the permalink 300 carries the same header for the same reason).
+        response.header(HttpHeaders.CacheControl, "no-store")
+        respondRest(
+            AmbiguousPageIdEnvelope.serializer(),
+            AmbiguousPageIdEnvelope(
+                AmbiguousPageIdBody(
+                    code = ErrorCodes.AMBIGUOUS_PAGE_ID,
+                    message = ambiguousMessage(ambiguous.id, remedy),
+                    candidates = ambiguous.candidates.map {
+                        AmbiguousCandidate(
+                            root = it.value,
+                            url = when (remedy) {
+                                AmbiguityRemedy.QueryPin -> retryUrlPinnedTo(it)
+                                is AmbiguityRemedy.BodyPin -> null
+                            },
+                        )
+                    },
+                ),
+            ),
+            HttpStatusCode.Conflict,
+        )
     }
+}
+
+/**
+ * How a caller of THIS endpoint names a root, which is the only thing that decides what a 409 candidate can offer.
+ *
+ * Every id-addressed REST surface takes the pin as `?root=` ([QueryPin], the default). `POST /api/v1/changes` takes it
+ * as a body field ([BodyPin]) - so its candidates carry no url and its message names the field instead.
+ */
+internal sealed interface AmbiguityRemedy {
+    data object QueryPin : AmbiguityRemedy
+
+    data class BodyPin(val field: String) : AmbiguityRemedy
+}
+
+/**
+ * The request's OWN endpoint with the `root` pin added - the retry url a 409 candidate hands back.
+ *
+ * The RAW path is used (`request.uri` up to the query, the [rawPathAfter] idiom), never Ktor's decoded routing
+ * parameters: re-encoding a decoded path would be the forbidden second decoder. Any existing query string is carried
+ * through and `root` appended, which is total here because a request that ALREADY named a root can never reach this -
+ * only [com.plainbase.domain.service.PageRootResolver.resolve] returns `Ambiguous`, and a pinned request goes through
+ * `resolvePinned`, which answers One or None and never Ambiguous. A [RootName] is a validated slug, so it needs no
+ * escaping.
+ */
+internal fun ApplicationCall.retryUrlPinnedTo(root: RootName): String {
+    val path = request.uri.substringBefore('?').substringBefore('#')
+    val query = request.queryString()
+    return if (query.isEmpty()) "$path?root=${root.value}" else "$path?$query&root=${root.value}"
+}
+
+/**
+ * The one wording behind both ambiguity surfaces (the REST 409 and the permalink 300), kept a hair from the MCP
+ * twin's ("retry with the `root` argument") only where the surfaces genuinely differ in how a root is named.
+ */
+internal fun ambiguousMessage(id: PageId, remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin): String {
+    val retry = when (remedy) {
+        AmbiguityRemedy.QueryPin -> "retry against one of the candidate roots below."
+        // Naming the FIELD, because this surface has no url to follow and an agent told to "retry against a candidate
+        // url" would go looking for a query string it never sent.
+        is AmbiguityRemedy.BodyPin ->
+            "retry with the \"${remedy.field}\" field in your request body naming one of the candidate roots below."
+    }
+    return "The id ${id.value} exists in more than one root, so the server cannot pick one; $retry"
 }
 
 /**
@@ -497,6 +576,61 @@ internal fun decodedTreePath(raw: String): TreePath? {
     val decoded = PercentCoding.decodeOnce(raw) as? PercentCoding.DecodeResult.Success ?: return null
     return TreePath.of(decoded.value)
 }
+
+/**
+ * The `?root=` query pin shape (C4, the 5.2a auth-defer sweep). GRAMMAR only: a [Named] carries a legal slug
+ * (whether or not it names a REGISTERED root - registration/ownership is deferred to AFTER the auth gate, in the
+ * facade), and only a [Malformed] slug or a [Repeated] parameter is answered pre-auth (400 `invalid_root`).
+ * [Absent] is a bare read/write.
+ */
+internal sealed interface RootPin {
+    data object Absent : RootPin
+
+    data class Named(val root: RootName) : RootPin
+
+    data class Malformed(val raw: String) : RootPin
+
+    /** `?root=a&root=b` - two pins, one decision. Both may be perfectly legal slugs; that is not the problem. */
+    data object Repeated : RootPin
+}
+
+/**
+ * Classifies the optional `?root=` query parameter by GRAMMAR ([RootName.of]); never consults the registry.
+ *
+ * A REPEATED parameter is its own refusal rather than a first-value read. This is the one surface whose entire job
+ * is disambiguation, so silently keeping `a` out of `?root=a&root=b` would answer a question the caller did not ask
+ * - and answer it about which root's disk a write lands on. Two pins is a malformed request, not a preference.
+ */
+internal fun ApplicationCall.rootPin(): RootPin {
+    val values = request.queryParameters.getAll("root") ?: return RootPin.Absent
+    if (values.size > 1) return RootPin.Repeated
+    val raw = values.single()
+    return RootName.of(raw)?.let(RootPin::Named) ?: RootPin.Malformed(raw)
+}
+
+/**
+ * The `?root=` pin as a plain [RootName]? for the id-addressed reads/writes: [RootPin.Absent] -> null (a bare
+ * read), [RootPin.Named] -> its root (registration deferred to the facade), and a [RootPin.Malformed] slug or a
+ * [RootPin.Repeated] parameter responds 400 `invalid_root` here (both syntax errors, the sole pre-auth exception)
+ * and returns null. The caller does `val pin = call.pinnedRootOrRefuse() ?: return@guarded` (null ==
+ * already-answered) and then reads `pin.root`, distinguished from a legal absent pin because absent yields
+ * [PinResolved]`(null)`, not null.
+ */
+internal suspend fun ApplicationCall.pinnedRootOrRefuse(): PinResolved? = when (val pin = rootPin()) {
+    RootPin.Absent -> PinResolved(null)
+    is RootPin.Named -> PinResolved(pin.root)
+    is RootPin.Malformed -> {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "?root must be a valid root name: '${pin.raw}'")
+        null
+    }
+    RootPin.Repeated -> {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "?root was given more than once; name exactly one root")
+        null
+    }
+}
+
+/** A resolved (grammar-valid or absent) `?root=` pin: [root] is null for an absent pin. */
+internal data class PinResolved(val root: RootName?)
 
 /**
  * The ONE first-segment rule every root-scoped route grammar shares (C3, ADR-0011 D3): if the

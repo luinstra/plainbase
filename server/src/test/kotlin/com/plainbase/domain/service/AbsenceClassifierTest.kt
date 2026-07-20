@@ -49,7 +49,6 @@ class AbsenceClassifierTest : FunSpec({
             withClue("the SAME observation, and now the index binds it: 503. The store's answer did not change - ours did") {
                 absence.classify(bound, StoreRead.NoBytes) shouldBe ContentRead.AbsenceUnknown
                 absence.absenceAt(bound) shouldBe ContentRead.AbsenceUnknown
-                absence.absenceOf(id) shouldBe ContentRead.AbsenceUnknown
             }
             withClue("a downed root outranks both - nothing may be concluded about a tree we cannot look at") {
                 absence.classify(bound, StoreRead.RootDown) shouldBe ContentRead.RootDown

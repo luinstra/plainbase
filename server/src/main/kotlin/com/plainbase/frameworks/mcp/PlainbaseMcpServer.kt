@@ -3,8 +3,10 @@ package com.plainbase.frameworks.mcp
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.RootUnavailable
@@ -16,6 +18,8 @@ import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.ListChangesResponse
+import com.plainbase.frameworks.ktor.dto.McpAmbiguousCandidate
+import com.plainbase.frameworks.ktor.dto.McpAmbiguousResponse
 import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
 import com.plainbase.frameworks.ktor.dto.PageResponse
 import com.plainbase.frameworks.ktor.dto.ProposalStatusWire
@@ -74,21 +78,24 @@ fun buildPlainbaseMcpServer(principal: Principal.Agent, ctx: RouteContext): Serv
     server.addTool(McpTools.READ_PAGE, READ_PAGE_DESCRIPTION, readPageSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            toolResult(PageResponse.serializer()) { ctx.read.pageById(principal, id)?.toDto() }
+            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
+            toolResult(PageResponse.serializer()) { ctx.read.pageById(principal, id, root)?.toDto() }
         }
     }
 
     server.addTool(McpTools.GET_PAGE_METADATA, GET_PAGE_METADATA_DESCRIPTION, getPageMetadataSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            toolResult(PageMetadataResponse.serializer()) { ctx.read.pageMetadata(principal, id)?.toMetadataDto() }
+            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
+            toolResult(PageMetadataResponse.serializer()) { ctx.read.pageMetadata(principal, id, root)?.toMetadataDto() }
         }
     }
 
     server.addTool(McpTools.VALIDATE_LINKS, VALIDATE_LINKS_DESCRIPTION, validateLinksSchema) { request ->
         catchingErrors {
             val id = request.canonicalPageId() ?: return@catchingErrors invalidPageId(request.arguments?.stringArg("id"))
-            toolResult(ValidateLinksResponse.serializer()) { ctx.read.validateLinks(principal, id)?.toDto() }
+            val root = request.rootArgOrError(ctx.roots) { return@catchingErrors it }
+            toolResult(ValidateLinksResponse.serializer()) { ctx.read.validateLinks(principal, id, root)?.toDto() }
         }
     }
 
@@ -154,8 +161,44 @@ private fun io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest.canonicalPa
     return if (CANONICAL_PAGE_ID.matches(raw)) PageId.require(raw) else null
 }
 
+/**
+ * The optional `root` arg for a read tool (C4). Absent -> no pin; a REGISTERED root -> [RootArg.Pinned]; a malformed
+ * OR unregistered slug -> [RootArg.Bad] (`invalid_root`, pre-checkRead). This is the DELIBERATE MCP-read exception to
+ * the auth-defer sweep (5.2a #8): MCP is connect-authenticated, a read mints no write-audit, and root names are
+ * public - so MCP answers `invalid_root` for an unknown root where REST `?root=ghost` defers to a post-checkRead 404.
+ */
+private sealed interface RootArg {
+    data object Absent : RootArg
+
+    data class Pinned(val root: RootName) : RootArg
+
+    data class Bad(val raw: String) : RootArg
+}
+
+private fun io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest.rootArg(roots: Set<RootName>): RootArg {
+    val raw = arguments?.stringArg("root") ?: return RootArg.Absent
+    return RootName.registered(raw, roots)?.let(RootArg::Pinned) ?: RootArg.Bad(raw)
+}
+
+/**
+ * The shape ALL THREE id-addressed read tools want out of [rootArg]: the pinned root, or null for a bare read. A
+ * [RootArg.Bad] slug has no `RootName?` to be, so it goes out through [bad] - which each caller spells
+ * `{ return@catchingErrors it }`, the same early `invalid_root` result the three used to write out longhand.
+ */
+private inline fun io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest.rootArgOrError(
+    roots: Set<RootName>,
+    bad: (CallToolResult) -> Nothing,
+): RootName? = when (val pin = rootArg(roots)) {
+    RootArg.Absent -> null
+    is RootArg.Pinned -> pin.root
+    is RootArg.Bad -> bad(invalidRoot(pin.raw))
+}
+
 /** REST parity: the SAME `invalid_page_id` code + quoted-raw-id message the REST `pageId()` parser emits. */
 private fun invalidPageId(raw: String?): CallToolResult = errorResult("invalid_page_id", "Not a canonical-shape UUID: '${raw.orEmpty()}'")
+
+/** The malformed-`root` arg answer (5.2a #8): `invalid_root`, quoting the raw slug. */
+private fun invalidRoot(raw: String): CallToolResult = errorResult(ErrorCodes.INVALID_ROOT, "Not a valid root name: '$raw'")
 
 /** Reads a named string argument off the tool's `arguments` object (null when absent / not a string). */
 private fun JsonObject.stringArg(name: String): String? = this[name]?.jsonPrimitive?.contentOrNull
@@ -182,6 +225,8 @@ private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): C
         unavailableResult(unavailable)
     } catch (unverified: AbsenceUnverified) {
         unverifiedResult(unverified)
+    } catch (ambiguous: AmbiguousPageId) {
+        ambiguousResult(ambiguous)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" } // cause to the log, never the wire
         errorResult("internal", "Internal error")
@@ -202,6 +247,8 @@ private inline fun catchingErrors(body: () -> CallToolResult): CallToolResult =
         unavailableResult(unavailable)
     } catch (unverified: AbsenceUnverified) {
         unverifiedResult(unverified)
+    } catch (ambiguous: AmbiguousPageId) {
+        ambiguousResult(ambiguous)
     } catch (t: Throwable) {
         logger.error(t) { "MCP tool failed" }
         errorResult("internal", "Internal error")
@@ -231,6 +278,29 @@ private fun unverifiedResult(unverified: AbsenceUnverified): CallToolResult =
         ErrorCodes.ABSENCE_UNVERIFIED,
         "The page '${unverified.subject}' is still bound in root '${unverified.root.value}' and its content cannot be read " +
             "right now. It is NOT deleted - KEEP your citations, and do not re-create it. Nothing was written. Retry shortly.",
+    )
+
+/**
+ * Maps an [AmbiguousPageId] to the MCP twin of the REST 409 (C4): a bare id held by more than one root. The message
+ * tells the agent to retry naming a `root`; [McpAmbiguousResponse.candidates] carries (root, id) pairs so it knows
+ * which. FAKE-only under `UNIQUE(id)`, but the shape ships in C4.
+ */
+private fun ambiguousResult(ambiguous: AmbiguousPageId): CallToolResult =
+    CallToolResult(
+        content = listOf(
+            TextContent(
+                RestJson.encodeToString(
+                    McpAmbiguousResponse.serializer(),
+                    McpAmbiguousResponse(
+                        code = ErrorCodes.AMBIGUOUS_PAGE_ID,
+                        id = ambiguous.id.value,
+                        candidates = ambiguous.candidates.map { McpAmbiguousCandidate(root = it.value, id = ambiguous.id.value) },
+                        message = "This id exists in more than one root; retry with the `root` argument.",
+                    ),
+                ),
+            ),
+        ),
+        isError = true,
     )
 
 /**

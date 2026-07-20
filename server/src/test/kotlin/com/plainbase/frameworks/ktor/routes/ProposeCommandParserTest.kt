@@ -64,7 +64,7 @@ class ProposeCommandParserTest : FunSpec({
         invalid.message shouldBe "a create requires root"
     }
 
-    test("an EDIT with NO root still parses - only a create declares one") {
+    test("an EDIT with NO root still parses - the pin is optional, and omitted means resolve from the page id") {
         parse(req(root = null, pageId = validPageId, baseHash = validBaseHash))
             .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
     }
@@ -86,10 +86,16 @@ class ProposeCommandParserTest : FunSpec({
         invalid.code shouldBe ErrorCodes.INVALID_PROPOSE_REQUEST
     }
 
-    test("an EDIT needs NO root check: its root is never declared, it is resolved from the page id") {
+    test(
+        "an EDIT root pin is GRAMMAR-only here: an unregistered-but-legal slug parses (no pre-auth leak); a malformed one is invalid_root",
+    ) {
+        // Registration is deferred to the facade AFTER checkEdit (5.2a) - a parser-side registry check would leak
+        // a root's existence pre-auth. The pin rides the command so the facade can durable-validate it.
         val command = parse(req(root = "nosuchroot", pageId = validPageId, baseHash = validBaseHash))
-            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command
-        command.shouldBeInstanceOf<ProposeCommand.Edit>()
+            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
+        command.root shouldBe RootName.require("nosuchroot")
+        parse(req(root = "Not A Root", pageId = validPageId, baseHash = validBaseHash))
+            .shouldBeInstanceOf<ProposeCommandParse.Invalid>().code shouldBe ErrorCodes.INVALID_ROOT
     }
 
     test("Ok create: a valid create yields ProposeCommand.Create with the target path + bytes") {

@@ -140,6 +140,17 @@ fun IndexHarness.testRouteContext(
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
     /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */
     convergence: com.plainbase.domain.root.RootConvergence = com.plainbase.domain.root.RootConvergence(),
+    /**
+     * The id->root resolver (C4). Defaults to the real one over the harness idMap; a window test injects a
+     * PageRootResolver over an [AmbiguousIdMap] FAKE to pose the Ambiguous arm / a cross-root move it cannot make real.
+     */
+    resolver: com.plainbase.domain.service.PageRootResolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry),
+    /**
+     * The 404-vs-503 classifier (C4, FIX 1). Defaults to the harness's own over the REAL idMap; a window test injects
+     * an AbsenceClassifier over the SAME [AmbiguousIdMap] FAKE the resolver uses, so the limbo (503) path fires by
+     * construction rather than reading the real rootsHoldingId and answering 404.
+     */
+    absence: com.plainbase.domain.service.AbsenceClassifier = this.absence,
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
@@ -150,7 +161,6 @@ fun IndexHarness.testRouteContext(
         enforced = enforced,
         editableOf = { rootRegistry.byName(it)?.editable == true },
     )
-    val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry)
     // Every root the harness registers resolves to its own store; history is main's provider for main, no-op
     // elsewhere (an extra root with no declared history records nothing, exactly as production wires it) - unless
     // the test declares the whole per-root map itself.

@@ -105,7 +105,12 @@ class AppDbMigrationNativeTest {
                 assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
                 assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
-                assertEquals(15L, driver.queryLongNative("PRAGMA user_version"))
+                assertEquals(16L, driver.queryLongNative("PRAGMA user_version"))
+                // C4 (15.sqm): the retired_binding_id index exists in-image after the full chain.
+                assertEquals(
+                    1L,
+                    driver.queryLongNative("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='retired_binding_id'"),
+                )
 
                 // The (root, id) composite PK enforces in-image on all three re-keyed tables: the same id under a
                 // SECOND root inserts cleanly, but the same (root, id) twice FAILS - proven with a PLAIN RAW INSERT,

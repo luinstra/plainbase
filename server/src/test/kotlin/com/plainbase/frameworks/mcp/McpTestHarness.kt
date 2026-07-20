@@ -1,13 +1,17 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.AmbiguousIdMap
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.ktor.testRouteContext
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -50,9 +54,19 @@ import io.ktor.server.cio.CIO as ServerCIO
 class McpHarness(
     /** Whether the seeded root accepts page writes (ADR-0011 D6). `false` exercises the `root_not_editable` deny. */
     editable: Boolean = true,
+    /**
+     * C4 window fixture: the roots a FAKE [AmbiguousIdMap] reports as holding the SEEDED page id. Non-empty wraps the
+     * real idMap for that one id, which is the only way to pose Ambiguity under `UNIQUE(id)`. Threaded into BOTH the
+     * resolver AND the classifier deliberately - a resolver-only fake leaves `requireVerifiedAbsence` reading the real
+     * list, and the two would answer from different facts (the REV14 FIX-1 defect).
+     */
+    ambiguousRoots: List<RootName> = emptyList(),
 ) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
+
+    /** The (empty) directories backing any EXTRA roots [ambiguousRoots] names - see the registry note in `init`. */
+    private val extraDir = Files.createTempDirectory("plainbase-mcp-extra-roots")
     private val searchDir = Files.createTempDirectory("plainbase-mcp-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     private val index: IndexHarness
@@ -90,7 +104,14 @@ class McpHarness(
                 },
             ),
             searchIndexer = searchIndexer,
-            rootRegistry = RootRegistry.of(listOf(localRoot("main", root, editable = editable))),
+            // Every root [ambiguousRoots] names is REGISTERED over an empty directory, because the resolver filters
+            // its claimant list to registered roots: an unregistered candidate is dropped and the Ambiguous arm
+            // collapses back to One, so the fake alone cannot pose ambiguity.
+            rootRegistry = RootRegistry.of(
+                listOf(localRoot("main", root, editable = editable)) +
+                    ambiguousRoots.filter { it != RootName.MAIN }
+                        .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
+            ),
         )
         index.builder.rebuild()
         val page = index.builder.current.pages.single()
@@ -100,7 +121,13 @@ class McpHarness(
         proposeBearer = propose.plaintext
         proposeTokenId = propose.id
         readOnlyBearer = index.apiTokens.mint(label = "ro", mode = AgentMode.READ_ONLY).plaintext
-        val ctx = index.testRouteContext(searchProvider = searchProvider, enforced = true)
+        val idMap = if (ambiguousRoots.isEmpty()) index.idMap else AmbiguousIdMap(index.idMap, page.id, ambiguousRoots)
+        val ctx = index.testRouteContext(
+            searchProvider = searchProvider,
+            enforced = true,
+            resolver = PageRootResolver(idMap, index.rootRegistry),
+            absence = AbsenceClassifier(idMap),
+        )
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }
         port = blocking { server.engine.resolvedConnectors().first().port }
     }
@@ -163,8 +190,9 @@ class McpHarness(
         exec.shutdownNow()
         index.close()
         searchDb.close()
-        runCatching { Files.walk(searchDir).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
-        runCatching { Files.walk(root).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+        listOf(searchDir, root, extraDir).forEach { dir ->
+            runCatching { Files.walk(dir).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+        }
     }
 }
 

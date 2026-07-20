@@ -1,0 +1,7 @@
+-- v15 -> v16: per-root identity C4, INDEX-ONLY. `retired_binding`'s PK is (root, id), so a bare `WHERE id = ?`
+-- (the retired-root resolution behind every live None - every unknown-id bare permalink) was an unindexed scan,
+-- an O(tombstones) DoS under a `/p/{random-uuid}` flood. Add a plain index on retired_binding(id). No table, PK,
+-- column or data change: `id_map`/`UNIQUE(id)`/`retired_binding` PK+columns stay exactly as v15 left them (the
+-- UNIQUE(id) -> UNIQUE(root,id) flip is C5's 16.sqm). verifyMigrations cross-checks this against schema/16.db.
+
+CREATE INDEX retired_binding_id ON retired_binding(id);

@@ -96,6 +96,54 @@ data class CreatedButUnindexedResponse(
     val warning: WriteWarning,
 )
 
+/**
+ * 409 `ambiguous_page_id` (REST) / 300 (permalink): a bare id held by more than one root. [candidates] carries one
+ * entry per root, ranked by D7 REGISTRY RANK and then by root name (the order every candidate list out of
+ * `PageRootResolver.resolve` / `resolveRetired` already carries), each with the per-root URL a client retries
+ * against. Emit-only (built server-side; never deserialized). FAKE-only under `UNIQUE(id)` in C4, but the shape
+ * ships now.
+ *
+ * **It nests under `error` like every other REST error body** ([ErrorEnvelope], [WriteConflictEnvelope],
+ * [PageExistsEnvelope], [BodyTooLargeEnvelope]), and carries the `message` they all carry — the shipped SPA client
+ * reads `error.code`/`error.message` off EVERY failure, so a bare top-level `{code, …}` would degrade to
+ * `unknown_error` on the one surface whose whole job is telling a caller what to retry with. The id lives in the
+ * message (and in each candidate url) rather than in its own key: the caller sent it, so repeating it as a
+ * machine-readable field buys nothing the candidates do not already carry. Re-cut here, in C4, deliberately — the
+ * arm is unreachable while `UNIQUE(id)` holds, so this is the last moment the shape is free to change.
+ *
+ * **[AmbiguousCandidate.url] is the CALLER'S OWN endpoint with `?root=` added, never a fixed `/api/v1/pages/{id}`
+ * guess** - a `/history` 409 hands back a `/history` url, because the one surface whose whole job is telling a caller
+ * what to retry with must not point at a different endpoint. It is NULL on a surface whose pin is a request-BODY field
+ * (`POST /api/v1/changes`): there is no url to retry, the remedy is the body's own `root` field, and the message says
+ * so. A fabricated query url there would send an agent hunting for a query string it never sent - the same reasoning
+ * `parseProposeCommand` already applies to its own `invalid_root` message.
+ */
+@Serializable
+data class AmbiguousCandidate(val root: String, val url: String?)
+
+@Serializable
+data class AmbiguousPageIdEnvelope(val error: AmbiguousPageIdBody)
+
+@Serializable
+data class AmbiguousPageIdBody(val code: String, val message: String, val candidates: List<AmbiguousCandidate>)
+
+/** The MCP twin of [AmbiguousCandidate]: an agent retries the tool with `root`, so the candidate carries (root, id). */
+@Serializable
+data class McpAmbiguousCandidate(val root: String, val id: String)
+
+/**
+ * The MCP twin of [AmbiguousPageIdEnvelope], and deliberately NOT wrapped in one: an MCP result carries its
+ * error-ness in `isError`, not in a body key, so there is nothing for an `error` envelope to mean here. It keeps a
+ * top-level [id] the REST body drops, because an agent retries by naming a root rather than by following a url.
+ */
+@Serializable
+data class McpAmbiguousResponse(
+    val code: String,
+    val id: String,
+    val candidates: List<McpAmbiguousCandidate>,
+    val message: String,
+)
+
 /** 409 drift envelope (kept distinct from the frozen [ErrorEnvelope] — it grows `reason` + `current_*`). */
 @Serializable
 data class WriteConflictEnvelope(val error: WriteConflictBody)

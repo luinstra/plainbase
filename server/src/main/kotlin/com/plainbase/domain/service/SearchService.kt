@@ -7,6 +7,7 @@ import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchHit
 import com.plainbase.domain.search.SearchProvider
@@ -73,8 +74,9 @@ class SearchService(
                 offset = offsetValue,
                 total = results.total,
                 hits = results.hits.mapNotNull { hit ->
-                    snapshot.byId[hit.pageId]
-                        ?.takeIf { it.root == hit.root } // the page id is not enough - see [assemble]'s root rule
+                    // pageAt keys on (root, id) - the page id is not enough (see [assemble]'s root rule): a
+                    // cross-root re-award must not pair one root's hit with another's page.
+                    snapshot.pageAt(RootedPageId(hit.root, hit.pageId))
                         ?.takeIf { available.isAvailable(it.root) }
                         ?.let { page -> assemble(hit, page) }
                 },

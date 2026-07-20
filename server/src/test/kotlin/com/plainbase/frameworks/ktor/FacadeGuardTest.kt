@@ -45,7 +45,7 @@ class FacadeGuardTest : FunSpec({
 
                 // EDITOR: the write lands (the grant reached the pipeline). The facade resolves the page path
                 // INTERNALLY from the snapshot — the route hands only id + base_hash + bytes.
-                val result = ctx.mutate.save(editor(), SaveRequest(page.id, page.contentHash, newBytes))
+                val result = ctx.mutate.save(editor(), SaveRequest(page.id, page.contentHash, newBytes, expectedRoot = null))
                 result.shouldBeInstanceOf<SaveResult.Written>()
                 result.outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                 Files.readString(root.resolve("doc.md")) shouldBe String(newBytes)
@@ -54,7 +54,7 @@ class FacadeGuardTest : FunSpec({
                 val refreshed = harness.builder.current.pages.single()
                 val viewerBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nedited by viewer.\n".toByteArray()
                 shouldThrow<AccessDenied> {
-                    ctx.mutate.save(viewer(), SaveRequest(refreshed.id, refreshed.contentHash, viewerBytes))
+                    ctx.mutate.save(viewer(), SaveRequest(refreshed.id, refreshed.contentHash, viewerBytes, expectedRoot = null))
                 }
                 Files.readString(root.resolve("doc.md")) shouldBe String(newBytes) // unchanged: the mutator was never reached
             }
@@ -78,7 +78,7 @@ class FacadeGuardTest : FunSpec({
                 // The VIEWER's PUT is denied. The denied decision MUST be the audited EDIT — not swallowed by an
                 // unaudited read-check that runs first. Exactly ONE audit row: action EDIT, decision denied.
                 shouldThrow<AccessDenied> {
-                    ctx.mutate.save(viewer(), SaveRequest(page.id, page.contentHash, "x".toByteArray()))
+                    ctx.mutate.save(viewer(), SaveRequest(page.id, page.contentHash, "x".toByteArray(), expectedRoot = null))
                 }
                 val rows = harness.auditRepository.recent(10)
                 rows shouldHaveSize 1

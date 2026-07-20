@@ -31,27 +31,35 @@ import com.plainbase.domain.root.RootedPath
  */
 interface ReadFacade {
 
-    fun pageById(principal: Principal, id: PageId): PagePayload?
+    /**
+     * The full page payload for [id], or null (§A4). [root] is the OPTIONAL `?root=` pin (C4): null resolves the
+     * owning root id_map-first (bare read); a present pin is coherent-stale on a snapshot HIT and durable-validated
+     * on a miss. An unregistered/non-owner pin resolves to null (404) AFTER `checkRead`; a bare id held by more than
+     * one root throws [AmbiguousPageId] (the funnel's 409).
+     */
+    fun pageById(principal: Principal, id: PageId, root: RootName? = null): PagePayload?
 
     /** The page at [root]'s canonical-or-alias URL [path] (the route-parsed root segment, C3), or null (§A4 by-path rules). */
     fun pageByUrlPath(principal: Principal, root: RootName, path: TreePath): PagePayload?
 
-    fun pageHtml(principal: Principal, id: PageId): PageHtmlPayload?
+    fun pageHtml(principal: Principal, id: PageId, root: RootName? = null): PageHtmlPayload?
 
     /**
      * The broken links + anchors ON the page [id] (Phase 5 `validate_links`, master §2.6): a checkRead-FIRST gated,
      * per-page view of the EXISTING whole-index [LinkChecker] report (filtered to this page). Null when [id] is
      * unknown (the checkRead gate fired first, so a denied caller cannot tell unknown-from-known). NOT a re-checker —
-     * it aggregates the one render-time resolution model, exactly like the whole-tree gate.
+     * it aggregates the one render-time resolution model, exactly like the whole-tree gate. [root] is the C4 `?root=`
+     * pin (see [pageById]).
      */
-    fun validateLinks(principal: Principal, id: PageId): LinkReport?
+    fun validateLinks(principal: Principal, id: PageId, root: RootName? = null): LinkReport?
 
     /**
      * The page [id]'s metadata projection (Phase 5 `get_page_metadata`, master §2.6): id/path/url/content_hash/
      * commit/title/headings, all from the published snapshot (no disk read). checkRead-FIRST; null when [id] unknown
      * (the gate fired first). Headings are document order. Returns the domain [IndexedPage] (the route projects it).
+     * [root] is the C4 `?root=` pin (see [pageById]).
      */
-    fun pageMetadata(principal: Principal, id: PageId): IndexedPage?
+    fun pageMetadata(principal: Principal, id: PageId, root: RootName? = null): IndexedPage?
 
     fun search(principal: Principal, q: String?, limit: String?, offset: String?): SearchService.Outcome
 
@@ -134,20 +142,36 @@ interface ReadFacade {
      * `/p/{id}` — the permanent ID permalink's resolution (§A4's durability layer), as ONE facade operation so the
      * route keeps only its 302/shell/400 mapping.
      *
-     * The truth table, after `checkRead`: a snapshot HIT under an AVAILABLE root is [PermalinkResolution.Found] (or
-     * [PermalinkResolution.LoserNoUrl] for a path-space collision loser, whose permalink IS its only human URL); a
-     * snapshot hit under an unavailable root THROWS. On a snapshot MISS the persisted `id_map` binding decides, and
-     * it is load-bearing for exactly one arm: a root unavailable SINCE BOOT was never scanned this process, so its
-     * pages are in NO section and only the binding can tell 503 from 404. So: no binding -> [PermalinkResolution
-     * .Unknown] (404); a binding under a DETACHED root -> Unknown (404 - it has no availability status to consult,
-     * and the boot WARN is its visibility); a binding under a registered-but-UNAVAILABLE root -> THROW (503); a
-     * binding under an AVAILABLE root whose page is nonetheless absent from the snapshot -> Unknown, because the
-     * root is up and serving, so 404 is the honest answer.
+     * The truth table, after `checkRead`, and it is id_map-FIRST (Option B, C4): the DURABLE claimant decides the
+     * owning root, never the snapshot. A root unavailable SINCE BOOT was never scanned this process, so its pages
+     * are in no section - a snapshot-first resolution would answer 404 for every one of them.
+     *
+     * Exactly one live registered claimant: the root's availability is gated (an UNAVAILABLE one THROWS 503
+     * `root_unavailable`), then a page still BOUND there but absent from the snapshot THROWS 503
+     * `absence_unverified` - it is a page the last pass could not read, and C1 forbids reporting that as gone. A
+     * page that IS in the snapshot is [PermalinkResolution.Found], or [PermalinkResolution.LoserNoUrl] for a
+     * path-space collision loser whose permalink IS its only human URL. More than one claimant is
+     * [PermalinkResolution.Ambiguous] (the route's 300).
+     *
+     * No live claimant - which includes a binding under a DETACHED root, since the resolver filters its candidate
+     * list to REGISTERED roots (the boot WARN is a detached root's visibility) - falls through to TOMBSTONES:
+     * exactly one retired claimant is [PermalinkResolution.Retired] (410, naming the last-known path), more than one
+     * is Ambiguous, and none at all is [PermalinkResolution.Unknown] (404).
      *
      * There is deliberately NO `Unavailable` variant: the unavailable arms THROW like every other facade method, so
      * the 503 stays mapped in ONE place instead of being re-minted route-side.
      */
     fun permalink(principal: Principal, id: PageId): PermalinkResolution
+
+    /**
+     * `/p/r/{root}/{id}` — the ROOT-PINNED permalink resolution (C4): a COHERENT-STALE snapshot-first PRESENT read
+     * (the pinned READ split, safe per the endpoint-status table), with a durable `id_map` consult only on a
+     * snapshot miss. An unregistered/detached [root] resolves to [PermalinkResolution.Unknown] (404) AFTER
+     * `checkRead`; a snapshot hit under an available root is [PermalinkResolution.Found]/[PermalinkResolution
+     * .LoserNoUrl], a live-binding miss THROWS (503), and a tombstone under [root] is [PermalinkResolution.Retired]
+     * (410). It never emits [PermalinkResolution.Ambiguous] - the root is already named.
+     */
+    fun permalinkAt(principal: Principal, root: RootName, id: PageId): PermalinkResolution
 }
 
 /** The outcome of [ReadFacade.permalink] — the route maps these to 302 / SPA shell / 410 / 404. */
@@ -171,6 +195,13 @@ sealed interface PermalinkResolution {
 
     /** No such page, here or in the persisted bindings — a 404. */
     data object Unknown : PermalinkResolution
+
+    /**
+     * The bare id is held by more than one root (C4) — the permalink route answers **300 Multiple Choices** with one
+     * `Link: rel="alternate"` per [candidates] entry (rank order). FAKE-only under `UNIQUE(id)`; only the bare
+     * `permalink` produces it, never [permalinkAt] (which is already root-pinned).
+     */
+    data class Ambiguous(val candidates: List<RootName>) : PermalinkResolution
 }
 
 /**

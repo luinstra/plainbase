@@ -39,6 +39,7 @@ import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
@@ -321,6 +322,29 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
         }
     }
 
+    test("tombstoned-id COMMIT → the frozen 409 page_deleted, never 404: ONE write vocabulary regardless of principal") {
+        withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, _, _, _ ->
+            // Retire an id by displacement (the detachedTombstone idiom, here under REGISTERED main): bind it, then
+            // bind a DIFFERENT id at the SAME rooted path - the first id is now tombstoned with NO live binding.
+            val retired = "0190aaaa-bbbb-7ccc-8ddd-0000000000fe"
+            val gone = RootedPath(RootName.MAIN, TreePath.require("notes/gone.md"))
+            harness.idMap.bind(gone, PageId.require(retired), materialized = false)
+            harness.idMap.bind(gone, PageId.require("0190aaaa-bbbb-7ccc-8ddd-0000000000fd"), materialized = false)
+            val resp = app.client.put("/api/v1/pages/$retired") {
+                header(HttpHeaders.IfMatch, "\"sha256:${"0".repeat(64)}\"")
+                contentType(markdown)
+                setBody(edited)
+            }
+            // A page PROVEN gone is reported as deleted, never as never-existed - the SAME frozen C1 answer the
+            // non-agent directSave arm gives (write-conflict-page-deleted.json), on the SAME endpoint.
+            resp.status shouldBe HttpStatusCode.Conflict
+            val error = Json.parseToJsonElement(resp.bodyAsText()).jsonObject.getValue("error").jsonObject
+            error.getValue("reason").jsonPrimitive.content shouldBe "page_deleted"
+            error.getValue("current_content") shouldBe JsonNull
+            harness.proposalRepository.all().shouldBeEmpty()
+        }
+    }
+
     test("PUT-path stale_base 400: a COMMIT agent out-of-glob whose base_hash no longer matches disk → 400 stale_base; no proposal") {
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
             val staleHash = app.hashOf(outId)
@@ -371,7 +395,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             val outHash = citations.contentHash(outDoc.toByteArray())
             ctx.proposals.propose(
                 agent,
-                ProposeCommand.Edit(PageId.require(outId), outHash, null, edited.toByteArray(), "r"),
+                ProposeCommand.Edit(PageId.require(outId), outHash, null, edited.toByteArray(), "r", root = null),
             )
             val pid = harness.proposalRepository.all().single().id
             val outcome = ctx.proposals.approve(agent, pid)

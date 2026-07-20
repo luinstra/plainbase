@@ -142,6 +142,7 @@ class ProposalAuthzRouteTest : FunSpec({
                             clientTargetPath = null,
                             proposedContent = "x".encodeToByteArray(),
                             rationale = "r",
+                            root = null,
                         ),
                     )
                 }
@@ -256,6 +257,7 @@ private object UnusedMutatingFacade : com.plainbase.domain.service.MutatingFacad
         filename: String,
         bytes: ByteArray,
         hasher: (ByteArray) -> String,
+        expectedRoot: com.plainbase.domain.root.RootName?,
     ) = error("unused")
     override fun rescan(principal: Principal) = error("unused")
     override fun reindex(principal: Principal) = error("unused")
