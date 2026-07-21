@@ -10,6 +10,7 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -173,6 +174,64 @@ class LocalContentStoreExoticFsTest : FunSpec({
             val onDisk = Files.readAllBytes(root.resolve("mutated.md"))
             onDisk shouldBe partial
             onDisk.contentEquals(intended) shouldBe false
+        }
+    }
+
+    test("a racing page create preserves the winning file and cleans up its temporary file") {
+        withTempDir { root ->
+            val winner = "external winner\n".toByteArray()
+            val racingCreate = object : FileAtomics by FileAtomics.Real {
+                override fun createLink(link: Path, existing: Path) {
+                    Files.write(link, winner)
+                    throw FileAlreadyExistsException(link.toString())
+                }
+            }
+            val store = LocalContentStore(root, atomics = racingCreate)
+            val path = TreePath.require("race.md")
+
+            store.createExclusive(path, "losing bytes\n".toByteArray(), hasher) shouldBe CreateResult.Exists(path)
+
+            Files.readAllBytes(root.resolve("race.md")) shouldBe winner
+            residueCount(root) shouldBe 0
+        }
+    }
+
+    test("a racing asset create preserves the winning file and cleans up its temporary file") {
+        withTempDir { root ->
+            Files.createDirectory(root.resolve("page"))
+            val winner = "external asset".toByteArray()
+            val racingCreate = object : FileAtomics by FileAtomics.Real {
+                override fun createLink(link: Path, existing: Path) {
+                    Files.write(link, winner)
+                    throw FileAlreadyExistsException(link.toString())
+                }
+            }
+            val store = LocalContentStore(root, atomics = racingCreate).also { it.scan() }
+            val path = TreePath.require("page/image.png")
+
+            store.writeAssetExclusive(grantForTests(), path, "losing asset".toByteArray(), hasher) shouldBe
+                CreateResult.Exists(path)
+
+            Files.readAllBytes(root.resolve("page/image.png")) shouldBe winner
+            residueCount(root.resolve("page")) shouldBe 0
+        }
+    }
+
+    test("an atomic CAS move failure reports the target as unmutated and cleans up its temporary file") {
+        withTempDir { root ->
+            val original = "original bytes\n".toByteArray()
+            Files.write(root.resolve("page.md"), original)
+            val failingMove = object : FileAtomics by FileAtomics.Real {
+                override fun atomicMove(source: Path, target: Path) = throw IOException("move failed before landing")
+            }
+            val store = LocalContentStore(root, atomics = failingMove).also { it.scan() }
+            val path = TreePath.require("page.md")
+
+            val result = store.compareAndSwapWrite(path, hasher(original), "new bytes\n".toByteArray(), hasher)
+
+            result.shouldBeInstanceOf<CasResult.Unreadable>().targetMutated shouldBe false
+            Files.readAllBytes(root.resolve("page.md")) shouldBe original
+            residueCount(root) shouldBe 0
         }
     }
 })

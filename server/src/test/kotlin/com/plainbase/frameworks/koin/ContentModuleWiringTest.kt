@@ -1,12 +1,16 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import io.kotest.core.spec.style.FunSpec
@@ -86,6 +90,26 @@ class ContentModuleWiringTest : FunSpec({
                 history.enabled shouldBe true
                 history.gateCheck() // does not throw - the object-mode git binary/version probe passes pre-lock
             } finally {
+                app.close()
+            }
+        }
+    }
+
+    test("object mode resolves the lazy DR bundle and the no-op write-history adapter through production wiring") {
+        withTempDataDir { dataDir ->
+            val app = koinApplication {
+                modules(objectConfigModule(dataDir), contentModule, repositoryModule, securityModule, historyModule)
+            }
+            val store = app.koin.get<ObjectContentStore>()
+            val bundleDr = app.koin.get<GitBundleDr>()
+            try {
+                bundleDr.shouldBeInstanceOf<GitBundleDr>()
+
+                val hook = app.koin.get<WriteHistoryHook>()
+                hook.commit(RootName.MAIN, TreePath.require("wiring.md"), "content".toByteArray(), null, null) shouldBe null
+            } finally {
+                bundleDr.close()
+                store.close()
                 app.close()
             }
         }

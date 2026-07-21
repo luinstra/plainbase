@@ -11,6 +11,9 @@ jobs:
   build-test:
     name: Build + test (JVM, universal JAR floor)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +26,17 @@ jobs:
 
       - name: Build (backend + embedded frontend) and run tests
         run: ./gradlew build --console=plain
+
+      - name: Generate Kover XML report
+        run: ./gradlew koverXmlReport --console=plain
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: build/reports/kover/report.xml
+          use_oidc: true
 
       - name: Run full-stack dependency spike on the JVM
         run: ./gradlew :server:run --args="spike" --console=plain

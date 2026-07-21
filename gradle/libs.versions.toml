@@ -20,6 +20,7 @@ junit-platform = "1.10.1"
 node-gradle = "7.1.0"
 spotless = "8.6.0"
 ktlint = "1.8.0"
+kover = "0.9.9"
 kotest = "5.9.1"
 mockk = "1.14.3"
 snakeyaml = "2.4"
@@ -122,3 +123,4 @@ sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-buildtools" }
 node-gradle = { id = "com.github.node-gradle.node", version.ref = "node-gradle" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

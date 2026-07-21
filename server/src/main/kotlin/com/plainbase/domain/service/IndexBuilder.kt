@@ -1215,7 +1215,13 @@ class IndexBuilder(
         val claimed = HashMap<PageId, RootedPath>()
         val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-path = the bind order
         for (scan in scans) {
-            for (draft in scan.drafts) {
+            // Within one root, a valid frontmatter id travels with its page before an unmaterialized
+            // newcomer at the vacated path can reuse the stale id_map row. The sort is stable, so
+            // duplicate frontmatter claims retain path order, and the outer loop preserves root rank.
+            val precedenceOrdered = scan.drafts.sortedBy { draft ->
+                patcher.readIdValue(draft.bytes)?.let(PageId::of) == null
+            }
+            for (draft in precedenceOrdered) {
                 val path = RootedPath(scan.root, draft.file.path)
                 val assignment = identity.resolve(
                     path = path,
@@ -1232,7 +1238,19 @@ class IndexBuilder(
                     ownerOf = { id ->
                         claimed[id]
                             ?: idMap.binding(id)
-                                ?.takeIf { BindingVisibility.isLive(it, witnessed.keys, scannedRoots, registeredRoots, supersession) }
+                                ?.takeIf { binding ->
+                                    BindingVisibility.isLive(
+                                        binding,
+                                        witnessed.keys,
+                                        scannedRoots,
+                                        registeredRoots,
+                                        supersession,
+                                    ) &&
+                                        // A witnessed path that no longer carries this id is path reuse, not
+                                        // the old page still owning the id. An unwitnessed owner remains live
+                                        // and non-supersedable under D16, so absence here must stay fail-closed.
+                                        (witnessed[binding.path]?.let { it.observedId == id } ?: true)
+                                }
                                 ?.path
                             ?: idMap.retired(id)?.path
                     },

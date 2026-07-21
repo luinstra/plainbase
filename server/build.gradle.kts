@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.sqldelight)
     alias(libs.plugins.graalvm.native)
     alias(libs.plugins.spotless)
+    alias(libs.plugins.kover)
     application
 }
 
@@ -55,6 +56,14 @@ application {
     // JEP 472 (JDK 24+) warns on restricted native access unless granted; this carries the grant
     // on the `run`/installDist launchers. The native image bakes the same grant in via buildArgs.
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+kover {
+    currentProject {
+        sources {
+            includedSourceSets.add("main")
+        }
+    }
 }
 
 // Native-smoke tests live in their own source set so the native test image's classpath carries NO

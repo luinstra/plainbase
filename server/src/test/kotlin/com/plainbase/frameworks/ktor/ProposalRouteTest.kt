@@ -13,6 +13,7 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -111,6 +112,118 @@ class ProposalRouteTest : FunSpec({
                 }
                 created.status shouldBe HttpStatusCode.Created
                 created.body().getValue("unified_diff").jsonPrimitive.content shouldContain "+# New"
+            }
+        }
+    }
+
+    test("proposal writes reject the wrong media type and malformed UTF-8 without persisting") {
+        withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
+            restTest(root) {
+                val wrongType = client.post("/api/v1/changes") {
+                    contentType(ContentType.Text.Plain)
+                    setBody("{}")
+                }
+                wrongType.status shouldBe HttpStatusCode.UnsupportedMediaType
+                wrongType.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "unsupported_media_type"
+
+                val malformedUtf8 = client.post("/api/v1/changes") {
+                    header("Content-Type", "application/json")
+                    setBody(byteArrayOf(0x7B, 0x22, 0xFF.toByte(), 0x22, 0x7D))
+                }
+                malformedUtf8.status shouldBe HttpStatusCode.BadRequest
+                malformedUtf8.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "invalid_propose_request"
+
+                client.get("/api/v1/changes").body().getValue("proposals").jsonArray.size shouldBe 0
+            }
+        }
+    }
+
+    test("decision routes reject non-canonical proposal ids before invoking proposal state transitions") {
+        withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
+            restTest(root) {
+                suspend fun assertInvalid(response: HttpResponse) {
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    response.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                        "invalid_propose_request"
+                }
+
+                assertInvalid(client.get("/api/v1/changes/not-a-uuid"))
+                assertInvalid(client.post("/api/v1/changes/not-a-uuid/approve"))
+                assertInvalid(client.post("/api/v1/changes/not-a-uuid/rebase"))
+                assertInvalid(
+                    client.post("/api/v1/changes/not-a-uuid/reject") {
+                        contentType(json)
+                        setBody("{}")
+                    },
+                )
+            }
+        }
+    }
+
+    test("reject requires JSON and rejects a malformed body") {
+        withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
+            restTest(root) {
+                val id = "01900000-0000-7000-9000-000000000099"
+                val wrongType = client.post("/api/v1/changes/$id/reject") {
+                    contentType(ContentType.Text.Plain)
+                    setBody("{}")
+                }
+                wrongType.status shouldBe HttpStatusCode.UnsupportedMediaType
+
+                val malformed = client.post("/api/v1/changes/$id/reject") {
+                    contentType(json)
+                    setBody("{")
+                }
+                malformed.status shouldBe HttpStatusCode.BadRequest
+                malformed.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "invalid_propose_request"
+            }
+        }
+    }
+
+    test("decision routes expose the terminal-state matrix and cap reject bodies") {
+        withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
+            restTest(root) { harness ->
+                val (pageId, hash) = page("doc")
+                val proposalId = client.post("/api/v1/changes") {
+                    contentType(json)
+                    setBody(proposeEdit(pageId, hash, "---\ntitle: Doc\n---\n\n# Changed\n"))
+                }.body().getValue("id").jsonPrimitive.content
+
+                val pendingRebase = client.post("/api/v1/changes/$proposalId/rebase")
+                pendingRebase.status shouldBe HttpStatusCode.Conflict
+                pendingRebase.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "not_conflicted"
+
+                client.post("/api/v1/changes/$proposalId/reject") {
+                    contentType(json)
+                    setBody("{}")
+                }.status shouldBe HttpStatusCode.OK
+                val terminalApprove = client.post("/api/v1/changes/$proposalId/approve")
+                terminalApprove.status shouldBe HttpStatusCode.Conflict
+                terminalApprove.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "not_pending"
+
+                val unknownId = "01900000-0000-7000-9000-000000000099"
+                for (response in listOf(
+                    client.get("/api/v1/changes/$unknownId"),
+                    client.post("/api/v1/changes/$unknownId/approve"),
+                    client.post("/api/v1/changes/$unknownId/rebase"),
+                )) {
+                    response.status shouldBe HttpStatusCode.NotFound
+                    response.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                        "not_found"
+                }
+
+                val oversizedReject = client.post("/api/v1/changes/$unknownId/reject") {
+                    contentType(json)
+                    setBody(ByteArray((harness.services.maxWriteBodyBytes + 1).toInt()) { 'x'.code.toByte() })
+                }
+                oversizedReject.status shouldBe HttpStatusCode.PayloadTooLarge
+                oversizedReject.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "body_too_large"
             }
         }
     }

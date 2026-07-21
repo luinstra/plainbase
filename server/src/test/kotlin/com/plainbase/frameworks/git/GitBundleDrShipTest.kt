@@ -344,6 +344,41 @@ class GitBundleDrShipTest : FunSpec({
             }
         }
     }
+
+    test("best-effort shipping contains an out-of-memory transfer failure and schedules one retry") {
+        HybridFixture().use { hybrid ->
+            withHarness { gitHomeDir, tmpDir, sentinelPath ->
+                val exec = GitExecutor(workTree = hybrid.mirrorRoot, home = gitHomeDir)
+                providerFor(exec, hybrid, gitHomeDir).commit(TreePath.require("seed.md"), "seed".toByteArray())
+                var armedDelay: Long? = null
+                var armedAction: (() -> Unit)? = null
+                val fakeAlarm = RebuildScheduler.Alarm { delayMillis, action ->
+                    armedDelay = delayMillis
+                    armedAction = action
+                }
+                val bundleDr = GitBundleDr(
+                    exec = exec,
+                    objectStore = hybrid.store,
+                    mirrorRoot = hybrid.mirrorRoot,
+                    tmpDir = tmpDir,
+                    sentinelPath = sentinelPath,
+                    identity = testIdentity(),
+                    clock = fixedClock(),
+                    repoPath = { path -> hybrid.mirror.resolveRepoRelativePath(path) },
+                    gitHome = gitHomeDir,
+                    locks = GitRepoLocks(),
+                    alarm = fakeAlarm,
+                )
+                hybrid.fake.onNetworkOp = { throw OutOfMemoryError("simulated heap pressure") }
+
+                bundleDr.shipBestEffort()
+
+                armedDelay shouldBe GitBundleDr.SHIP_MAX_LATENCY_MILLIS
+                armedAction.shouldNotBeNull()
+                Files.exists(tmpDir.resolve("history.bundle")) shouldBe false
+            }
+        }
+    }
 })
 
 private fun providerFor(

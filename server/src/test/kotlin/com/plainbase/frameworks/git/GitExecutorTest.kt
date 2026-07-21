@@ -10,6 +10,8 @@ import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.measureTime
 
 /**
@@ -185,6 +187,52 @@ class GitExecutorTest : FunSpec({
             }
             // timeout (2s) + drain grace (2s) + slack — far under any unbounded-join hang (the child sleeps 60s).
             elapsed.inWholeSeconds shouldBeLessThan 10L
+        }
+    }
+
+    test("interrupting the caller kills the entire git process tree and restores its interrupt flag") {
+        withFakeGit(
+            "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\nsleep 60 &\necho ${'$'}! > \"${'$'}HOME/child.pid\"\nwait\n",
+        ) { root, home, git ->
+            val result = AtomicReference<GitResult?>()
+            val failure = AtomicReference<Throwable?>()
+            val interruptRestored = AtomicBoolean(false)
+            val worker = Thread {
+                try {
+                    result.set(GitExecutor(workTree = root, home = home, timeoutSeconds = 30, gitBinary = git).run(listOf("gc")))
+                    interruptRestored.set(Thread.currentThread().isInterrupted)
+                } catch (t: Throwable) {
+                    failure.set(t)
+                }
+            }
+
+            worker.start()
+            try {
+                val childPidFile = home.resolve("child.pid")
+                val deadline = System.nanoTime() + 5_000_000_000L
+                while (Files.notExists(childPidFile) && System.nanoTime() < deadline) Thread.sleep(10)
+                Files.exists(childPidFile) shouldBe true
+                val parentPid = Files.readString(home.resolve("parent.pid")).trim().toLong()
+                val childPid = Files.readString(childPidFile).trim().toLong()
+
+                worker.interrupt()
+                worker.join(10_000)
+
+                worker.isAlive shouldBe false
+                failure.get() shouldBe null
+                val interruptedResult = result.get()
+                interruptedResult shouldNotBe null
+                interruptedResult!!.exitCode shouldBe -1
+                interruptedResult.stderr shouldContain "interrupted and was force-killed"
+                interruptRestored.get() shouldBe true
+                ProcessHandle.of(parentPid).map { it.isAlive }.orElse(false) shouldBe false
+                ProcessHandle.of(childPid).map { it.isAlive }.orElse(false) shouldBe false
+            } finally {
+                if (worker.isAlive) {
+                    worker.interrupt()
+                    worker.join(10_000)
+                }
+            }
         }
     }
 })
