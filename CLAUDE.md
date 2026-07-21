@@ -104,3 +104,9 @@ Both escalations are crew-native — **`/octo` is retired; never invoke or recom
 
 The owner can say "always debate"/"always review" to make either automatic. **When a debate or
 review finds a hole the spec missed, widen the spec AND its tests — not just the code.**
+
+**Never assert "test X pins / flips / stays green under change Y" from a line citation or memory — TRACE it
+(walk the real resolver + assertion) or RUN it.** In three multi-root debate rounds this exact claim-shape was
+loose four separate times, always from citing a prose model of the test file instead of reading it. A line
+number is not a trace. Re-pinning a deliberately-flipped test is RED-first, one rule at a time — doubly so around
+a test that encodes a past crash.
