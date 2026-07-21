@@ -958,4 +958,43 @@ class ProposalServiceTest : FunSpec({
         svc.reconcileApplying()
         repo.findById(id)!!.status shouldBe ProposalStatus.APPLIED
     }
+
+    test("reconcileApplying never rewrites a durable row when its root cannot supply trustworthy evidence") {
+        data class UnavailableCase(
+            val clue: String,
+            val status: RootStatus,
+            val rootDown: Boolean = false,
+            val absenceUnverified: Boolean = false,
+        )
+
+        listOf(
+            UnavailableCase("the row names a detached root", RootStatus.DETACHED),
+            UnavailableCase("the row names an unavailable root", RootStatus.UNAVAILABLE),
+            UnavailableCase("the root disappears after the status check", RootStatus.AVAILABLE, rootDown = true),
+            UnavailableCase("the page remains bound but its bytes are missing", RootStatus.AVAILABLE, absenceUnverified = true),
+        ).forEach { case ->
+            withClue(case.clue) {
+                val reader = FakeReader(
+                    pathById = mapOf(pageId to path),
+                    bytesByPath = mapOf(path to proposed),
+                    rootDownPaths = if (case.rootDown) setOf(path) else emptySet(),
+                    unverifiedPaths = if (case.absenceUnverified) setOf(path) else emptySet(),
+                )
+                val repo = MemRepo()
+                val svc = ProposalService(
+                    repo,
+                    citations,
+                    reader,
+                    TestProposalIdProvider(),
+                    clock,
+                    rootStatus = { case.status },
+                )
+                val id = insertApplying(repo, proposed)
+
+                svc.reconcileApplying()
+
+                repo.findById(id)!!.status shouldBe ProposalStatus.APPLYING
+            }
+        }
+    }
 })

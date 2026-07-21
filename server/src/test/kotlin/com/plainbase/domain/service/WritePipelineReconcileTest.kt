@@ -1,11 +1,14 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -167,6 +170,53 @@ class WritePipelineReconcileTest : FunSpec({
                 val remaining = harness.dirtyPages.all()
                 remaining.map { it.pageId }.toSet() shouldBe setOf(drift.id) // match cleared, drift left
                 harness.builder.current.byId.getValue(match.id).contentHash shouldBe citations.contentHash(matchOnDisk)
+            }
+        }
+    }
+
+    test("reconcile keeps the recovery row when the root disappears under its classified read") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+                val real = LocalContentStore(root).also { it.scan() }
+                val vanishing = object : ContentStore by real {
+                    override fun readClassified(path: TreePath): StoreRead = StoreRead.RootDown
+                }
+
+                harness.writePipeline(store = vanishing).reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().pageId shouldBe page.id
+            }
+        }
+    }
+
+    test("reconcile keeps the recovery row when a post-read recovery step fails") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+                val real = LocalContentStore(root).also { it.scan() }
+                val pipeline = harness.writePipeline(
+                    store = real,
+                    historyHook = { _, _, _, _, _ -> error("recovery commit failed") },
+                )
+
+                pipeline.reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().pageId shouldBe page.id
             }
         }
     }
