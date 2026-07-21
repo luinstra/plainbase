@@ -149,6 +149,12 @@ jobs:
           done
           test "$ok" = "1"
           curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          docker logs plainbase-smoke >plainbase-smoke.log 2>&1
+          test -s plainbase-smoke.log
+          while IFS= read -r line; do
+            test -z "$line" || printf '%s\n' "$line" | jq -e . >/dev/null
+          done <plainbase-smoke.log
+          grep -q 'PLAINBASE_INSECURE_HTTP' plainbase-smoke.log
           docker rm -f plainbase-smoke
 
       # C1c: a published-port connection enters the container from the bridge gateway — a REAL

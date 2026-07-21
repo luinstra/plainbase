@@ -1,0 +1,12 @@
+<configuration>
+    <appender name="STDERR_JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder class="ch.qos.logback.classic.encoder.JsonEncoder"/>
+    </appender>
+
+    <root level="${PLAINBASE_LOG_LEVEL:-INFO}">
+        <appender-ref ref="STDERR_JSON"/>
+    </root>
+
+    <logger name="io.modelcontextprotocol" level="WARN"/>
+</configuration>

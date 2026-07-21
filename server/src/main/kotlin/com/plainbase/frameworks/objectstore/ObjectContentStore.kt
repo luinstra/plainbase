@@ -537,7 +537,7 @@ class ObjectContentStore(
      *
      * The first LIST doubles as the R16 fail-closed TLS/signature self-check: a TLS-, signature-, or
      * connect-rejected LIST throws the operator-actionable refusal the caller surfaces via the
-     * System.err + exit(1) idiom. There is no degraded boot and no trust-all retry.
+     * deterministic stderr channel + exit(1) idiom. There is no degraded boot and no trust-all retry.
      *
      * The delete-absent step EXCLUDES [dirtyPaths] - and that is safe for a load-bearing REASON, not
      * luck: `WritePipeline.write` marks the page dirty BEFORE calling `compareAndSwapWrite`

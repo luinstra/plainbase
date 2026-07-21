@@ -66,7 +66,8 @@ object RootCommand {
     private const val LOCK_WAIT_MILLIS = 5_000L
     private const val LOCK_POLL_MILLIS = 50L
 
-    fun runAsMain(args: List<String>): Int = run(args, System.getenv())
+    fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int =
+        run(args, System.getenv(), output)
 
     /**
      * The [runAsMain] body, over an injected [env].
@@ -76,27 +77,31 @@ object RootCommand {
      * `admin` use, and correct for them, because none of them writes config) would hand it a snapshot taken
      * BEFORE the lock, which is precisely the check-then-act this design exists to eliminate.
      *
-     * The catch is `reindex`/`adopt`'s, verbatim: an UNEXPECTED failure is a diagnostic (the facade, never
-     * `println`) and exit 1, not a stack trace dumped at an operator. This is the first tool in the codebase that
+     * The catch is `reindex`/`adopt`'s, verbatim: an UNEXPECTED failure is a diagnostic through the facade and
+     * exit 1, not a stack trace dumped at an operator. This is the first tool in the codebase that
      * writes an operator's config file, and it does not get to be the one that greets them with a JVM trace - the
      * realistic path being a control character in a `--force`'d path, which `hoconQuote` refuses by design.
      */
-    fun run(args: List<String>, env: Map<String, String>): Int =
+    fun run(
+        args: List<String>,
+        env: Map<String, String>,
+        output: CommandOutput = systemCommandOutput(),
+    ): Int =
         try {
-            execute(args, env)
+            execute(args, env, output)
         } catch (e: Exception) {
             logger.error(e) { "root failed" }
             1
         }
 
-    private fun execute(args: List<String>, env: Map<String, String>): Int {
+    private fun execute(args: List<String>, env: Map<String, String>, output: CommandOutput): Int {
         // PRE-LOCK: pure argument parsing. It reads no config, touches no filesystem and decides nothing about
         // the topology - so there is nothing to carry across the lock boundary, and no check out here has any
         // authority. (A "validate, then lock, then re-check the NAME" protocol is a check-then-act with a window
         // exactly wide enough: two individually-valid adds whose paths NEST compose into a topology that nothing
         // ever validated, because the lock windows never overlap and a name check is not a topology check.)
-        val request = parse(args) ?: return USAGE_EXIT
-        if (request is RootArgs.List) return list(env)
+        val request = parse(args, output) ?: return USAGE_EXIT
+        if (request is RootArgs.List) return list(env, output)
 
         // The ONLY pre-lock state read, and it reads no config FILE: DATA_DIR LOCATES every config file and so is
         // the one field that can never come from one - it is resolved from env/default, never file-derived. This
@@ -105,7 +110,7 @@ object RootCommand {
         val dataDir = PlainbaseConfig.dataDirFrom(env)
         val lock = awaitRootsLock(dataDir)
         if (lock == null) {
-            System.err.println(
+            output.error(
                 "root: another `plainbase root` command is holding ${dataDir.resolve(DataDirLock.ROOTS_LOCK_FILE_NAME)}",
             )
             return 1
@@ -115,19 +120,19 @@ object RootCommand {
             // of the config, ONE snapshot: the managed roots come off it, never from a second parse of roots.conf
             // (which `root add` replaces atomically, so two reads of it are two observations of a changing file
             // rather than one observation of it).
-            val config = load("root", env) ?: return@use 1
+            val config = load("root", env, output) ?: return@use 1
             val managed = config.roots.list.filter { it.name in config.roots.managed }
             when (request) {
-                is RootArgs.Add -> add(config, env, managed, request)
-                is RootArgs.Remove -> remove(config, env, managed, request)
+                is RootArgs.Add -> add(config, env, managed, request, output)
+                is RootArgs.Remove -> remove(config, env, managed, request, output)
                 RootArgs.List -> error("unreachable: list never takes the lock")
             }
         }
     }
 
     /** The config as it stands, through the loader's own error funnel (a clean `<command>: <msg>` line + null). */
-    private fun load(command: String, env: Map<String, String>): PlainbaseConfig? =
-        PlainbaseConfig.loadForCommand(command, resolve = { PlainbaseConfig.fromEnvAndFile(env) })
+    private fun load(command: String, env: Map<String, String>, output: CommandOutput): PlainbaseConfig? =
+        PlainbaseConfig.loadForCommand(command, output::error, resolve = { PlainbaseConfig.fromEnvAndFile(env) })
 
     /**
      * `root add <name> <path>`. A refusal writes NO CONFIG, and under this ordering that is structural rather
@@ -138,7 +143,13 @@ object RootCommand {
      * because that is what an advisory lock IS. The guarantee is about the ARTIFACT - on a refusal, no candidate
      * bytes and no `roots.conf` bytes reach disk.)
      */
-    private fun add(config: PlainbaseConfig, env: Map<String, String>, managed: List<Root>, request: RootArgs.Add): Int {
+    private fun add(
+        config: PlainbaseConfig,
+        env: Map<String, String>,
+        managed: List<Root>,
+        request: RootArgs.Add,
+        output: CommandOutput,
+    ): Int {
         // CLI-OWNED, and scoped to the MANAGED set on purpose. Boot has no opinion on re-adding a name this file
         // already holds: HOCON would field-merge the two entries and silently repoint the path, so the gate would
         // happily pass a config that quietly changed where a root points. Idempotence is NOT silently re-adding -
@@ -149,7 +160,7 @@ object RootCommand {
         // message. One rule, one home, one message - and a hand-written duplicate of it here would FAIL
         // RootCommandTest rather than pass it.
         managed.firstOrNull { it.name == request.name }?.let { existing ->
-            System.err.println("root add: root '${request.name.value}' already exists (path: ${existing.localPath})")
+            output.error("root add: root '${request.name.value}' already exists (path: ${existing.localPath})")
             return 1
         }
         // Never store a relative path: the server's CWD is not the operator's, and the DECLARED path is what gets
@@ -166,7 +177,7 @@ object RootCommand {
         // against every incumbent. `root add` is an operator convenience and it must not be able to take a page
         // id away from a root that was already serving it. (Never rebuild the list as `listOf(main) + extras +
         // new` - that hoist forces main to rank 0 and silently reassigns every shared id to main's page.)
-        val hocon = gate(config, env, "add", managed + newRoot) ?: return 1
+        val hocon = gate(config, env, "add", managed + newRoot, output) ?: return 1
 
         // CLI-OWNED, and the ONE place this command is deliberately STRICTER than boot (boot only WARNs, per
         // ADR-0011 D3's accepted tradeoff - a refusal there would let an author creating a top-level folder
@@ -176,7 +187,7 @@ object RootCommand {
         if (!request.force) {
             when (val shadow = shadowScan(config, request.name)) {
                 is Shadow.Segments -> {
-                    System.err.println(
+                    output.error(
                         "root add: '${request.name.value}' is already a top-level segment of the main root " +
                             "(${shadow.paths.joinToString(", ")}). Adding it would silently re-point every circulating " +
                             "link through /docs/${request.name.value}/... into the NEW root - main's own entries under " +
@@ -195,7 +206,7 @@ object RootCommand {
                 // walk comes back SHORT rather than failing - and a short walk that called itself complete would report
                 // "shadows nothing" from a tree it never read.
                 Shadow.MainDown, Shadow.Incomplete -> {
-                    System.err.println(
+                    output.error(
                         "root add: the main root at ${config.roots.main.localPath} is not readable right now, so the " +
                             "shadow check cannot run and this add would be accepted BLIND. Restore the path (a missing " +
                             "mount, a permission drop), or pass --force to add without the check.",
@@ -205,7 +216,7 @@ object RootCommand {
                 // Fail CLOSED for the SAME reason, one page down: an absence this scan cannot verify never becomes a
                 // fact (C1), and here the fact it would silently become is "that page's slug shadows nothing".
                 is Shadow.Unverified -> {
-                    System.err.println(
+                    output.error(
                         "root add: main's page ${shadow.path} was listed by the scan and could not be read, so the shadow " +
                             "check ran against a view that is not main and would be accepted on incomplete evidence. " +
                             "Re-run (it self-heals if the page was simply being written), or pass --force to add without " +
@@ -218,32 +229,38 @@ object RootCommand {
         }
         // An add always leaves at least one managed root, so the delete arm `remove` needs cannot arise here.
         ManagedRootsFile.writeAtomically(config.managedRootsPath, requireNotNull(hocon.text))
-        println(
+        output.result(
             "added root '${request.name.value}' -> $path " +
                 "(editable = ${request.editable}, history = ${request.history.name.lowercase()})",
         )
-        println("written to ${config.managedRootsPath}")
-        println("restart the server to apply.")
+        output.result("written to ${config.managedRootsPath}")
+        output.result("restart the server to apply.")
         return 0
     }
 
     /** `root remove <name>` - same lock, same gate, same one policy. */
-    private fun remove(config: PlainbaseConfig, env: Map<String, String>, managed: List<Root>, request: RootArgs.Remove): Int {
+    private fun remove(
+        config: PlainbaseConfig,
+        env: Map<String, String>,
+        managed: List<Root>,
+        request: RootArgs.Remove,
+        output: CommandOutput,
+    ): Int {
         // CLI-OWNED, both of them. The second is less a policy than an honest admission: this command cannot
         // edit plainbase.conf, and pretending otherwise would mean corrupting an operator's hand-written file.
         if (config.roots.list.none { it.name == request.name }) {
-            System.err.println("root remove: no such root '${request.name.value}'")
+            output.error("root remove: no such root '${request.name.value}'")
             return 1
         }
         if (request.name !in config.roots.managed) {
-            System.err.println(
+            output.error(
                 "root remove: root '${request.name.value}' is declared in plainbase.conf, which `plainbase root` never " +
                     "writes - remove it there yourself.",
             )
             return 1
         }
         // A FILTER, which preserves the survivors' relative order and so preserves Invariant R.
-        val hocon = gate(config, env, "remove", managed.filterNot { it.name == request.name }) ?: return 1
+        val hocon = gate(config, env, "remove", managed.filterNot { it.name == request.name }, output) ?: return 1
         // Removing the LAST managed root DELETES roots.conf rather than leaving an empty `roots {}` husk: that
         // returns the install to byte-identical legacy behavior instead of stranding it in the strict EXPLICIT
         // matrix over a file with nothing in it. The gate already ran over the artifact the DELETE actually
@@ -251,25 +268,25 @@ object RootCommand {
         // promoting it means unlinking a file.
         if (hocon.text == null) {
             ManagedRootsFile.delete(config.managedRootsPath)
-            println("removed root '${request.name.value}' (the last CLI-managed root; ${config.managedRootsPath} deleted)")
+            output.result("removed root '${request.name.value}' (the last CLI-managed root; ${config.managedRootsPath} deleted)")
         } else {
             ManagedRootsFile.writeAtomically(config.managedRootsPath, hocon.text)
-            println("removed root '${request.name.value}' from ${config.managedRootsPath}")
+            output.result("removed root '${request.name.value}' from ${config.managedRootsPath}")
         }
         // The consequences this command is legally obliged to name. The middle one is the boot refusal the gate
         // structurally CANNOT evaluate - it reads the app DB, which may not be opened without the DATA_DIR lock,
         // and this command deliberately does not take it - so it is PRINTED instead. A silent exclusion is how an
         // operator meets an unexplained refusal on their next restart.
-        println("restart the server to apply. Then:")
-        println(
+        output.result("restart the server to apply. Then:")
+        output.result(
             "  - its pages keep their id_map / url_alias / page_checkpoint rows and become DETACHED; re-adding the " +
                 "same name revives them, subject to the ADR-0011 D2 supersede rules.",
         )
-        println(
+        output.result(
             "  - IF THAT ROOT HELD EVERY PAGE BINDING IN THIS DATA_DIR, THE NEXT BOOT WILL REFUSE TO SERVE - it reads " +
                 "as a DATA_DIR belonging to a different deployment. Re-add the root, or follow that refusal's remedy.",
         )
-        println(
+        output.result(
             "  - re-adding it later APPENDS its rank, so it would then LOSE any cross-root duplicate-id contest it " +
                 "wins today (remove + add is the documented rename path).",
         )
@@ -290,8 +307,8 @@ object RootCommand {
      * separate process cannot know it. The on-disk probe is what THIS process can see; `/healthz` is what the
      * server knows.
      */
-    private fun list(env: Map<String, String>): Int {
-        val config = load("root list", env) ?: return 1
+    private fun list(env: Map<String, String>, output: CommandOutput): Int {
+        val config = load("root list", env, output) ?: return 1
         val headers = listOf("NAME", "PATH", "WRITES", "HISTORY", "DECLARED IN", "ON DISK")
         val rows = config.roots.list.map { root ->
             val path = root.localPath
@@ -306,11 +323,11 @@ object RootCommand {
         }
         val widths = headers.indices.map { column -> (rows + listOf(headers)).maxOf { it[column].length } }
         (listOf(headers) + rows).forEach { row ->
-            println(row.mapIndexed { column, cell -> cell.padEnd(widths[column]) }.joinToString("  ").trimEnd())
+            output.result(row.mapIndexed { column, cell -> cell.padEnd(widths[column]) }.joinToString("  ").trimEnd())
         }
-        println()
-        println("`ON DISK` is what this process can see right now - it is NOT serving state.")
-        println("For live per-root availability, ask the running server: GET http://${config.host}:${config.port}/healthz")
+        output.result()
+        output.result("`ON DISK` is what this process can see right now - it is NOT serving state.")
+        output.result("For live per-root availability, ask the running server: GET http://${config.host}:${config.port}/healthz")
         return 0
     }
 
@@ -367,10 +384,17 @@ object RootCommand {
      * fault differently, so a string diff would call a pre-existing DATA_DIR collision NEW and refuse an add
      * that introduced nothing - trapping exactly the operator this policy exists to protect.
      */
-    private fun gate(config: PlainbaseConfig, env: Map<String, String>, verb: String, candidateRoots: List<Root>): Artifact? {
+    private fun gate(
+        config: PlainbaseConfig,
+        env: Map<String, String>,
+        verb: String,
+        candidateRoots: List<Root>,
+        output: CommandOutput,
+    ): Artifact? {
         val text = if (candidateRoots.isEmpty()) null else ManagedRootsFile.serialize(candidateRoots)
         val candidate = PlainbaseConfig.loadForCommand(
             "root $verb",
+            output::error,
             resolve = { PlainbaseConfig.fromEnvAndCandidateRoots(text, env) },
         ) ?: return null
         val candidateRefusals = bootGateFor(candidate).refusals
@@ -378,21 +402,21 @@ object RootCommand {
 
         val introduced = candidateRefusals.filterNot { it.key in baselineKeys }
         if (introduced.isNotEmpty()) {
-            introduced.forEach { System.err.println("root $verb: ${it.message}") }
+            introduced.forEach { output.error("root $verb: ${it.message}") }
             return null // NOTHING was written
         }
         // Pre-existing refusals are the operator's, not ours. Say so, loudly, and carry on. stderr rather than
         // the logging facade because this is the command's operator-facing contract, on the same channel as the
         // refusals above - a warning an operator does not see is not a warning.
         candidateRefusals.forEach {
-            System.err.println("root $verb: WARNING: this config already refuses to boot, and this command did not cause it: ${it.message}")
+            output.error("root $verb: WARNING: this config already refuses to boot, and this command did not cause it: ${it.message}")
         }
         // The other half of what boot SAYS about a topology, and it is not optional: a mistyped path is not a
         // refusal (an extra root may legitimately be an unmounted volume), so a `root add notes /srv/dosc` that
         // printed only refusals would exit 0 with nothing but cheerful news about a root that will 503. `serve`
         // prints these; a CLI that validated half the server's surface would be back to keeping its own list of
         // which half matters.
-        candidate.rootsWarnings().forEach { System.err.println("root $verb: WARNING: $it") }
+        candidate.rootsWarnings().forEach { output.error("root $verb: WARNING: $it") }
         return Artifact(text)
     }
 
@@ -496,12 +520,12 @@ object RootCommand {
         }
     }
 
-    private fun parse(argv: List<String>): RootArgs? {
+    private fun parse(argv: List<String>, output: CommandOutput): RootArgs? {
         val request = when (argv.firstOrNull()) {
-            "add" -> parseAdd(argv.drop(1))
-            "remove" -> parseRemove(argv.drop(1))
-            "list" -> if (argv.size == 1) RootArgs.List else usage()
-            else -> usage()
+            "add" -> parseAdd(argv.drop(1), output)
+            "remove" -> parseRemove(argv.drop(1), output)
+            "list" -> if (argv.size == 1) RootArgs.List else usage(output)
+            else -> usage(output)
         } ?: return null
         // D-C5-2, and it is the ONE main-by-name comparison in this file (ledgered in RootWiringArchitectureTest).
         // Main's protection is STRUCTURAL everywhere else - no code path here can write main's name into any file
@@ -509,7 +533,7 @@ object RootCommand {
         // shared by both mutating verbs.
         val mutating = request as? RootArgs.Mutating
         if (mutating != null && mutating.name == RootName.MAIN) {
-            System.err.println(
+            output.error(
                 "root: 'main' is never CLI-managed. Its directory comes from CONTENT_DIR, or from a roots {} block you " +
                     "wrote yourself in plainbase.conf - freezing the CONTENT_DIR value one command happened to see " +
                     "would silently repoint main on every container that boots with a different one.",
@@ -519,7 +543,7 @@ object RootCommand {
         return request
     }
 
-    private fun parseAdd(argv: List<String>): RootArgs? {
+    private fun parseAdd(argv: List<String>, output: CommandOutput): RootArgs? {
         val positional = mutableListOf<String>()
         var editable = false
         var force = false
@@ -537,7 +561,7 @@ object RootCommand {
                         "off" -> HistoryMode.OFF
                         "native" -> HistoryMode.NATIVE
                         else -> {
-                            System.err.println("root add: --history accepts off|native (got '${raw.orEmpty()}')")
+                            output.error("root add: --history accepts off|native (got '${raw.orEmpty()}')")
                             return null
                         }
                     }
@@ -545,7 +569,7 @@ object RootCommand {
                 }
                 else -> {
                     if (token.startsWith("--")) {
-                        System.err.println("root add: unknown flag '$token'")
+                        output.error("root add: unknown flag '$token'")
                         return null
                     }
                     positional += token
@@ -553,9 +577,9 @@ object RootCommand {
             }
             index++
         }
-        if (positional.size != 2) return usage()
+        if (positional.size != 2) return usage(output)
         val name = RootName.of(positional[0]) ?: run {
-            System.err.println("root add: '${positional[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
+            output.error("root add: '${positional[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
             return null
         }
         // BLANK is refused HERE, before anything absolutizes it - the loader's identical guard cannot save us,
@@ -564,23 +588,23 @@ object RootCommand {
         // serve and index whatever the CLI happened to be run from (under systemd, `/`) - and, with --editable,
         // hand an agent write access to it.
         val path = positional[1].takeIf { it.isNotBlank() } ?: run {
-            System.err.println("root add: the path is empty - an unset shell variable expands to nothing, and the CWD is not a root")
-            return usage()
+            output.error("root add: the path is empty - an unset shell variable expands to nothing, and the CWD is not a root")
+            return usage(output)
         }
         return RootArgs.Add(name = name, path = path, editable = editable, history = history, force = force)
     }
 
-    private fun parseRemove(argv: List<String>): RootArgs? {
-        if (argv.size != 1) return usage()
+    private fun parseRemove(argv: List<String>, output: CommandOutput): RootArgs? {
+        if (argv.size != 1) return usage(output)
         val name = RootName.of(argv[0]) ?: run {
-            System.err.println("root remove: '${argv[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
+            output.error("root remove: '${argv[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
             return null
         }
         return RootArgs.Remove(name)
     }
 
-    private fun usage(): RootArgs? {
-        System.err.println(USAGE)
+    private fun usage(output: CommandOutput): RootArgs? {
+        output.error(USAGE)
         return null
     }
 }

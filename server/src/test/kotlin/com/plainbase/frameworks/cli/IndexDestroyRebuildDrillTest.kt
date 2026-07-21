@@ -14,8 +14,6 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -40,7 +38,7 @@ class IndexDestroyRebuildDrillTest : FunSpec({
     test("destroy search.db, recover via `plainbase reindex`: hashes, ordered answers, and the summary count all match") {
         withDrillTree { config ->
             // Build the pre-disaster install: both DBs file-backed, populated through the real CLI graph.
-            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
+            captureStdout { ReindexCommand.run(emptyList(), config, CommandOutputCapture.current) shouldBe 0 }
             val before: List<ReindexEquivalence.QueryAnswer>
             val beforeState: Map<RootedPageId, PageSearchState>
             SearchDb(config.searchDatabasePath).use { db ->
@@ -58,7 +56,7 @@ class IndexDestroyRebuildDrillTest : FunSpec({
             Files.notExists(config.searchDatabasePath) shouldBe true
             Files.exists(config.appDatabasePath) shouldBe true
 
-            val out = captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
+            val out = captureStdout { ReindexCommand.run(emptyList(), config, CommandOutputCapture.current) shouldBe 0 }
             out.lineSequence().toList() shouldContain
                 "reindex: rebuilt the search index for $PAGE_COUNT page(s) under ${config.contentDir}"
 
@@ -106,14 +104,4 @@ private fun deleteIndexFiles(dataDir: Path) {
     listOf("search.db", "search.db-wal", "search.db-shm").forEach { Files.deleteIfExists(dataDir.resolve(it)) }
 }
 
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)

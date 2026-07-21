@@ -6,8 +6,6 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -41,15 +39,7 @@ class AdminCommandLockTest : FunSpec({
         }
     }
 
-    fun silently(block: () -> Int): Int {
-        val prev = System.out
-        System.setOut(PrintStream(ByteArrayOutputStream(), true, Charsets.UTF_8))
-        return try {
-            block()
-        } finally {
-            System.setOut(prev)
-        }
-    }
+    fun quietly(block: (CommandOutput) -> Int): Int = block(CommandOutputFixture().output)
 
     test("mint-token refuses with exit 1 when a server holds the lock, then succeeds once released") {
         withData { data ->
@@ -60,7 +50,7 @@ class AdminCommandLockTest : FunSpec({
             } finally {
                 held.close()
             }
-            silently { AdminCommand.run(listOf("mint-token", "ci"), cfg) } shouldBe 0 // released → mint succeeds
+            quietly { AdminCommand.run(listOf("mint-token", "ci"), cfg, it) } shouldBe 0 // released → mint succeeds
         }
     }
 
@@ -73,7 +63,7 @@ class AdminCommandLockTest : FunSpec({
             } finally {
                 held.close()
             }
-            silently { AdminCommand.run(listOf("grant-role", "builtin", "u1", "admin"), cfg) } shouldBe 0
+            quietly { AdminCommand.run(listOf("grant-role", "builtin", "u1", "admin"), cfg, it) } shouldBe 0
         }
     }
 
@@ -96,9 +86,9 @@ class AdminCommandLockTest : FunSpec({
             AdminCommand.run(listOf("mint-token", "ci", "read-only", "extra"), cfg) shouldBe 2
             AdminCommand.run(listOf("revoke-token", "some-id", "extra"), cfg) shouldBe 2
             // Valid arities still succeed.
-            silently { AdminCommand.run(listOf("mint-token", "ci"), cfg) } shouldBe 0
-            silently { AdminCommand.run(listOf("mint-token", "ci", "commit"), cfg) } shouldBe 0
-            silently { AdminCommand.run(listOf("revoke-token", "some-id"), cfg) } shouldBe 0
+            quietly { AdminCommand.run(listOf("mint-token", "ci"), cfg, it) } shouldBe 0
+            quietly { AdminCommand.run(listOf("mint-token", "ci", "commit"), cfg, it) } shouldBe 0
+            quietly { AdminCommand.run(listOf("revoke-token", "some-id"), cfg, it) } shouldBe 0
         }
     }
 
@@ -112,7 +102,7 @@ class AdminCommandLockTest : FunSpec({
             AdminCommand.run(listOf("grant-role", "proxy", "carol"), cfg) shouldBe 2
             AdminCommand.run(listOf("grant-role", "proxy", "carol", "owner"), cfg) shouldBe 2
 
-            silently { AdminCommand.run(listOf("list-tokens"), cfg) } shouldBe 0
+            quietly { AdminCommand.run(listOf("list-tokens"), cfg, it) } shouldBe 0
         }
     }
 
@@ -121,7 +111,7 @@ class AdminCommandLockTest : FunSpec({
             val cfg = config(data)
 
             AdminCommand.run(listOf("list-tokens", "extra"), cfg) shouldBe 2
-            silently { AdminCommand.run(listOf("list-tokens"), cfg) } shouldBe 0
+            quietly { AdminCommand.run(listOf("list-tokens"), cfg, it) } shouldBe 0
         }
     }
 

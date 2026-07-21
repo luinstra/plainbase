@@ -3,8 +3,6 @@ package com.plainbase.frameworks.cli
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsOrigin
 import org.junit.jupiter.api.Tag
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -38,7 +36,12 @@ class RootCommandNativeTest {
             val rootsConf = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
 
             // ADD
-            val added = captureStdout { assertEquals(0, RootCommand.run(listOf("add", "notes", notes.toString(), "--editable"), env)) }
+            val added = captureStdout {
+                assertEquals(
+                    0,
+                    RootCommand.run(listOf("add", "notes", notes.toString(), "--editable"), env, NativeCommandOutputCapture.current),
+                )
+            }
             assertTrue(Files.exists(rootsConf))
             assertTrue(added.contains(notes.toString()), "the ABSOLUTE path must be printed: $added")
             assertTrue(added.contains("restart the server to apply"))
@@ -49,14 +52,14 @@ class RootCommandNativeTest {
             assertEquals(RootsOrigin.EXPLICIT, afterAdd.origin)
 
             // LIST
-            val listed = captureStdout { assertEquals(0, RootCommand.run(listOf("list"), env)) }
+            val listed = captureStdout { assertEquals(0, RootCommand.run(listOf("list"), env, NativeCommandOutputCapture.current)) }
             assertTrue(listed.contains("notes"), listed)
             assertTrue(listed.contains(PlainbaseConfig.MANAGED_ROOTS_FILE), "provenance must be shown: $listed")
             assertTrue(listed.contains("CONTENT_DIR"), "a synthesized main comes from CONTENT_DIR: $listed")
             assertTrue(listed.contains("/healthz"), "live state is the SERVER's to know: $listed")
 
             // REMOVE - and the file goes with it, returning the install to byte-identical legacy behavior.
-            captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env)) }
+            captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env, NativeCommandOutputCapture.current)) }
             assertFalse(Files.exists(rootsConf))
             assertEquals(RootsOrigin.SYNTHESIZED, PlainbaseConfig.fromEnvAndFile(env).roots.origin)
         } finally {
@@ -88,8 +91,10 @@ class RootCommandNativeTest {
             val before = Files.readAllBytes(conf)
             val env = mapOf("DATA_DIR" to data.toString())
 
-            captureStdout { assertEquals(0, RootCommand.run(listOf("add", "notes", notes.toString()), env)) }
-            captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env)) }
+            captureStdout {
+                assertEquals(0, RootCommand.run(listOf("add", "notes", notes.toString()), env, NativeCommandOutputCapture.current))
+            }
+            captureStdout { assertEquals(0, RootCommand.run(listOf("remove", "notes"), env, NativeCommandOutputCapture.current)) }
 
             assertContentEquals(before, Files.readAllBytes(conf), "`plainbase root` opened plainbase.conf for writing")
         } finally {
@@ -98,14 +103,4 @@ class RootCommandNativeTest {
     }
 }
 
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = NativeCommandOutputCapture.captureStdout(block)

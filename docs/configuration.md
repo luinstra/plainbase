@@ -7,6 +7,20 @@ table for the everyday knobs (`CONTENT_DIR`, `DATA_DIR`, `PLAINBASE_HOST`, `PLAI
 with one exception - `PLAINBASE_LOG_LEVEL`, a logback-level env var - noted below. The one
 file-only key with no env twin is the `roots {}` block (its own section below).
 
+## Logging and command channels
+
+Logging is launcher/backend configuration, not a `PlainbaseConfig` field. Native binaries and local
+JVM distributions use the readable `logback.xml` profile; the container image selects
+`logback-container.xml` before the JVM starts and emits JSON Lines operational logs to stderr.
+`PLAINBASE_LOG_LEVEL` controls either profile. A launcher may override the container default with, for
+example, `PLAINBASE_OPTS=-Dlogback.configurationFile=logback.xml`.
+
+Command results and reports use stdout. One-time token plaintext is written only to that result channel.
+Usage errors and expected refusals use stderr. Operational logs and adoption command events never contain
+token plaintext, credentials, authorization headers, cookies, or signed URLs. The `adopt --write-ids`
+pre-write event is synchronously flushed before mutation; it is plain stdout locally and typed JSON stderr
+in the container, independent of the ordinary log level.
+
 ## Env-wins-over-file, restart-only
 
 Environment variables always win over `DATA_DIR/plainbase.conf` (HOCON, ADR-0009): the file only

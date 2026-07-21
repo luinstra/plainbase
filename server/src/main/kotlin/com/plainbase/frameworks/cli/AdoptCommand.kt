@@ -25,6 +25,7 @@ import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Path
 import kotlin.time.Clock
 
@@ -51,12 +52,12 @@ import kotlin.time.Clock
  * the very state adopt exists to repair. So the remedy is always the same and it is always safe: restore
  * the root (or let the tree settle) and RE-RUN. Adoption is idempotent and deletes nothing.
  *
- * stdout is a CLI output contract (`println` by design, like `spike`): the per-root report, the
- * rule-naming refusal reasons (the §A3 asymmetric-freeze measurement input), and the pre-write
- * intent log (`intent:` lines, emitted BEFORE each file write so an interrupted run is
- * reconcilable). Diagnostics still go through the logging facade.
+ * Reports use the deterministic result channel and refusals use the deterministic error channel. Pre-write
+ * intent is a separate checked event channel, synchronously flushed BEFORE each file write so an interrupted
+ * run is reconcilable. Unexpected failures preserve their throwable through the logging facade.
  */
 object AdoptCommand {
+    private val logger = KotlinLogging.logger {}
 
     /**
      * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf`, exit-code result. Resolves via
@@ -65,15 +66,15 @@ object AdoptCommand {
      * must not get the LOCAL branch here and silently adopt over an ignored CONTENT_DIR while the bucket is
      * the real authority. A bad config (IAE or HOCON) surfaces as the actionable `adopt:` stderr + exit 1.
      */
-    fun runAsMain(args: List<String>): Int {
-        val config = PlainbaseConfig.loadForCommand("adopt") ?: return 1
-        return run(args, config)
+    fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int {
+        val config = PlainbaseConfig.loadForCommand("adopt", output::error) ?: return 1
+        return run(args, config, output)
     }
 
-    fun run(args: List<String>, config: PlainbaseConfig): Int {
+    fun run(args: List<String>, config: PlainbaseConfig, output: CommandOutput = systemCommandOutput()): Int {
         val mode = parseMode(args)
         if (mode == null) {
-            System.err.println(USAGE)
+            output.error(USAGE)
             return 2
         }
 
@@ -82,20 +83,20 @@ object AdoptCommand {
         // preview never falls out of date, yet a fresh tree gains no plainbase.db from a dry run.
         // That same contract is why it stays lock-free below.
         if (mode == AdoptionPass.Mode.PREVIEW) {
-            return adopt(mode, config, DatabaseFactory.createReadOnlyDriver(config.appDatabasePath))
+            return adopt(mode, config, DatabaseFactory.createReadOnlyDriver(config.appDatabasePath), output)
         }
         // RECORD/MATERIALIZE write the db (MATERIALIZE the files too) and trigger createDriver's
         // implicit non-idempotent migrate, so they hold the DataDirLock BEFORE the driver opens,
         // exactly like reindex/admin: never racing or writing underneath a live server.
         val lock = DataDirLock.tryAcquire(config.dataDir)
         if (lock == null) {
-            System.err.println("adopt: a Plainbase server is holding ${config.dataDir}; stop it before running this command")
+            output.error("adopt: a Plainbase server is holding ${config.dataDir}; stop it before running this command")
             return 1
         }
-        return lock.use { adopt(mode, config, DatabaseFactory.createDriver(config.appDatabasePath)) }
+        return lock.use { adopt(mode, config, DatabaseFactory.createDriver(config.appDatabasePath), output) }
     }
 
-    private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver): Int {
+    private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver, output: CommandOutput): Int {
         val registry = RootRegistry.of(config.roots.list)
         val stores = LinkedHashMap<RootName, ContentStore>()
         try {
@@ -135,13 +136,14 @@ object AdoptCommand {
                         try {
                             hybrid.hydrate()
                         } catch (e: Exception) {
-                            System.err.println("adopt: ${e.message}")
+                            logger.error(e) { "adopt hydrate failed" }
+                            output.error("adopt: ${e.message ?: "unexpected failure"}")
                             return 1
                         }
                     }
                 }
             }
-            if (refuseUnavailableRoots(registry, stores)) return 1
+            if (refuseUnavailableRoots(registry, stores, output)) return 1
             val pass = AdoptionPass(
                 sources = stores.map { (root, store) -> AdoptionPass.Source(root, store) },
                 idMap = SqlDelightIdMapRepository(database),
@@ -167,25 +169,36 @@ object AdoptCommand {
             // to another page - durably, in the operator's own tree, by the very command that promises the opposite.
             val plan = try {
                 pass.run(mode) { page, id ->
+                    try {
+                        output.intent(WriteIntent(id.toString(), page, qualified))
+                    } catch (e: Exception) {
+                        throw CommandEventPublicationFailed(e)
+                    }
                     wrote = true
-                    println("intent: write id $id -> ${label(page, qualified)}")
                 }
             } catch (e: RootUnavailable) {
-                return abort(e.root, wrote)
+                return abort(e.root, wrote, output)
             } catch (e: PlanStale) {
-                return abortStale(label(e.page, qualified), e.reason, wrote)
+                return abortStale(label(e.page, qualified), e.reason, wrote, output)
             } catch (e: AdoptWriteFailed) {
                 val landed = if (e.targetMutated) " (the bytes may already be durable at the authority)" else ""
-                return abortStale(label(e.page, qualified), "could not be written: ${e.reason}$landed", wrote)
+                return abortStale(label(e.page, qualified), "could not be written: ${e.reason}$landed", wrote, output)
+            } catch (e: CommandEventPublicationFailed) {
+                logger.error(e.cause) { "adopt command event publication failed" }
+                output.error("adopt: the pre-write intent could not be published; nothing was written for that intent")
+                return 1
             }
 
             // D7 order, said out loud rather than inherited from a map's insertion order. The two key sets are equal:
             // LOCAL registers every registry root above, and OBJECT is single-root by D10 (refused at parse).
             registry.roots.forEach { root ->
-                print(render(plan.report(root.name), root.name, adoptedTree(config, registry, root.name), qualified))
+                output.result(
+                    render(plan.report(root.name), root.name, adoptedTree(config, registry, root.name), qualified),
+                    newline = false,
+                )
             }
             // ONE caveat for the whole run, not one per root (it is about the WRITE mechanism, not about a tree).
-            if (mode != AdoptionPass.Mode.RECORD) println(NETWORK_FS_CAVEAT)
+            if (mode != AdoptionPass.Mode.RECORD) output.result(NETWORK_FS_CAVEAT)
         } finally {
             stores.values.forEach { (it as? AutoCloseable)?.close() } // the object-store transport; LocalContentStore is not closeable
             driver.close()
@@ -198,9 +211,9 @@ object AdoptCommand {
      * writes nothing and [AdoptionPass.apply] re-probes every root before its first write, so the common case is a
      * run that changed NOTHING - and the intent log, which is emitted before each write, is what proves it either way.
      */
-    private fun abort(root: RootName, wrote: Boolean): Int {
-        System.err.println("adopt: root '$root' became unavailable mid-run; the run was ABORTED, not half-applied")
-        System.err.println(
+    private fun abort(root: RootName, wrote: Boolean, output: CommandOutput): Int {
+        output.error("adopt: root '$root' became unavailable mid-run; the run was ABORTED, not half-applied")
+        output.error(
             if (wrote) {
                 "adopt: the 'intent:' lines above name every write that was attempted - adopt is idempotent, so " +
                     "restore the path and re-run to reconcile them."
@@ -216,9 +229,9 @@ object AdoptCommand {
      * Adopt will not recreate a page someone deleted, nor overwrite an edited one with bytes it derived from a stale
      * read, so it stops - and the remedy is the same one every other adopt abort has: re-run it.
      */
-    private fun abortStale(page: String, reason: String, wrote: Boolean): Int {
-        System.err.println("adopt: $page $reason; the run was ABORTED, not half-applied")
-        System.err.println(
+    private fun abortStale(page: String, reason: String, wrote: Boolean, output: CommandOutput): Int {
+        output.error("adopt: $page $reason; the run was ABORTED, not half-applied")
+        output.error(
             if (wrote) {
                 "adopt: the 'intent:' lines above name every write that was attempted - adopt is idempotent, so " +
                     "re-run to reconcile them against the tree as it stands now."
@@ -239,19 +252,25 @@ object AdoptCommand {
      * one command whose promise is "every page's identity now lives in the tree itself" and walked away believing it.
      * Adopt is idempotent, so restoring the path and re-running costs nothing.
      */
-    private fun refuseUnavailableRoots(registry: RootRegistry, stores: Map<RootName, ContentStore>): Boolean {
+    private fun refuseUnavailableRoots(
+        registry: RootRegistry,
+        stores: Map<RootName, ContentStore>,
+        output: CommandOutput,
+    ): Boolean {
         val missing = registry.roots.filter { it.name in stores }.filterNot { stores.getValue(it.name).available() }
         if (missing.isEmpty()) return false
         missing.forEach { root ->
-            System.err.println("adopt: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
+            output.error("adopt: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
         }
-        System.err.println(
+        output.error(
             "adopt: refusing to run - the ids of a root it cannot walk would stay in DATA_DIR only, and losing " +
                 "DATA_DIR would then cost that root every permalink and citation. Restore the path(s) and re-run " +
                 "(adopt is idempotent), or remove the root(s) from the roots {} block if they are gone for good.",
         )
         return true
     }
+
+    private class CommandEventPublicationFailed(cause: Exception) : RuntimeException(cause)
 
     /**
      * One root's offline tree, carrying the SAME DATA_DIR exclusion the server's store does (ADR-0011): a legally-

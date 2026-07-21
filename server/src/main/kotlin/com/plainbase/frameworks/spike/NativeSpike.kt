@@ -9,6 +9,8 @@ import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.frameworks.cli.CommandOutput
+import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.contentModule
@@ -118,21 +120,21 @@ object NativeSpike {
         check("s3-sigv4-vector") { sigV4Vectors() },
     )
 
-    fun runAsMain(): Int {
-        println("Plainbase full-stack native dependency spike (v${PlainbaseConfig.VERSION})")
+    fun runAsMain(output: CommandOutput = systemCommandOutput()): Int {
+        output.result("Plainbase full-stack native dependency spike (v${PlainbaseConfig.VERSION})")
         val vm = System.getProperty("java.vm.name")
         val vmVersion = System.getProperty("java.vendor.version") ?: System.getProperty("java.version")
-        println("runtime: $vm / $vmVersion")
+        output.result("runtime: $vm / $vmVersion")
         val results = runAll()
         for (r in results) {
-            println("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")
+            output.result("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")
         }
         val failed = results.count { !it.passed }
         return if (failed == 0) {
-            println("SPIKE OK — ${results.size}/${results.size} checks passed")
+            output.result("SPIKE OK — ${results.size}/${results.size} checks passed")
             0
         } else {
-            println("SPIKE FAILED — $failed/${results.size} checks failed")
+            output.result("SPIKE FAILED — $failed/${results.size} checks failed")
             1
         }
     }

@@ -3,8 +3,6 @@ package com.plainbase.frameworks.cli
 import com.plainbase.bootGateFor
 import com.plainbase.frameworks.config.PlainbaseConfig
 import org.junit.jupiter.api.Tag
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -79,7 +77,7 @@ class RootCommandNativeHistoryTest {
         val env = mapOf("DATA_DIR" to data.toString(), "CONTENT_DIR" to content.toString())
         val rootsConf: Path get() = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
         fun add(name: String, path: Path, vararg extra: String): Int =
-            RootCommand.run(listOf("add", name, path.toString()) + extra.toList(), env)
+            RootCommand.run(listOf("add", name, path.toString()) + extra.toList(), env, NativeCommandOutputCapture.current)
     }
 
     /** In EVERY refusal case: exit 1, roots.conf untouched, and no temp sibling left behind. */
@@ -238,7 +236,9 @@ class RootCommandNativeHistoryTest {
                 "precondition: this install must currently REFUSE to boot, or the test proves nothing",
             )
 
-            captureStderr { assertEquals(0, RootCommand.run(listOf("remove", "broken"), w.env)) }
+            captureStderr {
+                assertEquals(0, RootCommand.run(listOf("remove", "broken"), w.env, NativeCommandOutputCapture.current))
+            }
 
             // And the resulting config BOOTS. Removing the offender cleared the refusal.
             assertFalse(Files.exists(w.rootsConf))
@@ -250,14 +250,4 @@ class RootCommandNativeHistoryTest {
 }
 
 /** Captures System.err for the duration of [block] - the CLI's operator-facing channel, and where refusals go. */
-private fun captureStderr(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.err
-    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setErr(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStderr(block: () -> Unit): String = NativeCommandOutputCapture.captureStderr(block)

@@ -30,9 +30,11 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
+import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.ReindexCommand
 import com.plainbase.frameworks.cli.RootCommand
 import com.plainbase.frameworks.cli.S3SmokeCommand
+import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
@@ -61,7 +63,7 @@ import java.nio.file.Path
 import kotlin.system.exitProcess
 import kotlin.time.Clock
 
-private val logger = KotlinLogging.logger {}
+private val logger by lazy { KotlinLogging.logger {} }
 
 fun main(args: Array<String>) {
     // kotlin-logging 8.x prints a startup banner from KotlinLogging's class initializer unless
@@ -69,29 +71,30 @@ fun main(args: Array<String>) {
     // its own class init. Set it before anything touches a logger; both classes initialize at
     // run time under JVM and native image alike, so one programmatic gate covers both binaries.
     System.setProperty("kotlin-logging.logStartupMessage", "false")
+    val output = systemCommandOutput()
     when (args.firstOrNull()) {
-        "spike" -> exitProcess(NativeSpike.runAsMain())
-        "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1)))
-        "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1)))
-        "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1)))
-        "root" -> exitProcess(RootCommand.runAsMain(args.drop(1)))
+        "spike" -> exitProcess(NativeSpike.runAsMain(output))
+        "adopt" -> exitProcess(AdoptCommand.runAsMain(args.drop(1), output))
+        "reindex" -> exitProcess(ReindexCommand.runAsMain(args.drop(1), output))
+        "admin" -> exitProcess(AdminCommand.runAsMain(args.drop(1), output))
+        "root" -> exitProcess(RootCommand.runAsMain(args.drop(1), output))
         // Hidden (not in the usage line): the credentialed C0 object-store smoke - operator-run, never CI.
-        "s3-smoke" -> exitProcess(S3SmokeCommand.runAsMain(args.drop(1)))
-        null, "serve" -> serve()
+        "s3-smoke" -> exitProcess(S3SmokeCommand.runAsMain(args.drop(1), output))
+        null, "serve" -> serve(output)
         else -> {
-            System.err.println("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex | admin | root)")
+            output.error("Unknown command: ${args.first()} (expected: serve | spike | adopt | reindex | admin | root)")
             exitProcess(2)
         }
     }
 }
 
-private fun serve() {
+private fun serve(output: CommandOutput) {
     // Resolve config BEFORE building the Koin graph (R2-2): a bad config (an IllegalArgumentException from the
     // Q9/auth validation, OR a HOCON ConfigException - malformed plainbase.conf, unresolved ${...}, wrong-typed
     // value) must unwrap cleanly into a `serve:` stderr line + exit(1), never a raw stack trace. Resolving here
     // (not via a Koin `single {}`) is what keeps the error unwrapped - Koin would wrap it in an
     // InstanceCreationException that dodges the funnel. The resolved instance is the graph's single source.
-    val config = PlainbaseConfig.loadForCommand("serve") ?: exitProcess(1)
+    val config = PlainbaseConfig.loadForCommand("serve", output::error) ?: exitProcess(1)
     val koin = startKoin {
         modules(
             module { single { config } }, contentModule, repositoryModule, securityModule, indexModule,
@@ -115,7 +118,7 @@ private fun serve() {
     val refusals = config.bootRefusals()
     fun refuse(kinds: Set<BootRefusal.Kind>) {
         refusals.firstOrNull { it.kind in kinds }?.let {
-            System.err.println("serve: ${it.message}")
+            output.error("serve: ${it.message}")
             exitProcess(1)
         }
     }
@@ -165,7 +168,7 @@ private fun serve() {
                 }
             }
             is RootGateVerdict.Refused -> {
-                System.err.println("serve: ${verdict.message}")
+                output.error("serve: ${verdict.message}")
                 exitProcess(1)
             }
             is RootGateVerdict.Ready -> Unit
@@ -181,7 +184,7 @@ private fun serve() {
     // `plainbase reindex` while this one runs - is refused, never silently racing search.db writes.
     val lock = DataDirLock.tryAcquire(config.dataDir)
     if (lock == null) {
-        System.err.println("serve: another Plainbase process is holding ${config.dataDir} - stop it before starting a second instance")
+        output.error("serve: another Plainbase process is holding ${config.dataDir} - stop it before starting a second instance")
         exitProcess(1)
     }
     // Everything past the lock runs INSIDE the try/finally so the lock ALWAYS releases - including a
@@ -209,14 +212,14 @@ private fun serve() {
             koin.get<RootRegistry>().roots.map { it.name }.toSet(),
         )?.let { refusal ->
             lock.close() // exitProcess skips the outer finally (the hydrate-failure arm's shape)
-            System.err.println("serve: $refusal")
+            output.error("serve: $refusal")
             exitProcess(1)
         }
         // Object mode: hydrate the DATA_DIR mirror from the bucket FIRST in the lock region, strictly
         // BEFORE the first rebuild() and reconcileDirtyPages() below - both read the post-hydrate
         // mirror through the port, which is what makes a retained-mark recovery commit-or-drift-skip
         // correctly. The first LIST is also the R16 fail-closed TLS/signature self-check; its refusal
-        // surfaces via the same System.err + exit(1) idiom as the other gates.
+        // surfaces via the same deterministic error channel + exit(1) idiom as the other gates.
         //
         // C5: when git is enabled, a bundle-DR restore runs strictly BEFORE hydrate, and the boot
         // reconcile strictly AFTER - both in this same lock region, hydrate/hydrate's mirror walk. Nested
@@ -247,7 +250,8 @@ private fun serve() {
             } catch (e: Exception) {
                 // exitProcess skips the outer finally - release the lock explicitly (the prepare() idiom).
                 lock.close()
-                System.err.println("serve: ${e.message}")
+                logger.error(e) { "serve object hydrate or bundle restore failed" }
+                output.error("serve: ${e.message ?: "unexpected failure"}")
                 exitProcess(1)
             }
         }
@@ -283,7 +287,8 @@ private fun serve() {
             // exitProcess terminates the JVM without running the outer finally, so release the lock
             // explicitly here - otherwise a forced-on Git failure would leak it in embedded/test use.
             lock.close()
-            System.err.println("serve: ${e.message}")
+            logger.error(e) { "serve history preparation failed" }
+            output.error("serve: ${e.message ?: "unexpected failure"}")
             exitProcess(1)
         }
         val builder = koin.get<IndexBuilder>()
@@ -391,7 +396,7 @@ private fun serve() {
             // of a main/... create) and republish, so the guard must judge the LAST pre-serve snapshot.
             mainRootUrlCollisionRefusal(builder.current)?.let { refusal ->
                 lock.close() // exitProcess skips the outer finally (the hydrate-failure arm's shape)
-                System.err.println("serve: $refusal")
+                output.error("serve: $refusal")
                 exitProcess(1)
             }
             val aliases = koin.get<UrlAliasRegistry>().all()

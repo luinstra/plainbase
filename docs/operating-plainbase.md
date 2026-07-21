@@ -788,6 +788,27 @@ hung `git` hook shimmed in from outside Plainbase's pinned config, etc.) can sta
 for **a small multiple of the per-invocation bound**, not one fixed number of seconds. There's no
 circuit breaker today - a trip-after-N-failures breaker is a v0.1.x candidate.
 
+## Operational logs and one-shot command output
+
+Local JVM and native launches write readable operational records to stderr. The container image selects
+the JSON profile before JVM initialization, so `docker logs` and Kubernetes collectors receive one JSON
+object per operational line:
+
+```sh
+./plainbase serve 2>plainbase.log
+docker logs -f plainbase
+kubectl logs -f deployment/plainbase
+```
+
+`PLAINBASE_LOG_LEVEL` filters operational telemetry in both profiles. To override an image's default,
+replace its launcher options, for example
+`PLAINBASE_OPTS=-Dlogback.configurationFile=logback.xml -Dplainbase.commandEvents=plain`.
+
+One-shot CLI commands retain a separate wire contract: results and reports are stdout; usage and expected
+refusals are stderr; exit codes remain 0/1/2 for success/runtime/usage. Token commands print plaintext only
+on stdout, so capture that stream separately. `adopt --write-ids` publishes its pre-write event as plain
+stdout locally and typed JSON stderr in the container, and refuses the write if that event cannot be flushed.
+
 ## Known limitations (v0.1)
 
 Recorded cuts - conscious v0.1 trade-offs, not gaps discovered later and not TODOs:

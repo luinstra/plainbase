@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.cli.AdoptCommand
+import com.plainbase.frameworks.cli.CommandOutputFixture
 import com.plainbase.frameworks.config.PlainbaseConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -37,7 +38,7 @@ class MoveFileIntegrationTest : FunSpec({
             try {
                 // `adopt --write-ids` (the real CLI) materializes the page ids into the files.
                 val config = PlainbaseConfig(contentDir = root, dataDir = dataDir, host = "127.0.0.1", port = 0)
-                AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0
+                AdoptCommand.run(listOf("--write-ids"), config, CommandOutputFixture().output) shouldBe 0
 
                 // A FRESH harness (in-memory id_map): identity must come from the materialized
                 // frontmatter alone — the durability §5.2 actually promises.

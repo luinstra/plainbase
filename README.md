@@ -87,6 +87,11 @@ modes (`read-only` / `propose` / `commit`), and reverse-proxy notes:
 Full reference: [Configuration](docs/configuration.md) (every key, the three
 `auth.mode`s, the proxy/MCP CIDR nuance).
 
+Native binaries and local JVM distributions emit readable operational logs on stderr. The container
+image emits one JSON object per operational log line for Docker/Kubernetes collection. Command results
+(including one-time tokens) remain exact stdout payloads; usage and refusal text remains stderr and is
+not routed through the logger.
+
 ## Your data (hard rule)
 
 - `CONTENT_DIR` - canonical, portable, user-owned (local mode). Reinstall

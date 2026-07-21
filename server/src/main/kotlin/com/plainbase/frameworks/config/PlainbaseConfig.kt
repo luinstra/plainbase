@@ -784,7 +784,7 @@ data class PlainbaseConfig(
          */
         fun loadForCommand(
             command: String,
-            err: (String) -> Unit = System.err::println,
+            err: (String) -> Unit,
             resolve: () -> PlainbaseConfig = { fromEnvAndFile() },
         ): PlainbaseConfig? =
             try {

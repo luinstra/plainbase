@@ -32,9 +32,9 @@ class AdoptCommandTest : FunSpec({
 
     test("--dry-run alone and unknown flags are usage errors (exit 2)") {
         withCliTree { config ->
-            AdoptCommand.run(listOf("--dry-run"), config) shouldBe 2
-            AdoptCommand.run(listOf("--bogus"), config) shouldBe 2
-            AdoptCommand.run(listOf("--write-ids", "extra"), config) shouldBe 2
+            runAdopt(listOf("--dry-run"), config) shouldBe 2
+            runAdopt(listOf("--bogus"), config) shouldBe 2
+            runAdopt(listOf("--write-ids", "extra"), config) shouldBe 2
         }
     }
 
@@ -42,7 +42,7 @@ class AdoptCommandTest : FunSpec({
         withCliTree { config ->
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
             val out = captureStdout {
-                AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0
+                runAdopt(listOf("--write-ids", "--dry-run"), config) shouldBe 0
             }
 
             out shouldContain "dry run: nothing was written"
@@ -62,11 +62,11 @@ class AdoptCommandTest : FunSpec({
 
     test("adopt --write-ids --dry-run against an existing install reads it without changing a byte") {
         withCliTree { config ->
-            captureStdout { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0 }
+            captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
             val dbBefore = Files.readAllBytes(config.appDatabasePath)
 
             val out = captureStdout {
-                AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0
+                runAdopt(listOf("--write-ids", "--dry-run"), config) shouldBe 0
             }
 
             // Accurate against persisted state: the materialized pages are not re-listed as pending.
@@ -78,7 +78,7 @@ class AdoptCommandTest : FunSpec({
 
     test("dry run consults the existing id_map: a pasted copy of a mapped id surfaces as duplicate_id") {
         withCliTree { config ->
-            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 } // RECORD binds map-only ids
+            captureStdout { runAdopt(emptyList(), config) shouldBe 0 } // RECORD binds map-only ids
             val mappedId = DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                 DatabaseFactory.createDatabase(driver).idMapQueries
                     .selectBinding(RootName.MAIN, TreePath.require("titled.md")).executeAsOne().id
@@ -86,7 +86,7 @@ class AdoptCommandTest : FunSpec({
             Files.writeString(config.contentDir.resolve("copy.md"), "---\nid: $mappedId\n---\nA pasted duplicate.\n")
 
             val out = captureStdout {
-                AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0
+                runAdopt(listOf("--write-ids", "--dry-run"), config) shouldBe 0
             }
             // Only detectable because PREVIEW read the on-disk bindings: against an empty stand-in
             // db, copy.md's claim on titled.md's map-only id would have gone unchallenged.
@@ -97,7 +97,7 @@ class AdoptCommandTest : FunSpec({
     test("adopt --write-ids intent-logs then materializes; a second run reports zero writes") {
         withCliTree { config ->
             val first = captureStdout {
-                AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0
+                runAdopt(listOf("--write-ids"), config) shouldBe 0
             }
             first shouldContain "intent: write id"
             first shouldContain "materialized 2 page(s); 0 already carried their id; 1 refused"
@@ -106,10 +106,25 @@ class AdoptCommandTest : FunSpec({
             String(Files.readAllBytes(config.contentDir.resolve("plain.md"))) shouldContain "id: "
 
             val second = captureStdout {
-                AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0
+                runAdopt(listOf("--write-ids"), config) shouldBe 0
             }
             second shouldContain "materialized 0 page(s); 2 already carried their id; 1 refused"
             second shouldNotContain "intent:"
+        }
+    }
+
+    test("a failed intent publication prevents the following page write") {
+        withCliTree { config ->
+            val before = Files.readAllBytes(config.contentDir.resolve("plain.md"))
+            val output = StreamCommandOutput(
+                PrintStream(ByteArrayOutputStream(), true, Charsets.UTF_8),
+                PrintStream(ByteArrayOutputStream(), true, Charsets.UTF_8),
+                CommandEventSink { throw IllegalStateException("journal unavailable") },
+            )
+
+            AdoptCommand.run(listOf("--write-ids"), config, output) shouldBe 1
+
+            Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe before
         }
     }
 
@@ -118,7 +133,7 @@ class AdoptCommandTest : FunSpec({
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
             DataDirLock.tryAcquire(config.dataDir)!!.use {
                 listOf(emptyList(), listOf("--write-ids")).forEach { args ->
-                    val err = captureStderr { AdoptCommand.run(args, config) shouldBe 1 }
+                    val err = captureStderr { runAdopt(args, config) shouldBe 1 }
                     err shouldContain "adopt: a Plainbase server is holding ${config.dataDir}"
                 }
                 // The refusal precedes the driver open AND the adoption pass: no db, no file writes.
@@ -126,7 +141,7 @@ class AdoptCommandTest : FunSpec({
                 Files.readAllBytes(config.contentDir.resolve("plain.md")) shouldBe plainBefore
             }
             // After release, a run succeeds.
-            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 }
+            captureStdout { runAdopt(emptyList(), config) shouldBe 0 }
         }
     }
 
@@ -150,7 +165,7 @@ class AdoptCommandTest : FunSpec({
                 ),
             )
             listOf(emptyList(), listOf("--write-ids")).forEach { args ->
-                val err = captureStderr { AdoptCommand.run(args, objectConfig) shouldBe 1 }
+                val err = captureStderr { runAdopt(args, objectConfig) shouldBe 1 }
                 err shouldContain "adopt: "
                 err shouldNotContain "storage.backend=object is configured but the object backend is not available"
             }
@@ -166,7 +181,7 @@ class AdoptCommandTest : FunSpec({
             val mirrorDir = objectConfig.dataDir.resolve("mirror")
             Files.deleteIfExists(mirrorDir) // in case a prior arm left an empty dir; assert PREVIEW re-creates none
             val out = captureStdout {
-                AdoptCommand.run(listOf("--write-ids", "--dry-run"), objectConfig) shouldBe 0
+                runAdopt(listOf("--write-ids", "--dry-run"), objectConfig) shouldBe 0
             }
             out shouldContain "would materialize 0 page(s):"
             Files.exists(mirrorDir) shouldBe false // PREVIEW created no DATA_DIR/mirror
@@ -176,7 +191,7 @@ class AdoptCommandTest : FunSpec({
     test("PREVIEW stays lock-free: adopt --write-ids --dry-run runs while a server holds the lock") {
         withCliTree { config ->
             DataDirLock.tryAcquire(config.dataDir)!!.use {
-                val out = captureStdout { AdoptCommand.run(listOf("--write-ids", "--dry-run"), config) shouldBe 0 }
+                val out = captureStdout { runAdopt(listOf("--write-ids", "--dry-run"), config) shouldBe 0 }
                 out shouldContain "dry run: nothing was written"
             }
         }
@@ -186,7 +201,7 @@ class AdoptCommandTest : FunSpec({
         withCliTree { config ->
             val plainBefore = Files.readAllBytes(config.contentDir.resolve("plain.md"))
             val out = captureStdout {
-                AdoptCommand.run(emptyList(), config) shouldBe 0
+                runAdopt(emptyList(), config) shouldBe 0
             }
             out shouldContain "adopt: 3 page(s)"
             out shouldContain "recorded 3 id_map-only identity(ies); 0 page(s) already carry their id"
@@ -199,7 +214,7 @@ class AdoptCommandTest : FunSpec({
 
     test("adopt --write-ids materializes ids in EVERY configured root - not just main") {
         withTwoRootCliTree { config, handbook ->
-            val out = captureStdout { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0 }
+            val out = captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
             withClue("each root gets its own named section - the same page path can exist in two of them") {
                 out shouldContain "adopt: root 'main': 3 page(s)"
@@ -219,11 +234,11 @@ class AdoptCommandTest : FunSpec({
         withTwoRootCliTree { config, handbook ->
             // The lower-ranked root owns an id today (map-only, the read-only first index), and the higher-ranked
             // root then turns out to hold a page carrying that same id in its frontmatter.
-            captureStdout { AdoptCommand.run(emptyList(), config) shouldBe 0 }
+            captureStdout { runAdopt(emptyList(), config) shouldBe 0 }
             val contested = binding(config, RootName.require("handbook"), "onboarding.md")
             Files.writeString(config.contentDir.resolve("claimant.md"), "---\nid: $contested\ntitle: Claimant\n---\nbody\n")
 
-            captureStdout { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0 }
+            captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
             withClue("D17: registry rank decides, and main is declared first - so main KEEPS the id it already carries") {
                 binding(config, RootName.MAIN, "claimant.md") shouldBe contested
@@ -243,7 +258,7 @@ class AdoptCommandTest : FunSpec({
         withTwoRootCliTree { config, handbook ->
             handbook.toFile().deleteRecursively() // the unmounted-disk shape
 
-            val err = captureStderr { AdoptCommand.run(listOf("--write-ids"), config) shouldBe 1 }
+            val err = captureStderr { runAdopt(listOf("--write-ids"), config) shouldBe 1 }
 
             err shouldContain "adopt: root 'handbook' is not available"
             err shouldContain "would then cost that root every permalink and citation"
@@ -300,28 +315,11 @@ private fun withCliTree(block: (PlainbaseConfig) -> Unit) {
     }
 }
 
-/** Captures System.out for the duration of [block] - the CLI's output contract under test. */
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun runAdopt(args: List<String>, config: PlainbaseConfig): Int =
+    AdoptCommand.run(args, config, CommandOutputCapture.current)
 
-/** Captures System.err for the duration of [block]: the lock-held refusal message under test. */
-private fun captureStderr(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.err
-    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setErr(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+/** Captures the injected result channel for the duration of [block]. */
+private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)
+
+/** Captures the injected error channel for the duration of [block]. */
+private fun captureStderr(block: () -> Unit): String = CommandOutputCapture.captureStderr(block)

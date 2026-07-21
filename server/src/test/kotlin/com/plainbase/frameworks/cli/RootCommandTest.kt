@@ -9,8 +9,6 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
@@ -629,7 +627,8 @@ private class World(private val base: Path, val data: Path, val content: Path) {
     val rootsConf: Path get() = data.resolve(PlainbaseConfig.MANAGED_ROOTS_FILE)
 
     /** Drives the REAL command, through the REAL env seam - never an injected config (INVARIANT W). */
-    fun root(vararg args: String, env: Map<String, String> = this.env): Int = RootCommand.run(args.toList(), env)
+    fun root(vararg args: String, env: Map<String, String> = this.env): Int =
+        RootCommand.run(args.toList(), env, CommandOutputCapture.current)
 
     fun config(): PlainbaseConfig = PlainbaseConfig.fromEnvAndFile(env)
 
@@ -643,26 +642,6 @@ private class World(private val base: Path, val data: Path, val content: Path) {
     }
 }
 
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)
 
-private fun captureStderr(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.err
-    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setErr(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStderr(block: () -> Unit): String = CommandOutputCapture.captureStderr(block)

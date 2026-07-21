@@ -8,8 +8,6 @@ import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
 import org.junit.jupiter.api.Tag
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,7 +35,9 @@ class MintTokenCommandNativeTest {
                 port = 0,
             )
 
-            val out = captureStdout { assertEquals(0, AdminCommand.run(listOf("mint-token", "ci-bot"), config)) }
+            val out = captureStdout {
+                assertEquals(0, AdminCommand.run(listOf("mint-token", "ci-bot"), config, NativeCommandOutputCapture.current))
+            }
             val token = out.lineSequence().first { it.startsWith("pb_") }
             assertTrue(token.matches(Regex("^pb_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+$")), "unexpected token: $token")
 
@@ -69,14 +69,4 @@ class MintTokenCommandNativeTest {
 }
 
 /** Captures System.out for the duration of [block] — the CLI's stdout is its output contract. */
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = NativeCommandOutputCapture.captureStdout(block)

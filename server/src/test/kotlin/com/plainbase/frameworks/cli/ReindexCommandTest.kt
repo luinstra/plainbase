@@ -20,8 +20,6 @@ import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -37,7 +35,7 @@ class ReindexCommandTest : FunSpec({
         withReindexTree { config ->
             // The println summary is the output contract. Logback also writes INFO diagnostics to
             // the test's stdout, so assert the exact summary LINE is present (not the whole buffer).
-            val out = captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
+            val out = captureStdout { runReindex(emptyList(), config) shouldBe 0 }
             out.lineSequence().toList() shouldContain "reindex: rebuilt the search index for 2 page(s) under ${config.contentDir}"
 
             // Reopen the engine independently of the CLI's lifetime and confirm the term is indexed.
@@ -50,7 +48,7 @@ class ReindexCommandTest : FunSpec({
 
     test("extra arguments are a usage error (exit 2)") {
         withReindexTree { config ->
-            ReindexCommand.run(listOf("--bogus"), config) shouldBe 2
+            runReindex(listOf("--bogus"), config) shouldBe 2
         }
     }
 
@@ -61,7 +59,7 @@ class ReindexCommandTest : FunSpec({
     ) {
         withReindexTree { config ->
             val objectConfig = config.copy(storage = StorageConfig(backend = StorageBackend.OBJECT))
-            val err = captureStderr { ReindexCommand.run(emptyList(), objectConfig) shouldBe 1 }
+            val err = captureStderr { runReindex(emptyList(), objectConfig) shouldBe 1 }
             err shouldNotContain "storage.backend=object is configured but the object backend is not available"
             // The gate precedes the lock and any driver open: no db/search.db, and the lock is free.
             Files.exists(objectConfig.appDatabasePath) shouldBe false
@@ -85,13 +83,13 @@ class ReindexCommandTest : FunSpec({
                 ),
             )
             // The failure is logged via the facade (logger.error), not println - the exit code is the contract.
-            captureStderr { ReindexCommand.run(emptyList(), objectConfig) shouldBe 1 }
+            captureStderr { runReindex(emptyList(), objectConfig) shouldBe 1 }
         }
     }
 
     test("a multi-root reindex covers EVERY configured root: both roots' documents survive the swap, and the count is the whole corpus") {
         withTwoRootTree { config, _ ->
-            val out = captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
+            val out = captureStdout { runReindex(emptyList(), config) shouldBe 0 }
             out.lineSequence().toList() shouldContain
                 "reindex: rebuilt the search index for 3 page(s) across 2 roots: main (2), handbook (1)"
 
@@ -108,11 +106,11 @@ class ReindexCommandTest : FunSpec({
 
     test("an unavailable extra root refuses the whole reindex (exit 1) rather than silently purging that root's search rows") {
         withTwoRootTree { config, handbook ->
-            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
+            captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
             Files.delete(handbook.resolve("onboarding.md"))
             Files.delete(handbook) // the NAS came unmounted; config validation still accepts this (ADR-0011 D13)
 
-            val err = captureStderr { ReindexCommand.run(emptyList(), config) shouldBe 1 }
+            val err = captureStderr { runReindex(emptyList(), config) shouldBe 1 }
             err shouldContain "root 'handbook' is not available"
             err shouldContain "refusing to rebuild"
 
@@ -128,13 +126,13 @@ class ReindexCommandTest : FunSpec({
             "search generation intact rather than silently purging the root that went away",
     ) {
         withTwoRootTree { config, _ ->
-            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
+            captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
 
             // handbook answers the preflight probe and is gone from the rebuild's own probe on - the window a
             // check-then-act guard cannot see. IndexBuilder SKIPS it (the carry-forward rule), and a fresh CLI
             // process has no previous section to carry, so the published snapshot has no handbook section at all:
             // swapping it in is a DELETE of handbook's rows, reported as a success.
-            val err = captureStderr { ReindexCommand.run(emptyList(), config, vanishAfterFirstProbe(HANDBOOK)) shouldBe 1 }
+            val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(HANDBOOK)) shouldBe 1 }
             err shouldContain "root 'handbook' went away while it was being indexed"
             err shouldContain "nothing was written"
 
@@ -149,12 +147,12 @@ class ReindexCommandTest : FunSpec({
 
     test("main's store is decorated too: main vanishing MID-REBUILD aborts before the swap, exactly as an extra does") {
         withTwoRootTree { config, _ ->
-            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
+            captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
 
             // `openStores` constructs main's entry EXPLICITLY, outside the extras fold - the one place `decorate` could
             // be dropped without any other test noticing, since the test above only ever drives it through an EXTRA.
             // Undecorated, main's store would be the real one: nothing vanishes, and this run returns 0.
-            val err = captureStderr { ReindexCommand.run(emptyList(), config, vanishAfterFirstProbe(RootName.MAIN)) shouldBe 1 }
+            val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(RootName.MAIN)) shouldBe 1 }
             err shouldContain "root 'main' went away while it was being indexed"
             err shouldContain "nothing was written"
 
@@ -167,14 +165,14 @@ class ReindexCommandTest : FunSpec({
     test("criterion 14: a running server's DATA_DIR lock makes reindex refuse with exit 1 and write nothing") {
         withReindexTree { config ->
             DataDirLock.tryAcquire(config.dataDir)!!.use {
-                val err = captureStderr { ReindexCommand.run(emptyList(), config) shouldBe 1 }
+                val err = captureStderr { runReindex(emptyList(), config) shouldBe 1 }
                 err shouldContain "a Plainbase server is holding ${config.dataDir}"
                 err shouldContain "POST /api/v1/admin/reindex"
                 // The refusal happens before any engine open: no search.db was created underneath the server.
                 Files.exists(config.searchDatabasePath) shouldBe false
             }
             // After release, a run succeeds.
-            captureStdout { ReindexCommand.run(emptyList(), config) shouldBe 0 }
+            captureStdout { runReindex(emptyList(), config) shouldBe 0 }
         }
     }
 })
@@ -252,26 +250,12 @@ private fun deleteTree(dir: Path) {
     Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
 }
 
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun runReindex(args: List<String>, config: PlainbaseConfig): Int =
+    ReindexCommand.run(args, config, CommandOutputCapture.current)
 
-private fun captureStderr(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.err
-    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setErr(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun runReindex(args: List<String>, config: PlainbaseConfig, decorate: StoreDecorator): Int =
+    ReindexCommand.run(args, config, decorate, CommandOutputCapture.current)
+
+private fun captureStdout(block: () -> Unit): String = CommandOutputCapture.captureStdout(block)
+
+private fun captureStderr(block: () -> Unit): String = CommandOutputCapture.captureStderr(block)

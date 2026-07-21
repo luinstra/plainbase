@@ -48,9 +48,8 @@ $(cat "$tmp/cli.out")
 $(cat "$tmp/cli.err")"
 }
 
-# One boot, with stdout AND stderr captured to $1: the detached-root WARN rides the logging facade
-# (logback's ConsoleAppender, i.e. stdout) while the CLI's refusals go to stderr, and a smoke that
-# greps only one of the two would silently stop seeing the other.
+# One boot, with stdout AND stderr captured to $1: operational logs and CLI refusals both use stderr
+# locally, while command results use stdout. Merging both keeps this smoke independent of presentation.
 boot() {
   "$BIN" serve >"$1" 2>&1 &
   SERVER_PID=$!

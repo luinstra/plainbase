@@ -89,8 +89,8 @@ class RootsLockNativeTest {
         val inner = Files.createDirectories(outer.resolve("inner"))
 
         val exits = concurrently(
-            { RootCommand.run(listOf("add", "outer", outer.toString()), w.env) },
-            { RootCommand.run(listOf("add", "inner", inner.toString()), w.env) },
+            { RootCommand.run(listOf("add", "outer", outer.toString()), w.env, NativeCommandOutputCapture.current) },
+            { RootCommand.run(listOf("add", "inner", inner.toString()), w.env, NativeCommandOutputCapture.current) },
         )
 
         assertEquals(listOf(0, 1), exits.sorted(), "exactly one add must win and the other must be refused: $exits")
@@ -106,8 +106,8 @@ class RootsLockNativeTest {
         val beta = Files.createDirectory(w.base.resolve("beta"))
 
         val exits = concurrently(
-            { RootCommand.run(listOf("add", "alpha", alpha.toString()), w.env) },
-            { RootCommand.run(listOf("add", "beta", beta.toString()), w.env) },
+            { RootCommand.run(listOf("add", "alpha", alpha.toString()), w.env, NativeCommandOutputCapture.current) },
+            { RootCommand.run(listOf("add", "beta", beta.toString()), w.env, NativeCommandOutputCapture.current) },
         )
 
         assertEquals(listOf(0, 0), exits, "both non-conflicting adds must succeed: $exits")
@@ -130,8 +130,8 @@ class RootsLockNativeTest {
             val other = Files.createDirectory(w.base.resolve("other"))
 
             concurrently(
-                { RootCommand.run(listOf("add", "other", other.toString()), w.env) },
-                { RootCommand.run(listOf("remove", "notes"), w.env) },
+                { RootCommand.run(listOf("add", "other", other.toString()), w.env, NativeCommandOutputCapture.current) },
+                { RootCommand.run(listOf("remove", "notes"), w.env, NativeCommandOutputCapture.current) },
             )
 
             // Either ordering is legal. What must hold in BOTH is that the file is whole and the config boots.
@@ -147,8 +147,8 @@ class RootsLockNativeTest {
         Files.writeString(w.rootsConf, ManagedRootsFileSeed.forRoot("notes", notes))
 
         val exits = concurrently(
-            { RootCommand.run(listOf("remove", "notes"), w.env) },
-            { RootCommand.run(listOf("remove", "notes"), w.env) },
+            { RootCommand.run(listOf("remove", "notes"), w.env, NativeCommandOutputCapture.current) },
+            { RootCommand.run(listOf("remove", "notes"), w.env, NativeCommandOutputCapture.current) },
         )
 
         assertEquals(listOf(0, 1), exits.sorted(), "one remove wins; the loser reports 'no such root': $exits")
@@ -169,7 +169,7 @@ class RootsLockNativeTest {
                 val notes = Files.createDirectory(w.base.resolve("notes"))
                 assertEquals(
                     0,
-                    RootCommand.run(listOf("add", "notes", notes.toString()), w.env),
+                    RootCommand.run(listOf("add", "notes", notes.toString()), w.env, NativeCommandOutputCapture.current),
                     "`plainbase root` must work WHILE a server holds the DATA_DIR lock",
                 )
             }
@@ -184,7 +184,7 @@ class RootsLockNativeTest {
         held.use {
             val notes = Files.createDirectory(w.base.resolve("notes"))
             val started = System.nanoTime()
-            val exit = RootCommand.run(listOf("add", "notes", notes.toString()), w.env)
+            val exit = RootCommand.run(listOf("add", "notes", notes.toString()), w.env, NativeCommandOutputCapture.current)
             val elapsedMillis = (System.nanoTime() - started) / 1_000_000
 
             assertEquals(1, exit, "a contended lock must refuse, not corrupt")

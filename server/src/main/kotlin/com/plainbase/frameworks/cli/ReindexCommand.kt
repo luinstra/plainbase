@@ -58,8 +58,8 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * the cross-process twin of the in-process stale-snapshot defect). So it acquires the DATA_DIR
  * advisory lock ([DataDirLock]) FIRST and exits 1 if a server holds it.
  *
- * stdout is a CLI output contract (`println` by design, like `adopt`/`spike`): the one summary
- * line below. Diagnostics (engine generation logs, failures) stay on the logging facade.
+ * The one summary line is a deterministic stdout result. Expected refusals use stderr; engine diagnostics and
+ * unexpected failures stay on the logging facade.
  */
 object ReindexCommand {
 
@@ -72,13 +72,14 @@ object ReindexCommand {
      * must not get the LOCAL branch here and rebuild search from an ignored CONTENT_DIR instead of the bucket
      * mirror. A bad config (IAE or HOCON) surfaces as the actionable `reindex:` stderr + exit 1.
      */
-    fun runAsMain(args: List<String>): Int {
-        val config = PlainbaseConfig.loadForCommand("reindex") ?: return 1
-        return run(args, config)
+    fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int {
+        val config = PlainbaseConfig.loadForCommand("reindex", output::error) ?: return 1
+        return run(args, config, output)
     }
 
     /** Exit codes: 0 success / 1 runtime failure (incl. a server holding the lock) / 2 usage error. */
-    fun run(args: List<String>, config: PlainbaseConfig): Int = run(args, config, NO_DECORATION)
+    fun run(args: List<String>, config: PlainbaseConfig, output: CommandOutput = systemCommandOutput()): Int =
+        run(args, config, NO_DECORATION, output)
 
     /**
      * The [StoreDecorator] seam: production runs [NO_DECORATION], and the mid-rebuild-disappearance test wraps ONE
@@ -86,14 +87,19 @@ object ReindexCommand {
      * [requireCompleteGeneration] closes is otherwise unreachable from a test - it is a real NAS unmounting between
      * two probes, and a guard nobody can exercise is a guard nobody can trust.
      */
-    internal fun run(args: List<String>, config: PlainbaseConfig, decorate: StoreDecorator): Int {
+    internal fun run(
+        args: List<String>,
+        config: PlainbaseConfig,
+        decorate: StoreDecorator,
+        output: CommandOutput = systemCommandOutput(),
+    ): Int {
         if (args.isNotEmpty()) {
-            System.err.println(USAGE) // reindex takes no flags
+            output.error(USAGE) // reindex takes no flags
             return 2
         }
         return try {
             config.requireContentDir() // inside try → a bad config exits 1, honoring the contract (not a stack trace)
-            reindex(config, decorate)
+            reindex(config, decorate, output)
             0
         } catch (e: Exception) {
             logger.error(e) { "reindex failed" } // diagnostics via the facade, not println
@@ -101,12 +107,12 @@ object ReindexCommand {
         }
     }
 
-    private fun reindex(config: PlainbaseConfig, decorate: StoreDecorator) {
+    private fun reindex(config: PlainbaseConfig, decorate: StoreDecorator, output: CommandOutput) {
         // Resolution 1b: acquire the DATA_DIR lock FIRST. A live server holds it for its lifetime;
         // writing search.db underneath it would risk the cross-process stale-generation regression.
         val lock = DataDirLock.tryAcquire(config.dataDir)
         if (lock == null) {
-            System.err.println(
+            output.error(
                 "reindex: a Plainbase server is holding ${config.dataDir} - stop it, or use " +
                     "POST /api/v1/admin/reindex on the running server",
             )
@@ -119,9 +125,9 @@ object ReindexCommand {
                     // The engine count and the published snapshot's page count are the SAME figure - the swap
                     // re-derives the engine from exactly this snapshot, under one monitor - and the snapshot
                     // also carries the per-root split the multi-root summary reports.
-                    val snapshot = rebuildSearchIndex(config, driver, searchDb, decorate)
-                    // The ONLY sanctioned println here (CLI output contract, like adopt/spike).
-                    println(summary(snapshot, config))
+                    val snapshot = rebuildSearchIndex(config, driver, searchDb, decorate, output)
+                    // The command's deterministic stdout result contract.
+                    output.result(summary(snapshot, config))
                 }
             } finally {
                 driver.close()
@@ -142,12 +148,18 @@ object ReindexCommand {
      * the corpus. The registry drives the source list here exactly as it drives `RootStores` in
      * `contentModule` - one wiring rule, two entry points.
      */
-    private fun rebuildSearchIndex(config: PlainbaseConfig, driver: SqlDriver, searchDb: SearchDb, decorate: StoreDecorator): PageIndex {
+    private fun rebuildSearchIndex(
+        config: PlainbaseConfig,
+        driver: SqlDriver,
+        searchDb: SearchDb,
+        decorate: StoreDecorator,
+        output: CommandOutput,
+    ): PageIndex {
         val database = DatabaseFactory.createDatabase(driver)
         val registry = RootRegistry.of(config.roots.list)
         val stores = openStores(config, registry, database, decorate)
         try {
-            requireEveryRootAvailable(registry, stores)
+            requireEveryRootAvailable(registry, stores, output)
             val aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
             val checkpoint = SqlDelightPageCheckpointRepository(database)
             val searchIndexer = SearchIndexer(Fts5SearchProvider(searchDb), SectionSplitter())
@@ -177,7 +189,7 @@ object ReindexCommand {
                 searchIndexer = searchIndexer,
             )
             val snapshot = builder.rebuild() // page-index pass; publishes the snapshot (the sync listener does not fire)
-            requireCompleteGeneration(registry, snapshot) // ...and NOW check what the pass actually produced
+            requireCompleteGeneration(registry, snapshot, output) // ...and NOW check what the pass actually produced
             builder.rebuildSearchIndex() // atomic snapshot-read + clean engine rebuild - identical to the endpoint
             return snapshot
         } finally {
@@ -266,13 +278,17 @@ object ReindexCommand {
      * that runs before the thing it protects cannot speak for what happens during it. [requireCompleteGeneration]
      * is what actually holds the invariant.
      */
-    private fun requireEveryRootAvailable(registry: RootRegistry, stores: Map<RootName, ContentStore>) {
+    private fun requireEveryRootAvailable(
+        registry: RootRegistry,
+        stores: Map<RootName, ContentStore>,
+        output: CommandOutput,
+    ) {
         val missing = registry.roots.filterNot { stores.getValue(it.name).available() }
         if (missing.isEmpty()) return
         missing.forEach { root ->
-            System.err.println("reindex: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
+            output.error("reindex: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
         }
-        System.err.println(
+        output.error(
             "reindex: refusing to rebuild - the search index is rebuilt as ONE generation over every root, so " +
                 "running now would drop the missing root(s) from it. Restore the path(s), or remove the root(s) " +
                 "from the roots {} block if they are gone for good.",
@@ -295,16 +311,16 @@ object ReindexCommand {
      * built?". A missing root aborts before the swap - nothing is written, the previous generation stands untouched,
      * and the operator is told which root went away.
      */
-    private fun requireCompleteGeneration(registry: RootRegistry, snapshot: PageIndex) {
+    private fun requireCompleteGeneration(registry: RootRegistry, snapshot: PageIndex, output: CommandOutput) {
         val indexed = snapshot.sections.map { it.root }.toSet()
         val missing = registry.roots.filterNot { it.name in indexed }
         if (missing.isEmpty()) return
         missing.forEach { root ->
-            System.err.println(
+            output.error(
                 "reindex: root '${root.name}' went away while it was being indexed (${root.localPath ?: "object backend"})",
             )
         }
-        System.err.println(
+        output.error(
             "reindex: nothing was written - the rebuilt index covers ${indexed.size} of ${registry.roots.size} configured " +
                 "root(s), and swapping THAT in would drop the missing root(s) from search. The previous search index is " +
                 "untouched; restore the path(s) and run it again.",
