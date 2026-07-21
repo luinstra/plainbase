@@ -1011,11 +1011,12 @@ class IndexBuilder(
         if (rootLoss.markIfGone(root, source.store)) return skipAndCarry(root, "its backing tree is not traversable")
         val scan = try {
             scan(source)
-        } catch (_: RootUnavailable) {
-            // Only ever raised by the mark-then-throw rule, so the root is ALREADY marked and there is nothing
-            // left to decide: skip and carry, unconditionally. Re-probing here would be worse than redundant -
-            // a root that vanished and whose path has since REAPPEARED would probe PASS, and the pass would
-            // then trust a scan the store already refused to answer for.
+        } catch (unavailable: RootUnavailable) {
+            // RootUnavailable is already a classified answer, so publish it here instead of relying on every
+            // ContentStore adapter to have invoked an out-of-band marker before returning RootDown. The mark is
+            // idempotent when an adapter already did so. Never re-probe: a vanished root whose path has since
+            // REAPPEARED could pass that probe and make us trust the scan the store already refused to answer for.
+            availability.markUnavailable(unavailable.root, unavailable.reason)
             logger.warn { "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward" }
             return null
         } catch (e: IOException) {

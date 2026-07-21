@@ -128,4 +128,41 @@ class IndexBuilderFixtureTest : FunSpec({
             snapshot.pages.forEach { page -> reads[page.path.value].shouldNotBeNull() }
         }
     }
+
+    test("a page removed between the tree walk and its classified read is skipped without minting identity") {
+        withTempTree({ root -> writePage(root, "vanished.md", "# Vanished\n") }) { root ->
+            val real = LocalContentStore(root)
+            val disappearing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead = StoreRead.NoBytes
+            }
+
+            IndexHarness(root, contentStore = disappearing).use { harness ->
+                val snapshot = harness.builder.rebuild()
+
+                snapshot.pages.shouldBeEmpty()
+                harness.idMap.bindings().shouldBeEmpty()
+            }
+        }
+    }
+
+    test("a root that disappears during page reads carries its last-good section and becomes unavailable") {
+        withTempTree({ root -> writePage(root, "doc.md", "# Document\n") }) { root ->
+            val real = LocalContentStore(root)
+            var rootDown = false
+            val vanishing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead =
+                    if (rootDown) StoreRead.RootDown else real.readClassified(path)
+            }
+
+            IndexHarness(root, contentStore = vanishing).use { harness ->
+                val first = harness.builder.rebuild()
+                rootDown = true
+
+                val carried = harness.builder.rebuild()
+
+                carried.pages shouldBe first.pages
+                harness.availability.current().isAvailable(RootName.MAIN) shouldBe false
+            }
+        }
+    }
 })
