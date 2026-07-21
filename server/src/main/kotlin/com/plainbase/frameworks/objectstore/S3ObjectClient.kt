@@ -148,7 +148,7 @@ class S3ObjectClient(
         )
         return when {
             response.status.isSuccess() -> PutOutcome.Stored(etag = etagOf(response))
-            response.status == HttpStatusCode.PreconditionFailed || response.status == HttpStatusCode.Conflict ->
+            condition != PutCondition.None && response.status.isPreconditionRefusal() ->
                 PutOutcome.PreconditionFailed(status = response.status.value)
             else -> unexpected("PUT", key, response)
         }
@@ -233,11 +233,12 @@ class S3ObjectClient(
         }
         return when {
             response.status.isSuccess() -> PutOutcome.Stored(etag = etagOf(response))
-            response.status == HttpStatusCode.PreconditionFailed || response.status == HttpStatusCode.Conflict ->
-                PutOutcome.PreconditionFailed(status = response.status.value)
             else -> unexpected("PUT", key, response)
         }
     }
+
+    private fun HttpStatusCode.isPreconditionRefusal(): Boolean =
+        this == HttpStatusCode.PreconditionFailed || this == HttpStatusCode.Conflict
 
     /** A streaming request body over [source]: [READ_CHUNK] at a time from the file, never buffered whole. */
     private fun fileBody(source: Path): OutgoingContent = object : OutgoingContent.WriteChannelContent() {
