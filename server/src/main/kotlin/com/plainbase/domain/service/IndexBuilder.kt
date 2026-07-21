@@ -321,16 +321,28 @@ class IndexBuilder(
     /** §5.2 identity over the in-hand bytes — the same precedence/duplicate seam as `AdoptionPass` RECORD. */
     private fun resolveIdentities(drafts: List<Draft>): Map<TreePath, Identity> {
         val livePaths = drafts.map { it.file.path }.toSet()
+        val frontmatterIds = drafts.associate { draft ->
+            draft.file.path to patcher.readIdValue(draft.bytes)?.let(PageId::of)
+        }
+        // Honor the documented cross-page precedence too: a valid frontmatter id must travel with a
+        // moved page before an unmaterialized newcomer at its old path can reuse the stale id_map row.
+        // The sort is stable, so duplicate frontmatter claims retain the scanner's deterministic order.
+        val precedenceOrdered = drafts.sortedBy { frontmatterIds[it.file.path] == null }
         val claimed = HashMap<PageId, TreePath>()
-        return drafts.associate { draft ->
+        return precedenceOrdered.associate { draft ->
             val path = draft.file.path
             val assignment = identity.resolve(
                 path = path,
                 rawFrontmatterId = patcher.readIdValue(draft.bytes),
                 mappedId = idMap.find(path)?.id,
                 // Within-run claims first, then live id_map bindings: a binding whose path is gone
-                // from the tree is a moved file, not a duplicate owner (the AdoptionPass rule).
-                ownerOf = { id -> claimed[id] ?: idMap.pathOf(id)?.takeIf(livePaths::contains) },
+                // from the tree is a moved file, not a duplicate owner (the AdoptionPass rule). A
+                // reused old path that no longer carries this frontmatter id is likewise not its owner.
+                ownerOf = { id ->
+                    claimed[id] ?: idMap.pathOf(id)?.takeIf { ownerPath ->
+                        ownerPath in livePaths && frontmatterIds[ownerPath] == id
+                    }
+                },
             )
             claimed[assignment.id] = path
             val materialized = assignment.source == PageIdentityService.Source.FRONTMATTER
