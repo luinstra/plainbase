@@ -5,11 +5,15 @@ coverage:
         target: auto
         threshold: 0.5%
     patch:
-      default:
+      behavior:
         target: 80%
         threshold: 0%
         informational: true
         only_pulls: true
+        paths:
+          - "server/src/main/kotlin"
+          - "!server/src/main/kotlin/com/plainbase/Application.kt"
+          - "!server/src/main/kotlin/com/plainbase/frameworks/ktor/KtorServer.kt"
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
