@@ -97,9 +97,6 @@ interface ReadFacade {
      */
     fun assetRead(principal: Principal, root: RootName, path: TreePath): AssetReadOutcome
 
-    /** The page file's bytes under [root] (a read), or null when gone / unreadable→throw; 503 when the root is down. */
-    fun pageBytes(principal: Principal, root: RootName, path: TreePath): ByteArray?
-
     /**
      * The current published snapshot. Read-GATED so a resolve's existence is not revealed to an anonymous caller
      * (the gate fires BEFORE the resolve). [resource] names the lookup for the audit-free read gate.

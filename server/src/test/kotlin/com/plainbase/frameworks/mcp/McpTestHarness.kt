@@ -3,6 +3,7 @@ package com.plainbase.frameworks.mcp
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
@@ -140,6 +141,20 @@ class McpHarness(
 
     /** The fully-typed stored proposal row (carrying the raw `proposedContent` bytes) for the round-trip assertion. */
     fun proposalContentBytes() = requireNotNull(index.proposalRepository.findById(proposalRows().single().id)).proposedContent
+
+    /** Drives the sticky runtime-outage state without depending on an OS-specific unmount in an MCP contract test. */
+    fun markMainUnavailable() = index.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+
+    /**
+     * Leaves the seeded page durably bound but absent from the next snapshot. A second live page keeps this from
+     * becoming the separate empty-corpus tripwire case, so the honest result is absence_unverified rather than
+     * root_unavailable.
+     */
+    fun moveSeedPageToLimbo() {
+        Files.writeString(root.resolve("keeper.md"), "---\ntitle: Keeper\n---\n\n# Keeper\n\nstill here\n")
+        Files.delete(root.resolve("doc.md"))
+        index.builder.rebuild()
+    }
 
     /** Opens an authed SSE MCP session with [bearer] and runs [block] against the connected client. */
     fun <T> session(bearer: String, block: suspend (Client) -> T): T = blocking {

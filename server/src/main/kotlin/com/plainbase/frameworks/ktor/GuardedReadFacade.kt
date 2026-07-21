@@ -21,7 +21,6 @@ import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.AbsenceClassifier
-import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
 import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.AssetReadOutcome
@@ -260,21 +259,6 @@ class GuardedReadFacade(
         return when (val read = absence.read(stores(root), RootedPath(root, path))) {
             is ContentRead.Bytes -> AssetReadOutcome.Found(read.bytes)
             ContentRead.ConfirmedAbsent, ContentRead.AbsenceUnknown -> AssetReadOutcome.IndexedButMissing
-            ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
-        }
-    }
-
-    override fun pageBytes(principal: Principal, root: RootName, path: TreePath): ByteArray? {
-        policy.checkRead(principal, RootedResource(root, path.value).audit)
-        requireAvailable(root)
-        val target = RootedPath(root, path)
-        return when (val read = absence.read(stores(root), target)) {
-            is ContentRead.Bytes -> read.bytes
-            // The index still binds this page and its bytes are not there: 503, never the null the route turns into
-            // a 404. This is the raw-markdown surface an AGENT reads (`read_file`), so it is the one place the lie
-            // costs the most - a 404 tells it to drop the citation for a page that is coming back.
-            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
-            ContentRead.ConfirmedAbsent -> null
             ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
         }
     }

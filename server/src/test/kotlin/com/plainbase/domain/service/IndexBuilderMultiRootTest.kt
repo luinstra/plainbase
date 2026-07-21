@@ -18,6 +18,7 @@ import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
@@ -25,6 +26,7 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -47,6 +49,36 @@ class IndexBuilderMultiRootTest : FunSpec({
     val mapped = PageId.require("0197b555-1111-7222-8333-444455556666")
 
     fun identified(id: PageId, title: String = "T") = "---\nid: ${id.value}\ntitle: $title\n---\n\n# $title\n\nbody\n"
+
+    test("duplicate source roots are rejected before scan order can choose an accidental winner") {
+        withTrees { mainDir, extraDir ->
+            val registry = mainFirst(mainDir, extraDir)
+            World(registry).use { world ->
+                val source = IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider)
+
+                val failure = shouldThrow<IllegalArgumentException> {
+                    world.builder(listOf(source, source))
+                }
+
+                failure.message shouldContain "duplicate source root"
+            }
+        }
+    }
+
+    test("a source unknown to the registry rank is rejected instead of silently becoming highest priority") {
+        withTrees { mainDir, extraDir ->
+            val registry = mainFirst(mainDir, extraDir)
+            World(registry).use { world ->
+                val ghost = localRoot("ghost", extraDir)
+
+                val failure = shouldThrow<IllegalArgumentException> {
+                    world.builder(listOf(IndexBuilder.Source(ghost, LocalContentStore(extraDir), NoOpHistoryProvider)))
+                }
+
+                failure.message shouldContain "unknown to the registry rank"
+            }
+        }
+    }
 
     test("the round-1 panel crash case: the same id at the SAME relative path in two roots rebuilds cleanly, winner by registry order") {
         withTrees { mainDir, extraDir ->
