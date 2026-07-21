@@ -23,6 +23,19 @@ class Argon2PasswordHasher(
     private val random: SecureRandom = SecureRandom(),
 ) : PasswordHasher {
 
+    init {
+        require(memoryKb in 1..MAX_MEMORY_KB) { "Argon2 memory must be between 1 and $MAX_MEMORY_KB KiB" }
+        require(iterations in 1..MAX_ITERATIONS) { "Argon2 iterations must be between 1 and $MAX_ITERATIONS" }
+        require(parallelism in 1..MAX_PARALLELISM) { "Argon2 parallelism must be between 1 and $MAX_PARALLELISM" }
+        require(memoryKb >= 8 * parallelism) { "Argon2 memory must be at least 8 KiB per lane" }
+        require(saltLength in MIN_SALT_BYTES..MAX_SALT_BYTES) {
+            "Argon2 salt length must be between $MIN_SALT_BYTES and $MAX_SALT_BYTES bytes"
+        }
+        require(hashLength in MIN_HASH_BYTES..MAX_HASH_BYTES) {
+            "Argon2 hash length must be between $MIN_HASH_BYTES and $MAX_HASH_BYTES bytes"
+        }
+    }
+
     // PHC argon2 uses unpadded standard base64; ABSENT_OPTIONAL omits padding on
     // encode and tolerates it on decode (matching the prior java getEncoder().withoutPadding()).
     private val base64 = Base64.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
@@ -55,22 +68,25 @@ class Argon2PasswordHasher(
      * not pass.
      */
     private fun parsePhc(encoded: String): Phc? {
+        if (encoded.length > MAX_PHC_CHARS) return null
         val parts = encoded.split('$')
         if (parts.size != 6 || parts[1] != "argon2id") return null
         val version = parts[2].takeIf { it.startsWith("v=") }?.removePrefix("v=")?.toIntOrNull()
         if (version != PHC_VERSION) return null
         val params = parseParams(parts[3]) ?: return null
-        val m = params["m"]?.takeIf { it > 0 } ?: return null
-        val t = params["t"]?.takeIf { it > 0 } ?: return null
-        val p = params["p"]?.takeIf { it > 0 } ?: return null
-        val salt = decodeBase64(parts[4])?.takeIf { it.isNotEmpty() } ?: return null
-        val hash = decodeBase64(parts[5])?.takeIf { it.isNotEmpty() } ?: return null
+        val m = params["m"]?.takeIf { it in 1..MAX_MEMORY_KB } ?: return null
+        val t = params["t"]?.takeIf { it in 1..MAX_ITERATIONS } ?: return null
+        val p = params["p"]?.takeIf { it in 1..MAX_PARALLELISM } ?: return null
+        if (m < 8 * p) return null
+        val salt = decodeBase64(parts[4])?.takeIf { it.size in MIN_SALT_BYTES..MAX_SALT_BYTES } ?: return null
+        val hash = decodeBase64(parts[5])?.takeIf { it.size in MIN_HASH_BYTES..MAX_HASH_BYTES } ?: return null
         return Phc(m, t, p, salt, hash)
     }
 
     private fun parseParams(segment: String): Map<String, Int>? = buildMap {
         for (param in segment.split(',')) {
             val (k, v) = param.split('=', limit = 2).takeIf { it.size == 2 } ?: return null
+            if (k !in PHC_PARAMETERS || containsKey(k)) return null
             put(k, v.toIntOrNull() ?: return null)
         }
     }
@@ -118,5 +134,21 @@ class Argon2PasswordHasher(
     private companion object {
         /** The only Argon2 version we emit or accept (0x13 — “v=19” in PHC strings). */
         const val PHC_VERSION = 19
+
+        /**
+         * Verification resource envelope. Plainbase has only emitted m=65536,t=3,p=1. These caps also admit the
+         * RFC 9106 low-memory profile and every OWASP-listed Argon2id profile, while a corrupted/hostile DB row
+         * cannot request more memory, passes, lanes, or decode buffers than the server deliberately supports.
+         */
+        const val MAX_MEMORY_KB = 65_536
+        const val MAX_ITERATIONS = 5
+        const val MAX_PARALLELISM = 4
+        const val MIN_SALT_BYTES = 8
+        const val MAX_SALT_BYTES = 64
+        const val MIN_HASH_BYTES = 4
+        const val MAX_HASH_BYTES = 64
+        const val MAX_PHC_CHARS = 512
+
+        val PHC_PARAMETERS = setOf("m", "t", "p")
     }
 }
