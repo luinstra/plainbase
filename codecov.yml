@@ -1,0 +1,17 @@
+coverage:
+  status:
+    project: false
+    patch:
+      default:
+        target: 85%
+        threshold: 0%
+        informational: true
+        only_pulls: true
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+  hide_project_coverage: true
