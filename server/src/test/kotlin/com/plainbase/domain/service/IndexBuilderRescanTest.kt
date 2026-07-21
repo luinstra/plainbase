@@ -94,6 +94,28 @@ class IndexBuilderRescanTest : FunSpec({
         }
     }
 
+    test("a move alias never displaces a new live canonical that claims the vacated path") {
+        withTempTree(seed = { root ->
+            writePage(root, "docs/start.md", pageWithId("Start"))
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+
+                Files.createDirectories(root.resolve("archive"))
+                Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
+                writePage(root, "docs/start.md", "---\ntitle: New Start\n---\n\n# New Start\n")
+
+                val snapshot = harness.builder.rebuild()
+                snapshot.byId.getValue(pageId).url shouldBe "/docs/archive/start"
+                snapshot.byUrlPath.getValue(TreePath.require("docs/start")).id shouldNotBe pageId
+                harness.registry.find(TreePath.require("docs/start")).shouldBeNull()
+                harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
+                    .single { it.path == TreePath.require("docs/start") }
+                    .message shouldBe "move alias for page $pageId dropped: shadowed by a live canonical path"
+            }
+        }
+    }
+
     test("a slug-only change is a move too: editing frontmatter slug records the old canonical path") {
         withTempTree(seed = { root ->
             writePage(root, "guide.md", pageWithId("Guide"))
@@ -158,6 +180,24 @@ class IndexBuilderRescanTest : FunSpec({
                 harness.builder.rebuild() // idempotent across rescans
                 harness.registry.find(TreePath.require("old/guide")) shouldBe id
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>() shouldBe emptyList()
+            }
+        }
+    }
+
+    test("the first page claiming a redirect_from keeps it when another page makes the same claim") {
+        withTempTree(seed = { root ->
+            writePage(root, "alpha.md", "---\ntitle: Alpha\nredirect_from: /shared.md\n---\n\n# Alpha\n")
+            writePage(root, "beta.md", "---\ntitle: Beta\nredirect_from: /shared.md\n---\n\n# Beta\n")
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                val snapshot = harness.builder.rebuild()
+                val alpha = snapshot.byPath.getValue(TreePath.require("alpha.md"))
+
+                harness.registry.find(TreePath.require("shared")) shouldBe alpha.id
+                harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
+                    .single { it.path == TreePath.require("shared") }
+                    .message shouldBe
+                    "redirect_from of beta.md ignored: already an alias of page ${alpha.id}"
             }
         }
     }

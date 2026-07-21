@@ -83,4 +83,34 @@ class AdminUserCrudTest : FunSpec({
             }.status shouldBe HttpStatusCode.Conflict
         }
     }
+
+    test("an unknown role is rejected without creating the user") {
+        authRouteTest(enforced = true) { harness ->
+            val (admin, csrf) = loginAs(harness, "boss", Role.ADMIN)
+            val response = admin.post("/api/v1/admin/users") {
+                header("X-CSRF-Token", csrf)
+                contentType(ContentType.Application.Json)
+                setBody("""{"username":"newbie","role":"superuser"}""")
+            }
+
+            response.status shouldBe HttpStatusCode.BadRequest
+            Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.content shouldBe
+                "invalid_auth_request"
+            admin.get("/api/v1/admin/users").bodyAsText().shouldNotContain("newbie")
+        }
+    }
+
+    test("disabling or resetting a nonexistent user returns 404") {
+        authRouteTest(enforced = true) { harness ->
+            val (admin, csrf) = loginAs(harness, "boss", Role.ADMIN)
+            val missingId = "01900000-0000-7000-9000-000000000099"
+
+            admin.post("/api/v1/admin/users/$missingId/disable") {
+                header("X-CSRF-Token", csrf)
+            }.status shouldBe HttpStatusCode.NotFound
+            admin.post("/api/v1/admin/users/$missingId/reset") {
+                header("X-CSRF-Token", csrf)
+            }.status shouldBe HttpStatusCode.NotFound
+        }
+    }
 })

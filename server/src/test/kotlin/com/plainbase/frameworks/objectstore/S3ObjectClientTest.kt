@@ -105,6 +105,16 @@ class S3ObjectClientTest : FunSpec({
         recorded.single().verifySignature()
     }
 
+    test("successful object responses without an ETag fail closed") {
+        respond = { FakeResponse(HttpStatusCode.OK, body = "content".toByteArray()) }
+        shouldThrow<ObjectStoreException> { client.get("missing-get-etag.md") }.message.orEmpty() shouldContain "no ETag"
+
+        respond = { FakeResponse(HttpStatusCode.OK) }
+        shouldThrow<ObjectStoreException> {
+            client.put("missing-put-etag.md", "content".toByteArray(), PutCondition.None)
+        }.message.orEmpty() shouldContain "no ETag"
+    }
+
     test("PUT If-None-Match:* sends the exclusive-create header and signs the payload") {
         respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"e2\"")) }
         val body = "# created\n".toByteArray()
@@ -138,6 +148,24 @@ class S3ObjectClientTest : FunSpec({
 
         respond = { FakeResponse(HttpStatusCode.Conflict) }
         client.put("a.md", "v2".toByteArray(), PutCondition.IfAbsent) shouldBe PutOutcome.PreconditionFailed(409)
+    }
+
+    test("unconditional byte-array and streamed PUTs throw on 409 or 412 instead of reporting a refused condition") {
+        respond = { FakeResponse(HttpStatusCode.Conflict) }
+        shouldThrow<ObjectStoreException> {
+            client.put("history.bundle", "bundle".toByteArray(), PutCondition.None)
+        }.message.orEmpty() shouldContain "409 Conflict"
+
+        val source = Files.createTempFile("pb-put-conflict", ".bundle")
+        try {
+            Files.writeString(source, "bundle")
+            respond = { FakeResponse(HttpStatusCode.PreconditionFailed) }
+            shouldThrow<ObjectStoreException> {
+                client.putFromFile("history.bundle", source)
+            }.message.orEmpty() shouldContain "412 Precondition Failed"
+        } finally {
+            Files.deleteIfExists(source)
+        }
     }
 
     test("DELETE succeeds on 204 and on 404 (idempotent), throws on anything else") {
@@ -287,6 +315,19 @@ class S3ObjectClientTest : FunSpec({
     test("an unexpected status surfaces as ObjectStoreException with the status and body") {
         respond = { FakeResponse(HttpStatusCode.Forbidden, body = "<Error><Code>AccessDenied</Code></Error>".toByteArray()) }
         shouldThrow<ObjectStoreException> { client.get("a.md") }.message.orEmpty() shouldContain "AccessDenied"
+    }
+
+    test("an oversized hostile error body stays bounded while preserving the status and useful prefix") {
+        val prefix = "<Error><Code>AccessDenied</Code><Message>"
+        val hostileBody = (prefix + "x".repeat(100_000) + "SECRET-TAIL").toByteArray()
+        respond = { FakeResponse(HttpStatusCode.Forbidden, body = hostileBody) }
+
+        val message = shouldThrow<ObjectStoreException> { client.get("bounded-error.md") }.message.orEmpty()
+
+        message shouldContain "403 Forbidden"
+        message shouldContain "AccessDenied"
+        (message.length < 600) shouldBe true
+        ("SECRET-TAIL" in message) shouldBe false
     }
 
     test("virtual-host addressing: bucket prefixes the host, drops out of the path, and is the signed host") {

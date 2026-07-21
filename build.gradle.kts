@@ -4,6 +4,7 @@
 
 plugins {
     alias(libs.plugins.spotless)
+    alias(libs.plugins.kover)
 }
 
 group = "com.plainbase"
@@ -11,6 +12,10 @@ group = "com.plainbase"
 // dev/CI builds fall back to the snapshot. `:server` inherits this via `version = rootProject.version`
 // (server/build.gradle.kts) and self-reports it through the generated `BuildInfo` (item 8).
 version = (findProperty("releaseVersion") as String?)?.takeIf { it.isNotBlank() } ?: "0.1.0-SNAPSHOT"
+
+dependencies {
+    kover(project(":server"))
+}
 
 spotless {
     kotlinGradle {

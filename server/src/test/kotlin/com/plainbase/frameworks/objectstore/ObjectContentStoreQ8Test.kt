@@ -5,12 +5,15 @@ import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.service.CitationFactory
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
+import java.net.ConnectException
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The Q8a/Q8b/Q8c/Q8d injected-failure arms that are not clean oracle-pair properties, plus the
@@ -19,6 +22,95 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 class ObjectContentStoreQ8Test : FunSpec({
 
     val hasher = CitationFactory()::contentHash
+
+    test("Q8a create: the PUT threw ambiguously before applying and GET confirms absence => Unreadable(false)") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-not-landed.md")
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            hybrid.fake.ambiguousBeforeApply += key
+
+            val result = hybrid.store.createExclusive(path, "fresh".toByteArray(), hasher)
+
+            val unreadable = result.shouldBeInstanceOf<CreateResult.Unreadable>()
+            unreadable.targetMutated shouldBe false
+            unreadable.cause shouldContain "simulated ambiguous PUT failure"
+            hybrid.fake.currentBytes(key).shouldBeNull()
+            hybrid.store.read(path).shouldBeNull()
+        }
+    }
+
+    test("Q8a create: the PUT and disambiguating GET both fail => outcome_unknown with mutation retained") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-unknown.md")
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            hybrid.fake.ambiguousBeforeApply += key
+            val opIndex = AtomicInteger(0)
+            hybrid.fake.onNetworkOp = {
+                if (opIndex.getAndIncrement() >= 1) {
+                    throw ObjectStoreException("simulated create disambiguation failure")
+                }
+            }
+
+            val result = hybrid.store.createExclusive(path, "fresh".toByteArray(), hasher)
+
+            val unreadable = result.shouldBeInstanceOf<CreateResult.Unreadable>()
+            unreadable.targetMutated shouldBe true
+            unreadable.cause shouldContain "outcome_unknown"
+            unreadable.cause shouldContain "simulated create disambiguation failure"
+            hybrid.fake.currentBytes(key).shouldBeNull()
+            hybrid.store.read(path).shouldBeNull()
+        }
+    }
+
+    test("Q8a create: the PUT lands before its ambiguous failure => Created and mirror apply completes") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-landed.md")
+            val bytes = "our generation".toByteArray()
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            hybrid.fake.ambiguousAfterApply += key
+
+            val result = hybrid.store.createExclusive(path, bytes, hasher)
+
+            result shouldBe CreateResult.Created(hasher(bytes))
+            hybrid.fake.currentBytes(key) shouldBe bytes
+            java.nio.file.Files.readAllBytes(hybrid.mirrorRoot.resolve(key)) shouldBe bytes
+            hybrid.state.etagOf(path).shouldNotBeNull()
+        }
+    }
+
+    test("Q8a create: another generation wins after the ambiguous failure => Exists and mirror heals to authority") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-external-winner.md")
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            val external = "external generation".toByteArray()
+            hybrid.fake.seed(key, external)
+            hybrid.fake.ambiguousBeforeApply += key
+
+            val result = hybrid.store.createExclusive(path, "our generation".toByteArray(), hasher)
+
+            result shouldBe CreateResult.Exists(path)
+            hybrid.fake.currentBytes(key) shouldBe external
+            java.nio.file.Files.readAllBytes(hybrid.mirrorRoot.resolve(key)) shouldBe external
+            hybrid.state.etagOf(path).shouldNotBeNull()
+        }
+    }
+
+    test("Q8c unconditional write: two definitive failures exhaust the single retry and leave both stores unchanged") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8c-retry-exhausted.md")
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            hybrid.fake.connectRefusal = true
+
+            shouldThrow<ConnectException> {
+                hybrid.store.write(path, "never lands".toByteArray())
+            }
+
+            hybrid.fake.putCount shouldBe 2
+            hybrid.fake.currentBytes(key).shouldBeNull()
+            hybrid.store.read(path).shouldBeNull()
+            hybrid.state.etagOf(path).shouldBeNull()
+        }
+    }
 
     test("Q8a CAS: the PUT threw ambiguously but did NOT land (etag == prior) => Unreadable(false)") {
         HybridFixture().use { hybrid ->
