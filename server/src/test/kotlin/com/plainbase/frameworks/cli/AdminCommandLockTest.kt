@@ -54,7 +54,7 @@ class AdminCommandLockTest : FunSpec({
     test("mint-token refuses with exit 1 when a server holds the lock, then succeeds once released") {
         withData { data ->
             val cfg = config(data)
-            val held = DataDirLock.tryAcquire(data)!!
+            val held = requireNotNull(DataDirLock.tryAcquire(data))
             try {
                 AdminCommand.run(listOf("mint-token", "ci"), cfg) shouldBe 1 // lock-held refusal
             } finally {
@@ -99,6 +99,42 @@ class AdminCommandLockTest : FunSpec({
             silently { AdminCommand.run(listOf("mint-token", "ci"), cfg) } shouldBe 0
             silently { AdminCommand.run(listOf("mint-token", "ci", "commit"), cfg) } shouldBe 0
             silently { AdminCommand.run(listOf("revoke-token", "some-id"), cfg) } shouldBe 0
+        }
+    }
+
+    test("missing operands and invalid enum values return usage without mutating state") {
+        withData { data ->
+            val cfg = config(data)
+
+            AdminCommand.run(listOf("mint-token"), cfg) shouldBe 2
+            AdminCommand.run(listOf("mint-token", "ci", "root"), cfg) shouldBe 2
+            AdminCommand.run(listOf("revoke-token"), cfg) shouldBe 2
+            AdminCommand.run(listOf("grant-role", "proxy", "carol"), cfg) shouldBe 2
+            AdminCommand.run(listOf("grant-role", "proxy", "carol", "owner"), cfg) shouldBe 2
+
+            silently { AdminCommand.run(listOf("list-tokens"), cfg) } shouldBe 0
+        }
+    }
+
+    test("list-tokens rejects positional arguments and remains available after the usage error") {
+        withData { data ->
+            val cfg = config(data)
+
+            AdminCommand.run(listOf("list-tokens", "extra"), cfg) shouldBe 2
+            silently { AdminCommand.run(listOf("list-tokens"), cfg) } shouldBe 0
+        }
+    }
+
+    test("setup-token validates arguments and auth mode before trying to acquire the data lock") {
+        withData { data ->
+            val cfg = config(data)
+            val held = requireNotNull(DataDirLock.tryAcquire(data))
+            try {
+                AdminCommand.run(listOf("setup-token", "--force", "extra"), cfg) shouldBe 2
+                AdminCommand.run(listOf("setup-token"), cfg) shouldBe 2
+            } finally {
+                held.close()
+            }
         }
     }
 })

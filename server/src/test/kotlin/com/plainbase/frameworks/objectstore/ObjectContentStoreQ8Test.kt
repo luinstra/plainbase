@@ -62,6 +62,39 @@ class ObjectContentStoreQ8Test : FunSpec({
         }
     }
 
+    test("Q8a create: the PUT lands before its ambiguous failure => Created and mirror apply completes") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-landed.md")
+            val bytes = "our generation".toByteArray()
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            hybrid.fake.ambiguousAfterApply += key
+
+            val result = hybrid.store.createExclusive(path, bytes, hasher)
+
+            result shouldBe CreateResult.Created(hasher(bytes))
+            hybrid.fake.currentBytes(key) shouldBe bytes
+            java.nio.file.Files.readAllBytes(hybrid.mirrorRoot.resolve(key)) shouldBe bytes
+            hybrid.state.etagOf(path).shouldNotBeNull()
+        }
+    }
+
+    test("Q8a create: another generation wins after the ambiguous failure => Exists and mirror heals to authority") {
+        HybridFixture().use { hybrid ->
+            val path = TreePath.require("q8a-create-external-winner.md")
+            val key = hybrid.mirror.resolveRepoRelativePath(path)
+            val external = "external generation".toByteArray()
+            hybrid.fake.seed(key, external)
+            hybrid.fake.ambiguousBeforeApply += key
+
+            val result = hybrid.store.createExclusive(path, "our generation".toByteArray(), hasher)
+
+            result shouldBe CreateResult.Exists(path)
+            hybrid.fake.currentBytes(key) shouldBe external
+            java.nio.file.Files.readAllBytes(hybrid.mirrorRoot.resolve(key)) shouldBe external
+            hybrid.state.etagOf(path).shouldNotBeNull()
+        }
+    }
+
     test("Q8c unconditional write: two definitive failures exhaust the single retry and leave both stores unchanged") {
         HybridFixture().use { hybrid ->
             val path = TreePath.require("q8c-retry-exhausted.md")

@@ -8,6 +8,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -89,6 +90,55 @@ class McpSurfaceTest : FunSpec({
                 client.call("propose_change", proposeArgs(harness.seedPageId, harness.seedBaseHash, content)).isErr() shouldBe false
             }
             harness.proposalContentBytes().toList() shouldBe content.encodeToByteArray().toList()
+        }
+    }
+
+    test("page tools reject missing, non-string, and non-canonical ids with the frozen invalid_page_id envelope") {
+        McpHarness().use { harness ->
+            harness.session(harness.proposeBearer) { client ->
+                for (tool in listOf("read_page", "get_page_metadata", "validate_links")) {
+                    for (args in listOf(emptyMap(), mapOf("id" to 42), mapOf("id" to "not-a-uuid"))) {
+                        val result = client.call(tool, args)
+                        result.isErr() shouldBe true
+                        result.text() shouldContain "invalid_page_id"
+                    }
+                }
+            }
+        }
+    }
+
+    test("get_change distinguishes malformed ids from well-formed unknown ids") {
+        McpHarness().use { harness ->
+            harness.session(harness.proposeBearer) { client ->
+                for (args in listOf(emptyMap(), mapOf("id" to 42), mapOf("id" to "not-a-uuid"))) {
+                    val malformed = client.call("get_change", args)
+                    malformed.isErr() shouldBe true
+                    malformed.text() shouldContain "invalid_propose_request"
+                }
+
+                val unknown = client.call("get_change", mapOf("id" to "01900000-0000-7000-9000-000000000099"))
+                unknown.isErr() shouldBe true
+                unknown.text() shouldContain "not_found"
+            }
+        }
+    }
+
+    test("propose_change maps malformed argument shapes and stale bases to stable client errors") {
+        McpHarness().use { harness ->
+            harness.session(harness.proposeBearer) { client ->
+                for (args in listOf(emptyMap(), mapOf("operation" to 42), mapOf("operation" to "delete"))) {
+                    val malformed = client.call("propose_change", args)
+                    malformed.isErr() shouldBe true
+                    malformed.text() shouldContain "invalid_propose_request"
+                }
+
+                val stale = client.call(
+                    "propose_change",
+                    proposeArgs(harness.seedPageId, "sha256:${"0".repeat(64)}"),
+                )
+                stale.isErr() shouldBe true
+                stale.text() shouldContain "stale_base"
+            }
         }
     }
 
