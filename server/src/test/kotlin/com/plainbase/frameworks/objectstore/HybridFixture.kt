@@ -5,6 +5,7 @@ import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
@@ -73,14 +74,23 @@ class FailableFileAtomics(private val delegate: FileAtomics = FileAtomics.Real) 
     /** Called with the write TARGET - lets a batch (e.g. a poll cycle) fail exactly one key. */
     var shouldFailForTarget: (Path) -> Boolean = { false }
 
+    /** Models filesystems that support replacement copies but not atomic rename. */
+    var atomicMoveUnsupported: Boolean = false
+
+    val copyReplaceCalls: AtomicInteger = AtomicInteger()
+
     override fun createLink(link: Path, existing: Path) = delegate.createLink(link, existing)
 
     override fun atomicMove(source: Path, target: Path) {
+        if (atomicMoveUnsupported) {
+            throw AtomicMoveNotSupportedException(source.toString(), target.toString(), "simulated unsupported atomic move")
+        }
         if (shouldFail() || shouldFailForTarget(target)) throw IOException("simulated mirror write failure (atomicMove)")
         delegate.atomicMove(source, target)
     }
 
     override fun copyReplace(source: Path, target: Path) {
+        copyReplaceCalls.incrementAndGet()
         if (shouldFail() || shouldFailForTarget(target)) throw IOException("simulated mirror write failure (copyReplace)")
         delegate.copyReplace(source, target)
     }

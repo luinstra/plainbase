@@ -177,6 +177,51 @@ class ProposalRouteTest : FunSpec({
         }
     }
 
+    test("decision routes expose the terminal-state matrix and cap reject bodies") {
+        withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
+            restTest(root) { harness ->
+                val (pageId, hash) = page("doc")
+                val proposalId = client.post("/api/v1/changes") {
+                    contentType(json)
+                    setBody(proposeEdit(pageId, hash, "---\ntitle: Doc\n---\n\n# Changed\n"))
+                }.body().getValue("id").jsonPrimitive.content
+
+                val pendingRebase = client.post("/api/v1/changes/$proposalId/rebase")
+                pendingRebase.status shouldBe HttpStatusCode.Conflict
+                pendingRebase.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "not_conflicted"
+
+                client.post("/api/v1/changes/$proposalId/reject") {
+                    contentType(json)
+                    setBody("{}")
+                }.status shouldBe HttpStatusCode.OK
+                val terminalApprove = client.post("/api/v1/changes/$proposalId/approve")
+                terminalApprove.status shouldBe HttpStatusCode.Conflict
+                terminalApprove.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "not_pending"
+
+                val unknownId = "01900000-0000-7000-9000-000000000099"
+                for (response in listOf(
+                    client.get("/api/v1/changes/$unknownId"),
+                    client.post("/api/v1/changes/$unknownId/approve"),
+                    client.post("/api/v1/changes/$unknownId/rebase"),
+                )) {
+                    response.status shouldBe HttpStatusCode.NotFound
+                    response.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                        "not_found"
+                }
+
+                val oversizedReject = client.post("/api/v1/changes/$unknownId/reject") {
+                    contentType(json)
+                    setBody(ByteArray((harness.services.maxWriteBodyBytes + 1).toInt()) { 'x'.code.toByte() })
+                }
+                oversizedReject.status shouldBe HttpStatusCode.PayloadTooLarge
+                oversizedReject.body().getValue("error").jsonObject.getValue("code").jsonPrimitive.content shouldBe
+                    "body_too_large"
+            }
+        }
+    }
+
     test("§0.13(i) freeze-proof: the stored diff survives the live page converging on the proposed content") {
         withTempTree(seed = { writePage(it, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n\nOld.\n") }) { root ->
             restTest(root) { harness ->
