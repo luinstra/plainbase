@@ -117,6 +117,20 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("invalid root names and unknown add flags are rejected without creating managed config") {
+        world { w ->
+            val err = captureStderr {
+                w.root("add", "Bad_Name", "/tmp/x") shouldBe 2
+                w.root("remove", "Bad_Name") shouldBe 2
+                w.root("add", "notes", "/tmp/x", "--bogus") shouldBe 2
+            }
+
+            err shouldContain "not a valid root name"
+            err shouldContain "unknown flag '--bogus'"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
     test("an EMPTY path is exit 2 - `root add docs \"\$DOCS_DIR\"` with the var unset must not serve the CWD") {
         // The loader refuses a blank `roots.<x>.path` for exactly this reason, and it can never fire: this command
         // ABSOLUTIZES before it serializes, and `Path.of("")` is the process working directory - which is a real,

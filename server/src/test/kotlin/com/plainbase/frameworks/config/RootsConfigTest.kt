@@ -165,6 +165,23 @@ class RootsConfigTest : FunSpec({
         }
     }
 
+    test("explicit main history and the legacy git switch cannot contradict each other") {
+        listOf(
+            Triple("native", false, "history = native and git.enabled = false"),
+            Triple("off", true, "history = off and git.enabled = true"),
+        ).forEach { (history, gitEnabled, expected) ->
+            withDataDir(
+                """
+                roots { main { path = "/roots/m", history = $history } }
+                git { enabled = $gitEnabled }
+                """.trimIndent(),
+            ) { env ->
+                shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                    .message shouldContain expected
+            }
+        }
+    }
+
     test("an explicit roots block combined with storage.backend=object is a boot error (D10)") {
         withDataDir("""roots { main { path = "/roots/m" } }""") { env ->
             val objectEnv = env + mapOf(
@@ -177,6 +194,25 @@ class RootsConfigTest : FunSpec({
             shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(objectEnv) }
                 .message shouldContain "roots {} cannot be combined with storage.backend=object"
         }
+    }
+
+    test("a directly constructed object config reasserts the explicit-roots refusal at the boot gate") {
+        val config = PlainbaseConfig(
+            contentDir = Path.of("/roots/ignored"),
+            dataDir = Path.of("/data/plainbase"),
+            host = "127.0.0.1",
+            port = PlainbaseConfig.DEFAULT_PORT,
+            storage = StorageConfig(
+                backend = StorageBackend.OBJECT,
+                endpoint = "https://acct.example.com",
+                bucket = "docs",
+                accessKeyId = "k",
+                secretAccessKey = "s",
+            ),
+            roots = RootsConfig.of(listOf(root("main")), RootsOrigin.EXPLICIT),
+        )
+
+        config.bootRefusals().single().message shouldContain "roots {} cannot be combined with storage.backend=object"
     }
 
     // --- warnings (D11/D12) --------------------------------------------------------------------------

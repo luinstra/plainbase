@@ -101,6 +101,20 @@ class DirectCommitGlobConfigTest : FunSpec({
         }
     }
 
+    test("roots.main alone is a complete main grant source rather than an empty legacy fallback") {
+        withConf(
+            """
+            $twoRoots
+            auth { agentDirectCommit { roots { main = ["drafts/**"], archive = ["2024/**"] } } }
+            """.trimIndent(),
+        ) { env ->
+            val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
+
+            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
+            globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
+        }
+    }
+
     test("the env var still overrides MAIN's file list and leaves an EXTRAS-only block intact (the LEGAL combination)") {
         withConf(
             """

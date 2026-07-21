@@ -3,10 +3,14 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.Nfc
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -47,6 +51,16 @@ import kotlin.time.Clock
  * AdoptionPass's ROUTING of each patcher outcome, so fixture frontmatter can evolve freely).
  */
 class AdoptionPassTest : FunSpec({
+
+    test("duplicate source roots are refused before rank can silently choose a winner") {
+        withHarness { h ->
+            val duplicate = AdoptionPass.Source(RootName.MAIN, LocalContentStore(h.root))
+
+            shouldThrow<IllegalArgumentException> {
+                h.pass(extras = listOf(duplicate))
+            }.message shouldContain "duplicate source root(s): main"
+        }
+    }
 
     test("zero-write proof: default adoption assigns ids to all pages and the directory checksum is identical") {
         withHarness { h ->
@@ -433,6 +447,46 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
+    test("a page deleted after enumeration is skipped without minting or binding an identity") {
+        withHarness { h ->
+            val vanished = TreePath.require("notes/no-frontmatter.md")
+            val target = RootedPath(RootName.MAIN, vanished)
+            val real = LocalContentStore(h.root)
+            val disappearing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead =
+                    if (path == vanished) StoreRead.NoBytes else real.readClassified(path)
+            }
+
+            val plan = h.pass(store = disappearing).run(AdoptionPass.Mode.RECORD)
+
+            plan.pages.none { it.path == vanished } shouldBe true
+            h.idMap.find(target) shouldBe null
+        }
+    }
+
+    test("a bind refusal after identity resolution aborts instead of improvising a different owner") {
+        withHarness { h ->
+            val heldBy = RootedPath(RootName.require("other"), TreePath.require("held.md"))
+            val refusing = object : IdMapRepository by h.idMap {
+                override fun bind(
+                    path: RootedPath,
+                    id: PageId,
+                    materialized: Boolean,
+                    supersession: Supersession,
+                ): BindOutcome = BindOutcome.Refused(id, heldBy, retired = false)
+            }
+
+            val failure = shouldThrow<IllegalStateException> {
+                h.pass(idMap = refusing).run(AdoptionPass.Mode.RECORD)
+            }
+
+            failure.message shouldContain "the bind REFUSED it"
+            failure.message shouldContain "root=other"
+            failure.message shouldContain "path=held.md"
+            h.idMap.bindings().shouldBeEmpty()
+        }
+    }
+
     test("a page EDITED under the plan is not clobbered with the bytes the plan derived from the stale read") {
         withHarness { h ->
             val page = TreePath.require("notes/no-frontmatter.md")
@@ -579,6 +633,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
         store: ContentStore = LocalContentStore(root),
         registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
         extras: List<AdoptionPass.Source> = emptyList(),
+        idMap: IdMapRepository = this.idMap,
     ): AdoptionPass =
         AdoptionPass(
             sources = listOf(AdoptionPass.Source(RootName.MAIN, store)) + extras,
