@@ -15,6 +15,9 @@ coverage:
           - "!server/src/main/kotlin/com/plainbase/Application.kt"
           - "!server/src/main/kotlin/com/plainbase/frameworks/ktor/KtorServer.kt"
 
+ignore:
+  - "server/build/generated/sqldelight/**"
+
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
   behavior: default
