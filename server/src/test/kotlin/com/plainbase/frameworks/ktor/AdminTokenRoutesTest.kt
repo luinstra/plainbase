@@ -63,6 +63,51 @@ class AdminTokenRoutesTest : FunSpec({
         }
     }
 
+    test("mint rejects a blank label and unknown mode") {
+        authRouteTest(enforced = true, extract = admin) { harness ->
+            harness.grantRole("builtin", "admin-id", Role.ADMIN)
+
+            listOf(
+                """{"label":" ","mode":"commit"}""",
+                """{"label":"ci","mode":"root"}""",
+            ).forEach { body ->
+                val response = client.post("/api/v1/admin/tokens") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                }
+                response.status shouldBe HttpStatusCode.BadRequest
+                Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.content shouldBe
+                    "invalid_auth_request"
+            }
+
+            Json.parseToJsonElement(client.get("/api/v1/admin/tokens").bodyAsText())
+                .jsonObject["tokens"]!!.jsonArray.size shouldBe 0
+        }
+    }
+
+    test("role grant rejects blank subject fields and an unknown role") {
+        authRouteTest(enforced = true, extract = admin) { harness ->
+            harness.grantRole("builtin", "admin-id", Role.ADMIN)
+
+            listOf(
+                """{"issuer":" ","external_id":"carol","role":"editor"}""",
+                """{"issuer":"proxy","external_id":" ","role":"editor"}""",
+                """{"issuer":"proxy","external_id":"carol","role":"owner"}""",
+            ).forEach { body ->
+                val response = client.post("/api/v1/admin/roles") {
+                    contentType(ContentType.Application.Json)
+                    setBody(body)
+                }
+                response.status shouldBe HttpStatusCode.BadRequest
+                Json.parseToJsonElement(response.bodyAsText()).jsonObject["error"]!!.jsonObject["code"]!!.jsonPrimitive.content shouldBe
+                    "invalid_auth_request"
+            }
+
+            client.get("/api/v1/admin/roles").bodyAsText() shouldContain "admin-id"
+            (client.get("/api/v1/admin/roles").bodyAsText().contains("carol")) shouldBe false
+        }
+    }
+
     test("the audit read returns recent decision rows") {
         authRouteTest(enforced = true, extract = admin) { harness ->
             harness.grantRole("builtin", "admin-id", Role.ADMIN)
