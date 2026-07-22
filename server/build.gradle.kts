@@ -311,24 +311,35 @@ val nativeTestList = tasks.register<Test>("nativeTestList") {
 // P3 metadata regen: run the full-stack spike (incl. the new mcp-sse-handshake check) on the JVM under the
 // native-image tracing agent, merging the SSE/MCP-server reachability delta into the committed kotlin-sdk metadata.
 // Deliberate, manual step (not wired into `build`): run it when the SSE path or the SDK version changes.
-tasks.register<JavaExec>("traceMcpSseMetadata") {
+tasks.register<Exec>("traceMcpSseMetadata") {
     group = "verification"
     description = "Run the spike under -agentlib:native-image-agent to regenerate kotlin-sdk SSE reflect metadata"
-    mainClass.set("com.plainbase.ApplicationKt")
-    classpath = sourceSets["main"].runtimeClasspath
-    args("spike")
+    dependsOn(tasks.named("classes"))
+    val runtimeClasspath = sourceSets["main"].runtimeClasspath
     // The native-image tracing agent ships ONLY with GraalVM; the default build toolchain is Adoptium 21 (no
     // agent). Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
     // so the traced reachability matches what nativeCompile sees.
-    val graalHome = System.getenv("GRAALVM_HOME")?.takeIf { it.isNotBlank() }
-        ?: System.getenv("JAVA_HOME")
-        ?: error("traceMcpSseMetadata needs GraalVM via GRAALVM_HOME or JAVA_HOME")
-    executable("$graalHome/bin/java")
-    jvmArgs(
-        "--enable-native-access=ALL-UNNAMED",
-        "-agentlib:native-image-agent=config-merge-dir=" +
-            "src/main/resources/META-INF/native-image/io.modelcontextprotocol/kotlin-sdk",
-    )
+    val graalvmHome = providers.environmentVariable("GRAALVM_HOME")
+    val javaHome = providers.environmentVariable("JAVA_HOME")
+
+    doFirst {
+        val home =
+            graalvmHome.orNull?.takeIf { it.isNotBlank() }
+                ?: javaHome.orNull?.takeIf { it.isNotBlank() }
+                ?: throw GradleException(
+                    "traceMcpSseMetadata needs GraalVM via GRAALVM_HOME or JAVA_HOME",
+                )
+        commandLine(
+            "$home/bin/java",
+            "--enable-native-access=ALL-UNNAMED",
+            "-agentlib:native-image-agent=config-merge-dir=" +
+                "src/main/resources/META-INF/native-image/io.modelcontextprotocol/kotlin-sdk",
+            "-cp",
+            runtimeClasspath.asPath,
+            "com.plainbase.ApplicationKt",
+            "spike",
+        )
+    }
 }
 
 // ---- GraalVM native image ----
