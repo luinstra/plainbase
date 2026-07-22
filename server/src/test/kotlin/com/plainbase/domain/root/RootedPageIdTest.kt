@@ -17,7 +17,7 @@ class RootedPageIdTest : FunSpec({
     test("permalink is the bare /p/{id} form, byte-identical to the pre-seam PageId permalink") {
         val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
         RootedPageId(RootName.MAIN, id).permalink shouldBe "/p/${id.value}"
-        Permalink.of(RootName.MAIN, id) shouldBe "/p/${id.value}"
+        Permalink.of(id) shouldBe "/p/${id.value}"
     }
 
     test("the permalink is the same string regardless of the qualifying root (unchanged in this chunk)") {

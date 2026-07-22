@@ -348,7 +348,7 @@ class GuardedReadFacade(
                 registry.byName(id.root) != null &&
                     resolver.statusOf(id.root, availability.current()) == RootStatus.UNAVAILABLE &&
                     resolver.bindsLive(id.root, id.id)
-            }?.let { Permalink.of(id.root, id.id) }
+            }?.let { Permalink.of(id.id) }
         // A cross-root alias's TARGET may live in an unavailable root even though the route's root is fine. The 302
         // still fires and the target surface answers 503 - an accepted, documented two-step.
         return target.url ?: target.permalink

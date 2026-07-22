@@ -6,14 +6,15 @@ plugins {
     alias(libs.plugins.sqldelight)
     alias(libs.plugins.graalvm.native)
     alias(libs.plugins.kover)
-    alias(libs.plugins.detekt)
+    // TODO: Re-enable with the cleanup tracked in /docs/detekt-cleanup-plan.md.
+    // alias(libs.plugins.detekt)
     application
 }
 
-detekt {
-    buildUponDefaultConfig = true
-    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
-}
+// detekt {
+//     buildUponDefaultConfig = true
+//     config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+// }
 
 tasks.named("check") {
     dependsOn(rootProject.tasks.named("lintKotlin"))

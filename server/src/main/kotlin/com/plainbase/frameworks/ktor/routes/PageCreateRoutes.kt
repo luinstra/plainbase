@@ -358,7 +358,7 @@ internal data class CreatedIdentity(val id: PageId, val url: String)
 internal fun createdIdentity(target: RootedPath, minted: PageId, snapshot: PageIndex): CreatedIdentity {
     val page = snapshot.byPath[target]
     val id = page?.id ?: minted
-    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(target.root, id))
+    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(id))
 }
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */

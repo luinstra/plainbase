@@ -313,5 +313,5 @@ object S3SmokeCommand {
         it.cause
     }.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
 
-    private val USAGE = "usage: plainbase s3-smoke  (config via PLAINBASE_SMOKE_* env - see S3SmokeCommand)"
+    private const val USAGE = "usage: plainbase s3-smoke  (config via PLAINBASE_SMOKE_* env - see S3SmokeCommand)"
 }

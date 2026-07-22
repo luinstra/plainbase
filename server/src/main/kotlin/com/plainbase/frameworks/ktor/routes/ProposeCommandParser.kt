@@ -1,7 +1,3 @@
-// The file's primary export is the `parseProposeCommand` function (the REST+MCP shared parser); `ProposeCommandParse`
-// is its small result type. Named after the parser, not the result type — suppress ktlint's single-class filename rule.
-@file:Suppress("ktlint:standard:filename")
-
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.TreePath
@@ -11,23 +7,6 @@ import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ProposalOperationWire
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
-
-/**
- * The shared `ProposeChangeRequest` -> `ProposeCommand` validation (the F4 malformed-shape matrix), CALL-FREE so
- * BOTH the REST route ([proposalRoutes]) and the MCP `propose_change` tool reuse it — they can never drift. On a
- * bad shape it returns [Invalid] with the SAME message the REST 400 used; the caller maps it to its transport
- * (REST: 400 `invalid_propose_request`; MCP: `CallToolResult` isError `invalid_propose_request`). Every wire value
- * is parsed through its typed constructor BEFORE the semantic checks; rows 3/5/6 (well-formed but stale /
- * path-mismatch) are the `ProposalService` outcomes.
- */
-sealed interface ProposeCommandParse {
-    data class Ok(val command: ProposeCommand) : ProposeCommandParse
-
-    /** [code] is the wire error code the caller emits — the default for every malformed shape, `invalid_root` for a
-     *  root that is not a legal slug or names no registered root. Carrying it HERE is what keeps the vocabulary ONE
-     *  across the three write surfaces instead of each mapping site hardcoding its own. */
-    data class Invalid(val message: String, val code: String = ErrorCodes.INVALID_PROPOSE_REQUEST) : ProposeCommandParse
-}
 
 /**
  * Validates a decoded [ProposeChangeRequest] into a typed [ProposeCommand], or returns [ProposeCommandParse.Invalid].

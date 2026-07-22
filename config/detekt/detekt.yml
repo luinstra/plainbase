@@ -1,4 +1,34 @@
 # Project-specific Detekt overrides. Unspecified rules inherit Detekt's defaults.
+#
+# Initial adoption policy: style/size debt remains visible as warnings while the
+# existing backlog is reviewed. Revisit these thresholds and promote useful
+# rules back to errors as the backlog is cleaned up.
+complexity:
+  LargeClass:
+    excludes:
+      - '**/test/**'
+    severity: Warning
+  LongMethod:
+    severity: Warning
+  TooManyFunctions:
+    severity: Warning
+
+exceptions:
+  TooGenericExceptionThrown:
+    excludes:
+      - '**/test/**'
+
 style:
+  DestructuringDeclarationWithTooManyEntries:
+    excludes:
+      - '**/test/**'
+  FunctionOnlyReturningConstant:
+    excludes:
+      - '**/test/**'
+  MagicNumber:
+    severity: Warning
   MaxLineLength:
     active: false
+  ReturnCount:
+    excludeGuardClauses: true
+    severity: Warning

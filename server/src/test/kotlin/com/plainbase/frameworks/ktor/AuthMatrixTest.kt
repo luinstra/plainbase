@@ -47,7 +47,7 @@ class AuthMatrixTest : FunSpec({
                     }
                 }
                 val ctx = harness.testRouteContext(
-                    searchProvider = harness.fts(root),
+                    searchProvider = harness.fts(),
                     enforced = true,
                     extract = fixedPrincipal(principal),
                 )
@@ -113,7 +113,7 @@ class AuthMatrixTest : FunSpec({
                 // first (BLOCKING 1: the write path's FIRST authorization is the audited edit/create/manage check).
                 harness.roleRepository.upsert("builtin", "subject", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    searchProvider = harness.fts(root),
+                    searchProvider = harness.fts(),
                     enforced = true,
                     extract = fixedPrincipal(Principal.Human("builtin", "subject")),
                 )
@@ -162,7 +162,7 @@ class AuthMatrixTest : FunSpec({
                 // A real loopback bearer for a READ_ONLY agent — the genuine extraction path (loopback is secure).
                 val minted = harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY)
                 val ctx = harness.testRouteContext(
-                    searchProvider = harness.fts(root),
+                    searchProvider = harness.fts(),
                     enforced = true, // the REAL extractPrincipal over the bearer (no fixed-principal seam)
                 )
                 testApplication {
@@ -192,7 +192,7 @@ class AuthMatrixTest : FunSpec({
                 // is enforced on the single authenticate path, so the very same bearer flips 200 → 401 with no restart.
                 val minted = harness.apiTokens.mint(label = "ci-revoked", mode = AgentMode.READ_ONLY)
                 val ctx = harness.testRouteContext(
-                    searchProvider = harness.fts(root),
+                    searchProvider = harness.fts(),
                     enforced = true, // the REAL extractPrincipal over the bearer (no fixed-principal seam)
                 )
                 testApplication {
@@ -215,7 +215,7 @@ class AuthMatrixTest : FunSpec({
 })
 
 /** A real FTS provider over a temp search.db so search/create exercise the engine; closed with the harness. */
-private fun IndexHarness.fts(root: java.nio.file.Path): com.plainbase.domain.search.SearchProvider {
+private fun IndexHarness.fts(): com.plainbase.domain.search.SearchProvider {
     val searchDb = com.plainbase.frameworks.search.SearchDb(Files.createTempDirectory("authmatrix-search").resolve("search.db"))
     return com.plainbase.frameworks.search.Fts5SearchProvider(searchDb)
 }

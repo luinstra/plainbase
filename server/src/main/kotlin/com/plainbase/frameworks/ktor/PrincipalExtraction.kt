@@ -159,7 +159,7 @@ fun decidePrincipalExtraction(
         // Diagnosability: a proxy request that fails the gate logs WHICH half failed (CIDR miss vs proto
         // mismatch) so an operator can tell a misrouted/spoofed peer from a missing `X-Forwarded-Proto`. The client
         // always sees the same 421 — no oracle. Never logs the secret/identity value.
-        if (proxyIdentityPresent) logProxyGateFailure(remoteHost, forwardedProtoValues, trustedProxyCidrs)
+        if (proxyIdentityPresent) logProxyGateFailure(remoteHost, trustedProxyCidrs)
         return PrincipalExtraction.InsecureTransportRefused // refuse BEFORE any secret/identity is touched
     }
     // Bearer wins: an agent call carrying a stray cookie/proxy header is still an agent.
@@ -185,7 +185,7 @@ private val logger = KotlinLogging.logger {}
  * `X-Forwarded-Proto` isn't all-`https` is a proto mismatch. Operator log ONLY (the client sees an identical 421);
  * never logs the secret/identity value.
  */
-private fun logProxyGateFailure(remoteHost: String, forwardedProtoValues: List<String>, trustedProxyCidrs: List<String>) {
+private fun logProxyGateFailure(remoteHost: String, trustedProxyCidrs: List<String>) {
     if (!RemoteAddress.isInAnyCidr(remoteHost, trustedProxyCidrs)) {
         logger.info { "proxy auth: CIDR miss — socket peer $remoteHost not in trustedProxyCidrs; refused (transport insecure)" }
     } else {
