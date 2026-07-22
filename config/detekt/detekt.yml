@@ -1,0 +1,4 @@
+# Project-specific Detekt overrides. Unspecified rules inherit Detekt's defaults.
+style:
+  MaxLineLength:
+    active: false

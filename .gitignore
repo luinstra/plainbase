@@ -25,6 +25,7 @@ frontend/playwright-report/
 *.iml
 .vscode/
 .kotlin/
+.codex/
 
 # Local git worktrees
 .worktrees/

@@ -21,8 +21,7 @@ Filesystem-native, agent-native internal docs product. Master plan:
 
 - Hexagonal, memoria-style: `domain/` (no framework imports) + `frameworks/` (adapters),
   ports named `XxxProvider`/natural nouns, impls `<Tech><Port>`. See master plan §5.8.
-- Formatting: Spotless + ktlint; author's layout wins (six rules disabled — see
-  `.editorconfig` and the `ktlintDisabledRules` map in `server/build.gradle.kts`; keep in sync).
+- Formatting: Kotlinter + ktlint; author's layout wins (layout-changing rules disabled in `.editorconfig`).
   140-col limit.
 - Logging: kotlin-logging facade, lazy lambdas. Companion-object logger for classes,
   top-level when file composition suits. `println` only for CLI output contracts
@@ -31,7 +30,7 @@ Filesystem-native, agent-native internal docs product. Master plan:
 
 ## Verification
 
-- `./gradlew build` = JAR floor: compile, tests, spotlessCheck, dependency allowlist.
+- `./gradlew build` = JAR floor: compile, tests, lintKotlin, dependency allowlist.
 - `./gradlew :server:nativeCompile` then `server/build/native/nativeCompile/plainbase spike`
   = the native gate (9/9 required). GraalVM comes from asdf (`.tool-versions`).
 - CI mirrors both; the universal JAR is the release floor — native failures block the
