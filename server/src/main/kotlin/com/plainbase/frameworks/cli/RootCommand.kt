@@ -3,6 +3,7 @@ package com.plainbase.frameworks.cli
 import com.plainbase.bootGateFor
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.StoreRead
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
@@ -579,7 +580,14 @@ object RootCommand {
         }
         if (positional.size != 2) return usage(output)
         val name = RootName.of(positional[0]) ?: run {
-            output.error("root add: '${positional[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
+            if (PageId.of(positional[0]) != null) {
+                output.error("root add: '${positional[0]}' may not look like a page id")
+            } else {
+                output.error(
+                    "root add: '${positional[0]}' is not a valid root name " +
+                        "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                )
+            }
             return null
         }
         // BLANK is refused HERE, before anything absolutizes it - the loader's identical guard cannot save us,

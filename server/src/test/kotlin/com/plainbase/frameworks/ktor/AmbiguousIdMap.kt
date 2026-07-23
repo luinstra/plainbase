@@ -1,8 +1,11 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The C4 test FAKE: an [IdMapRepository] that, for ONE [ambiguousId], reports a chosen set of live/retired roots and
@@ -28,6 +31,29 @@ class AmbiguousIdMap(
 
     override fun retiredRootsHoldingId(id: PageId): List<RootName> =
         if (id == ambiguousId) retiredRoots else real.retiredRootsHoldingId(id)
+}
+
+/** A rooted-miss fixture with one synthetic tombstone and a configurable live claimant set for the same id. */
+class RetiredElsewhereIdMap(
+    private val real: IdMapRepository,
+    private val retiredId: PageId,
+    private val retiredRoot: RootName,
+    private val retiredPath: TreePath,
+    private val liveRoots: List<RootName> = emptyList(),
+) : IdMapRepository by real {
+
+    override fun rootsHoldingId(id: PageId): List<RootName> =
+        if (id == retiredId) liveRoots else real.rootsHoldingId(id)
+
+    override fun retiredRootsHoldingId(id: PageId): List<RootName> =
+        if (id == retiredId) listOf(retiredRoot) else real.retiredRootsHoldingId(id)
+
+    override fun retiredAt(root: RootName, id: PageId): RetiredBinding? =
+        if (id == retiredId && root == retiredRoot) {
+            RetiredBinding(id, RootedPath(retiredRoot, retiredPath), materialized = false, retiredAt = 0L)
+        } else {
+            real.retiredAt(root, id)
+        }
 }
 
 /**

@@ -293,7 +293,8 @@ class GuardedReadFacade(
             is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(live.candidates)
             IdResolution.None -> when (val dead = resolver.resolveRetired(id)) {
                 is IdResolution.One ->
-                    resolver.retirementAt(dead.root, id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
+                    resolver.retirementAt(dead.root, id)?.let { PermalinkResolution.Retired(it, emptyList()) }
+                        ?: PermalinkResolution.Unknown
                 is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(dead.candidates)
                 IdResolution.None -> PermalinkResolution.Unknown
             }
@@ -319,7 +320,13 @@ class GuardedReadFacade(
             absence.requireVerifiedAbsence(root, id, snapshot)
         }
         // Not present, not live-bound here: a tombstone at (root, id) is 410, otherwise absent -> 404.
-        return resolver.retirementAt(root, id)?.let(PermalinkResolution::Retired) ?: PermalinkResolution.Unknown
+        val here = resolver.retirementAt(root, id) ?: return PermalinkResolution.Unknown
+        val liveElsewhere = when (val live = resolver.resolve(id)) {
+            is IdResolution.One -> listOf(live.root)
+            is IdResolution.Ambiguous -> live.candidates
+            IdResolution.None -> emptyList()
+        }.filter { it != root }
+        return PermalinkResolution.Retired(here, liveElsewhere)
     }
 
     override fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String? {

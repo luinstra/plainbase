@@ -17,7 +17,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * The permalink READ column of the endpoint-status matrix (C4, 6b): both the root-pinned `/p/r/{root}/{id}` and the
+ * The permalink READ column of the endpoint-status matrix (C4, 6b): both the root-pinned `/p/{root}/{id}` and the
  * bare `/p/{id}` against present / retired / detached / absent / malformed states. The CLASS-A line-280 flip is
  * pinned here: a sole tombstone under a DETACHED root answers 404 (never the old 410), while a tombstone under a
  * REGISTERED root stays 410.
@@ -46,7 +46,7 @@ class RootedPermalinkMatrixTest : FunSpec({
     suspend fun io.ktor.client.statement.HttpResponse.code(): String =
         Json.parseToJsonElement(bodyAsText()).jsonObject.getValue("error").jsonObject.getValue("code").jsonPrimitive.content
 
-    test("the permalink READ matrix: present/retired/detached/absent/malformed on /p/r and /p") {
+    test("the permalink READ matrix: present/retired/detached/absent/malformed on rooted and bare /p") {
         oneRoot { mainDir ->
             multiRootTest(listOf(testRoot("main", mainDir))) { harness ->
                 // Post-boot durable state: a tombstone under REGISTERED main, and a tombstone under a DETACHED root.
@@ -57,48 +57,56 @@ class RootedPermalinkMatrixTest : FunSpec({
 
                 val c = createClient { followRedirects = false }
 
-                withClue("PRESENT: /p/r/main/{id} -> 302") {
-                    c.get("/p/r/main/$presentId").status shouldBe HttpStatusCode.Found
+                withClue("PRESENT: /p/main/{id} -> 302") {
+                    c.get("/p/main/$presentId").status shouldBe HttpStatusCode.Found
                 }
                 withClue("PRESENT: bare /p/{id} -> 302") {
                     c.get("/p/$presentId").status shouldBe HttpStatusCode.Found
                 }
-                withClue("DETACHED root pin: /p/r/ghost/{id} -> 404 (unregistered, AFTER checkRead)") {
-                    c.get("/p/r/ghost/$presentId").status shouldBe HttpStatusCode.NotFound
+                withClue("DETACHED root pin: /p/ghost/{id} -> 404 (unregistered, AFTER checkRead)") {
+                    c.get("/p/ghost/$presentId").status shouldBe HttpStatusCode.NotFound
                 }
-                withClue("MALFORMED root slug: /p/r/BadRoot/{id} -> 400 invalid_root (the sole pre-auth exception)") {
-                    val res = c.get("/p/r/BadRoot/$presentId")
+                withClue("MALFORMED root slug: /p/BadRoot/{id} -> 400 invalid_root (the sole pre-auth exception)") {
+                    val res = c.get("/p/BadRoot/$presentId")
                     res.status shouldBe HttpStatusCode.BadRequest
                     res.code() shouldBe "invalid_root"
                 }
-                withClue("ABSENT: /p/r/main/{unknown} -> 404") {
-                    c.get("/p/r/main/$absentId").status shouldBe HttpStatusCode.NotFound
+                withClue("ABSENT: /p/main/{unknown} -> 404") {
+                    c.get("/p/main/$absentId").status shouldBe HttpStatusCode.NotFound
                 }
-                withClue("RETIRED under REGISTERED main: /p/r/main/{id} -> 410, and bare /p/{id} -> 410") {
-                    c.get("/p/r/main/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
+                withClue("RETIRED under REGISTERED main: /p/main/{id} -> 410, and bare /p/{id} -> 410") {
+                    c.get("/p/main/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
                     c.get("/p/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
                 }
                 withClue("CLASS-A flip: a sole tombstone under a DETACHED root -> bare /p/{id} is 404, NEVER 410") {
                     c.get("/p/${retiredDetachedId.value}").status shouldBe HttpStatusCode.NotFound
                 }
-                withClue("MALFORMED id: the 32-hex hyphenless form is 400 invalid_page_id on /p/r (the shared canonical gate)") {
-                    val res = c.get("/p/r/main/${presentId.replace("-", "")}")
+                withClue("MALFORMED id: the 32-hex hyphenless form is 400 invalid_page_id on rooted /p") {
+                    val res = c.get("/p/main/${presentId.replace("-", "")}")
                     res.status shouldBe HttpStatusCode.BadRequest
                     res.code() shouldBe "invalid_page_id"
                 }
-                withClue("canonical hyphenated UPPERCASE still resolves on /p/r (any-case is canonical-shape)") {
-                    c.get("/p/r/main/${presentId.uppercase()}").status shouldBe HttpStatusCode.Found
+                withClue("canonical hyphenated UPPERCASE still resolves on rooted /p (any-case is canonical-shape)") {
+                    c.get("/p/main/${presentId.uppercase()}").status shouldBe HttpStatusCode.Found
+                }
+                withClue("interior and leading empty segments are malformed") {
+                    val interior = c.get("/p/main//$presentId")
+                    interior.status shouldBe HttpStatusCode.BadRequest
+                    interior.code() shouldBe "invalid_page_id"
+                    val leading = c.get("/p//$presentId")
+                    leading.status shouldBe HttpStatusCode.BadRequest
+                    leading.code() shouldBe "invalid_page_id"
                 }
             }
         }
     }
 
-    // Behavior-pins (no back-out exists for these arms): the DOWN-root /p/r column + the limbo cell. The tombstone
+    // Behavior-pins (no back-out exists for these arms): the DOWN-root rooted column + the limbo cell. The tombstone
     // cell pins the TRACED arm order - live None is decided BEFORE the availability gate can fire, because
     // `bindsLive` is false for a retired id and only the live arms call `requireAvailable`. Retired is a settled
     // durable fact; availability gates only LIVE serving, so 410 under a down root is right per the pinned matrix.
     test(
-        "the DOWN-root /p/r column: live-bound -> 503 root_unavailable; tombstone-only -> 410; absent -> 404; limbo under UP main -> 503",
+        "the DOWN-root rooted column: live-bound -> 503 root_unavailable; tombstone-only -> 410; absent -> 404; limbo under UP main -> 503",
     ) {
         oneRoot { mainDir ->
             val missing = mainDir.resolveSibling("extra-root-gone")
@@ -118,18 +126,18 @@ class RootedPermalinkMatrixTest : FunSpec({
                     application { plainbaseModule(harness.services) }
                     val c = createClient { followRedirects = false }
                     withClue("LIVE binding under a DOWN root -> 503 root_unavailable (availability gates live serving)") {
-                        val res = c.get("/p/r/extra/${liveDownId.value}")
+                        val res = c.get("/p/extra/${liveDownId.value}")
                         res.status shouldBe HttpStatusCode.ServiceUnavailable
                         res.code() shouldBe "root_unavailable"
                     }
                     withClue("TOMBSTONE-only under a DOWN root -> 410 (retired is settled; the gate sits on the live arms only)") {
-                        c.get("/p/r/extra/${retiredDownId.value}").status shouldBe HttpStatusCode.Gone
+                        c.get("/p/extra/${retiredDownId.value}").status shouldBe HttpStatusCode.Gone
                     }
                     withClue("absent everywhere under a DOWN root -> 404") {
-                        c.get("/p/r/extra/$absentId").status shouldBe HttpStatusCode.NotFound
+                        c.get("/p/extra/$absentId").status shouldBe HttpStatusCode.NotFound
                     }
                     withClue("LIMBO under an UP root (bound, not in the snapshot) -> 503 absence_unverified, never the 404 lie") {
-                        val res = c.get("/p/r/main/${limboId.value}")
+                        val res = c.get("/p/main/${limboId.value}")
                         res.status shouldBe HttpStatusCode.ServiceUnavailable
                         res.code() shouldBe "absence_unverified"
                     }

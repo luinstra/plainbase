@@ -66,7 +66,7 @@ interface IdMapRepository {
      *  they may DISPLACE it, which is a question about the binding and not about a path. */
     fun binding(id: PageId): IdBinding?
 
-    /** The TOMBSTONE for [id], or null when the id was never retired. A retired id is reserved forever. */
+    /** The TOMBSTONE for [id], or null when the id was never retired. Reversible: the same (root, path) may reclaim it. */
     fun retired(id: PageId): RetiredBinding?
 
     /** Every tombstone, for reporting and tests. */

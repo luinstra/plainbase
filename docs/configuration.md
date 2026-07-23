@@ -224,7 +224,9 @@ default, and what every config without a `roots {}` block produces) is compatibl
 Validation at boot (each failure is an actionable `serve:` refusal naming the offending root):
 
 - a root named `main` is **required** (it is the reserved primary);
-- names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars);
+- names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars), and may **not** be page-id-shaped
+  (a 32-hex string a page id could parse) - such a name is a boot **refusal**, since `/p/{root}/{id}`
+  must never be ambiguous with the bare `/p/{id}` permalink;
 - `main`'s path must exist and be a **readable and searchable** (`r-x`) directory - a missing or
   unreadable `main` is a boot **refusal**, never a degraded 503 root (see
   [When a root is not there](#when-a-root-is-not-there) below). The identical rule applies to

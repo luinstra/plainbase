@@ -37,9 +37,10 @@ object ErrorCodes {
     const val PAGE_NOT_FOUND: String = "page_not_found"
 
     /**
-     * 410: the page's binding was RETIRED (a C0 tombstone). The id is reserved forever and will never name another
-     * page, so this is a permanent, honest answer - distinct from [PAGE_NOT_FOUND], which says the id was never
-     * ours at all. An agent holding a citation can tell "this document was deleted" from "you made this up".
+     * 410: the page's binding was RETIRED (a C0 tombstone). The id was deleted from its root - an honest answer,
+     * distinct from [PAGE_NOT_FOUND], which says the id was never ours at all. It is NOT permanent: the same
+     * (root, path) may reclaim the id, so the route sends `Cache-Control: no-store`. An agent holding a citation
+     * can still tell "this document was deleted" from "you made this up".
      */
     const val PAGE_RETIRED: String = "page_retired"
 

@@ -102,6 +102,14 @@ class RootsConfigTest : FunSpec({
         }
     }
 
+    test("a page-id-shaped root key fails with the permalink ambiguity message") {
+        val hex32 = "a".repeat(32)
+        withDataDir("""roots { main { path = "/roots/m" }, "$hex32" { path = "/roots/b" } }""") { env ->
+            shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+                .message shouldContain "look like a page id"
+        }
+    }
+
     test("a block without a main root fails naming the required primary") {
         withDataDir("""roots { extra { path = "/roots/e" } }""") { env ->
             shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }

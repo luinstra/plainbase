@@ -161,12 +161,13 @@ interface ReadFacade {
     fun permalink(principal: Principal, id: PageId): PermalinkResolution
 
     /**
-     * `/p/r/{root}/{id}` — the ROOT-PINNED permalink resolution (C4): a COHERENT-STALE snapshot-first PRESENT read
+     * `/p/{root}/{id}` - the ROOT-PINNED permalink resolution (C4): a COHERENT-STALE snapshot-first PRESENT read
      * (the pinned READ split, safe per the endpoint-status table), with a durable `id_map` consult only on a
      * snapshot miss. An unregistered/detached [root] resolves to [PermalinkResolution.Unknown] (404) AFTER
      * `checkRead`; a snapshot hit under an available root is [PermalinkResolution.Found]/[PermalinkResolution
      * .LoserNoUrl], a live-binding miss THROWS (503), and a tombstone under [root] is [PermalinkResolution.Retired]
-     * (410). It never emits [PermalinkResolution.Ambiguous] - the root is already named.
+     * (410) carrying `liveElsewhere` (other registered roots still holding the id) for the route's `rel="alternate"`
+     * hints. It never emits [PermalinkResolution.Ambiguous] - the root is already named.
      */
     fun permalinkAt(principal: Principal, root: RootName, id: PageId): PermalinkResolution
 }
@@ -181,14 +182,16 @@ sealed interface PermalinkResolution {
     data object LoserNoUrl : PermalinkResolution
 
     /**
-     * The binding was RETIRED (C0 tombstone) — **410 Gone**, naming [lastKnownPath].
+     * The binding was RETIRED (C0 tombstone) - **410 Gone**, naming [lastKnownPath].
      *
-     * A retired id is reserved forever and never re-issued, so this is a permanent, honest answer rather than the
-     * 404 that tells an agent its citation was never valid. It is also why the tombstone table exists at all: for
-     * an unmaterialized page the `id_map` row is the ONLY record the path ever had that id, and hard-deleting it
-     * would leave nothing here to answer WITH.
+     * The 410 is honest now: the id was deleted from this root. It is not permanent because the same `(root, path)`
+     * may reclaim the id, and the id may already be live in [liveElsewhere]. The route therefore sends
+     * `Cache-Control: no-store` and exposes live holders as `Link: rel="alternate"` hints.
      */
-    data class Retired(val lastKnownPath: RootedPath) : PermalinkResolution
+    data class Retired(
+        val lastKnownPath: RootedPath,
+        val liveElsewhere: List<RootName> = emptyList(),
+    ) : PermalinkResolution
 
     /** No such page, here or in the persisted bindings — a 404. */
     data object Unknown : PermalinkResolution

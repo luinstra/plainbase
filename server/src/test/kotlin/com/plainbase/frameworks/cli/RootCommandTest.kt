@@ -129,6 +129,16 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("root add rejects a page-id-shaped name with the permalink ambiguity message") {
+        world { w ->
+            val err = captureStderr {
+                w.root("add", "a".repeat(32), "/tmp/x") shouldBe 2
+            }
+            err shouldContain "look like a page id"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
     test("an EMPTY path is exit 2 - `root add docs \"\$DOCS_DIR\"` with the var unset must not serve the CWD") {
         // The loader refuses a blank `roots.<x>.path` for exactly this reason, and it can never fire: this command
         // ABSOLUTIZES before it serializes, and `Path.of("")` is the process working directory - which is a real,

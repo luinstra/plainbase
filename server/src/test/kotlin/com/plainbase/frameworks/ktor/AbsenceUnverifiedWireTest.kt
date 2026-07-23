@@ -18,6 +18,7 @@ import io.kotest.matchers.shouldNotBe
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import kotlinx.serialization.json.Json
@@ -123,11 +124,12 @@ class AbsenceUnverifiedWireTest : FunSpec({
         }
     }
 
-    test("/p/{id} on a RETIRED binding is 410 Gone naming the last-known path - never 404") {
-        limboed { harness, _ ->
+    test("a retired permalink is an uncached 410 and same-root reappearance reclaims it as a 302") {
+        limboed { harness, root ->
+            val c = restClient()
             // The absence is PROVEN (C2's epoch / C4's git history mint these for real; OPERATOR stands in here).
-            // Only now may the server say the page is gone - and a tombstoned id is reserved forever, so it says so
-            // with a 410 that NAMES where the page lived rather than a 404 that denies it ever existed.
+            // Only now may the server say the page is gone - a 410 that NAMES where the page lived (not a 404
+            // denying it existed). The 410 is uncached and reversible: this same test reclaims the id as a 302.
             harness.retirements.applyProofs(
                 listOf(
                     AbsenceProof(
@@ -140,12 +142,18 @@ class AbsenceUnverifiedWireTest : FunSpec({
                 witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
             )
 
-            val p = client.get("/p/$docId")
+            val p = c.get("/p/main/$docId")
             p.status shouldBe HttpStatusCode.Gone
             p.code() shouldBe "page_retired"
+            p.headers[HttpHeaders.CacheControl] shouldBe "no-store"
             withClue("the last-known path is the whole point: a human or an agent learns WHAT HAPPENED") {
                 p.error().getValue("message").jsonPrimitive.content.contains("doc.md") shouldBe true
             }
+
+            writePage(root, "doc.md", "---\nid: $docId\ntitle: Doc\n---\n\n# Doc\n\nBody.\n")
+            harness.builder.rebuild()
+
+            c.get("/p/main/$docId").status shouldBe HttpStatusCode.Found
         }
     }
 

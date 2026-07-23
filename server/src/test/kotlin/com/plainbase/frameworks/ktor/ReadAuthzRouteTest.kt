@@ -85,6 +85,19 @@ class ReadAuthzRouteTest : FunSpec({
         Json.parseToJsonElement(client.get("/api/v1/pages/by-path/doc").bodyAsText())
             .jsonObject.getValue("id").jsonPrimitive.content
 
+    test("enforced permalink auth defers registered and unregistered root lookup until after checkRead") {
+        withApp(enforced = true, principal = Principal.Anonymous) { app, harness ->
+            val id = harness.builder.current.pages.single().id.value
+            val rooted = app.client.get("/p/main/$id")
+            val unregistered = app.client.get("/p/ghost/$id")
+            val bare = app.client.get("/p/$id")
+
+            rooted.status shouldBe HttpStatusCode.Unauthorized
+            unregistered.status shouldBe rooted.status
+            bare.status shouldBe HttpStatusCode.Unauthorized
+        }
+    }
+
     // ---- existence-non-leak: a denied caller gets the SAME status for a present AND an absent page ----
 
     listOf("validate-links", "metadata").forEach { suffix ->

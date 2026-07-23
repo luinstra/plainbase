@@ -2,6 +2,7 @@ package com.plainbase.frameworks.config
 
 import com.plainbase.BuildInfo
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
@@ -1016,6 +1017,12 @@ data class PlainbaseConfig(
             }
 
         private fun parseRoot(key: String, value: ConfigValue): Root {
+            if (PageId.of(key) != null) {
+                throw IllegalArgumentException(
+                    "roots.$key: a root name may not look like a page id (a 32-hex or UUID string) - " +
+                        "it would be ambiguous with a /p/{id} permalink. Rename this root.",
+                )
+            }
             val name = RootName.of(key) ?: throw IllegalArgumentException(
                 "roots.$key is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
             )

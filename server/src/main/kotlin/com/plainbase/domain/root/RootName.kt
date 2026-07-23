@@ -1,12 +1,14 @@
 package com.plainbase.domain.root
 
+import com.plainbase.domain.page.PageId
+
 /**
  * A root's name: the stable identity of one document directory, used as its config key and (from C3)
  * its `/docs/{root}/...` URL segment.
  *
  * The slug is deliberately tight - `[a-z0-9][a-z0-9-]*`, max 32 chars - so a name is always a clean
- * URL segment with no encoding concerns. No names beyond [MAIN] are reserved: every root URL lives under
- * the `/docs/` prefix, so a name can never collide with `/api`, `/p`, or `/assets`.
+ * URL segment with no encoding concerns. A root name also cannot parse as a [PageId], which keeps the shared
+ * `/p/{segments...}` dispatcher unambiguous between bare page ids and rooted permalinks.
  *
  * A tight slug is NOT the same thing as an inert HOCON key, and the difference is a real bug we shipped
  * into review: `include` satisfies this regex and is also a HOCON directive. The writer therefore QUOTES
@@ -29,13 +31,16 @@ value class RootName private constructor(val value: String) {
         private const val MAX_LENGTH = 32
         private val SLUG = Regex("[a-z0-9][a-z0-9-]*")
 
-        /** Builds a [RootName] from [raw], or returns null unless it matches the slug rule above. */
+        /** Builds a [RootName] from [raw], or returns null unless it matches the slug rule and is not page-id-shaped. */
         fun of(raw: String): RootName? =
-            raw.takeIf { it.length <= MAX_LENGTH && SLUG.matches(it) }?.let(::RootName)
+            raw.takeIf { it.length <= MAX_LENGTH && SLUG.matches(it) && PageId.of(it) == null }?.let(::RootName)
 
-        /** Like [of] but throws [IllegalArgumentException] on invalid input. */
+        /** Like [of] but throws when the slug is invalid or the value parses as a page id. */
         fun require(raw: String): RootName =
-            requireNotNull(of(raw)) { "not a valid root name: '$raw' (a lowercase slug [a-z0-9][a-z0-9-]*, max $MAX_LENGTH chars)" }
+            requireNotNull(of(raw)) {
+                "not a valid root name: '$raw' (a lowercase slug [a-z0-9][a-z0-9-]*, max $MAX_LENGTH chars, " +
+                    "and must not parse as a page id)"
+            }
 
         /**
          * The REGISTERED name [raw] denotes, or null when [raw] is not a legal slug OR names no root in

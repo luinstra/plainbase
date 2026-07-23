@@ -21,8 +21,10 @@ import com.plainbase.domain.root.RootedPath
  * always names a durable claimant (the property `resolve(One).root in rootsHoldingId(id)` holds unconditionally),
  * and a cross-root move in flight fails CLOSED (503/404/410) rather than serving the displaced root. This retires
  * the old "the hot path never touches the DB" promise for the BARE path: every bare resolution pays ONE indexed
- * point-SELECT. The CANONICAL `/p/r/{root}/{id}` and `?root=`-present read paths stay snapshot-first-hot - a
+ * point-SELECT. The CANONICAL `/p/{root}/{id}` and `?root=`-present read paths stay snapshot-first-hot - a
  * pinned READ is coherent-stale on a hit, no durable check - so the canonical-hot property is preserved there.
+ * A rooted-miss 410 also pays a `rootsHoldingId` point-SELECT to find live alternate holders. That cost is limited
+ * to the cold retired path because a present read returns before the tombstone arm.
  * [statusOf] takes a `RootAvailability.Snapshot` PARAMETER rather than reading the holder itself: a caller threads
  * ONE availability read through ONE decision, and a service that reached for the holder mid-decision would
  * silently mint a second read that could disagree with the first. [resolvePinned] takes no snapshot at all - the

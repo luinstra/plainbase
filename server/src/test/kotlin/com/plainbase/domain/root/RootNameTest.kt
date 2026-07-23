@@ -1,5 +1,6 @@
 package com.plainbase.domain.root
 
+import com.plainbase.domain.page.PageId
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
@@ -12,13 +13,13 @@ import io.kotest.property.arbitrary.string
 import io.kotest.property.checkAll
 
 /**
- * The root-name slug (ADR-0011): `[a-z0-9][a-z0-9-]*`, max 32 chars - the exact design rule,
- * nothing looser, nothing stricter. Pure logic, JVM-only (the TreePathTest pattern).
+ * The root-name grammar (ADR-0011): `[a-z0-9][a-z0-9-]*`, max 32 chars, excluding page-id-shaped values.
+ * Pure logic, JVM-only (the TreePathTest pattern).
  */
 class RootNameTest : FunSpec({
 
     test("valid slugs construct and round-trip their text") {
-        listOf("main", "a", "0", "a-b-1", "memoria", "a".repeat(32)).forEach { raw ->
+        listOf("main", "a", "0", "a-b-1", "memoria", "g".repeat(32)).forEach { raw ->
             val name = RootName.of(raw)
             name.shouldNotBeNull()
             name.value shouldBe raw
@@ -56,7 +57,7 @@ class RootNameTest : FunSpec({
     test("of never accepts a string the slug rule rejects (property)") {
         val slug = Regex("[a-z0-9][a-z0-9-]*")
         checkAll(Arb.string(0..40)) { raw ->
-            (RootName.of(raw) != null) shouldBe (raw.length <= 32 && slug.matches(raw))
+            (RootName.of(raw) != null) shouldBe (raw.length <= 32 && slug.matches(raw) && PageId.of(raw) == null)
         }
     }
 
@@ -66,7 +67,7 @@ class RootNameTest : FunSpec({
             // Deterministic in-alphabet string with a guaranteed legal head (no leading hyphen).
             val head = alphabet[seed].takeIf { it != '-' } ?: 'a'
             val raw = head + List(length - 1) { alphabet[(seed + it) % alphabet.size] }.joinToString("")
-            RootName.of(raw).shouldNotBeNull().value shouldBe raw
+            if (PageId.of(raw) == null) RootName.of(raw).shouldNotBeNull().value shouldBe raw
         }
     }
 })

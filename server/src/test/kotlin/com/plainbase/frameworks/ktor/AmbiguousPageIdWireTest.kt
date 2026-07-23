@@ -199,8 +199,8 @@ title: X
                 val res = createClient { followRedirects = false }.get("/p/$dupId")
                 res.status shouldBe HttpStatusCode.MultipleChoices
                 res.headers.getAll(HttpHeaders.Link) shouldContainExactly listOf(
-                    "</p/r/main/$dupId>; rel=\"alternate\"",
-                    "</p/r/notes/$dupId>; rel=\"alternate\"",
+                    "</p/main/$dupId>; rel=\"alternate\"",
+                    "</p/notes/$dupId>; rel=\"alternate\"",
                 )
                 withClue("ambiguity is transient, and 300 is heuristically cacheable - no intermediary may keep it") {
                     res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
@@ -209,7 +209,7 @@ title: X
                 val body = res.errorBody()
                 body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
                 body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content } shouldContainExactly
-                    listOf("/p/r/main/$dupId", "/p/r/notes/$dupId")
+                    listOf("/p/main/$dupId", "/p/notes/$dupId")
             }
         }
     }

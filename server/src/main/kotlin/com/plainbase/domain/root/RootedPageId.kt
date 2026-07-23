@@ -21,9 +21,8 @@ data class RootedPageId(val root: RootName, val id: PageId) {
  * in a single place.
  *
  * The owning root does NOT shape the string: every permalink this EMITS is the bare `/p/{id}`, byte-identical
- * to what `PageId.permalink` emitted before the seam. C4 ships the root-qualified
- * `/p/r/{root}/{id}` as a ROUTE - the disambiguation surface a 300/409 hands out - not as the canonical
- * form. Emitting it from here is the later change, and it is the one that would move bytes on every wire.
+ * to what `PageId.permalink` emitted before the seam. C4 ships `/p/{root}/{id}` as the rooted ROUTE that a
+ * 300/409 hands out. Emitting the rooted form from here is the later change that moves every wire value.
  */
 object Permalink {
 

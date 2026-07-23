@@ -41,56 +41,81 @@ class RestRoutingTest : FunSpec({
         )
     }
 
-    test("GET /p/{id} 302s to the current canonical /docs URL; a trailing stale slug is ignored") {
+    suspend fun io.ktor.client.statement.HttpResponse.errorCode(): String =
+        Json.parseToJsonElement(bodyAsText()).jsonObject.getValue("error").jsonObject.getValue("code").jsonPrimitive.content
+
+    test("the shared permalink dispatcher classifies bare, rooted, decorative trailing, and malformed paths") {
         restTest(Fixtures.demoDocs, seed) {
             val client = restClient()
 
             val bare = client.get("/p/$deployGuideId")
-            bare.status shouldBe HttpStatusCode.Found // 302 — the target moves with the page
+            bare.status shouldBe HttpStatusCode.Found
             bare.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
 
-            val withStaleSlug = client.get("/p/$deployGuideId/stale-slug")
-            withStaleSlug.status shouldBe HttpStatusCode.Found
-            withStaleSlug.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
-        }
-    }
-
-    test("permalink id parsing: shape-invalid -> 400, shape-valid unknown (v4) -> 404, uppercase resolves") {
-        restTest(Fixtures.demoDocs, seed) {
-            val client = restClient()
-            client.get("/p/1-1-1-1-1").status shouldBe HttpStatusCode.BadRequest
-            client.get("/p/a3bb189e-8bf9-4888-9912-ace4e6543002").status shouldBe HttpStatusCode.NotFound
-            client.get("/p/${deployGuideId.uppercase()}").headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
-        }
-    }
-
-    test("route precedence: /p/r/{root}/{id} is the ROOTED permalink, never the bare route binding id='r'") {
-        restTest(Fixtures.demoDocs, seed) {
-            val client = restClient()
-            // The bare `/p/{id}/{trailing...}` route also MATCHES this shape, with id='r' and trailing
-            // 'main/<id>'. Ktor's constant-outranks-parameter rule is what stops it, and this pins the rule
-            // directly: a future route reorder must fail HERE, not as a puzzling 302-matrix failure elsewhere.
-            val rooted = client.get("/p/r/main/$deployGuideId")
+            val rooted = client.get("/p/main/$deployGuideId")
             rooted.status shouldBe HttpStatusCode.Found
             rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
 
-            // The same proof from the failing side: the 400 must name the ID segment as the bad UUID. Were the
-            // bare route winning, id would be 'r' and the message would say so (and a 302 would be impossible).
-            val badId = client.get("/p/r/main/not-a-uuid")
+            val badId = client.get("/p/main/not-a-uuid")
             badId.status shouldBe HttpStatusCode.BadRequest
             badId.bodyAsText() shouldContain "not-a-uuid"
+
+            client.get("/p/$deployGuideId/stale-slug").status shouldBe HttpStatusCode.Found
+            client.get("/p/main/$deployGuideId/stale-slug").status shouldBe HttpStatusCode.Found
+
+            listOf(
+                "/p/$deployGuideId/",
+                "/p/$deployGuideId//",
+                "/p/$deployGuideId///",
+                "/p/main/$deployGuideId//",
+            ).forEach { path ->
+                val response = client.get(path)
+                response.status shouldBe HttpStatusCode.Found
+                response.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            }
+
+            listOf(
+                "/p/main//$deployGuideId",
+                "/p//$deployGuideId",
+                "/p/main/$deployGuideId//extra",
+            ).forEach { path ->
+                val response = client.get(path)
+                response.status shouldBe HttpStatusCode.BadRequest
+                response.errorCode() shouldBe "invalid_page_id"
+            }
         }
     }
 
-    test("the ROOTED permalink tolerates a trailing slug exactly like the bare form") {
+    test("the shared permalink dispatcher pins invalid, mount, deleted, and raw-canonical cases") {
         restTest(Fixtures.demoDocs, seed) {
             val client = restClient()
-            // The 300 hands clients `/p/r/{root}/{id}` URLs, and a client that decorates a permalink with a slug
-            // decorates that one too. Without its own trailing form it fell into the bare `/p/{id}/{trailing...}`
-            // tailcard with id='r' and answered 400 invalid_page_id: 'r'.
-            val trailing = client.get("/p/r/main/$deployGuideId/stale-slug")
-            trailing.status shouldBe HttpStatusCode.Found
-            trailing.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+
+            val invalidBare = client.get("/p/not-a-uuid")
+            invalidBare.status shouldBe HttpStatusCode.BadRequest
+            invalidBare.errorCode() shouldBe "invalid_page_id"
+            invalidBare.bodyAsText() shouldContain "not-a-uuid"
+
+            client.get("/p/a3bb189e-8bf9-4888-9912-ace4e6543002").status shouldBe HttpStatusCode.NotFound
+            client.get("/p/${deployGuideId.uppercase()}").headers[HttpHeaders.Location] shouldBe
+                "/docs/main/guides/deploy-guide"
+
+            listOf("/p", "/p/").forEach { path ->
+                val response = client.get(path)
+                response.status shouldBe HttpStatusCode.BadRequest
+                response.errorCode() shouldBe "invalid_page_id"
+            }
+
+            val deleted = client.get("/p/" + "r/main/$deployGuideId")
+            deleted.status shouldBe HttpStatusCode.BadRequest
+            deleted.errorCode() shouldBe "invalid_page_id"
+
+            val encodedSlash = client.get("/p/main%2F$deployGuideId")
+            encodedSlash.status shouldBe HttpStatusCode.BadRequest
+            encodedSlash.errorCode() shouldBe "invalid_page_id"
+
+            val encodedId = client.get("/p/%30${deployGuideId.drop(1)}")
+            encodedId.status shouldBe HttpStatusCode.BadRequest
+            encodedId.errorCode() shouldBe "invalid_page_id"
         }
     }
 
