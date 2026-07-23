@@ -427,6 +427,16 @@ run {
             logger.lifecycle("Native gate: building image from ${recordedIds.size} recorded native test id(s).")
         }
     }
+
+    tasks.named<org.graalvm.buildtools.gradle.tasks.NativeRunTask>("nativeTest") {
+        // The plugin adds the default JVM `test` UID directory to the test binary's runtime arguments.
+        // Re-point execution too, or the correctly compiled nativeTest image runs zero selected tests.
+        runtimeArgs.add(
+            nativeTestListDir.map {
+                "-Djunit.platform.listeners.uid.tracking.output.dir=${it.asFile.absolutePath}"
+            },
+        )
+    }
 }
 
 // ---- Dependency discipline (native-image gate protection) ----
