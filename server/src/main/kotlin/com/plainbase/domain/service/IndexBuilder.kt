@@ -628,8 +628,15 @@ class IndexBuilder(
                 // LATER and would already reflect any restore's re-bind, matching the reap it must forbid. The negative
                 // evidence (`rowsAtStart - listed`) and the stamp are thus the SAME durable moment. The observation half
                 // is the CALLER's pre-evidence capture rather than a mint-time read, so a break arriving in this pass's
-                // (evidence -> mint) window moves the token past it and fails the compare; the wider poll -> mint gap
-                // stays the latch's job, via its `manifest.binding != latched.binding` guard.
+                // (evidence -> mint) window moves the token past it and fails the compare.
+                //
+                // The wider poll -> mint gap this source alone has is NOT closed by ordering, and it is NOT closed by the
+                // token: nothing can move a stamp read after the evidence it stamps. It is closed by the LATCH, and
+                // `ObjectListRebindBetweenPollAndMintTest` measured WHICH part - backing out
+                // `manifest.binding != latched.binding` leaves the realistic case (an operator re-points the root
+                // mid-window) still safe, because a re-bind lands the latch UNRESOLVED and `proven` refuses on TRUST
+                // before it ever compares bindings. The binding comparison is the belt for a stale generation under a
+                // binding that is trusted again; the trust status is the braces, and it is the one doing the work here.
                 AbsenceProof(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
