@@ -374,10 +374,15 @@ class IndexBuilder(
         // GIT deliberately needs no epoch at all - an offline `git rm` converges on an unobserved root - which is why
         // this map covers every source rather than only the ones holding an epoch.
         val established = localSources.associate { it.root.name to epochs.establish(it.root.name) }
-        val bindingEpochs = localSources.associate { it.root.name to retirements.bindingEpoch(it.root.name) }
+        // The observation stamps come FIRST of the two captures, and that ordering is itself load-bearing. For a root
+        // `establish` opened, the value is the one it installed and nothing can precede it. But an UNOBSERVED root - the
+        // case GIT exists for, since an offline `git rm` converges with no epoch at all - falls back to a plain read, and
+        // a read taken after the binding capture would absorb a break that landed between the two: one stamp catching an
+        // event the other cannot, for no reason a reader could predict. Both are now as early as this pass can make them.
         val observationStamps = sources.associate { source ->
             source.root.name to (established[source.root.name] ?: retirements.observation(source.root.name))
         }
+        val bindingEpochs = localSources.associate { it.root.name to retirements.bindingEpoch(it.root.name) }
         val headsBefore = gitHeadsBefore()
         val observed = sources.mapNotNull { scanIfAvailable(it) }
         // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
