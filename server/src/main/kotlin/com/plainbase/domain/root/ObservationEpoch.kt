@@ -50,8 +50,15 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * best-effort. So every read of an epoch re-checks its token against `root_observation` ([liveEpoch]) rather than
  * trusting the map, which means a break that raced a pass cannot leave a live-looking epoch behind: the token has
  * moved, so the epoch is dead, whatever the map says. That is the same argument the proof-apply transaction rests
- * on, applied one layer earlier - and it is what lets the holder stay lock-free with no lost-update hazard that
- * matters.
+ * on, applied one layer earlier.
+ *
+ * **What that argument does NOT cover, and what does.** The stores here are plain `load() + store()`, not compare-and-set,
+ * so a racing store CAN lose a write - including a blinding break's [Epoch.Unobserved]. The token argument does not save
+ * that case, because a subsequent open mints a fresh token and the map would then look consistent. What actually closes
+ * it lives two files away: every blinding cause also marks the root UNAVAILABLE and stays that way for the process
+ * (`WATCHER_FAILED` from the watcher's `onFailure`, `ROOT_LOST` via the loss classifier), and an unavailable root is
+ * never scanned again - so a wrongly-reopened epoch opens over an empty witness, never gets its confirmation scan, and
+ * proves nothing. Naming that belt here on purpose: the lock-free holder is only safe WITH it.
  */
 class ObservationEpoch(
     private val retirements: RetirementRepository,
@@ -110,17 +117,24 @@ class ObservationEpoch(
      *
      * Opening over an EMPTY witness set is not a weakening: [scanned] folds the scan's pages in on this same pass, and
      * an epoch may only ever speak about pages it has witnessed - so an opening pass proves exactly nothing either way.
+     *
+     * **RETURNS the token this root is now observing under**, or null when it has no epoch (unwatched, or coverage is
+     * partial). Returning it is what closes the last hand's-breadth of the same window: an open REVOKES, so a caller
+     * that re-READ the token afterwards would pick up a break that landed in between and stamp its proofs with the very
+     * value the apply-time compare will see - swallowing it. The value handed back here is the one this pass installed,
+     * so a break after it moves the durable token PAST the stamp and the proof fails closed.
      */
-    fun establish(root: RootName) {
+    fun establish(root: RootName): ObservationId? {
         val state = holder.load()[root] ?: Epoch.Unobserved
-        if (state == Epoch.Unobserved) return // nobody is watching: there is no epoch to be earned here
+        if (state == Epoch.Unobserved) return null // nobody is watching: there is no epoch to be earned here
         if (!convergence.isWhole(root)) {
             // Coverage that STAYS partial reports nothing further, so this is the REOPEN guard - and the belt for a
             // live epoch that somehow outlived the transition the watcher reported.
             if (liveEpoch(root) != null) broke(root, BreakCause.COVERAGE_LOST)
-            return
+            return null
         }
-        if (liveEpoch(root) == null) open(root, emptySet())
+        // ONE `liveEpoch` read decides and answers: re-reading to report the token would be the same gap again, smaller.
+        return liveEpoch(root)?.observationId ?: open(root, emptySet())
     }
 
     /**
@@ -136,7 +150,12 @@ class ObservationEpoch(
      */
     fun broke(root: RootName, cause: BreakCause) {
         val revoked = retirements.revoke(root)
-        holder.store(holder.load() + (root to if (cause.blinding) Epoch.Unobserved else Epoch.Closed))
+        // A break never PROMOTES. Landing on a root with no entry at all (reachable: `broke(SCAN_FAILED)` fires for
+        // every local root without a complete scan, watched or not) must leave it Unobserved rather than write Closed -
+        // Closed means "watched, entitled to earn an epoch", and no break is evidence that a watcher exists.
+        val state = holder.load()[root] ?: Epoch.Unobserved
+        val next = if (cause.blinding || state == Epoch.Unobserved) Epoch.Unobserved else Epoch.Closed
+        holder.store(holder.load() + (root to next))
         logger.warn {
             "the observation epoch for root '$root' BROKE ($cause): it can no longer prove any page gone. Its rows " +
                 "stay in limbo until a fresh epoch witnesses them (observation ${revoked.value})"
@@ -215,7 +234,7 @@ class ObservationEpoch(
      * Called only from [establish], i.e. before its pass reads any evidence, so the revoke here can never be mistaken
      * for a mid-pass break by a stamp taken later.
      */
-    private fun open(root: RootName, witnessed: Set<TreePath>) {
+    private fun open(root: RootName, witnessed: Set<TreePath>): ObservationId {
         val observationId = retirements.revoke(root)
         holder.store(holder.load() + (root to Epoch.Open(observationId, witnessed)))
         logger.info {
@@ -223,6 +242,7 @@ class ObservationEpoch(
                 "page(s) it has witnessed so far. It proves NOTHING yet: an epoch must witness a page before it may say " +
                 "the page is gone"
         }
+        return observationId
     }
 
     /**

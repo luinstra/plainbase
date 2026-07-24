@@ -142,6 +142,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
                     ),
                 ),
                 witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
+                unavailable = emptySet(),
             )
 
             val p = c.get("/p/main/$docId")

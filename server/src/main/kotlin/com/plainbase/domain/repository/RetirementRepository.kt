@@ -77,10 +77,25 @@ interface RetirementRepository {
      * most), while omitting [advances] defaults to the PESSIMISTIC one (the checkpoint does not move, the next boot
      * re-derives) - a safety input gets no default, a fail-closed convenience may. A baseline or empty-reap advance
      * arrives with NO proofs, which is why the empty-list early return must guard on BOTH lists.
+     *
+     * **[unavailable] is the second required safety input, and it is here for the same reason [witnessed] is.** A root
+     * that has been marked unavailable has a HOLE in what we know about it - it vanished, its watcher died, or a probe
+     * could not traverse it - and evidence gathered before that hole cannot be cashed after it. The dangerous shape is
+     * vanish-and-RESTORE inside one pass: the tree comes back with the page on it, a bindless restore moves no
+     * [BindingEpoch], and a mark moves no [ObservationId] (`RootAvailability.markUnavailable` publishes the mark and
+     * nothing else - deliberately, because a revoke is a transaction and the loss paths run on request and write
+     * threads, where a second BEGIN on the shared driver is a 500). So neither stamp catches it, and this set does.
+     * Asked here, at the door of the only deleter, for the same reason as the witness: a caller that cannot say which
+     * roots it still has standing on must not be able to retire anything.
+     *
+     * It gates the INFERRED sources only, exactly as the witness refutation does. An `OPERATOR` proof is an accepted
+     * human decision rather than a conclusion drawn from an observation, so an operator retiring a page in a root they
+     * have already been told is unavailable is doing precisely what they asked to do.
      */
     fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance> = emptyList(),
     ): Set<RootedPageId>
 
@@ -97,13 +112,25 @@ interface RetirementRepository {
      */
     fun bindingEpoch(root: RootName): BindingEpoch
 
-    /** Every root's current token - the value a pass stamps into the proofs it mints. */
+    /** Every root's current token. Reporting/health; a pass stamps the value `ObservationEpoch.establish` hands it. */
     fun observations(): Map<RootName, ObservationId>
 
     /**
      * Mints [root] a NEW token, which invalidates every outstanding proof against it. A restart is itself a
-     * revocation (the token is durable, so it is the only thing that could prove that after a crash); so is a
-     * watcher break, a coverage loss, an availability mark and a binding change.
+     * revocation (the token is durable, so it is the only thing that could prove that after a crash); so is a watcher
+     * break, a coverage loss, and an epoch OPEN (which is why the open is hoisted above a pass's evidence rather than
+     * happening at mint - see `ObservationEpoch.establish`).
+     *
+     * Two things deliberately do NOT come through here:
+     *  - a BINDING change, which advances [bindingEpoch] instead. A restore's re-bind must revoke the proof that would
+     *    have reaped the page it just re-created WITHOUT collapsing the root's epoch; that is the whole point of the
+     *    second stamp being orthogonal.
+     *  - an AVAILABILITY mark. `RootAvailability.markUnavailable` publishes the mark and nothing else. For the
+     *    watcher-driven losses that is covered, because the watcher reports the break FIRST (`WATCHER_DIED` before
+     *    `onFailure`, `ROOT_LOST`) and the break revokes. **It is NOT covered for a loss discovered by probing** -
+     *    `RootLossClassifier.markIfGone` holds no [ObservationEpoch] - so a vanish-and-restore between a pass's mint and
+     *    its apply moves neither token and leaves a stale proof applicable. Known gap, pre-dating C5; do not read this
+     *    KDoc as a claim that every availability transition revokes.
      */
     fun revoke(root: RootName): ObservationId
 }
@@ -117,6 +144,7 @@ object NoRetirements : RetirementRepository {
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> = emptySet()
     override fun gitHead(root: RootName): String? = null

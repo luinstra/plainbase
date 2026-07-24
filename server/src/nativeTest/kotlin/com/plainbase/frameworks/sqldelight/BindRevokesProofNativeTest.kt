@@ -66,7 +66,7 @@ class BindRevokesProofNativeTest {
 
                 // The observation NEVER broke (no restart, no watcher break), so the observation compare still matches -
                 // only the binding-epoch half discards this proof. witnessed is empty (no scan this call).
-                val retired = retirements.applyProofs(listOf(proof), witnessed = emptySet())
+                val retired = retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailable = emptySet())
 
                 assertTrue(retired.isEmpty(), "the stale proof reaped $retired - the binding-epoch gate did not discard it")
                 assertNotNull(idMap.bindingInRoot(root, id), "the re-created binding was tombstoned by a proof minted before it")

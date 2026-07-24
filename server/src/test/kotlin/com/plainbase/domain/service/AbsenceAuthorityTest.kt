@@ -307,7 +307,7 @@ class AbsenceAuthorityTest : FunSpec({
                     ),
                     // A retirement manufactured for SETUP: no scan ran, so this observation saw nothing. (And OPERATOR
                     // is not an INFERENCE from not-seeing, so no witness could refute it anyway - see ProofSource.)
-                    witnessed = emptySet(),
+                    witnessed = emptySet(), unavailable = emptySet(),
                 ) shouldBe setOf(RootedPageId(RootName.MAIN, old))
 
                 writePage(mainDir, "guides/deploy.md", "# A totally different page\n\nbody\n")
@@ -338,7 +338,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), retiredId)),
                         ),
                     ),
-                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
+                    witnessed = emptySet(), unavailable = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
                 mainDir.resolve("guides/deploy.md").toFile().delete()
 
@@ -373,7 +373,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), id)),
                         ),
                     ),
-                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
+                    witnessed = emptySet(), unavailable = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
                 world.idMap.retiredAt(RootName.MAIN, id).shouldNotBeNull()
 
@@ -430,7 +430,7 @@ class AbsenceAuthorityTest : FunSpec({
                 )
                 world.retirements.revoke(RootName.MAIN)
 
-                world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailable = emptySet()).shouldBeEmpty()
                 world.idMap.livePathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
                 world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
             }
@@ -456,7 +456,7 @@ class AbsenceAuthorityTest : FunSpec({
                     covers = setOf(BindingRef(TreePath.require("notes/rollback.md"), id)), // ...but naming extra's binding
                 )
 
-                world.retirements.applyProofs(listOf(forRootA), witnessed = emptySet()).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(forRootA), witnessed = emptySet(), unavailable = emptySet()).shouldBeEmpty()
                 world.idMap.livePathOf(id) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
             }
         }
@@ -486,7 +486,7 @@ class AbsenceAuthorityTest : FunSpec({
                     covers = setOf(BindingRef(TreePath.require("guides/a.md"), x)),
                 )
 
-                world.retirements.applyProofs(listOf(proof), witnessed = setOf(RootedPageId(extra, x))) shouldBe
+                world.retirements.applyProofs(listOf(proof), witnessed = setOf(RootedPageId(extra, x)), unavailable = emptySet()) shouldBe
                     setOf(RootedPageId(RootName.MAIN, x))
 
                 world.idMap.retiredAt(RootName.MAIN, x).shouldNotBeNull() // A tombstoned...
@@ -516,6 +516,7 @@ class AbsenceAuthorityTest : FunSpec({
                     world.retirements.applyProofs(
                         listOf(proofFrom(ProofSource.EPOCH)),
                         witnessed = setOf(RootedPageId(RootName.MAIN, id)),
+                        unavailable = emptySet(),
                     ).shouldBeEmpty()
                     world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
                 }
@@ -529,6 +530,7 @@ class AbsenceAuthorityTest : FunSpec({
                     world.retirements.applyProofs(
                         listOf(proofFrom(ProofSource.OPERATOR)),
                         witnessed = setOf(RootedPageId(RootName.MAIN, id)),
+                        unavailable = emptySet(),
                     ) shouldBe
                         setOf(RootedPageId(RootName.MAIN, id))
                     world.idMap.retiredAt(RootName.MAIN, id).shouldNotBeNull()
@@ -552,7 +554,7 @@ class AbsenceAuthorityTest : FunSpec({
                     covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), other)), // a stale (path, id) pair
                 )
 
-                world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
+                world.retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailable = emptySet()).shouldBeEmpty()
                 world.idMap.livePathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
             }
         }
@@ -576,7 +578,7 @@ class AbsenceAuthorityTest : FunSpec({
                             covers = setOf(BindingRef(home.path, id)),
                         ),
                     ),
-                    witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
+                    witnessed = emptySet(), unavailable = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
 
                 // A thief in the SAME root (main) is refused: main's tombstone reserves the id for the page that earned it.
@@ -613,6 +615,7 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     proofs = emptyList(),
                     witnessed = emptySet(),
+                    unavailable = emptySet(),
                     advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, epoch, "deadbeef")),
                 ).shouldBeEmpty()
 
@@ -628,7 +631,8 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     emptyList(),
                     emptySet(),
-                    listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "aaaa")),
+                    unavailable = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "aaaa")),
                 )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
 
@@ -637,7 +641,8 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     emptyList(),
                     emptySet(),
-                    listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "bbbb")),
+                    unavailable = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "bbbb")),
                 )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
 
@@ -646,7 +651,8 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     emptyList(),
                     emptySet(),
-                    listOf(GitCheckpointAdvance(RootName.MAIN, fresh, world.retirements.bindingEpoch(RootName.MAIN), "cccc")),
+                    unavailable = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, fresh, world.retirements.bindingEpoch(RootName.MAIN), "cccc")),
                 )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "cccc"
             }
@@ -661,13 +667,15 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     emptyList(),
                     emptySet(),
-                    listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "1111")),
+                    unavailable = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "1111")),
                 )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "1111"
                 world.retirements.applyProofs(
                     emptyList(),
                     emptySet(),
-                    listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "2222")),
+                    unavailable = emptySet(),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "2222")),
                 )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "2222"
             }

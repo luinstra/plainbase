@@ -68,7 +68,12 @@ class RetirementCrossRootIsolationTest : FunSpec({
                 covers = setOf(BindingRef(mainPath.path, x)),
             )
             // witnessed EXCLUDES X so the refutation does not veto the proof; advances is the C4 checkpoint list, empty.
-            val retired = retirements.applyProofs(proofs = listOf(proof), witnessed = emptySet(), advances = emptyList())
+            val retired = retirements.applyProofs(
+                proofs = listOf(proof),
+                witnessed = emptySet(),
+                unavailable = emptySet(),
+                advances = emptyList(),
+            )
 
             retired shouldContainExactly setOf(RootedPageId(main, x))
             dirty.get(RootedPageId(main, x)).shouldBeNull()

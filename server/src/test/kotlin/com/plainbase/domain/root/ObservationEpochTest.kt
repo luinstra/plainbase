@@ -33,6 +33,7 @@ class ObservationEpochTest : FunSpec({
         override fun applyProofs(
             proofs: List<AbsenceProof>,
             witnessed: Set<RootedPageId>,
+            unavailable: Set<RootName>,
             advances: List<GitCheckpointAdvance>,
         ) = emptySet<RootedPageId>()
         override fun gitHead(root: RootName): String? = null
@@ -160,6 +161,30 @@ class ObservationEpochTest : FunSpec({
 
         // ...and the epoch it just opened witnessed nothing, so it still cannot touch the page.
         epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldBeNull()
+    }
+
+    test("a scan does NOT re-open an epoch a break just closed - the reopen belongs to the NEXT pass, over a LATER witness") {
+        val epochs = epochOver().apply { observing(handbook) }
+        val deploy = binding("guides/deploy.md")
+        val durable = setOf(deploy)
+        epochs.scanned(handbook, witnessed = setOf(deploy.path), durable = durable) // a live epoch that HAS seen it
+
+        // The break lands after this pass already took its evidence. The PRODUCTION signature is called directly here,
+        // NOT the establish-then-scan helper: the helper would re-open the epoch first and hide the very arm under test.
+        epochs.broke(handbook, BreakCause.OVERFLOW)
+        val proof = epochs.scanned(
+            root = handbook,
+            witnessed = setOf(deploy.path),
+            unread = emptySet(),
+            durable = durable,
+            bindingEpoch = BindingEpoch(0),
+        )
+
+        // It mints nothing - and, the part that matters, it opens NOTHING either. Re-opening here would seed the new
+        // epoch with the witness set of a scan taken BEFORE the break, so the next pass would "confirm" a delete across
+        // the very gap this break reported. That epoch is the next pass's to open, over a witness gathered after it.
+        proof.shouldBeNull()
+        epochs.isOpen(handbook) shouldBe false
     }
 
     test("epochs are PER-ROOT: a break in one root leaves the other's authority untouched") {

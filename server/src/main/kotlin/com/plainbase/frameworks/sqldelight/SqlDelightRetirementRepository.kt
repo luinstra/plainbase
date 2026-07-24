@@ -32,6 +32,7 @@ class SqlDelightRetirementRepository(
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         // A baseline or empty-reap advance (C4) arrives with NO proofs by construction, so the empty-list guard
@@ -41,6 +42,19 @@ class SqlDelightRetirementRepository(
             val retiredAt = clock.now().toEpochMilliseconds()
             val applied = mutableSetOf<RootedPageId>()
             for (minted in proofs) {
+                // STANDING, before the refutation: a root marked unavailable has a HOLE in what we know about it, and
+                // evidence gathered before that hole cannot be cashed after it. Neither stamp catches a
+                // vanish-and-restore inside one pass - the restore is bindless so `binding_epoch` never moves, and
+                // publishing an availability mark deliberately does not revoke - so the mark itself is the evidence.
+                // INFERRED only: an OPERATOR proof is an accepted human decision, not a reading of a tree.
+                if (minted.source.inferred && minted.root in unavailable) {
+                    logger.warn {
+                        "discarding a ${minted.source} proof for root '${minted.root}': the root has been marked " +
+                            "unavailable since this pass gathered its evidence, so that evidence proves nothing about " +
+                            "the tree that is there now"
+                    }
+                    continue
+                }
                 // REFUTATION, before anything else: an INFERRED absence is a conclusion drawn from a gap in what we
                 // observed, and SEEING the page refutes it. A renamed page's old path is "absent" to every source we
                 // have, and its id is sitting in the file we just read under the new name - so this is what stands
@@ -100,6 +114,15 @@ class SqlDelightRetirementRepository(
             // its root's advance too. The same TWO stamps, one transaction, no window between the reap and the move.
             val advanced = mutableListOf<GitCheckpointAdvance>()
             for (advance in advances) {
+                // An advance is inferred evidence too, and the more permanent half: consuming a range the pass may have
+                // misread means no later pass ever re-examines those commits. A lost root withholds it.
+                if (advance.root in unavailable) {
+                    logger.warn {
+                        "withholding a GIT checkpoint advance for root '${advance.root}': it was marked unavailable " +
+                            "since the range was read, and a consumed range is never re-examined"
+                    }
+                    continue
+                }
                 val current = observations.selectObservationAndEpoch(advance.root).executeAsOneOrNull()
                 if (current == null || !current.matches(advance.observationId, advance.bindingEpoch)) {
                     logger.warn {

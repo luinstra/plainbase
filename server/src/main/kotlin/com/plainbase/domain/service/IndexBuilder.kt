@@ -348,8 +348,10 @@ class IndexBuilder(
         //
         // [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass is
         // indistinguishable at the freshness compare from a watcher BREAK landing mid-pass. Hoisting the open above all
-        // evidence is what lets the stamps below be taken pre-evidence at all: after this line nothing in a healthy pass
-        // moves either token, so ANY later movement is a break, and every stamp fails closed against it.
+        // evidence is what lets the stamps below be taken pre-evidence at all: past this point NOTHING THIS PASS DOES
+        // moves either token, so any later movement invalidates this pass's proofs and every stamp fails closed against
+        // it. Movement does not imply a break - a concurrent save moves `binding_epoch` perfectly healthily - it implies
+        // only that this pass's evidence is no longer current, which is the same answer either way.
         //
         // Both stamps are then captured HERE, before the git HEAD bracket ([gitHeadsBefore]), the scan ([observed]), and
         // the `durable` snapshot each mint reads - the earliest evidence-reads of the whole pass:
@@ -364,9 +366,18 @@ class IndexBuilder(
         // Captured any later, either stamp folds in the very event it exists to detect. [gitOracleRoots] is a subset of
         // [localSources], so the binding capture covers the EPOCH and GIT mints alike; OBJECT_LIST takes its binding half
         // from the manifest, co-read with the pagination boundary. OPERATOR/API_DELETE arrive pre-evidence, unaffected.
-        localSources.forEach { epochs.establish(it.root.name) }
+        // `establish` HANDS BACK the token it installed, and that is load-bearing: an open revokes, so re-reading the
+        // token after it would pick up a break that landed in the gap between the two and stamp the proof with exactly
+        // the value `applyProofs` is about to compare against - the same swallow, one line narrower. A root with no
+        // epoch (unwatched, or partial coverage) answers null and falls back to a plain read, which is honest for it:
+        // nothing legitimately moves an unwatched root's token mid-pass, so a break after this read still fails closed.
+        // GIT deliberately needs no epoch at all - an offline `git rm` converges on an unobserved root - which is why
+        // this map covers every source rather than only the ones holding an epoch.
+        val established = localSources.associate { it.root.name to epochs.establish(it.root.name) }
         val bindingEpochs = localSources.associate { it.root.name to retirements.bindingEpoch(it.root.name) }
-        val observationStamps = sources.associate { it.root.name to retirements.observation(it.root.name) }
+        val observationStamps = sources.associate { source ->
+            source.root.name to (established[source.root.name] ?: retirements.observation(source.root.name))
+        }
         val headsBefore = gitHeadsBefore()
         val observed = sources.mapNotNull { scanIfAvailable(it) }
         // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
@@ -379,19 +390,19 @@ class IndexBuilder(
 
         // **The only licence to delete** - and there are now THREE sources that mint it here: EPOCH (C2, local roots),
         // OBJECT_LIST (C3, a complete bucket LIST under a TRUSTED binding), and GIT (C4, a commit range that deleted
-        // the path on a HEAD descending from the recorded checkpoint). OPERATOR (C5) and API_DELETE arrive later; until
-        // they do, an absence outside those three is still never believed. Minted BEFORE the binds below, against the
-        // id_map as it stands NOW: a proof is about the durable binding a page HAD when the pass observed it gone, and
-        // this pass is about to rewrite that table. GIT also yields checkpoint ADVANCES that ride the apply transaction.
+        // the path on a HEAD descending from the recorded checkpoint). OPERATOR (C5's `admin force-retire`) mints
+        // elsewhere and API_DELETE arrives later; an absence outside those sources is still never believed. Minted
+        // BEFORE the binds below, against the id_map as it stands NOW: a proof is about the durable binding a page HAD
+        // when the pass observed it gone, and this pass is about to rewrite that table. GIT also yields checkpoint
+        // ADVANCES that ride the apply transaction.
         //
-        // **The ORDER here is load-bearing, and it is REVOKE BEFORE STAMP.** EPOCH and OBJECT_LIST do not merely mint:
-        // opening an epoch REVOKES the root's observation token, and every watched root opens one on its first pass,
-        // because `serve()` installs the watcher BEFORE the first rebuild. A source that stamped the PRE-open token
-        // would hand `applyProofs` a token the freshness compare then finds moved, and be discarded - silently, and on
-        // the boot of every watched root. So the revoking sources go FIRST, and GIT stamps the token they left behind.
-        // That is not a loophole in the freshness rule: the token a same-pass open installed IS this pass's
-        // observation, and the revoke that must still kill a git proof - a watcher break arriving from ANOTHER thread
-        // between this mint and the apply - moves the token again and does exactly that.
+        // **Mint order is NO LONGER load-bearing, and that is the point.** It used to be: opening an epoch REVOKES the
+        // root's observation token, every watched root opens one on its first pass (`serve()` installs the watcher
+        // BEFORE the first rebuild), so a source stamping the PRE-open token was discarded on every watched boot - which
+        // forced GIT to mint LAST and read the token late, and THAT is what swallowed a break arriving in the
+        // (evidence -> mint) window. The open now happens in `establish` above, before any evidence, and both stamps are
+        // captured there, so these mints are order-independent: each stamps a value taken before it ran, and the ONLY
+        // thing that can move a token afterwards is a genuine break - which fails the compare, exactly as it must.
         val absence = mintEpochProofs(observed, bindingEpochs) + mintObjectListProofs(observed, seen, observationStamps)
         val gitMint = mintGitProofs(observed, headsBefore, bindingEpochs, observationStamps)
         val proofs: List<AbsenceProof> = absence + gitMint.proofs
@@ -401,10 +412,17 @@ class IndexBuilder(
         // the file we just read under the new name. The witness is the FULL one (before the suspect-tree filter)
         // because the question is only ever "are we looking at it?", and it is PER-ROOT (per-root identity, C5): an
         // id read in root B refutes only an absence claimed in root B.
+        // The unavailability set is read HERE, as LATE as possible, and that is the exact opposite of the stamps above
+        // on purpose. A stamp wants the EARLIEST value, so that anything moving afterwards fails the compare; a lost
+        // root wants the LATEST, so that a mark landing at any point before the apply is still honoured. Both directions
+        // are the fail-closed one for what they guard.
         val retired: Set<RootedPageId> = retirements.applyProofs(
-            proofs,
-            seen.entries.mapNotNullTo(mutableSetOf()) { (rootedPath, w) -> w.observedId?.let { RootedPageId(rootedPath.root, it) } },
-            gitMint.advances,
+            proofs = proofs,
+            witnessed = seen.entries.mapNotNullTo(mutableSetOf()) { (rootedPath, w) ->
+                w.observedId?.let { RootedPageId(rootedPath.root, it) }
+            },
+            unavailable = availability.current().unavailable.keys,
+            advances = gitMint.advances,
         )
 
         // **A suspect tree may not DISPLACE the incumbents it does not carry** (C3). The latch guards the ABSENCE

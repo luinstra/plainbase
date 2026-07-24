@@ -17,6 +17,7 @@ import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.throwables.shouldThrowAny
@@ -261,6 +262,40 @@ class GitAbsenceConvergenceTest : FunSpec({
         }
     }
 
+    test("a root marked UNAVAILABLE after the scan drops the git proof AND withholds its advance - a lost root has no standing") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            writePage(extraDir, "notes/keep.md", "# Keep\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val git = FakeHistory(head = "A")
+                val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git)
+                    .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+                world.retirements.gitHead(extra) shouldBe "A"
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                git.head = "B"
+                git.deleted = setOf(rollback)
+                // The root VANISHES after the scan fixed this pass's evidence, and is restored before the apply. Neither
+                // stamp can see that: a bindless restore moves no binding_epoch, and publishing an availability mark
+                // deliberately does not revoke (a revoke is a transaction, and the loss paths run on request and write
+                // threads where a second BEGIN on the shared driver is a 500). The MARK is the evidence, so the apply
+                // reads it as late as it can and refuses to cash a proof about a tree it has lost standing on.
+                val vanishing = MarkUnavailableAtScanEnd(LocalContentStore(extraDir)) {
+                    world.availability.markUnavailable(extra, UnavailableCause.VANISHED)
+                }
+                world.builder(mainDir, vanishing, world.indexer, extraHistory = git).rebuild()
+
+                withClue("the binding survives: evidence gathered before the loss proves nothing about the tree now there") {
+                    world.idMap.retiredAt(extra, id).shouldBeNull()
+                }
+                withClue("and the range is unconsumed: a consumed range is never re-examined, so a lost root withholds it") {
+                    world.retirements.gitHead(extra) shouldBe "A"
+                }
+            }
+        }
+    }
+
     test("an observed root's FIRST pass still baselines - the epoch it opens IS this pass's own observation") {
         withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
@@ -498,6 +533,24 @@ private class BreakAtScanEnd(private val delegate: ContentStore, private val onS
     }
 }
 
+/**
+ * A [ContentStore] that fires [onScanEnd] as `scan()` hands back, modelling a root LOSS discovered after this pass's
+ * evidence is fixed - the vanish-and-restore window that neither freshness stamp can see.
+ */
+private class MarkUnavailableAtScanEnd(private val delegate: ContentStore, private val onScanEnd: () -> Unit) :
+    ContentStore by delegate {
+    private var fired = false
+
+    override fun scan(): ScanResult {
+        val result = delegate.scan()
+        if (!fired) {
+            fired = true
+            onScanEnd()
+        }
+        return result
+    }
+}
+
 /** A store whose walk comes back SHORT (`complete = false`) - a view with holes, which grants no delete authority. */
 private class IncompleteWalk(private val delegate: ContentStore) : ContentStore by delegate {
     override fun scan(): ScanResult = delegate.scan().copy(complete = false)
@@ -516,13 +569,14 @@ private class CrashOnce(private val delegate: RetirementRepository) : Retirement
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         if (!crashed) {
             crashed = true
             throw IllegalStateException("crash before the apply commits")
         }
-        return delegate.applyProofs(proofs, witnessed, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
     }
 }
 
@@ -535,10 +589,11 @@ private class BreakOnApply(private val delegate: RetirementRepository, private v
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         onApply()
-        return delegate.applyProofs(proofs, witnessed, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
     }
 }
 
@@ -549,10 +604,11 @@ private class Recording(private val delegate: RetirementRepository) : Retirement
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
+        unavailable: Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         this.proofs += proofs
         this.advances += advances
-        return delegate.applyProofs(proofs, witnessed, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
     }
 }

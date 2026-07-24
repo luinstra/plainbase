@@ -269,7 +269,11 @@ object AdminCommand {
             bindingEpoch = bindingEpoch,
             covers = setOf(BindingRef(binding.path.path, id)),
         )
-        if (RootedPageId(root, id) !in retirements.applyProofs(listOf(proof), witnessed = emptySet())) {
+        // Both safety inputs are answered EMPTY here, and both honestly: this pass read no tree, so it witnessed nothing
+        // to refute with; and OPERATOR is an ACCEPTED decision rather than an inference, so the standing gate does not
+        // consult this set for it at all - an operator retiring a page in a root they have already been told is
+        // unavailable is doing exactly what they asked for.
+        if (RootedPageId(root, id) !in retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailable = emptySet())) {
             output.error("admin force-retire: refused to retire ${id.value} in root '${root.value}' (freshness or binding re-read)")
             return 1
         }
