@@ -78,7 +78,9 @@ class ObservationEpoch(
          *
          * A watcher that DIES returns the root here rather than merely closing its epoch, which is also what C5's
          * recoverable availability will need: *recovery restores READS ONLY; it is not an epoch and mints no
-         * absence authority.*
+         * absence authority.* And note the PRECONDITION that feature carries, spelled out at
+         * [RootAvailability.markUnavailable]: the reaper's standing check leans on marks being sticky, so availability
+         * transitions must become DURABLE before any of them can be cleared.
          */
         data object Unobserved : Epoch
 

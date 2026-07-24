@@ -412,16 +412,17 @@ class IndexBuilder(
         // the file we just read under the new name. The witness is the FULL one (before the suspect-tree filter)
         // because the question is only ever "are we looking at it?", and it is PER-ROOT (per-root identity, C5): an
         // id read in root B refutes only an absence claimed in root B.
-        // The unavailability set is read HERE, as LATE as possible, and that is the exact opposite of the stamps above
-        // on purpose. A stamp wants the EARLIEST value, so that anything moving afterwards fails the compare; a lost
-        // root wants the LATEST, so that a mark landing at any point before the apply is still honoured. Both directions
-        // are the fail-closed one for what they guard.
+        // Standing is handed over as a FUNCTION, not a value, and that is the exact opposite of the stamps above on
+        // purpose. A stamp wants the EARLIEST value, so anything moving afterwards fails the compare; a lost root wants
+        // the LATEST, so a mark landing at any point before the reap is still honoured. Both directions are the
+        // fail-closed one for what they guard - and "latest" has to mean inside the apply transaction, not here at the
+        // call site, which is why the deleter does the calling.
         val retired: Set<RootedPageId> = retirements.applyProofs(
             proofs = proofs,
             witnessed = seen.entries.mapNotNullTo(mutableSetOf()) { (rootedPath, w) ->
                 w.observedId?.let { RootedPageId(rootedPath.root, it) }
             },
-            unavailable = availability.current().unavailable.keys,
+            unavailableNow = { availability.current().unavailable.keys },
             advances = gitMint.advances,
         )
 

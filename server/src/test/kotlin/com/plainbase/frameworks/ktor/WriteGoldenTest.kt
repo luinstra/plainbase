@@ -302,7 +302,7 @@ class WriteGoldenTest : FunSpec({
                     ),
                 ),
                 witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
-                unavailable = emptySet(),
+                unavailableNow = { emptySet() },
             )
             val put = client.put("/api/v1/pages/$deployGuideId") {
                 header(HttpHeaders.IfMatch, etag(hBase))

@@ -71,7 +71,7 @@ class RetirementCrossRootIsolationTest : FunSpec({
             val retired = retirements.applyProofs(
                 proofs = listOf(proof),
                 witnessed = emptySet(),
-                unavailable = emptySet(),
+                unavailableNow = { emptySet() },
                 advances = emptyList(),
             )
 

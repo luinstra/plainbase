@@ -428,7 +428,7 @@ class ProposalRouteTest : FunSpec({
                         ),
                     ),
                     witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not an inference, so nothing refutes it
-                    unavailable = emptySet(),
+                    unavailableNow = { emptySet() },
                 )
                 val gone = client.post("/api/v1/changes") {
                     contentType(json)

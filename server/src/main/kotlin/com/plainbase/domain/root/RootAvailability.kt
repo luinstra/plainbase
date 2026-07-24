@@ -87,6 +87,25 @@ class RootAvailability(private val clock: Clock) {
      * (monotonic - a VANISHED root whose watcher then dies is still, and only, VANISHED). Called from
      * the serve() gate loop, the rebuild probe, the watcher failure callback, and the store's
      * mark-then-throw guard.
+     *
+     * **A MARK IS FOREVER, AND SOMETHING ELSE'S SAFETY LEANS ON THAT. Read this before adding a way to CLEAR one.**
+     *
+     * A mark does not revoke any freshness token - deliberately, because a revoke is a transaction and the loss paths
+     * run on request and write threads, where a second BEGIN on the shared driver is a 500. So the reaper compensates
+     * by refusing INFERRED proofs for a currently-marked root
+     * ([com.plainbase.domain.repository.RetirementRepository.applyProofs]'s `unavailableNow`), read INSIDE the apply
+     * transaction. That works only because marks are MONOTONIC and STICKY-until-restart: a late read is guaranteed to
+     * see every mark that landed since the pass began gathering evidence.
+     *
+     * The moment a mark can be CLEARED - which "recoverable availability" is named as a plan in
+     * [com.plainbase.domain.root.ObservationEpoch]'s `Unobserved` KDoc - a root that is lost and recovers WITHIN one
+     * pass becomes invisible again: the late read sees no mark, a bindless on-disk restore moves no `binding_epoch`, and
+     * the mark moved no `observation_id`. That is the exact durable-loss shape the `unavailableNow` gate exists to close,
+     * reborn, and it reaps a page whose file is back on disk plus its `dirty_page` recovery row - real user content.
+     *
+     * So whoever builds recovery must FIRST make availability transitions DURABLE (a per-root event/generation counter
+     * the apply compares), not merely re-publishable in this in-memory snapshot. Removing stickiness without that is a
+     * silent regression no existing gate can see.
      */
     fun markUnavailable(root: RootName, cause: UnavailableCause) {
         while (true) {

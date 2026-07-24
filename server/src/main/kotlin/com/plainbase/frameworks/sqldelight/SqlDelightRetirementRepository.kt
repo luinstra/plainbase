@@ -32,13 +32,20 @@ class SqlDelightRetirementRepository(
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         // A baseline or empty-reap advance (C4) arrives with NO proofs by construction, so the empty-list guard
         // must check BOTH lists or the advance would never reach the transaction that lands the checkpoint.
         if (proofs.isEmpty() && advances.isEmpty()) return emptySet()
         return db.transactionWithResult {
+            // INSIDE the transaction, and that is load-bearing: read as a value at the CALL SITE, a mark landing between
+            // the caller's evaluation and this snapshot would be missed - the freshness-stamp bug mirrored. One read
+            // serves every proof and advance below, so they all judge standing against the same instant.
+            //
+            // This only holds if the caller hands over a LIVE read. A lambda closing over an already-read set relocates
+            // the convention rather than removing it, so the call site's job is to keep the read inside the lambda.
+            val unavailable = unavailableNow()
             val retiredAt = clock.now().toEpochMilliseconds()
             val applied = mutableSetOf<RootedPageId>()
             for (minted in proofs) {

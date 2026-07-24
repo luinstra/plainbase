@@ -296,6 +296,39 @@ class GitAbsenceConvergenceTest : FunSpec({
         }
     }
 
+    test("a mark landing between the CALL and the apply TRANSACTION still drops the proof - standing is read inside the boundary") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            writePage(extraDir, "notes/keep.md", "# Keep\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val git = FakeHistory(head = "A")
+                val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git)
+                    .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+                world.retirements.gitHead(extra) shouldBe "A"
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                git.head = "B"
+                git.deleted = setOf(rollback)
+                // The narrowest window of the whole class: the loss is discovered AFTER `rebuild()` handed its standing
+                // argument over and BEFORE the adapter opened its transaction. Handed a SET, the caller had already
+                // evaluated it and the mark is invisible; handed a FUNCTION the deleter calls inside its own
+                // transaction, the mark is seen. Microseconds wide, and the same bug as stamping a proof too late.
+                val marking = MarkUnavailableOnApply(world.retirements) {
+                    world.availability.markUnavailable(extra, UnavailableCause.VANISHED)
+                }
+                world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git, retirements = marking).rebuild()
+
+                withClue("the binding survives: standing is judged at the boundary, not at the call site") {
+                    world.idMap.retiredAt(extra, id).shouldBeNull()
+                }
+                withClue("and the range is unconsumed - the advance rides the identical standing check") {
+                    world.retirements.gitHead(extra) shouldBe "A"
+                }
+            }
+        }
+    }
+
     test("an observed root's FIRST pass still baselines - the epoch it opens IS this pass's own observation") {
         withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
@@ -569,14 +602,14 @@ private class CrashOnce(private val delegate: RetirementRepository) : Retirement
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         if (!crashed) {
             crashed = true
             throw IllegalStateException("crash before the apply commits")
         }
-        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailableNow, advances)
     }
 }
 
@@ -589,11 +622,29 @@ private class BreakOnApply(private val delegate: RetirementRepository, private v
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         onApply()
-        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailableNow, advances)
+    }
+}
+
+/**
+ * Marks a root unavailable as [applyProofs] is ENTERED - after the caller has finished evaluating its arguments and
+ * before the adapter opens its transaction. That is the whole window: a standing SET would already have been computed,
+ * a standing FUNCTION has not been called yet.
+ */
+private class MarkUnavailableOnApply(private val delegate: RetirementRepository, private val onApply: () -> Unit) :
+    RetirementRepository by delegate {
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<RootedPageId>,
+        unavailableNow: () -> Set<RootName>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<RootedPageId> {
+        onApply()
+        return delegate.applyProofs(proofs, witnessed, unavailableNow, advances)
     }
 }
 
@@ -604,11 +655,11 @@ private class Recording(private val delegate: RetirementRepository) : Retirement
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> {
         this.proofs += proofs
         this.advances += advances
-        return delegate.applyProofs(proofs, witnessed, unavailable, advances)
+        return delegate.applyProofs(proofs, witnessed, unavailableNow, advances)
     }
 }

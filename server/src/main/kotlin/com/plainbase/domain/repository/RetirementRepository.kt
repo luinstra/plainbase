@@ -78,15 +78,21 @@ interface RetirementRepository {
      * re-derives) - a safety input gets no default, a fail-closed convenience may. A baseline or empty-reap advance
      * arrives with NO proofs, which is why the empty-list early return must guard on BOTH lists.
      *
-     * **[unavailable] is the second required safety input, and it is here for the same reason [witnessed] is.** A root
+     * **[unavailableNow] is the second required safety input, and it is here for the same reason [witnessed] is.** A root
      * that has been marked unavailable has a HOLE in what we know about it - it vanished, its watcher died, or a probe
      * could not traverse it - and evidence gathered before that hole cannot be cashed after it. The dangerous shape is
      * vanish-and-RESTORE inside one pass: the tree comes back with the page on it, a bindless restore moves no
      * [BindingEpoch], and a mark moves no [ObservationId] (`RootAvailability.markUnavailable` publishes the mark and
      * nothing else - deliberately, because a revoke is a transaction and the loss paths run on request and write
-     * threads, where a second BEGIN on the shared driver is a 500). So neither stamp catches it, and this set does.
+     * threads, where a second BEGIN on the shared driver is a 500). So neither stamp catches it, and this does.
      * Asked here, at the door of the only deleter, for the same reason as the witness: a caller that cannot say which
      * roots it still has standing on must not be able to retire anything.
+     *
+     * **It is a FUNCTION, not a set, and that is the whole point of its name.** A set would be evaluated wherever the
+     * caller wrote the argument - OUTSIDE the apply transaction - and a mark landing between that evaluation and the
+     * transaction's snapshot would be missed. That is the same bug as capturing a freshness stamp too late, mirrored:
+     * a stamp must be read as EARLY as possible (before the evidence), and this must be read as LATE as possible
+     * (inside the boundary it is checked against). The implementation therefore calls this INSIDE its transaction, once.
      *
      * It gates the INFERRED sources only, exactly as the witness refutation does. An `OPERATOR` proof is an accepted
      * human decision rather than a conclusion drawn from an observation, so an operator retiring a page in a root they
@@ -95,7 +101,7 @@ interface RetirementRepository {
     fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance> = emptyList(),
     ): Set<RootedPageId>
 
@@ -144,7 +150,7 @@ object NoRetirements : RetirementRepository {
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
-        unavailable: Set<RootName>,
+        unavailableNow: () -> Set<RootName>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> = emptySet()
     override fun gitHead(root: RootName): String? = null

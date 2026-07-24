@@ -33,7 +33,7 @@ class ObservationEpochTest : FunSpec({
         override fun applyProofs(
             proofs: List<AbsenceProof>,
             witnessed: Set<RootedPageId>,
-            unavailable: Set<RootName>,
+            unavailableNow: () -> Set<RootName>,
             advances: List<GitCheckpointAdvance>,
         ) = emptySet<RootedPageId>()
         override fun gitHead(root: RootName): String? = null
