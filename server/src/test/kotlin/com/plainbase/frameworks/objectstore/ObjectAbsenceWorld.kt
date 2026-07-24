@@ -14,6 +14,7 @@ import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
@@ -111,7 +112,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         sources = listOf(IndexBuilder.Source(root, store, history, manifests = store)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = aliasRegistry,
@@ -125,9 +126,13 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         bindings = BindingLatch(topology),
     )
 
-    /** Main's durable bindings - the same lambda `contentModule` wires as the LIST's `rowsAtStart` boundary. */
-    fun rowsOfMain(): Set<BindingRef> =
-        idMap.bindings().filter { it.path.root == RootName.MAIN }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+    /** Main's durable rows + binding_epoch - the same boundary `contentModule` wires as the LIST's `rowsAtStart`
+     *  (epoch co-read FIRST, revoke-before-stamp C5). */
+    fun rowsOfMain(): RowsAtStart {
+        val bindingEpoch = retirements.bindingEpoch(RootName.MAIN)
+        val rows = idMap.bindings().filter { it.path.root == RootName.MAIN }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+        return RowsAtStart(rows, bindingEpoch)
+    }
 
     override fun close() {
         driver.close()

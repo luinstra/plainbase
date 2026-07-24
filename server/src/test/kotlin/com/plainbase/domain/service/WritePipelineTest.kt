@@ -80,7 +80,7 @@ class WritePipelineTest : FunSpec({
                 val written = outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                 written.newHash shouldBe citations.contentHash(saveBytes)
                 Files.readAllBytes(root.resolve("guides/edit-me.md")) shouldBe saveBytes
-                val reindexed = harness.builder.current.byId.getValue(page.id)
+                val reindexed = harness.builder.current.pageAt(page.rooted)!!
                 reindexed.markdown shouldBe String(saveBytes, Charsets.UTF_8)
                 reindexed.contentHash shouldBe citations.contentHash(saveBytes)
             }
@@ -124,7 +124,7 @@ class WritePipelineTest : FunSpec({
 
                 // File untouched on disk; the snapshot's urlPath unchanged; the journal stayed empty (no write happened).
                 Files.readAllBytes(root.resolve("guides/has-slug.md")) shouldBe before
-                harness.builder.current.byId.getValue(page.id).urlPath shouldBe urlBefore
+                harness.builder.current.pageAt(page.rooted)!!.urlPath shouldBe urlBefore
                 harness.dirtyPages.all().isEmpty() shouldBe true
             }
         }

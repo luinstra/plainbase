@@ -61,7 +61,7 @@ class SearchServiceTest : FunSpec({
 
                 resultsOf(service.search("shared")).hits.map { it.pageId } shouldBe listOf(alpha.id)
 
-                // No rebuild: an unavailable root's section is CARRIED FORWARD, so the page is still in `byId` and the
+                // No rebuild: an unavailable root's section is CARRIED FORWARD, so the page is still in `byRootedId` and the
                 // engine still returns it. The liveness filter is the ONLY thing standing between a downed root and a
                 // live search result served from its stale index rows.
                 harness.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
@@ -130,7 +130,7 @@ class SearchServiceTest : FunSpec({
                 // (level 3 under the same H1) must not appear in the trail.
                 assembled.headingPath shouldBe listOf("Alpha", "Setup", "Wiring")
                 assembled.citation.headingId shouldBe "wiring"
-                assembled.citation.uri shouldBe "plainbase://${alpha.id.value}#wiring@${alpha.contentHash}"
+                assembled.citation.uri shouldBe "plainbase://main/${alpha.id.value}#wiring@${alpha.contentHash}"
             }
         }
     }

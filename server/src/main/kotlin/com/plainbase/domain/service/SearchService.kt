@@ -63,8 +63,8 @@ class SearchService(
         val snapshot = indexBuilder.current
         // ONE availability snapshot per request, threaded - the same discipline as the page snapshot beside it.
         // A hit whose root is not serving is DROPPED here: a vanished root's section is carried forward, so its
-        // pages are still in `byId` and would otherwise be served, stale, from a root that answers 503 everywhere
-        // else. A DETACHED root needs no arm - it has no section, so its hits already drop at the `byId` join.
+        // pages are still in `byRootedId` and would otherwise be served, stale, from a root that answers 503 everywhere
+        // else. A DETACHED root needs no arm - it has no section, so its hits already drop at the `byRootedId` join.
         val available = availability.current()
         return Outcome.Results(
             SearchPayload(
@@ -121,6 +121,7 @@ class SearchService(
             highlights = hit.highlights,
             score = hit.score,
             citation = Citation(
+                root = page.root,
                 pageId = page.id,
                 headingId = headingId,
                 path = page.path,

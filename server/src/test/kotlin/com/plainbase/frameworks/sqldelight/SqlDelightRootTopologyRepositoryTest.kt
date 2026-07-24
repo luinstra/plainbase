@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RootTopologyRepository
 import com.plainbase.domain.root.AtRisk
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BindingStatus
@@ -46,7 +47,7 @@ class SqlDelightRootTopologyRepositoryTest : FunSpec({
                     topology.atRisk shouldBe AtRisk.Unreadable
                     BindingLatch(repository).proven(
                         root,
-                        ObjectManifest(binding = binding, listed = emptySet(), rowsAtStart = setOf(ref)),
+                        ObjectManifest(binding = binding, listed = emptySet(), rowsAtStart = setOf(ref), bindingEpoch = BindingEpoch(0)),
                         witnessed = emptyMap(),
                     ).shouldBeEmpty()
                     requireNotNull(repository.topology(root)).status shouldBe BindingStatus.UNRESOLVED
@@ -64,7 +65,7 @@ class SqlDelightRootTopologyRepositoryTest : FunSpec({
 
         BindingLatch(repository).proven(
             root,
-            ObjectManifest(binding = stale, listed = emptySet(), rowsAtStart = setOf(ref)),
+            ObjectManifest(binding = stale, listed = emptySet(), rowsAtStart = setOf(ref), bindingEpoch = BindingEpoch(0)),
             witnessed = emptyMap(),
         ).shouldBeEmpty()
 

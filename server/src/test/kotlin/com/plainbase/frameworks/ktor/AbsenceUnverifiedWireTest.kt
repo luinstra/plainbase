@@ -7,6 +7,7 @@ import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.withTempTree
@@ -61,7 +62,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
     fun limboed(block: suspend ApplicationTestBuilder.(RestHarness, java.nio.file.Path) -> Unit): Unit =
         withTempTree(seed = { writePage(it, "doc.md", page) }) { root ->
             restTest(root, seed) { harness ->
-                harness.builder.current.byId[PageId.require(docId)] shouldNotBe null
+                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(docId))) shouldNotBe null
                 Files.delete(root.resolve("doc.md"))
                 harness.builder.rebuild()
                 block(harness, root)
@@ -71,10 +72,10 @@ class AbsenceUnverifiedWireTest : FunSpec({
     test("a read for an indexed page whose bytes are unavailable is 503 absence_unverified, NEVER 404") {
         limboed { harness, _ ->
             withClue("the page left the SNAPSHOT - that is what makes this the 404 path, and it is the lie") {
-                harness.builder.current.byId[PageId.require(docId)] shouldBe null
+                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(docId))) shouldBe null
             }
             withClue("...but the durable index still BINDS it, and that is the fact that decides") {
-                harness.idMap.pathOf(PageId.require(docId)) shouldBe RootedPath(RootName.MAIN, docPath)
+                harness.idMap.livePathOf(PageId.require(docId)) shouldBe RootedPath(RootName.MAIN, docPath)
             }
 
             val get = client.get("/api/v1/pages/$docId")
@@ -136,6 +137,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
                         root = RootName.MAIN,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.MAIN),
+                        bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
                         covers = setOf(BindingRef(docPath, PageId.require(docId))),
                     ),
                 ),

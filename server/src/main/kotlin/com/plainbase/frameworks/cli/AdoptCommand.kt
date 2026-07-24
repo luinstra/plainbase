@@ -147,7 +147,7 @@ object AdoptCommand {
             val pass = AdoptionPass(
                 sources = stores.map { (root, store) -> AdoptionPass.Source(root, store) },
                 idMap = SqlDelightIdMapRepository(database),
-                identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+                identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
                 // The shared root-loss rule (probe decides, a live-root fault still rethrows). Its availability
                 // holder is inert here - a CLI serves no 503s and exits - but the CLASSIFICATION is the one every

@@ -149,7 +149,7 @@ class IndexHarness(
         epochs = epochs,
         frontmatterParser = frontmatterParser,
         rendererFactory = rendererFactory,
-        identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = patcher,
         idMap = idMap,
         aliasRegistry = registry,

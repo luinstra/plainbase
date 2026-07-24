@@ -1,8 +1,8 @@
 package com.plainbase.frameworks.sqldelight
 
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.RootName
@@ -29,7 +29,11 @@ class SqlDelightRetirementRepository(
     private val dirty get() = db.dirtyPageQueries
     private val gitCheckpoints get() = db.gitCheckpointQueries
 
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<RootedPageId>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<RootedPageId> {
         // A baseline or empty-reap advance (C4) arrives with NO proofs by construction, so the empty-list guard
         // must check BOTH lists or the advance would never reach the transaction that lands the checkpoint.
         if (proofs.isEmpty() && advances.isEmpty()) return emptySet()
@@ -55,15 +59,18 @@ class SqlDelightRetirementRepository(
                             "${minted.source} proof: this observation READ those ids somewhere, so they are not gone"
                     }
                 }
-                // FRESHNESS, re-read inside the transaction. A revocation that committed before this
-                // transaction opened is visible here, the compare fails, and the whole proof is worth nothing -
-                // which is precisely what "a restart is itself a revocation" has to mean for it to be true.
-                val current = observations.selectObservation(proof.root).executeAsOneOrNull()
-                if (current != proof.observationId.value) {
+                // FRESHNESS, re-read inside the transaction - BOTH tokens, exact-equality, fail-closed. A revocation
+                // (a new observation) OR a re-bind (an advanced binding epoch) that committed before this transaction
+                // opened is visible here, the compare fails, and the whole proof is worth nothing. The observation
+                // half is "a restart is itself a revocation"; the binding-epoch half is "a restore's re-bind revokes
+                // the proof that would have reaped the page it just re-created" - orthogonal, and either kills it.
+                val current = observations.selectObservationAndEpoch(proof.root).executeAsOneOrNull()
+                if (current == null || !current.matches(proof.observationId, proof.bindingEpoch)) {
                     logger.warn {
                         "discarding a ${proof.source} proof for root '${proof.root}': it was minted under observation " +
-                            "${proof.observationId.value}, and the root's current observation is $current - the view it " +
-                            "was minted from has been revoked, so it authorizes nothing"
+                            "${proof.observationId.value}/binding-epoch ${proof.bindingEpoch.value}, and the root is now at " +
+                            "${current?.observation_id}/${current?.binding_epoch} - the view it was minted from has been " +
+                            "revoked or a binding it covers was re-created, so it authorizes nothing"
                     }
                     continue
                 }
@@ -90,15 +97,16 @@ class SqlDelightRetirementRepository(
             }
             // The GIT checkpoint advances (C4), in the SAME transaction and behind the IDENTICAL freshness compare
             // the proofs above ride: a revoked view advances nothing, so a GIT proof discarded for freshness drops
-            // its root's advance too. There is one token, one transaction, no window between the reap and the move.
+            // its root's advance too. The same TWO stamps, one transaction, no window between the reap and the move.
             val advanced = mutableListOf<GitCheckpointAdvance>()
             for (advance in advances) {
-                val current = observations.selectObservation(advance.root).executeAsOneOrNull()
-                if (current != advance.observationId.value) {
+                val current = observations.selectObservationAndEpoch(advance.root).executeAsOneOrNull()
+                if (current == null || !current.matches(advance.observationId, advance.bindingEpoch)) {
                     logger.warn {
                         "discarding a GIT checkpoint advance for root '${advance.root}': it was minted under observation " +
-                            "${advance.observationId.value}, and the root's current observation is $current - the view it " +
-                            "was minted from has been revoked, so it advances nothing"
+                            "${advance.observationId.value}/binding-epoch ${advance.bindingEpoch.value}, and the root is now at " +
+                            "${current?.observation_id}/${current?.binding_epoch} - the view it was minted from has been " +
+                            "revoked or a binding was re-created, so it advances nothing"
                     }
                     continue
                 }
@@ -131,6 +139,9 @@ class SqlDelightRetirementRepository(
             }
         }
 
+    override fun bindingEpoch(root: RootName): BindingEpoch =
+        BindingEpoch(observations.selectObservationAndEpoch(root).executeAsOneOrNull()?.binding_epoch ?: 0L)
+
     override fun observations(): Map<RootName, ObservationId> =
         observations.selectAllObservations().executeAsList().associate { it.root to ObservationId(it.observation_id) }
 
@@ -141,6 +152,10 @@ class SqlDelightRetirementRepository(
             logger.info { "revoked root '$root''s observation; every proof minted before ${next.value} is now worthless" }
             next
         }
+
+    /** The two-token freshness compare: a proof (or advance) survives only if BOTH stamps still equal the root's. */
+    private fun SelectObservationAndEpoch.matches(observationId: ObservationId, bindingEpoch: BindingEpoch): Boolean =
+        observation_id == observationId.value && binding_epoch == bindingEpoch.value
 
     companion object {
         private val logger = KotlinLogging.logger {}

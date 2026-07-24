@@ -26,13 +26,13 @@ interface ProposalBaseReader {
      * The published content-file path of [pageId] **within [root]** — an edit proposal's live target — or null when
      * that root publishes no page with that id.
      *
-     * Scoped to the proposal's OWN root, deliberately (ADR-0011 D17). A page id is a durable identity but NOT a
-     * durable location: the cross-root duplicate-id rank contest re-awards an id to a higher-ranked root the moment
-     * that root claims the same frontmatter `id:`, WITHOUT moving any file - the original page is still exactly where
-     * it was, merely re-minted. So an unscoped `byId` resolve would silently walk a proposal off the root it was
-     * filed, gated and reviewed against and onto a stranger's file: the approve writes there, the rebase re-pins
-     * `base_hash` there, `base_drifted` reports on it. With two checkouts of one repo (the D2 case that makes
-     * duplicate ids ROUTINE) the bytes are identical, so the CAS does not even catch it.
+     * Scoped to the proposal's OWN root, deliberately (per-root identity, C5). A page id is a durable identity but NOT
+     * a durable location, and post-flip it does not even name ONE root: the SAME frontmatter `id:` may live in several
+     * roots at once (a legal cross-root duplicate), each root holding its OWN page under it. So an unscoped bare-id
+     * resolve is AMBIGUOUS and could silently walk a proposal off the root it was filed, gated and reviewed against and
+     * onto a stranger's file: the approve writes there, the rebase re-pins `base_hash` there, `base_drifted` reports on
+     * it. With two checkouts of one repo (the D2 case that makes duplicate ids ROUTINE) the bytes are identical, so the
+     * CAS does not even catch it.
      *
      * Root-scoping keeps the one resolution that IS wanted - an in-root move (the file was renamed on disk; the id
      * travels with its frontmatter) still applies - and turns the cross-root case into an honest null, which every

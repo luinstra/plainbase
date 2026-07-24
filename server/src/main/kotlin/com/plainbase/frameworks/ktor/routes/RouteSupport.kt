@@ -414,7 +414,7 @@ internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = Am
             AmbiguousPageIdEnvelope(
                 AmbiguousPageIdBody(
                     code = ErrorCodes.AMBIGUOUS_PAGE_ID,
-                    message = ambiguousMessage(ambiguous.id, remedy),
+                    message = ambiguousMessage(ambiguous.id, remedy, ambiguous.hasRetiredCandidate),
                     candidates = ambiguous.candidates.map {
                         AmbiguousCandidate(
                             root = it.value,
@@ -463,7 +463,11 @@ internal fun ApplicationCall.retryUrlPinnedTo(root: RootName): String {
  * The one wording behind both ambiguity surfaces (the REST 409 and the permalink 300), kept a hair from the MCP
  * twin's ("retry with the `root` argument") only where the surfaces genuinely differ in how a root is named.
  */
-internal fun ambiguousMessage(id: PageId, remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin): String {
+internal fun ambiguousMessage(
+    id: PageId,
+    remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin,
+    hasRetiredCandidate: Boolean = false,
+): String {
     val retry = when (remedy) {
         AmbiguityRemedy.QueryPin -> "retry against one of the candidate roots below."
         // Naming the FIELD, because this surface has no url to follow and an agent told to "retry against a candidate
@@ -471,7 +475,10 @@ internal fun ambiguousMessage(id: PageId, remedy: AmbiguityRemedy = AmbiguityRem
         is AmbiguityRemedy.BodyPin ->
             "retry with the \"${remedy.field}\" field in your request body naming one of the candidate roots below."
     }
-    return "The id ${id.value} exists in more than one root, so the server cannot pick one; $retry"
+    val base = "The id ${id.value} exists in more than one root, so the server cannot pick one; $retry"
+    // STATUS-NEUTRAL (the permalink 300 and REST 409 share this helper, and only the permalink answers 410): warn that
+    // a candidate is a tombstone without promising a status this surface may not deliver.
+    return if (hasRetiredCandidate) "$base (some candidate roots have retired this id)" else base
 }
 
 /**

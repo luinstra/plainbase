@@ -10,6 +10,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -97,7 +98,7 @@ class AbsenceClassifierTest : FunSpec({
             val pass = AdoptionPass(
                 sources = listOf(AdoptionPass.Source(RootName.MAIN, vanishing)),
                 idMap = world.idMap,
-                identity = PageIdentityService(UuidV7IdProvider()) { 0 },
+                identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
                 rootLoss = RootLossClassifier(world.availability),
                 citations = CitationFactory(),
@@ -108,7 +109,7 @@ class AbsenceClassifierTest : FunSpec({
             val abort = shouldThrow<AbsenceUnverified> { pass.run(AdoptionPass.Mode.RECORD) { _, _ -> } }
             abort.root shouldBe RootName.MAIN
             withClue("and it destroyed nothing on the way out - the binding it could not read is exactly as it was") {
-                world.idMap.pathOf(id) shouldBe bound
+                world.idMap.livePathOf(id) shouldBe bound
             }
         }
     }

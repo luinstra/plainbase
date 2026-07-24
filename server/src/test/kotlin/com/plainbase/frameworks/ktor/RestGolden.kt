@@ -34,7 +34,7 @@ object RestGolden {
      * carrying a `"` or `\`, a literal newline, …) is escaped correctly — never spliced as raw text
      * that could make the JSON invalid (the old pre-parse `text.replace` failure mode). Substituting
      * into the string content (not only whole-value primitives) keeps embedded placeholders working
-     * too — e.g. the PB-REST-1 citation `uri` `plainbase://<id>@{{content_hash}}`.
+     * too — e.g. the PB-REST-1 citation `uri` `plainbase://<root>/<id>@{{content_hash}}`.
      */
     fun load(name: String, substitutions: Map<String, String> = emptyMap()): JsonElement {
         val resource = checkNotNull(javaClass.getResourceAsStream("/golden/rest/$name")) { "missing golden resource: $name" }

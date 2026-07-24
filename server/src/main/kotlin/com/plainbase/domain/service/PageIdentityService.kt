@@ -2,7 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
-import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -24,21 +24,18 @@ import com.plainbase.domain.root.RootedPath
  * conflict reuses this path's existing `id_map` binding rather than minting anew, so the copy's
  * `/p/{id}` permalink stays stable across rescans (the still-conflicting file keeps raising the issue).
  *
- * **Cross-root duplicate policy (ADR-0011 D2/D17):** when the two claimants live in DIFFERENT roots,
- * registry rank ([rootRank], the D7 origin-line order) decides - the earlier-declared root wins the
- * id REGARDLESS of which side held the prior id_map binding ("previously-bound keeps it" stays the
- * rule only WITHIN a root) - but ONLY between roots the pass actually SCANNED. An owner the pass
- * could not look at is NON-SUPERSEDABLE ([supersedable], the D16 rule): rank cannot settle a contest
- * one side did not turn up to, and the winner's key-complete bind would DELETE that root's durable
- * binding while its carried section still holds the page. So the pass's own page reassigns instead,
- * and the contest waits for a pass that can see both roots.
+ * **Cross-root duplicate policy (per-root identity, C5):** a cross-root duplicate is NO LONGER a contest. The same
+ * frontmatter `id:` in two DIFFERENT roots is legal - both pages keep it and each answers its own `/p/{root}/{id}`.
+ * The `ownerOf` seam is root-scoped, so it never returns an owner in another root: rank no longer takes an id from
+ * anyone; it decides SOURCE precedence only. (The ADR-0011 D2/D17 cross-root rank-transfer this paragraph used to
+ * describe is dissolved; the broader ADR/essay rewrite is C7.)
  *
  * The loser reassigns like the within-root loser, and BOTH reassign through ONE gate: a loser keeps its own
  * `mappedId` only when [ownerOf] says that binding is still ITS to keep (nobody else holds the id), else it
  * MINTS FRESH. The gate closes two cases, and the second is why it is a gate and not an id comparison:
  *  - the prior-owner case (two checkouts of one repo), where the loser's own binding IS the contested id:
- *    reusing it would either key-complete the winner's fresh row away (a silent cross-root steal) or trip the
- *    snapshot's byId uniqueness check (a rebuild crash);
+ *    reusing it would either key-complete the winner's fresh row away (a silent within-root steal) or trip the
+ *    snapshot's byRootedId (root, id) uniqueness check (a rebuild crash);
  *  - and the case a `mappedId != contested id` check cannot see at all: the loser's binding names a DIFFERENT
  *    id, which another claimant of this same pass has already won. Reusing it hands one id to two live pages -
  *    the same crash, reached by a page that never contested that id.
@@ -62,7 +59,6 @@ import com.plainbase.domain.root.RootedPath
  */
 class PageIdentityService(
     private val idProvider: IdProvider,
-    private val rootRank: (RootName) -> Int,
 ) {
 
     /** How a page's resolved [id] was chosen — provenance the caller persists / surfaces in `adopt`. */
@@ -91,26 +87,24 @@ class PageIdentityService(
      *   through the §A4 shape gate ([PageId.of]); a present-but-shape-invalid value is treated as
      *   absent (no issue raised here — the invalid-id warning is the reader's per-page concern, §C2).
      * @param mappedId the page's existing `id_map` entry, or null if unmapped.
-     * @param ownerOf the previously-bound owner of a given id, or null if that id is not yet bound to
-     *   another live path — the duplicate-detection seam. The caller threads its already-assigned ids
-     *   through this lookup so a within-run duplicate is caught deterministically, and applies the
-     *   D16 [BindingVisibility.isLive] rule to id_map rows so a detached binding is never treated as an owner.
-     * @param supersedable whether the rank contest is even ALLOWED to take an id away from a given owner —
-     *   the D16 [BindingVisibility.isSupersedable] rule (an owner in a root this pass did not scan is
-     *   untouchable, so [path] reassigns however it ranks). Consulted ONLY on the cross-root arm.
+     * @param ownerOf the previously-bound owner of a given id WITHIN this page's root (root-scoped since C5), or
+     *   null if that id is not yet bound to another live path under this root — the duplicate-detection seam. The
+     *   caller threads its already-assigned ids through this lookup so a within-run duplicate is caught
+     *   deterministically, and applies the D16 [BindingVisibility.isLive] rule to id_map rows so a detached binding
+     *   is never treated as an owner. Because it is root-scoped, a returned owner is always in [path]'s own root: a
+     *   cross-root duplicate is no longer a contest (per-root identity), so both roots keep the id.
      */
     fun resolve(
         path: RootedPath,
         rawFrontmatterId: String?,
         mappedId: PageId?,
         ownerOf: (PageId) -> RootedPath?,
-        supersedable: (RootedPath) -> Boolean,
     ): Assignment {
         val frontmatterId = rawFrontmatterId?.let { PageId.of(it) }
         if (frontmatterId != null) {
             val owner = ownerOf(frontmatterId)
             if (owner != null && owner != path) {
-                return duplicate(path, frontmatterId, mappedId, owner, supersedable(owner), ownerOf)
+                return duplicate(path, frontmatterId, mappedId, owner, ownerOf)
             }
             return Assignment(frontmatterId, Source.FRONTMATTER)
         }
@@ -119,63 +113,50 @@ class PageIdentityService(
         val mapped = mappedId ?: return Assignment(idProvider.next(), Source.MINTED)
 
         // ...unless the binding is no longer this page's to keep, because an earlier claimant in THIS pass
-        // already took the id (the cross-root rank contest, lost by a page that had no frontmatter id of its
+        // already took the id (a within-root contest, lost by a page that had no frontmatter id of its
         // own to lose it with). A pass that binds INLINE never reaches this check - the winner's key-complete
         // bind has already deleted the row, so `mappedId` came back null and the mint below is the `null` arm
         // above. A pass that RESOLVES BEFORE IT BINDS (`AdoptionPass`'s read-only plan, which must be able to
         // abort without a trace) still reads the stale row, and honoring it would hand the winner's id to two
-        // pages at once: a duplicate in the plan, and a byId uniqueness crash the moment it is indexed. So the
+        // pages at once: a duplicate in the plan, and a byRootedId uniqueness crash the moment it is indexed. So the
         // owner check gates EVERY reuse of a mappedId - this arm and the reassignments in [duplicate] - and
         // resolve() no longer depends on a side effect of the last bind.
         val owner = ownerOf(mapped)
         if (owner == null || owner == path) return Assignment(mapped, Source.ID_MAP)
+        // owner is in path.root by construction (ownerOf is root-scoped, C5): a within-root claimant already took
+        // the mapped id this pass, so this page reassigns and records the within-root duplicate.
         return Assignment(
             id = idProvider.next(),
             source = Source.MINTED,
-            // Cross-root by construction - a within-root claimant can never get here, because the within-root
-            // rule hands the id to the PREVIOUSLY-BOUND path, which is precisely this one. Classified rather
-            // than asserted: an unreachable arm that reports honestly costs one line and cannot rot.
-            issue = if (owner.root == path.root) {
-                IdentityIssue.DuplicateId(id = mapped, root = path.root, keptPath = owner.path, reassignedPath = path.path)
-            } else {
-                IdentityIssue.CrossRootDuplicateId(id = mapped, kept = owner, reassigned = path)
-            },
+            issue = IdentityIssue.DuplicateId(id = mapped, root = path.root, keptPath = owner.path, reassignedPath = path.path),
         )
     }
 
-    /** The duplicate branch: within-root §5.2 verbatim, cross-root the D17 rank contest (class doc). */
+    /**
+     * The duplicate branch: a valid frontmatter id already bound to ANOTHER path of the SAME root is a copied-file
+     * duplicate (§5.2). Since [ownerOf] is root-scoped (C5) a returned owner is always in [path]'s own root - a
+     * cross-root duplicate is no longer a contest, both roots keep the id - so this is the ONLY arm. The
+     * previously-bound path keeps the id; this path reassigns. First detection mints fresh, but a rescan reuses this
+     * path's own id_map binding so /p/{root}/{id} stays stable.
+     */
     private fun duplicate(
         path: RootedPath,
         frontmatterId: PageId,
         mappedId: PageId?,
         owner: RootedPath,
-        supersedable: Boolean,
         ownerOf: (PageId) -> RootedPath?,
-    ): Assignment = when {
-        // A valid frontmatter id already bound to ANOTHER path of the SAME root is a copied-file
-        // duplicate: the previously-bound path keeps it; this path is reassigned. First detection
-        // mints fresh, but a rescan reuses this path's own id_map binding so /p/{id} stays stable.
-        owner.root == path.root -> reassign(
-            path,
-            mappedId,
-            ownerOf,
-            IdentityIssue.DuplicateId(id = frontmatterId, root = path.root, keptPath = owner.path, reassignedPath = path.path),
-        )
-        // Cross-root, this path outranks the owner AND the pass may take the id from it: it WINS
-        // (D17 - rank beats previously-bound). The beaten owner sits in a root this pass SCANNED, so
-        // it re-resolves later in this same pass (rank order) and records its own loser issue there.
-        supersedable && rootRank(path.root) < rootRank(owner.root) -> Assignment(frontmatterId, Source.FRONTMATTER)
-        // Cross-root loser - beaten on rank, or holding a rank it cannot cash because the owner's root
-        // is one this pass never scanned (D16: rank cannot settle a contest one side did not turn up
-        // to, and the bind would destroy that root's durable binding). Either way: reassign.
-        else -> reassign(path, mappedId, ownerOf, IdentityIssue.CrossRootDuplicateId(id = frontmatterId, kept = owner, reassigned = path))
-    }
+    ): Assignment = reassign(
+        path,
+        mappedId,
+        ownerOf,
+        IdentityIssue.DuplicateId(id = frontmatterId, root = path.root, keptPath = owner.path, reassignedPath = path.path),
+    )
 
     /**
      * The ONE way a duplicate loser gets an identity: its own `id_map` binding when [ownerOf] says that binding
      * is still its to keep, else a fresh mint - the SAME gate [resolve]'s id_map arm applies, for the same reason
      * (class doc). A `mappedId` some other claimant of this pass has already won is not a fallback, it is one id
-     * on two live pages: a duplicate in the plan, and a `PageIndex` byId crash the moment it is indexed.
+     * on two live pages IN ONE ROOT: a duplicate in the plan, and a `PageIndex` byRootedId crash the moment it is indexed.
      */
     private fun reassign(
         path: RootedPath,
@@ -201,16 +182,23 @@ class PageIdentityService(
  * that a rule can be wrong - `duplicate()` reused a `mappedId` blind for a whole release, and nothing between
  * there and the disk would have noticed.
  *
- * It has to run BEFORE the binds because a durable duplicate cannot be walked back: `id_map.bind` is key-complete,
- * so the second bind of an id DELETES the first page's row, and the only existing check ([PageIndex]'s `byId`) runs
- * AFTER the whole loop - it throws on a snapshot whose rows are already rewritten, and it throws again on every
- * boot that follows. Failing HERE aborts a pass that has changed nothing: the last-good snapshot stands, the rows
- * stand, and the fault is loud, named, and fixable.
+ * It has to run BEFORE the binds because a durable duplicate cannot be walked back: `id_map.bind` is key-complete
+ * within a root, so a second bind of the same id in ONE root DELETES the first page's row, and the only existing
+ * check ([PageIndex]'s `byRootedId`) runs AFTER the whole loop - it throws on a snapshot whose rows are already
+ * rewritten, and it throws again on every boot that follows. Failing HERE aborts a pass that has changed nothing:
+ * the last-good snapshot stands, the rows stand, and the fault is loud, named, and fixable.
+ *
+ * The rule is PER ROOT (per-root identity, C5): the same id in two DIFFERENT roots is legal, so the check groups by
+ * ([RootedPageId]) - one id per page WITHIN a root - and a cross-root duplicate passes.
  */
 internal fun requireDistinctIds(plan: Map<RootedPath, PageId>) {
-    val duplicates = plan.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
+    val duplicates = plan.entries
+        .groupBy({ RootedPageId(it.key.root, it.value) }, { it.key })
+        .filterValues { it.size > 1 }
     check(duplicates.isEmpty()) {
-        "identity resolution produced ONE id for SEVERAL pages, which no bind may make durable: " +
-            duplicates.entries.joinToString("; ") { (id, paths) -> "${id.value} -> ${paths.joinToString { it.path.value }}" }
+        "identity resolution produced ONE id for SEVERAL pages IN ONE ROOT, which no bind may make durable: " +
+            duplicates.entries.joinToString("; ") { (rooted, paths) ->
+                "${rooted.id.value} in '${rooted.root}' -> ${paths.joinToString { it.path.value }}"
+            }
     }
 }

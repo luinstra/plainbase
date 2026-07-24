@@ -47,9 +47,10 @@ class RestGoldenTest : FunSpec({
     val deployGuideHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("guides/deploy-guide.md"))
     val welcomeHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("index.md"))
 
-    // The §A4 citation-uri grammar: plainbase://{lowercase-uuid}["#"heading]"@"(git-sha | sha256:hex).
+    // The §A4 citation-uri grammar: plainbase://{root}/{lowercase-uuid}["#"heading]"@"(git-sha | sha256:hex),
+    // root-qualified (per-root identity, C5); {root} is the [a-z0-9][a-z0-9-]* slug.
     val uriGrammar = Regex(
-        "^plainbase://[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" +
+        "^plainbase://[a-z0-9][a-z0-9-]*/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" +
             "(#[^@]+)?@([0-9a-f]{7,40}|sha256:[0-9a-f]{64})$",
     )
 

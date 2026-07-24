@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.BreakCause
@@ -137,6 +138,9 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         mainHistory: HistoryProvider = NoOpHistoryProvider,
         extraHistory: HistoryProvider = NoOpHistoryProvider,
         retirements: RetirementRepository = this.retirements,
+        // Defaults to this world's real one; a race row wraps it (a decorator) to fire a concurrent bind at the exact
+        // durable-read the EPOCH mint takes its negative evidence from - the mid-mint revoke-before-stamp interleave.
+        idMap: IdMapRepository = this.idMap,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
             IndexBuilder.Source(registry.main, LocalContentStore(mainDir), mainHistory),
@@ -144,7 +148,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         ),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = aliasRegistry,

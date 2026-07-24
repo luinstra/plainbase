@@ -37,6 +37,7 @@ import com.plainbase.domain.service.ProposalFacade
 import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.ReindexResult
+import com.plainbase.domain.service.ResolvedClaimants
 import com.plainbase.domain.service.RootStatus
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.domain.service.RootedResource
@@ -144,12 +145,22 @@ class GuardedMutatingFacade(
         // read-only pin would start answering 403 instead of its ratified 404/stale_base. Closing it needs an audit-only
         // root channel through the gate. See the round-6 ledger entry.
         val snapshot = indexBuilder.current
-        val res: IdResolution = request.expectedRoot?.let { resolver.resolvePinned(it, request.pageId) }
-            ?: resolver.resolve(request.pageId)
+        // A BARE write reads ONE durable `claims` snapshot and threads it into `goneOrNotFound` (§6.2): the fail-closed
+        // `resolution()` and the frozen 409-vs-404 tombstone decision come from the SAME atomic read, so a reclaim
+        // landing between the two can no longer flip the frozen 409 to a 404. A pinned write keeps `resolvePinned`.
+        val expectedRoot = request.expectedRoot
+        val claims: ResolvedClaimants? = if (expectedRoot == null) resolver.claimants(request.pageId) else null
+        val res: IdResolution = if (expectedRoot != null) {
+            resolver.resolvePinned(expectedRoot, request.pageId)
+        } else {
+            // `claims` is populated in exactly this branch (the `expectedRoot == null` predicate above); make that
+            // coupling explicit rather than a bare `!!` that a later predicate change would turn into a latent NPE.
+            checkNotNull(claims) { "a bare write (no expectedRoot) always reads a claimants snapshot" }.resolution()
+        }
         return when (res) {
             is IdResolution.Ambiguous -> {
                 policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(null, request.pageId.value))
-                throw AmbiguousPageId(request.pageId, res.candidates)
+                throw AmbiguousPageId(request.pageId, res.candidates, res.hasRetiredCandidate)
             }
             // Missing-owner: audit EDIT@pageId (a READ_ONLY agent denies → 403), then the SAME frozen C1 vocabulary
             // as [directSave]'s bare None arm - deliberately, ONE vocabulary per endpoint regardless of principal. A
@@ -158,7 +169,7 @@ class GuardedMutatingFacade(
             // there is no content to smuggle and no applyable proposal to mint.
             IdResolution.None -> {
                 policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(null, request.pageId.value))
-                goneOrNotFound(request.pageId, request.expectedRoot)
+                goneOrNotFound(request.pageId, request.expectedRoot, claims)
             }
             is IdResolution.One -> {
                 val current = snapshot.pageAt(RootedPageId(res.root, request.pageId)) ?: run {
@@ -170,7 +181,10 @@ class GuardedMutatingFacade(
                     policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(res.root, request.pageId.value))
                     requireAvailable(res.root)
                     absence.requireVerifiedAbsence(res.root, request.pageId, snapshot)
-                    return goneOrNotFound(request.pageId, request.expectedRoot)
+                    // The bare One-race fallback reads a FRESH claims snapshot at the RECHECK (post-unbind state) so the
+                    // frozen 409 page_deleted survives a live->tombstone race; the pinned fallback passes null (404).
+                    val recheck = if (request.expectedRoot == null) resolver.claimants(request.pageId) else null
+                    return goneOrNotFound(request.pageId, request.expectedRoot, recheck)
                 }
                 // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME
                 // server-resolved current.path the pipeline writes (smuggling closed by construction), in the page's
@@ -214,16 +228,23 @@ class GuardedMutatingFacade(
         // id would let a D17 cross-root reassignment walk an approved edit into an unreviewed repository, while a pin
         // that no longer binds the id reads as gone from the approved root (see [SaveRequest.expectedRoot]). A bare PUT
         // has no pin: the id is the address, so it resolves id_map-first.
-        val res: IdResolution = request.expectedRoot?.let { resolver.resolvePinned(it, request.pageId) }
-            ?: resolver.resolve(request.pageId)
+        val expectedRoot = request.expectedRoot
+        val claims: ResolvedClaimants? = if (expectedRoot == null) resolver.claimants(request.pageId) else null
+        val res: IdResolution = if (expectedRoot != null) {
+            resolver.resolvePinned(expectedRoot, request.pageId)
+        } else {
+            // `claims` is populated in exactly this branch (the `expectedRoot == null` predicate above); make that
+            // coupling explicit rather than a bare `!!` that a later predicate change would turn into a latent NPE.
+            checkNotNull(claims) { "a bare write (no expectedRoot) always reads a claimants snapshot" }.resolution()
+        }
         val grant = policy.checkEdit(principal, WriteClass.PageEdit, RootedResource((res as? IdResolution.One)?.root, request.pageId.value))
         return when (res) {
-            is IdResolution.Ambiguous -> throw AmbiguousPageId(request.pageId, res.candidates)
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(request.pageId, res.candidates, res.hasRetiredCandidate)
             // No LIVE registered root owns this id. On a BARE write, a TOMBSTONED id (any registered retired claimant)
             // is the frozen C1 answer: 409 page_deleted, current_* null - a page PROVEN gone is reported as deleted,
             // never as never-existed. Only a genuinely-unknown id (or a pin that no longer binds it - the pinned
             // fresh-fail-closed arm, which the apply path's toWriteOutcome maps to its own page_deleted) is 404.
-            IdResolution.None -> goneOrNotFound(request.pageId, request.expectedRoot)
+            IdResolution.None -> goneOrNotFound(request.pageId, request.expectedRoot, claims)
             is IdResolution.One -> {
                 requireAvailable(res.root)
                 // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route
@@ -235,7 +256,8 @@ class GuardedMutatingFacade(
                 val current = snapshot.pageAt(RootedPageId(res.root, request.pageId))
                     ?: run {
                         absence.requireVerifiedAbsence(res.root, request.pageId, snapshot)
-                        return goneOrNotFound(request.pageId, request.expectedRoot)
+                        val recheck = if (request.expectedRoot == null) resolver.claimants(request.pageId) else null
+                        return goneOrNotFound(request.pageId, request.expectedRoot, recheck)
                     }
                 directWriteResolved(grant, request, current, request.author, request.committer)
             }
@@ -259,9 +281,14 @@ class GuardedMutatingFacade(
      *
      * A PINNED request keeps its 404 (the ratified endpoint table): the caller asserted a root, and the honest answer to
      * "is it in THAT root" is no - a 409 would describe a different question than the one asked.
+     *
+     * [claims] is the single durable snapshot the bare arm already read (§6.2), NULL on the pinned path (which returns
+     * 404 without consulting a tombstone). Its `retired` list is registered-filtered, so `retired.isNotEmpty()` is
+     * byte-identical to the old `resolveRetired(id) != None` - only the read is now the same atomic snapshot as
+     * `resolution()`, closing the reclaim-race that flipped the frozen 409 to a 404.
      */
-    private fun goneOrNotFound(pageId: PageId, expectedRoot: RootName?): SaveResult =
-        if (expectedRoot == null && resolver.resolveRetired(pageId) != IdResolution.None) {
+    private fun goneOrNotFound(pageId: PageId, expectedRoot: RootName?, claims: ResolvedClaimants?): SaveResult =
+        if (expectedRoot == null && claims?.retired?.isNotEmpty() == true) {
             SaveResult.Written(
                 WriteOutcome.Conflict(
                     reason = WriteConflictReason.PAGE_DELETED,
@@ -445,7 +472,7 @@ class GuardedMutatingFacade(
             ?: resolver.resolve(pageId)
         val grant = policy.checkEdit(principal, WriteClass.AssetWrite, RootedResource((res as? IdResolution.One)?.root, pageId.value))
         val page = when (res) {
-            is IdResolution.Ambiguous -> throw AmbiguousPageId(pageId, res.candidates)
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(pageId, res.candidates, res.hasRetiredCandidate)
             IdResolution.None -> return AssetWriteOutcome.PageMissing
             is IdResolution.One -> {
                 requireAvailable(res.root)

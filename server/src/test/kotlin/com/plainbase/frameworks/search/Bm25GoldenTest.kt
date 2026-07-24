@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.search
 
 import com.plainbase.domain.render.GoldenTsv
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -31,7 +33,7 @@ class Bm25GoldenTest : FunSpec({
                 withProvider { provider, _ ->
                     provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
                     val top = provider.search(query(text)).hits.first()
-                    val page = snapshot.byId.getValue(top.pageId)
+                    val page = snapshot.pageAt(RootedPageId(RootName.MAIN, top.pageId))!!
                     page.path.value shouldBe expectedPath
                     (top.headingId ?: "-") shouldBe expectedHeading
                 }

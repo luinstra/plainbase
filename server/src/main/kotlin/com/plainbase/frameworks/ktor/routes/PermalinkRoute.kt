@@ -27,8 +27,8 @@ import io.ktor.server.routing.get
  *
  * **The bare `/p/{id}` is id_map-FIRST (Option B, C4):** it resolves the owning root from the durable index, so a
  * bare id held by MORE THAN ONE root answers **300 Multiple Choices** with one `Link: rel="alternate"` per candidate
- * (the `/p/{root}/{id}` disambiguation targets, rank order) - FAKE-only under `UNIQUE(id)`, but the shape ships in
- * C4. The rooted form is the disambiguation surface itself: a malformed root slug returns 400 `invalid_root`
+ * (the `/p/{root}/{id}` disambiguation targets, rank order) - genuinely reachable now that `UNIQUE(id, root)` (C5)
+ * legalizes the same id in several roots. The rooted form is the disambiguation surface itself: a malformed root slug returns 400 `invalid_root`
  * (the sole pre-auth exception, a SYNTAX error), while an unregistered or detached root returns 404 AFTER `checkRead`. It is a
  * COHERENT-STALE snapshot-first read (the pinned-READ split) and never itself Ambiguous.
  *
@@ -74,7 +74,8 @@ private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
                 is PermalinkResolution.Retired -> respondRetired(bareId, resolution)
                 PermalinkResolution.Unknown ->
                     respondError(HttpStatusCode.NotFound, ErrorCodes.PAGE_NOT_FOUND, "No page with id ${bareId.value}")
-                is PermalinkResolution.Ambiguous -> respondAmbiguousPermalink(bareId, resolution.candidates)
+                is PermalinkResolution.Ambiguous ->
+                    respondAmbiguousPermalink(bareId, resolution.candidates, resolution.hasRetiredCandidate)
             }
         }
 
@@ -129,11 +130,16 @@ private suspend fun ApplicationCall.respondRetired(id: PageId, resolution: Perma
 }
 
 /**
- * 300 Multiple Choices for a bare id held by more than one root (C4): one `Link: </p/{root}/{id}>; rel="alternate"`
- * per candidate in rank order, plus a body of the same disambiguation URLs. A retired-Ambiguous answers the same 300
- * (every candidate then answers 410 - the 300 disambiguates WHICH tombstone).
+ * 300 Multiple Choices for a bare id the resolver refuses to pick one root for (C5): one
+ * `Link: </p/{root}/{id}>; rel="alternate"` per candidate in rank order, plus a body of the same disambiguation URLs.
+ * [hasRetiredCandidate] widens the message (STATUS-NEUTRAL) when a candidate is a tombstone - the mixed live+retired
+ * fail-closed arm, or a purely-retired multi-tombstone id (each candidate then answers 410).
  */
-private suspend fun ApplicationCall.respondAmbiguousPermalink(id: PageId, candidates: List<RootName>) {
+private suspend fun ApplicationCall.respondAmbiguousPermalink(
+    id: PageId,
+    candidates: List<RootName>,
+    hasRetiredCandidate: Boolean,
+) {
     candidates.forEach { response.header(HttpHeaders.Link, "</p/${it.value}/${id.value}>; rel=\"alternate\"") }
     // Ambiguity is TRANSIENT - it ends the moment the duplicate is resolved - but 300 is heuristically cacheable, so an
     // intermediary would keep serving "pick a root" long after there is only one.
@@ -143,7 +149,7 @@ private suspend fun ApplicationCall.respondAmbiguousPermalink(id: PageId, candid
         AmbiguousPageIdEnvelope(
             AmbiguousPageIdBody(
                 code = ErrorCodes.AMBIGUOUS_PAGE_ID,
-                message = ambiguousMessage(id),
+                message = ambiguousMessage(id, hasRetiredCandidate = hasRetiredCandidate),
                 candidates = candidates.map { AmbiguousCandidate(root = it.value, url = "/p/${it.value}/${id.value}") },
             ),
         ),

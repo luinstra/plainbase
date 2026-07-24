@@ -33,8 +33,9 @@ two hops (legacy 301, then the alias 301) - accepted, and still lands.
 and `GET /browse/{path}` both resolve a legacy tail under `main` directly. `by-path` answers the page
 itself (200, never a 301), and its `url` field carries the new canonical form. `/browse` is a lookup
 that has always answered a redirect - it still does, and the **302 it issues already points at the
-canonical `/docs/main/...` URL**, so a legacy `/browse/...` costs one hop, not two. `/p/{id}`
-permalinks are unchanged.
+canonical `/docs/main/...` URL**, so a legacy `/browse/...` costs one hop, not two. The canonical
+permalink is now the rooted `/p/{root}/{id}`; the bare `/p/{id}` still resolves (302 to the owning
+root, or 300 Multiple Choices when several roots hold the id).
 
 **2. A corpus with a top-level `main` entry will REFUSE to boot.** `main` is now a reserved URL
 segment, so a `content/main/` directory (or a top-level `main.md`, or a `slug: main`) makes an old
@@ -78,6 +79,12 @@ list is the remedy list.** The greps above only tell you where to start looking.
 The remedy is to rename the offending entry; there is no config key to disable the reservation. The
 full rule (every shape that trips it, and the deep-link consequence of renaming) is in
 [Configuration: `main` is a reserved URL segment](configuration.md#main-is-a-reserved-url-segment---in-every-install).
+
+**Upgrading to per-root identity (schema v17): stop the old binary FIRST.** This release rewrites
+`id_map` to `UNIQUE(id, root)`. A pre-v17 binary does not understand the new constraint and runs its
+global cross-root `unbindStale`/`unretire` against it, silently wiping another root's rows. Shut the
+running server down BEFORE upgrading the binary. A v17-or-later binary REFUSES to open a still-NEWER
+DB, but it cannot stop an OLDER binary that is already running, and there is no downgrade.
 
 ## The content tree is plain Markdown on disk
 
@@ -288,25 +295,25 @@ runtime API to talk to a live process, and the server does not hot-reload topolo
 
 `root remove <name>` does not touch the root's content or its database rows. Its pages keep their
 `id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
-**detached**, because the name no longer names a configured root. `root add` of the same name later
-binds them again - **but "again" is not "unchanged", and remove/re-add is not a no-op for
-permalinks.** Two things can move an id across the gap:
+**detached**, because the name no longer names a configured root. `root add` of the **same** name
+later revives them, and under per-root identity (C5) that revival is permalink-SAFE: each page keeps
+its own `id:` and answers the same rooted `/p/{name}/{id}` it did before. Two things are still worth
+naming:
 
-- **A detached row is not an owner.** While the root is out of the topology, a live page in another
-  root carrying the same frontmatter `id:` simply **takes that id**, and the bind sweeps the stale
-  row. Nothing contests it, because the removed root is not there to contest. Re-adding the name
-  cannot take the id back: the page comes home as a duplicate-id loser and is minted a **fresh id**,
-  so its old `/p/{id}` permalink now answers with the other root's page.
-- **A re-added root ranks LAST.** `root add` appends to `roots.conf`, so a root that wins a
-  cross-root duplicate-`id:` contest today can lose the same contest after a remove/re-add - rank
-  decides, and its rank changed (see
-  [Configuration: the order of the block](configuration.md#the-order-of-the-block-is-a-contract-it-decides-who-keeps-a-permalink)).
-  `root remove` prints this consequence when you run it.
+- **Re-adding under a DIFFERENT name is not a free rename.** Permalinks and agent citations are rooted
+  (`/p/{root}/{id}`), so the root's name is baked into every one of them. Bring the same directory back
+  under a new name and the pages answer at `/p/{newname}/{id}` while the old `/p/{oldname}/{id}` URLs
+  404 - the `id:` values are untouched; it is the ROOT segment that moved.
+- **Rank only reorders source precedence.** `root add` APPENDS to `roots.conf`, so a re-added root
+  ranks last - but rank decides SOURCE PRECEDENCE and the order a bare `/p/{id}` lists its candidate
+  roots (see
+  [Configuration: the order of the block](configuration.md#the-order-of-the-block-decides-source-precedence-not-permalinks)),
+  NOT who "keeps" a shared id. Two roots holding the same frontmatter `id:` BOTH keep it, each at its
+  own rooted permalink. `root remove` prints these consequences when you run it.
 
-A root with no ids shared with any other root is unaffected by either: its pages come back with the
-same ids and the same permalinks. **If your roots do share `id:` values, treat remove/re-add as a
-permalink-affecting operation** - and prefer fixing the topology in one edit over a remove now and an
-add later.
+A same-name remove/re-add leaves every page with the same id and the same rooted permalink. **Renaming
+a root, though, is a permalink-affecting operation** - prefer fixing the topology in one edit over a
+remove now and an add-under-a-new-name later.
 
 **If the removed root held every page binding in `DATA_DIR`, the next boot refuses to serve.** This is
 the 100%-detached guard (ADR-0011 D15): a nonempty `id_map` whose roots are entirely disjoint from the
@@ -507,7 +514,7 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - the directory itself (created on startup),
 - a fresh `plainbase.db`, created and migrated to the current schema,
 - a rebuilt, fully populated `search.db`,
-- the id of every page that carries `id:` in its frontmatter - those `/p/{id}` permalinks and
+- the id of every page that carries `id:` in its frontmatter - those `/p/{root}/{id}` permalinks and
   citations keep working,
 - `redirect_from` aliases (re-derived from frontmatter),
 - with `storage.backend=object` **and** `git.enabled=true`: commit-grained **history**, up to the last
@@ -524,7 +531,7 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - sessions, roles, and the audit log,
 - pending proposals,
 - move-history URL aliases: old URLs from past renames 404 unless re-declared as `redirect_from`,
-- ids of pages that never carried a frontmatter id - fresh ids are minted, so old `/p/{id}`
+- ids of pages that never carried a frontmatter id - fresh ids are minted, so old `/p/{root}/{id}`
   permalinks and citations to *those* pages break.
 
 **Mitigation, before disaster:**
@@ -540,10 +547,12 @@ bucket on the next boot). The authoritative content is the source of truth, so m
 - on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
   reconstructable from the content trees: they're the only record of *which* directories are roots,
   under what names, with what `editable`/`history` settings, and **in what ORDER** - and the order is
-  not cosmetic. A root's rank is its line in the `roots {}` block, and rank decides which root keeps
-  the `/p/{id}` permalink when two roots share a frontmatter `id:`, so a restore that guesses the
-  order back wrong reassigns those permalinks silently (see
-  [Configuration: the order of the block is a contract](configuration.md#the-order-of-the-block-is-a-contract-it-decides-who-keeps-a-permalink)).
+  not cosmetic. The root NAMES are baked into every rooted `/p/{root}/{id}` permalink and citation, so
+  a restore that brings a root back under a different name rots every citation into it; and a root's
+  rank is its line in the `roots {}` block, which decides SOURCE PRECEDENCE - the order a bare `/p/{id}`
+  lists its candidate roots - not who keeps a shared id (two roots holding one `id:` both keep it, each
+  at its own rooted permalink; see
+  [Configuration: the order of the block](configuration.md#the-order-of-the-block-decides-source-precedence-not-permalinks)).
   Lose these files without a backup and a restore has the pages back but not the topology that made
   them a multi-root install.
 
@@ -685,10 +694,13 @@ restore the root (or let the tree settle) and re-run.** What an abort can leave 
 `id_map` row exists while its file does not carry the `id:` line yet - which is exactly the state adopt
 exists to repair, so a re-run converges on it. Adoption deletes nothing and is idempotent.
 
-Reading everything before writing anything is also what lets it settle a page id that two roots both claim
-(a file copied between them, say): the root declared **first** in `roots {}` keeps the id, the other page
-is given a fresh one, and the run reports it as a `cross_root_duplicate_id`. `adopt --write-ids --dry-run`
-previews exactly that - the same decisions, the same bytes - without touching a file.
+Reading everything before writing anything is also what lets it settle a page id that two files in ONE
+root both claim (a copy-paste within a tree, say): the same id cannot live twice in one root, so one page
+keeps it and the other is given a fresh one, reported as a `duplicate_id`. The SAME id in two DIFFERENT
+roots is not a contest at all under per-root identity (C5) - a file copied between trees keeps its id in
+BOTH, each root answering its own rooted `/p/{root}/{id}` - so adopt reassigns nothing there and reports
+nothing. `adopt --write-ids --dry-run` previews exactly these decisions - the same bytes - without
+touching a file.
 
 Start read-only, always:
 

@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
@@ -244,7 +245,7 @@ class MultiRootRestHarness(
     /**
      * Creates a TOMBSTONE for [id] under a DETACHED root (C4, the CLASS-A line-280 case): bind [id] at
      * ([name], [path]), then bind a DIFFERENT id at the SAME (root, path) - the displacement retires [id]. The root is
-     * not in the registry, so `resolveRetired` filters it out and the permalink answers 404 (never the old 410). Uses
+     * not in the registry, so the resolver filters it out and the permalink answers 404 (never the old 410). Uses
      * only the PUBLIC double-`bind`, no raw `retire`.
      */
     fun detachedTombstone(name: String, path: String, id: PageId) {
@@ -253,7 +254,7 @@ class MultiRootRestHarness(
         val rooted = RootedPath(root, TreePath.require(path))
         idMap.bind(rooted, id, materialized = false)
         idMap.bind(rooted, UuidV7IdProvider().next(), materialized = false)
-        require(idMap.retired(id) != null) { "expected '$id' to be tombstoned by the displacing bind" }
+        require(idMap.retiredAt(root, id) != null) { "expected '$id' to be tombstoned by the displacing bind" }
     }
 
     override fun close() {
@@ -264,6 +265,14 @@ class MultiRootRestHarness(
         searchDir.toFile().deleteRecursively()
     }
 }
+
+/**
+ * Test-only: the rooted path holding [id] when EXACTLY ONE root holds it live (per-root identity, C5). The mechanical
+ * replacement for the deleted bare `IdMapRepository.pathOf(id)` at genuinely single-claimant assertion sites. NEVER
+ * for a dual-root assertion - those pin BOTH roots' `bindingInRoot` explicitly.
+ */
+fun IdMapRepository.livePathOf(id: PageId): RootedPath? =
+    rootsHoldingId(id).singleOrNull()?.let { root -> bindingInRoot(root, id)?.path }
 
 /** A local root over [path] with its per-root knobs — the fixture twin of one `roots { <name> { … } }` block. */
 fun testRoot(

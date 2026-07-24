@@ -696,8 +696,9 @@ internal fun shadowedRootWarning(
     }
     return "root name(s) collide with a top-level segment of the main root: $detail. Links through that segment " +
         "(/docs/<name>/..., /browse/<name>/..., /assets/<name>/...) now resolve inside the ROOT, not inside main - " +
-        "main's own entries under it are reachable only through their permalinks (/p/{id}). Rename the main-root " +
-        "entry, or rename the root (remove + add, which appends its rank)."
+        "main's own entries under it are reachable only through their rooted permalinks (/p/{root}/{id}). Rename the " +
+        "main-root entry, or re-add this root under a different name (remove + add) - but that changes every rooted " +
+        "/p/{root}/{id} citation into it."
 }
 
 /**

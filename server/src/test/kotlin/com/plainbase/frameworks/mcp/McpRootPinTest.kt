@@ -4,6 +4,7 @@ import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -60,6 +61,27 @@ class McpRootPinTest : FunSpec({
 
                 // Naming a root resolves it: the pin is the documented remedy the error tells the agent to use.
                 client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "main")).isErr() shouldBe false
+            }
+        }
+    }
+
+    test("a bare read with a LIVE claimant AND a foreign TOMBSTONE -> ambiguous_page_id with the STATUS-NEUTRAL retired note, no 410") {
+        McpHarness(ambiguousRoots = listOf(RootName.MAIN), retiredRoots = listOf(RootName.require("notes"))).use { harness ->
+            harness.session(harness.readOnlyBearer) { client ->
+                val res = client.call("read_page", mapOf("id" to harness.seedPageId))
+                res.isErr() shouldBe true
+                val body = Json.parseToJsonElement(res.text()).jsonObject
+                body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
+                body.getValue("id").jsonPrimitive.content shouldBe harness.seedPageId
+                // The candidate list is the RANKED UNION of live + tombstone roots (registry order), not just the live one.
+                body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldBe
+                    listOf("main", "notes")
+                val message = body.getValue("message").jsonPrimitive.content
+                // STATUS-NEUTRAL: MCP mirrors REST's 404/stale_base, so the mixed note promises no cross-surface status.
+                message shouldContain "some candidate roots have retired this id"
+                message shouldNotContain "410"
+                // No new JSON key: the body is exactly code/id/candidates/message, the same shape as the pure-ambiguous case.
+                body.keys shouldBe setOf("code", "id", "candidates", "message")
             }
         }
     }

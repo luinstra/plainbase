@@ -5,6 +5,7 @@ import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
 import com.plainbase.domain.repository.NoTopology
+import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
@@ -16,6 +17,7 @@ import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
@@ -120,6 +122,7 @@ val contentModule = module {
         val config = get<PlainbaseConfig>()
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
+        val retirements = get<RetirementRepository>()
         val main = get<RootRegistry>().main.name
         ObjectContentStoreFactory.build(
             config,
@@ -130,9 +133,14 @@ val contentModule = module {
             // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
             isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
             // C3: the pagination boundary. Read FRESH before each LIST (never captured here), so a page created while
-            // a LIST paginates is not in the generation's rows and can never be covered by its proof.
+            // a LIST paginates is not in the generation's rows and can never be covered by its proof. The binding_epoch
+            // is co-read HERE (revoke-before-stamp, C5), and FIRST: a bind landing between it and the row read advances
+            // the epoch past this value, so the OBJECT_LIST proof stamped from this snapshot fails the two-token compare
+            // rather than reaping a binding a restore re-created between this poll and the reap.
             rowsAtStart = {
-                idMap.bindings().filter { it.path.root == main }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+                val bindingEpoch = retirements.bindingEpoch(main)
+                val rows = idMap.bindings().filter { it.path.root == main }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+                RowsAtStart(rows, bindingEpoch)
             },
         )
     }

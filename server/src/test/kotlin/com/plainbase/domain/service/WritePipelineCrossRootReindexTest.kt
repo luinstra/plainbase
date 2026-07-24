@@ -20,6 +20,7 @@ import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -28,12 +29,13 @@ import java.nio.file.Path
 
 /**
  * Every step of a save must address the page by its PINNED TARGET — the (root, path) the intent carries — and
- * never by the bare page id (ADR-0011 D17).
+ * never by the bare page id (ADR-0011 D17; per-root identity, C5).
  *
- * A page id does not durably name a location. The cross-root duplicate-id rank contest re-awards an id to a
- * higher-ranked root the moment that root claims the same frontmatter `id:` — and a watcher `rebuild()` takes
- * the INDEX BUILDER's monitor, not the pipeline's, so one can land anywhere in a save's critical section. Two
- * distinct failures follow from an id-addressed lookup, one per test here:
+ * A page id does not durably name a location, and under per-root identity it does not even name ONE root: the
+ * same frontmatter `id:` may live in several roots at once (a legal cross-root duplicate). A watcher `rebuild()`
+ * takes the INDEX BUILDER's monitor, not the pipeline's, so one can land anywhere in a save's critical section
+ * and publish a snapshot where a second root now holds the same id. Two distinct failures follow from an
+ * id-addressed lookup, one per test here:
  *  - the post-CAS REINDEX re-reads, re-renders and search-syncs a DIFFERENT root's file than the one the save
  *    just wrote: disk truth on root A, index truth on root B, no error anywhere;
  *  - the pre-CAS edit-classification GUARD diffs the submitted frontmatter against a DIFFERENT page's, so a
@@ -81,12 +83,12 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                 searchIndexer = SearchIndexer(search, SectionSplitter()),
             ).use { harness ->
                 harness.builder.rebuild()
-                val before = harness.builder.current.byId.getValue(pageId)
+                val before = harness.builder.current.pageAt(RootedPageId(extraRoot, pageId))!!
                 before.root shouldBe extraRoot
 
                 // The store seam: the CAS is REAL and writes to `extra`; the instant it returns, a rebuild lands that
-                // hands the id to `main` (rank 0, the earlier-declared root) and re-mints extra's page. This is the
-                // window the pipeline's reindex runs in.
+                // publishes a colliding page in `main` carrying the SAME id - a legal cross-root duplicate post-flip,
+                // so main and extra now each hold their own page under the id. This is the window the reindex runs in.
                 val saved = body("revised.")
                 val interleaving = object : ContentStore by extraStore {
                     override fun compareAndSwapWrite(
@@ -120,18 +122,22 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                 )
 
                 outcome.shouldBeInstanceOf<WriteOutcome.Written>()
-                withClue("the contest ran: `main` now owns the id, and the page these bytes went to has been re-minted") {
-                    harness.builder.current.byId.getValue(pageId).root shouldBe RootName.MAIN
+                withClue("per-root identity (C5): main's colliding page and extra's page now BOTH hold the id, each its own page") {
+                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId)).shouldNotBeNull()
+                    harness.builder.current.pageAt(RootedPageId(extraRoot, pageId)).shouldNotBeNull()
                 }
 
-                val written = harness.builder.current.byPath.getValue(RootedPath(extraRoot, path))
+                val written = harness.builder.current.pageAt(RootedPageId(extraRoot, pageId))!!
+                written.id shouldBe pageId // extra keeps its OWN id - the flip re-awards nothing
                 Files.readString(extraDir.resolve("notes/rollback.md")) shouldContain "revised."
                 withClue(
-                    "the reindex must follow the BYTES. Addressed by page id, it would re-read, re-render and " +
-                        "search-sync MAIN's colliding file - leaving the page this save actually wrote out of the " +
-                        "propagating upsert entirely, while the pipeline answers a clean Written",
+                    "the reindex must follow the BYTES to EXTRA. Addressed by the bare id (now ambiguous), it could " +
+                        "re-read, re-render and search-sync MAIN's colliding file instead - leaving the page this save " +
+                        "actually wrote out of the propagating upsert, while the pipeline answers a clean Written",
                 ) {
-                    search.indexed shouldBe setOf(written.id)
+                    search.indexed shouldBe setOf(RootedPageId(extraRoot, written.id))
+                    // MAIN's same-id page is BYTE-IDENTICAL: the targeted reindex never touched it.
+                    Files.readString(mainDir.resolve("notes/rollback.md")) shouldContain "a colliding page in main."
                 }
             }
         }
@@ -163,8 +169,12 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                 ),
             ).use { harness ->
                 harness.builder.rebuild()
-                withClue("the contest has run: `main` holds the id, so an id-addressed guard would read MAIN's frontmatter") {
-                    harness.builder.current.byId.getValue(pageId).root shouldBe RootName.MAIN
+                withClue(
+                    "per-root identity (C5): main's page and extra's page BOTH hold the id, so an " +
+                        "id-addressed guard could read MAIN's frontmatter",
+                ) {
+                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId)).shouldNotBeNull()
+                    harness.builder.current.pageAt(RootedPageId(extraRoot, pageId)).shouldNotBeNull()
                 }
                 val target = harness.builder.current.byPath.getValue(RootedPath(extraRoot, path))
 
@@ -198,13 +208,18 @@ private fun withTwoRoots(block: (main: Path, extra: Path) -> Unit) {
     }
 }
 
-/** Records the page ids handed to the engine — here, exactly the ones the targeted reindex upserted. */
+/**
+ * Records the ROOTED ids handed to the engine — here, exactly the ones the targeted reindex upserted. The root is
+ * load-bearing: main's colliding page and extra's page share the bare [PageId], so a bare-id record cannot tell a
+ * reindex of the WRONG root's file apart from the right one, and the assertion would pass either way.
+ */
 private class RecordingSearchProvider : SearchProvider {
-    val indexed = mutableSetOf<PageId>()
+    val indexed = mutableSetOf<RootedPageId>()
 
-    override fun index(pages: List<PageDocuments>) = pages.forEach { indexed += it.pageId }
+    override fun index(pages: List<PageDocuments>) = pages.forEach { indexed += RootedPageId(it.root, it.pageId) }
     override fun delete(ids: Collection<RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(total = 0, hits = emptyList())
-    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) = pages.forEach { indexed += it.pageId }
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) =
+        pages.forEach { indexed += RootedPageId(it.root, it.pageId) }
     override fun indexedState(): Map<RootedPageId, PageSearchState> = emptyMap()
 }

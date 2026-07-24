@@ -280,9 +280,9 @@ class ProposalService(
         // A null pathOf needs NO classification, and the proof is worth stating: pathOf is SNAPSHOT-derived, so a
         // null means the id is in no published section OF THIS ROOT. Under a root whose status the facade's pre-guard
         // already passed, that can only be a never-scanned root (which is MISSING_AT_BOOT and therefore already marked,
-        // so the pre-guard fired), a genuinely absent page under a live root, or a page whose id was re-awarded to
-        // another root (D17) - all of them the honest Gone. It CANNOT be an unmarked-vanished root, because such a
-        // root's section is carried forward, so its pages are still in byId.
+        // so the pre-guard fired) or a genuinely absent page under a live root - both the honest Gone (per-root identity
+        // means the same id living in another root is that root's own page, never a re-award of this one). It CANNOT be
+        // an unmarked-vanished root, because such a root's section is carried forward, so its pages are still in byRootedId.
         val currentBytes = when (val read = target?.let(baseReader::currentBytes)) {
             is ContentRead.Bytes -> read.bytes
             // The facade's pre-guard is a STATUS check, so the root can vanish after it passes and the read then

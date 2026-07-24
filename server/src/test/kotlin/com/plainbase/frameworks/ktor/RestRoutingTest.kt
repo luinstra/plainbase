@@ -193,7 +193,7 @@ class RestRoutingTest : FunSpec({
                 // /browse of the loser's FILE path redirects to the permalink — its one durable URL.
                 val browse = client.get("/browse/a-b.md")
                 browse.status shouldBe HttpStatusCode.Found
-                browse.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}"
+                browse.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}"
 
                 val winner = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a b.md")))
                 winner.url.shouldNotBeNull()

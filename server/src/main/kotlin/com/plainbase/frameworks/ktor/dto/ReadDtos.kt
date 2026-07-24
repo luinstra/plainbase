@@ -20,8 +20,8 @@ import kotlinx.serialization.Serializable
  * ============================== NEVER-CHANGE POLICY ==============================
  * These shapes froze when P2 landed. They are append-only: a field is never removed or retyped; the
  * `BrokenLinkReason` wire vocabulary only grows (the closed PB-LINK-1 set + `broken_anchor`). The frozen
- * `PageMetadataResponse` fields are `id`/`path`/`url` (nullable)/`permalink` (always non-null, the `/p/{id}` ID
- * permalink)/`content_hash`/`commit` (nullable)/`title`/`headings`. Additive amendment (ADR-0011 D3, multi-root
+ * `PageMetadataResponse` fields are `id`/`path`/`url` (nullable)/`permalink` (always non-null, the rooted
+ * `/p/{root}/{id}` ID permalink)/`content_hash`/`commit` (nullable)/`title`/`headings`. Additive amendment (ADR-0011 D3, multi-root
  * C3): `root` (the page's root-name slug) - append-only, so within policy. P3 MCP re-exposes
  * these VERBATIM (its `validate_links`/`get_page_metadata` tools delegate to the SAME `ReadFacade` methods and
  * serialize these SAME DTOs) — a shape change is a contract break across BOTH REST and MCP. The shapes are pinned
@@ -60,7 +60,7 @@ data class PageMetadataResponse(
     val root: String,
     val path: String,
     val url: String?, // present-null for a path-collision loser (IndexedPage.url)
-    @SerialName("permalink") val permalink: String, // always NON-null — the /p/{id} ID permalink (IndexedPage.permalink)
+    @SerialName("permalink") val permalink: String, // always NON-null — the rooted /p/{root}/{id} ID permalink (IndexedPage.permalink)
     @SerialName("content_hash") val contentHash: String,
     val commit: String?, // present-null off Git / for an uncommitted page
     val title: String,

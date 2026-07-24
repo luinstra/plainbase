@@ -18,7 +18,8 @@ import com.plainbase.domain.root.RootedPath
  * takes the permalink with it and every agent citation to it dies.
  *
  * **[bind] no longer supersedes on trust (C0).** It is still key-complete - one binding per (root, path) AND
- * per id, so the adapter enforces id-uniqueness structurally - but removing ANOTHER (root, path)'s row is a
+ * per (root, id), so the adapter enforces PER-ROOT id-uniqueness structurally (post-flip `UNIQUE(id, root)`, C5:
+ * the same id in two roots is legal) - but removing ANOTHER (root, path)'s row is a
  * NEGATIVE CLAIM about that page ("it no longer holds this id"), and a negative claim needs authority like
  * any other. The caller states what it may displace ([Supersession]); an incumbent outside that authority is
  * REFUSED ([BindOutcome.Refused]) rather than swept, and the claimant mints a fresh id instead. A copied
@@ -27,8 +28,8 @@ import com.plainbase.domain.root.RootedPath
  * The three legal retirements, and only the third is an absence claim:
  *  - **DISPLACEMENT** ([bind]): the file at (root, path) now carries a DIFFERENT id. The displaced id is
  *    tombstoned in the SAME transaction as the new bind - `/p/{oldId}` stays a 410, never a 404.
- *  - **CONTEST** (the D17 cross-root rank transfer): the id moves to the winner and stays LIVE. Nothing is
- *    tombstoned, because nothing died - the permalink follows the id.
+ *  - **CONTEST** (a within-root rank contest, C5 - the D17 cross-root transfer is dissolved): the id moves to
+ *    the winner and stays LIVE. Nothing is tombstoned, because nothing died - the permalink follows the id.
  *  - **ABSENCE**: needs an `AbsenceProof`, and is applied nowhere but the one proof-apply transaction
  *    ([AbsenceReaper]). In C0 no production code mints a proof, so nothing is ever reaped by inference.
  *
@@ -41,18 +42,9 @@ interface IdMapRepository {
     fun find(path: RootedPath): IdBinding?
 
     /**
-     * The rooted path currently bound to [id], or null when the id is unbound - a bare-id, ROOT-AGNOSTIC lookup
-     * retained as a TEST assertion helper. It has no production callers and must not gain one: answering "where is
-     * this id?" without being told which root to ask is exactly the cross-root pairing C4 closed, and a read or write
-     * path that reached for it would resolve to whichever root happens to hold the id rather than the one it gated
-     * on. Production asks [rootsHoldingId] (the durable claimant list) or `PageRootResolver.resolve`/`resolvePinned`.
-     */
-    fun pathOf(id: PageId): RootedPath?
-
-    /**
-     * Every root holding a LIVE binding for [id] - the Option B bare-id resolver's durable claimant list (C4). Under
-     * `UNIQUE(id)` it is always 0 or 1 names; the List shape carries the C5 multiplicity the One/Ambiguous/None
-     * contract already models.
+     * Every root holding a LIVE binding for [id] - the Option B bare-id resolver's durable claimant list. Post-flip
+     * `UNIQUE(id, root)` legalizes the same id in several roots, so this is 0..N names, one per root holding it live;
+     * the One/Ambiguous/None contract classifies the count.
      */
     fun rootsHoldingId(id: PageId): List<RootName>
 
@@ -62,15 +54,14 @@ interface IdMapRepository {
     /** The tombstone at the full ([root], [id]) key, or null - the resolved retirement's last-known path (C4). */
     fun retiredAt(root: RootName, id: PageId): RetiredBinding?
 
-    /** The whole binding currently holding [id] - the `ownerOf` seam again, for callers that must ask whether
-     *  they may DISPLACE it, which is a question about the binding and not about a path. */
-    fun binding(id: PageId): IdBinding?
-
-    /** The TOMBSTONE for [id], or null when the id was never retired. Reversible: the same (root, path) may reclaim it. */
-    fun retired(id: PageId): RetiredBinding?
+    /** The binding for [id] WITHIN [root], or null - the root-scoped `ownerOf` seam (C5). */
+    fun bindingInRoot(root: RootName, id: PageId): IdBinding?
 
     /** Every tombstone, for reporting and tests. */
     fun retiredBindings(): List<RetiredBinding>
+
+    /** One durable snapshot of every claim on [id]: who holds it LIVE, and who holds a TOMBSTONE (with its path). */
+    fun claimantState(id: PageId): ClaimantState
 
     /**
      * Binds [path] to [id] under the stated [supersession] authority, tombstoning whatever id this key held
@@ -111,6 +102,12 @@ data class IdBinding(
     val materialized: Boolean,
 )
 
+/** One durable snapshot of every claim on an id: the roots holding it [live], and the [retired] tombstones (C5). */
+data class ClaimantState(
+    val live: List<RootName>,
+    val retired: List<RetiredBinding>,
+)
+
 /**
  * What a pass is ALLOWED to displace - the C0 gate on the key-complete bind, consulted BOTH by the identity
  * resolver ([com.plainbase.domain.service.BindingVisibility]) and inside the bind transaction itself, so the
@@ -121,8 +118,8 @@ data class IdBinding(
  * POSITIVE evidence:
  *
  *  1. **WITNESSED.** We READ the file at the incumbent's (root, path) this pass. Whatever it carries now, we
- *     are looking at it - the page is not in doubt, so rank may settle the contest. This is what keeps the D17
- *     cross-root rank transfer (and its four frozen oracle tests) working: every page in them is witnessed.
+ *     are looking at it - the page is not in doubt, so rank may settle the contest. This is what lets rank settle
+ *     a WITHIN-root contest (C5, root-scoped since the D17 cross-root transfer dissolved): every page in it is witnessed.
  *
  *  2. **PROVEN.** An [com.plainbase.domain.root.AbsenceProof] covers the binding - a commit range, an unbroken
  *     observation epoch, a complete bucket LIST, an operator. In C0 there are no proof sources, so [proven] is

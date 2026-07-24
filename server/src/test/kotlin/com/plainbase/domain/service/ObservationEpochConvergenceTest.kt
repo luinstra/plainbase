@@ -9,6 +9,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -52,8 +53,8 @@ class ObservationEpochConvergenceTest : FunSpec({
                 builder.rebuild() // the CONFIRMATION scan
 
                 withClue("the binding is RETIRED, not hard-deleted: /p/{id} answers 410, never the 404 that kills a citation") {
-                    world.idMap.pathOf(id).shouldBeNull()
-                    world.idMap.retired(id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                    world.idMap.livePathOf(id).shouldBeNull()
+                    world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 }
                 withClue("and the sinks act on the proof the apply transaction cashed - they never re-derive it") {
                     world.checkpoints.load().keys.contains(RootedPageId(extra, id)) shouldBe false
@@ -186,9 +187,9 @@ class ObservationEpochConvergenceTest : FunSpec({
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 builder.rebuild()
 
-                world.idMap.retired(id).shouldNotBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull()
                 withClue("the unwitnessed row is UNTOUCHED - a healthy epoch grants no authority over what it never read") {
-                    world.idMap.pathOf(stranded).shouldNotBeNull()
+                    world.idMap.livePathOf(stranded).shouldNotBeNull()
                     world.limbo.holds(extra, stranded) shouldBe true
                 }
             }
@@ -229,14 +230,14 @@ class ObservationEpochConvergenceTest : FunSpec({
 
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 builder.rebuild()
-                world.idMap.retired(id).shouldNotBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull()
 
                 // It comes home: same root, same path, same id IN THE FILE - the one return that carries its own
                 // evidence (C0.4). A reap is a TOMBSTONE, never a hard delete, and that is exactly what makes an
                 // epoch's mistake recoverable rather than final.
                 writePage(extraDir, "notes/rollback.md", page)
                 builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id shouldBe id
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
             }
         }
     }
@@ -262,8 +263,8 @@ class ObservationEpochConvergenceTest : FunSpec({
                 val healed = builder.rebuild()
 
                 healed.byPath.getValue(RootedPath(extra, rollback)).id shouldNotBe id
-                world.idMap.retired(id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
-                world.idMap.pathOf(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                world.idMap.livePathOf(id).shouldBeNull()
             }
         }
     }

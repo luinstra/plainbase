@@ -197,11 +197,16 @@ sealed interface PermalinkResolution {
     data object Unknown : PermalinkResolution
 
     /**
-     * The bare id is held by more than one root (C4) — the permalink route answers **300 Multiple Choices** with one
-     * `Link: rel="alternate"` per [candidates] entry (rank order). FAKE-only under `UNIQUE(id)`; only the bare
-     * `permalink` produces it, never [permalinkAt] (which is already root-pinned).
+     * The bare id refuses to resolve to one root (C5) — the permalink route answers **300 Multiple Choices** with one
+     * `Link: rel="alternate"` per [candidates] entry (rank order). Either 2+ live roots hold it, or a live root holds
+     * it alongside a registered tombstone (the fail-closed mixed case), or 2+ roots hold a tombstone for it. Only the
+     * bare `permalink` produces it, never [permalinkAt] (which is already root-pinned). [hasRetiredCandidate] is a
+     * DOMAIN flag only (no serialized key): true when a candidate holds a tombstone, so the 300 body can note it.
      */
-    data class Ambiguous(val candidates: List<RootName>) : PermalinkResolution
+    data class Ambiguous(
+        val candidates: List<RootName>,
+        val hasRetiredCandidate: Boolean = false,
+    ) : PermalinkResolution
 }
 
 /**

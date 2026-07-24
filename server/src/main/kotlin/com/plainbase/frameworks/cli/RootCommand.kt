@@ -288,8 +288,9 @@ object RootCommand {
                 "as a DATA_DIR belonging to a different deployment. Re-add the root, or follow that refusal's remedy.",
         )
         output.result(
-            "  - re-adding it later APPENDS its rank, so it would then LOSE any cross-root duplicate-id contest it " +
-                "wins today (remove + add is the documented rename path).",
+            "  - re-adding it later APPENDS its rank, which now decides SOURCE precedence only - per-root identity (C5) " +
+                "means no id is taken from another root. Re-adding under a DIFFERENT name is NOT a free rename: every " +
+                "rooted /p/{root}/{id} permalink and agent citation into this root changes with the name.",
         )
         return 0
     }

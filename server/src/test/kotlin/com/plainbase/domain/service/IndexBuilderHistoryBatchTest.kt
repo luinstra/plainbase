@@ -42,8 +42,7 @@ class IndexBuilderHistoryBatchTest : FunSpec({
                 val history = CountingHistoryProvider()
                 IndexHarness(root, history = history).use { h ->
                     h.builder.rebuild()
-                    val targetId = h.builder.current.pages.first().id
-                    val target = h.builder.current.byId.getValue(targetId)
+                    val target = h.builder.current.pages.first()
                     history.reset()
                     Files.write(root.resolve(target.path.value), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 

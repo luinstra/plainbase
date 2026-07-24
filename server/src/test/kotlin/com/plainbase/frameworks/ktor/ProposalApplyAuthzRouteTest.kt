@@ -10,6 +10,7 @@ import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.CommitGlob
@@ -368,7 +369,8 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Files.write(root.resolve("guides/doc.md"), Files.readAllBytes(root.resolve("doc.md")))
                     Files.delete(root.resolve("doc.md"))
                     harness.builder.rebuild()
-                    harness.builder.current.byId[PageId.require(movableId)]!!.path shouldBe TreePath.require("guides/doc.md")
+                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(movableId)))!!.path shouldBe
+                        TreePath.require("guides/doc.md")
                     val resp = client.post("/api/v1/changes/$proposalId/approve")
                     withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
                     // The bytes land at the NEW path (resolved via pageId), NOT the stale target_path doc.md.

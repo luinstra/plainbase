@@ -53,7 +53,7 @@ class IndexBuilderNativeTest {
                     sources = listOf(IndexBuilder.Source(rootRegistry.main, LocalContentStore(content), NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+                    identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
@@ -73,7 +73,7 @@ class IndexBuilderNativeTest {
                 Files.createDirectories(content.resolve("archive"))
                 Files.move(content.resolve("docs/start.md"), content.resolve("archive/start.md"))
                 val second = builder.rebuild()
-                assertEquals("/docs/main/archive/start", second.byId.getValue(page.id).url)
+                assertEquals("/docs/main/archive/start", second.pageAt(RootedPageId(RootName.MAIN, page.id))!!.url)
                 assertNotNull(registry.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
                 assertEquals(RootedPageId(RootName.MAIN, page.id), aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
             } finally {

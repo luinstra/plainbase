@@ -110,7 +110,9 @@ class GuardedProposalFacade(
             RootedResource((res as? IdResolution.One)?.root, ProposalCommandResource.PROPOSE),
         )
         return when (res) {
-            is IdResolution.Ambiguous -> throw AmbiguousPageId(command.pageId, res.candidates)
+            // A bare propose to a duplicated id now answers 409 ambiguous_page_id (per-root identity, C5): resolve is
+            // still id_map-first, but a fail-closed Ambiguous reaches this arm instead of One.
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(command.pageId, res.candidates, res.hasRetiredCandidate)
             // No registered root owns the id (unknown, tombstoned, detached, or a pin that no longer holds it) ->
             // StaleBase FROM HERE: the service is never called, so it can never re-resolve a target the gate did not
             // see. A TOMBSTONED id deliberately lands here too - the propose vocabulary has no page_deleted (that is

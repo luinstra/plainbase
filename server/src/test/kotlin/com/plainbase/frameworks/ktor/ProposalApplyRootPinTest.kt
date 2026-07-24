@@ -5,6 +5,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.IndexBuilder
@@ -48,7 +49,7 @@ class ProposalApplyRootPinTest : FunSpec({
     /** The two-checkouts-of-one-repo corpus: BYTE-IDENTICAL files carrying the SAME frontmatter id. */
     fun body(text: String) = "---\nid: ${pageId.value}\ntitle: Deploy\n---\n\n# Deploy\n\n$text\n"
 
-    test("an approved edit is NOT applied into a root that merely holds the page id now") {
+    test("an approved edit lands in the root it was filed against, even when another root now shares the page id") {
         withTwoRoots { mainDir, mirrorDir ->
             // `mirror` is where the proposal was filed (it owns the id: main has no such page yet).
             Files.createDirectories(mirrorDir.resolve("guides"))
@@ -71,13 +72,14 @@ class ProposalApplyRootPinTest : FunSpec({
                 val proposed = harness.builder.current.byPath.getValue(RootedPath(mirror, path))
                 proposed.id shouldBe pageId
 
-                // The contest: the SAME repo gets checked out into `main` too (rank 0), so main claims the id and
-                // mirror's page is re-minted. Nothing moved; mirror's file is untouched and still the proposal's target.
+                // The SAME repo gets checked out into `main` too (rank 0). Per-root identity: main takes NOTHING from
+                // mirror - it holds its OWN page with the same id, and mirror keeps its page (and its proposal target).
                 Files.createDirectories(mainDir.resolve("guides"))
                 Files.writeString(mainDir.resolve("guides/deploy.md"), body("original."))
                 harness.builder.rebuild()
-                withClue("the contest ran: `main` now holds the id an approved mirror-proposal was filed against") {
-                    harness.builder.current.byId.getValue(pageId).root shouldBe RootName.MAIN
+                withClue("both roots now hold the id under per-root identity; mirror still owns the page its proposal named") {
+                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId))!!.root shouldBe RootName.MAIN
+                    harness.builder.current.pageAt(RootedPageId(mirror, pageId))!!.root shouldBe mirror
                 }
 
                 val mutate = GuardedMutatingFacade(
@@ -111,10 +113,11 @@ class ProposalApplyRootPinTest : FunSpec({
                     ),
                 )
 
-                withClue("from the root this edit was approved against, the page is gone — CONFLICTED, never redirected") {
-                    result shouldBe SaveResult.PageNotFound
+                    withClue("the pin resolves to mirror (its own page survives per-root), so the approved edit lands THERE") {
+                    result.shouldBeInstanceOf<SaveResult.Written>()
+                    Files.readString(mirrorDir.resolve("guides/deploy.md")) shouldContain "approved edit."
                 }
-                withClue("the approved bytes must NOT have landed in a repository nobody reviewed") {
+                withClue("...and NOT into main, the repository nobody reviewed - the pin never follows the id across roots") {
                     Files.readString(mainDir.resolve("guides/deploy.md")) shouldContain "original."
                 }
             }

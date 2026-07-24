@@ -14,10 +14,12 @@ import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.queryLong
@@ -29,6 +31,7 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -181,7 +184,7 @@ class AdoptionPassTest : FunSpec({
             // overwritten, never marked materialized (§5.2: the fresh id is not materialized).
             copy.disposition shouldBe AdoptionPass.Disposition.MAPPED
             h.idMap.find(RootedPath(RootName.MAIN, copyPath)).shouldNotBeNull().materialized shouldBe false
-            h.idMap.pathOf(keptId) shouldBe RootedPath(RootName.MAIN, keptPath)
+            h.idMap.livePathOf(keptId) shouldBe RootedPath(RootName.MAIN, keptPath)
 
             val issue = h.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
             issue shouldBe IdentityIssue.DuplicateId(id = keptId, root = RootName.MAIN, keptPath = keptPath, reassignedPath = copyPath)
@@ -240,15 +243,15 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
-    // ---- ONE global plan over EVERY root: what makes the D17 rank contest decidable at all ----------
+    // ---- ONE global plan over EVERY root, RE-DERIVED for per-root identity (C5) ----------------------
     //
-    // The pass used to run once per root, sequentially, which made every not-yet-reached root look
-    // UNSCANNED - hence untouchable (D16) - so a rank winner could not take the id it outranked: it
-    // minted a fresh one and wrote THAT into the page's frontmatter, durably, contrary to the policy.
-    // Rank can only decide a contest both sides turn up to, so now the plan scans them all first.
-    // Seating discipline as ever: no rank-0-main assumption - each case is driven from both seatings.
+    // A cross-root duplicate id is NO LONGER a contest. The pass still scans every root before it binds any
+    // of it - that ordering is what makes the WITHIN-root duplicate deterministic - but the same id in two
+    // DIFFERENT roots is legal now, so rank decides SOURCE precedence only and never takes an id from another
+    // root. Seating discipline as ever: no rank-0-main assumption - each case is driven from both seatings, to
+    // prove order never decides identity.
 
-    test("cross-root rank: the HIGHER-ranked root TAKES the contested id from the live lower-ranked owner (no fresh mint)") {
+    test("cross-root duplicate: the higher-ranked root keeps its own id AND the lower-ranked owner keeps theirs (no contest)") {
         withTwoRoots { h, extra ->
             // The lower-ranked root owns the id today, and its page is right there on disk.
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
@@ -258,23 +261,21 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
-            // Rank decides, previously-bound does NOT (D17) - and the winner keeps the id it already carries
-            // in its frontmatter, so nothing is minted and nothing is rewritten.
+            // main keeps the id it carries in its frontmatter; extra keeps its own binding. Nothing minted, nothing
+            // rewritten, no cross-root issue - the two ids are legal per-root.
             val winner = plan.pages.single { it.path.value == "notes/claimant.md" }
             winner.id shouldBe CONTESTED
             winner.source shouldBe PageIdentityService.Source.FRONTMATTER
-            h.idMap.pathOf(CONTESTED) shouldBe RootedPath(RootName.MAIN, winner.path)
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, winner.path)
 
-            // The beaten owner reassigns like any duplicate loser, and says so.
-            val beaten = plan.report(EXTRA).pages.single()
-            beaten.id shouldNotBe CONTESTED
-            beaten.source shouldBe PageIdentityService.Source.MINTED
-            beaten.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe
-                IdentityIssue.CrossRootDuplicateId(CONTESTED, kept = RootedPath(RootName.MAIN, winner.path), reassigned = EXTRA_PAGE)
+            val other = plan.report(EXTRA).pages.single()
+            other.id shouldBe CONTESTED // extra keeps it, never reassigned
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 
-    test("cross-root rank: an extra seated AHEAD of main wins the same contest - main's page is the one that reassigns") {
+    test("cross-root duplicate: with an extra seated AHEAD of main, both roots STILL keep their own id (order never decides)") {
         withTwoRoots { h, extra ->
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
@@ -283,19 +284,19 @@ class AdoptionPassTest : FunSpec({
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
             plan.report(EXTRA).pages.single().id shouldBe CONTESTED
-            h.idMap.pathOf(CONTESTED) shouldBe EXTRA_PAGE
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
-            claimant.id shouldNotBe CONTESTED
-            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single().kept shouldBe EXTRA_PAGE
+            claimant.id shouldBe CONTESTED
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 
-    test("cross-root rank: the loser's own id_map row is NOT a way to keep the id - it is contested like any other claim") {
+    test("a page's id_map-only claim in another root is honored - a cross-root duplicate is not a contest") {
         withTwoRoots { h, extra ->
-            // The loser carries NO frontmatter id: its only claim on the contested id is the id_map row. Under a
-            // pass that binds inline that row is deleted by the winner's bind before the loser ever reads it; a
-            // pass that plans BEFORE it binds still sees it, and honoring it would put ONE id on TWO pages - and
-            // then bind the loser LAST, sweeping the winner's row and handing the id right back. So it reassigns.
+            // extra's page carries NO frontmatter id: its only claim on the id is the id_map row. main's file carries
+            // the id in frontmatter. Per-root identity: main's claim is in another root and cannot reach across, so
+            // extra keeps the id via its own binding - both roots hold it, legally.
             Files.writeString(extra.resolve("shared.md"), "---\ntitle: Shared\n---\nbody\n")
             h.idMap.bind(EXTRA_PAGE, CONTESTED, materialized = false)
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
@@ -305,29 +306,28 @@ class AdoptionPassTest : FunSpec({
 
             val winner = plan.pages.single { it.path.value == "notes/claimant.md" }
             winner.id shouldBe CONTESTED
-            val beaten = plan.report(EXTRA).pages.single()
-            beaten.id shouldNotBe CONTESTED
-            beaten.source shouldBe PageIdentityService.Source.MINTED
-            beaten.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single().kept shouldBe
-                RootedPath(RootName.MAIN, winner.path)
-            // The decisive assertion: the winner's binding SURVIVED the loser's bind. Without the contest on the
-            // mapped id, the plan holds one id twice and the last bind wins - a silent, durable identity swap.
-            h.idMap.pathOf(CONTESTED) shouldBe RootedPath(RootName.MAIN, winner.path)
-            h.idMap.bindings().map { it.id }.toSet() shouldHaveSize h.idMap.bindings().size
+            val other = plan.report(EXTRA).pages.single()
+            other.id shouldBe CONTESTED // extra keeps its id_map-only claim
+            other.source shouldBe PageIdentityService.Source.ID_MAP
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            // BOTH roots hold the id under their own binding - the per-root byRootedId key keeps them distinct.
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, winner.path)
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
         }
     }
 
-    // ---- a loser's id_map binding is a CLAIM, and another claimant can already have WON it ----------
+    // ---- a loser's id_map binding names an id ANOTHER ROOT holds - and that is legal now ----------------
     //
-    // The loser of EITHER duplicate arm reaches for its own `id_map` row, and a row is not a right: the id it
-    // names can already belong to a page this same plan resolved earlier. Reusing it blind puts one id on two
-    // pages of the plan - and since `bind` is key-complete, the loser's bind then SWEEPS the winner's row and
-    // walks off with the permalink. Neither shape needs the loser to have contested the mapped id itself.
+    // Pre-flip a loser reaching for its own `id_map` row could collide with an id a HIGHER-ranked root won this
+    // pass - one id on two live pages, a byId crash, a swept permalink. Post-flip `bind` is root-scoped and the
+    // snapshot's byRootedId key is per-root, so a mapped id another ROOT holds is no collision at all: the loser
+    // reuses its own binding in its own root, and both roots keep the id.
 
-    test("within-root loser: its id_map binding, just WON by an outranking root, is never reused - it mints") {
+    test("within-root loser reuses its own id_map binding even when the named id lives in ANOTHER root - no crash") {
         withTwoRoots { h, extra ->
             // dup-a/dup-b are the §5.2 copied-file pair in main, so dup-b is the within-root loser; its own
-            // binding names MAPPED, which extra - seated ahead - has just taken from it.
+            // binding names MAPPED, which extra - seated ahead - also holds. Per-root, both keep MAPPED.
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
             Files.writeString(h.root.resolve("notes/dup-a.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
             Files.writeString(h.root.resolve("notes/dup-b.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
@@ -337,37 +337,41 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
+            // dup-b lost the WITHIN-root contest for CONTESTED (unchanged policy) and reassigns - but its reassignment
+            // reuses its own MAPPED binding, legal in main because extra's MAPPED is a different root.
             val reassigned = plan.pages.single { it.path.value == "notes/dup-b.md" }
-            reassigned.id shouldNotBe MAPPED
-            reassigned.id shouldNotBe CONTESTED
-            reassigned.source shouldBe PageIdentityService.Source.MINTED
+            reassigned.id shouldBe MAPPED
+            reassigned.source shouldBe PageIdentityService.Source.ID_MAP
             reassigned.issues.filterIsInstance<IdentityIssue.DuplicateId>().single().keptPath shouldBe
                 TreePath.require("notes/dup-a.md")
-            // The winner's binding SURVIVED the loser's bind - the whole point of the gate.
-            h.idMap.pathOf(MAPPED) shouldBe EXTRA_PAGE
-            h.idMap.bindings().map { it.id }.toSet() shouldHaveSize h.idMap.bindings().size
+            // MAPPED lives in BOTH roots, each at its own path - the per-root reuse the old contest forbade.
+            h.idMap.bindingInRoot(RootName.MAIN, MAPPED)?.path shouldBe loser
+            h.idMap.bindingInRoot(EXTRA, MAPPED)?.path shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
         }
     }
 
-    test("cross-root loser: its id_map binding, just WON by another page of the winning root, is never reused - it mints") {
+    test("a page keeps its frontmatter id even when its stale id_map row names an id another root just claimed") {
         withTwoRoots { h, extra ->
+            // main's claimant carries CONTESTED in frontmatter and a stale id_map row naming MAPPED; extra holds both
+            // ids at their own pages. Frontmatter wins outright, and per-root identity keeps extra's claims out of main.
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
             Files.writeString(extra.resolve("winner.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val loser = RootedPath(RootName.MAIN, TreePath.require("notes/claimant.md"))
-            h.idMap.bind(loser, MAPPED, materialized = false)
+            val claimantPath = RootedPath(RootName.MAIN, TreePath.require("notes/claimant.md"))
+            h.idMap.bind(claimantPath, MAPPED, materialized = false)
             val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
-            val reassigned = plan.pages.single { it.path.value == "notes/claimant.md" }
-            reassigned.id shouldNotBe MAPPED
-            reassigned.id shouldNotBe CONTESTED
-            reassigned.source shouldBe PageIdentityService.Source.MINTED
-            reassigned.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single().kept shouldBe EXTRA_WINNER
-            h.idMap.pathOf(CONTESTED) shouldBe EXTRA_WINNER
-            h.idMap.pathOf(MAPPED) shouldBe EXTRA_PAGE
-            h.idMap.bindings().map { it.id }.toSet() shouldHaveSize h.idMap.bindings().size
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED // frontmatter wins; the stale MAPPED row is displaced
+            claimant.source shouldBe PageIdentityService.Source.FRONTMATTER
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe claimantPath
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_WINNER
+            h.idMap.bindingInRoot(EXTRA, MAPPED)?.path shouldBe EXTRA_PAGE
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
         }
     }
 
@@ -506,13 +510,13 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
-    // ---- D16, the class-level partial-visibility guard --------------------------------------------
+    // ---- per-root identity dissolves the cross-root steal a sourceless/detached root once risked -----
     //
-    // A REGISTERED root with no source. `AdoptCommand` never builds this (it refuses to run unless it can
-    // see every configured root), so the guard is reachable only from here - which is exactly why the test
-    // stays: it is what stops a future caller from quietly re-introducing the cross-root steal.
+    // A REGISTERED root with no source, or an UNREGISTERED detached one, once meant a rank winner might delete a
+    // durable binding it could not see. Post-flip the claimant simply keeps its own id in its own root - the
+    // foreign binding is a different root, so there is nothing to take and nothing to guess about.
 
-    test("a configured root this pass has no source for is untouchable - even when the claimant OUTRANKS it") {
+    test("a configured root this pass has no source for is untouched - the claimant keeps its own id, no contest") {
         withHarness { h ->
             val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
             h.idMap.bind(foreign, CONTESTED, materialized = true)
@@ -521,23 +525,17 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD) // ...and no source for 'extra'
 
-            // Rank says main wins. Visibility says main does not get to decide: a pass that cannot see extra's
-            // disk cannot know the page is still there, so taking the id would delete a durable binding on a
-            // guess. The claimant reassigns and records instead; a pass that CAN see both trees settles it.
+            // main's claimant keeps CONTESTED (its frontmatter id, root-scoped), the foreign binding is untouched,
+            // and no cross-root issue is raised - a same id in two roots is legal.
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
-            claimant.id shouldNotBe CONTESTED
-            h.idMap.pathOf(CONTESTED) shouldBe foreign // the foreign row survives the pass
-            val expected = IdentityIssue.CrossRootDuplicateId(
-                CONTESTED,
-                kept = foreign,
-                reassigned = RootedPath(RootName.MAIN, claimant.path),
-            )
-            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe expected
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single() shouldBe expected
+            claimant.id shouldBe CONTESTED
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign // the foreign row survives
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 
-    test("PREVIEW: the contest is REPORTED but nothing is persisted - no bind, no row, no issue") {
+    test("PREVIEW over a same-id page in a sourceless root persists NOTHING - no bind, no row, no issue") {
         withHarness { h ->
             val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
             h.idMap.bind(foreign, CONTESTED, materialized = true)
@@ -546,16 +544,18 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.PREVIEW)
 
-            // The report tells the operator exactly what a RECORD run would do (the reassignment + why)...
-            plan.pages.single { it.path.value == "notes/claimant.md" }
-                .issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().single().kept shouldBe foreign
-            // ...and writes none of it: preview binds nothing and records nothing.
-            h.idMap.pathOf(CONTESTED) shouldBe foreign
+            // The report shows main keeping its own id, no cross-root issue...
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED
+            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            // ...and preview binds nothing: main's claimant is NOT recorded, and the foreign row stands alone.
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED).shouldBeNull()
+            h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign
             h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 
-    test("a binding under an UNREGISTERED root is superseded by the live main claim with NO issue (detached, D2)") {
+    test("a binding under an UNREGISTERED root coexists with the live main claim - no supersede, no issue (detached, D2)") {
         withHarness { h ->
             val detached = RootedPath(RootName.require("gone"), TreePath.require("mirror/page.md"))
             h.idMap.bind(detached, CONTESTED, materialized = true)
@@ -565,8 +565,9 @@ class AdoptionPassTest : FunSpec({
 
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
             claimant.id shouldBe CONTESTED
-            h.idMap.pathOf(CONTESTED) shouldBe RootedPath(RootName.MAIN, claimant.path)
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty() // the boot WARN is its visibility
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.bindingInRoot(RootName.require("gone"), CONTESTED)?.path shouldBe detached // the detached row survives
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 })
@@ -638,7 +639,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
         AdoptionPass(
             sources = listOf(AdoptionPass.Source(RootName.MAIN, store)) + extras,
             idMap = idMap,
-            identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+            identity = PageIdentityService(UuidV7IdProvider()),
             patcher = FrontmatterPatcher(),
             rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
             citations = CitationFactory(),

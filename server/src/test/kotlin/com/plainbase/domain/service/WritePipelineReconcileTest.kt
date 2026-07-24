@@ -89,7 +89,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // reconcile still recovers B: on-disk hash matches the recorded hash(B) ⇒ reindexed + cleared.
                 harness.writePipeline().reconcileDirtyPages()
                 harness.dirtyPages.all().isEmpty() shouldBe true
-                harness.builder.current.byId.getValue(page.id).contentHash shouldBe hashB
+                harness.builder.current.pageAt(page.rooted)!!.contentHash shouldBe hashB
             }
         }
     }
@@ -169,7 +169,7 @@ class WritePipelineReconcileTest : FunSpec({
 
                 val remaining = harness.dirtyPages.all()
                 remaining.map { it.pageId }.toSet() shouldBe setOf(drift.id) // match cleared, drift left
-                harness.builder.current.byId.getValue(match.id).contentHash shouldBe citations.contentHash(matchOnDisk)
+                harness.builder.current.pageAt(match.rooted)!!.contentHash shouldBe citations.contentHash(matchOnDisk)
             }
         }
     }

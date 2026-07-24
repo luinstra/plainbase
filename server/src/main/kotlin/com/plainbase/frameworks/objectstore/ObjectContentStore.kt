@@ -12,11 +12,13 @@ import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.ObjectManifest
 import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.RootBinding
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -76,12 +78,14 @@ class ObjectContentStore(
      */
     val binding: RootBinding,
     /**
-     * The root's durable bindings, read fresh BEFORE the first LIST page of every generation (the pagination
-     * boundary - see [ObjectManifest]). Defaulted to NONE for the constructions with no durable index behind them
-     * (the offline CLIs, preview): a generation with no rows at start covers nothing, so it can prove nothing gone,
-     * which is exactly the authority a pass with no id_map should have.
+     * The pagination boundary, read fresh BEFORE the first LIST page of every generation (see [ObjectManifest]): the
+     * root's durable bindings AND its binding_epoch, co-read as ONE [RowsAtStart] snapshot so the epoch a proof is
+     * stamped with is the one that was current when its negative evidence was taken (revoke-before-stamp, C5).
+     * Defaulted to NONE for the constructions with no durable index behind them (the offline CLIs, preview): a
+     * generation with no rows at start covers nothing, so it can prove nothing gone, which is exactly the authority a
+     * pass with no id_map should have.
      */
-    private val rowsAtStart: () -> Set<BindingRef> = { emptySet() },
+    private val rowsAtStart: () -> RowsAtStart = { RowsAtStart(emptySet(), BindingEpoch(0)) },
     /** `""`, or the configured `storage.prefix` + `"/"`. */
     private val keyPrefix: String,
     private val pollSeconds: Long,
@@ -213,7 +217,7 @@ class ObjectContentStore(
 
     /** C3: the latest COMPLETE listing, in the domain's terms. Null until this store has finished one (see [scan]). */
     override fun latestManifest(): ObjectManifest? = generation.get()?.let {
-        ObjectManifest(binding = it.binding, listed = it.listed.keys, rowsAtStart = it.rowsAtStart)
+        ObjectManifest(binding = it.binding, listed = it.listed.keys, rowsAtStart = it.rowsAtStart, bindingEpoch = it.bindingEpoch)
     }
 
     /**
@@ -953,9 +957,14 @@ class ObjectContentStore(
      * not a smaller corpus, it is an unknown one.
      */
     private fun listGeneration(): Generation {
-        val rows = rowsAtStart()
+        val boundary = rowsAtStart()
         val listed = listBucket()
-        return Generation(binding = binding, listed = listed, rowsAtStart = rows).also(generation::set)
+        return Generation(
+            binding = binding,
+            listed = listed,
+            rowsAtStart = boundary.rows,
+            bindingEpoch = boundary.bindingEpoch,
+        ).also(generation::set)
     }
 
     /**
@@ -1287,6 +1296,7 @@ class ObjectContentStore(
         val binding: RootBinding,
         val listed: Map<TreePath, ListedEntry>,
         val rowsAtStart: Set<BindingRef>,
+        val bindingEpoch: BindingEpoch,
     )
 
     companion object {

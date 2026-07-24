@@ -62,6 +62,12 @@ class McpHarness(
      * list, and the two would answer from different facts (the REV14 FIX-1 defect).
      */
     ambiguousRoots: List<RootName> = emptyList(),
+    /**
+     * The roots the FAKE reports as holding a TOMBSTONE for the seeded id (alongside [ambiguousRoots]'s live
+     * claimants). A live root plus a foreign tombstone is the mixed fail-closed case (§6.0): the resolver answers
+     * Ambiguous with `hasRetiredCandidate = true`, so the ambiguous body carries the STATUS-NEUTRAL retired note.
+     */
+    retiredRoots: List<RootName> = emptyList(),
 ) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
@@ -110,7 +116,7 @@ class McpHarness(
             // collapses back to One, so the fake alone cannot pose ambiguity.
             rootRegistry = RootRegistry.of(
                 listOf(localRoot("main", root, editable = editable)) +
-                    ambiguousRoots.filter { it != RootName.MAIN }
+                    (ambiguousRoots + retiredRoots).filter { it != RootName.MAIN }.distinct()
                         .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
             ),
         )
@@ -122,7 +128,11 @@ class McpHarness(
         proposeBearer = propose.plaintext
         proposeTokenId = propose.id
         readOnlyBearer = index.apiTokens.mint(label = "ro", mode = AgentMode.READ_ONLY).plaintext
-        val idMap = if (ambiguousRoots.isEmpty()) index.idMap else AmbiguousIdMap(index.idMap, page.id, ambiguousRoots)
+        val idMap = if (ambiguousRoots.isEmpty() && retiredRoots.isEmpty()) {
+            index.idMap
+        } else {
+            AmbiguousIdMap(index.idMap, page.id, ambiguousRoots, retiredRoots)
+        }
         val ctx = index.testRouteContext(
             searchProvider = searchProvider,
             enforced = true,

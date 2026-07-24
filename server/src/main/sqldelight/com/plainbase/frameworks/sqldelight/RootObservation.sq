@@ -2,8 +2,10 @@
 --
 -- It has to survive a restart, because **a restart is itself a revocation**: an in-memory token could
 -- not prove that after a crash, and a proof minted before the crash would then be applied by a process
--- that has observed nothing at all. Any break, binding change or restart mints a new observation_id,
--- which invalidates every outstanding AbsenceProof by the freshness rule.
+-- that has observed nothing at all. A row carries TWO orthogonal freshness stamps (see binding_epoch
+-- below), and applyProofs compares BOTH: a break or a restart mints a new observation_id (epoch
+-- CONTINUITY), while a binding change increments binding_epoch (binding FRESHNESS) WITHOUT touching
+-- observation_id. Either advance invalidates an outstanding AbsenceProof by the freshness rule.
 --
 -- The app DB is the AUTHORITATIVE linearization boundary: the reap re-reads this row and compares it to
 -- the proof's token INSIDE the same transaction that applies the retirements, so a revocation landing
@@ -14,13 +16,26 @@
 
 import com.plainbase.domain.root.RootName;
 
+-- binding_epoch is the SECOND, orthogonal freshness stamp (C5, revoke-before-stamp). observation_id gates epoch
+-- CONTINUITY (a break, restart or unmount mints a new one and kills every live epoch); binding_epoch is a per-root,
+-- monotonic, never-reset counter that ONLY a successful bind advances, so a restore's re-bind revokes an in-flight
+-- inferred proof (minted under the old epoch value) WITHOUT touching observation_id and so WITHOUT collapsing the
+-- epoch. applyProofs compares BOTH tokens, exact-equality, fail-closed. upsertObservation deliberately leaves
+-- binding_epoch alone: observation churn must not reset it.
 CREATE TABLE root_observation (
   root TEXT AS RootName NOT NULL PRIMARY KEY,
-  observation_id INTEGER NOT NULL
+  observation_id INTEGER NOT NULL,
+  binding_epoch INTEGER NOT NULL DEFAULT 0
 );
 
 selectObservation:
 SELECT observation_id
+FROM root_observation
+WHERE root = :root;
+
+-- The pair the apply-time freshness gate reads together (one row, one snapshot): a proof survives only if BOTH still match.
+selectObservationAndEpoch:
+SELECT observation_id, binding_epoch
 FROM root_observation
 WHERE root = :root;
 
@@ -32,3 +47,11 @@ upsertObservation:
 INSERT INTO root_observation(root, observation_id)
 VALUES (:root, :observationId)
 ON CONFLICT(root) DO UPDATE SET observation_id = excluded.observation_id;
+
+-- Advances ONLY binding_epoch, in bind()'s existing transaction on the Bound path. A no-op when no row exists yet,
+-- which is exactly when no proof can be outstanding for the root: every proof producer mints a token (observation()
+-- / the epoch open's revoke()) first, and that upserts the row before any proof it stamps could be applied.
+incrementBindingEpoch:
+UPDATE root_observation
+SET binding_epoch = binding_epoch + 1
+WHERE root = :root;

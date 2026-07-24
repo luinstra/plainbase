@@ -99,9 +99,8 @@ data class CreatedButUnindexedResponse(
 /**
  * 409 `ambiguous_page_id` (REST) / 300 (permalink): a bare id held by more than one root. [candidates] carries one
  * entry per root, ranked by D7 REGISTRY RANK and then by root name (the order every candidate list out of
- * `PageRootResolver.resolve` / `resolveRetired` already carries), each with the per-root URL a client retries
- * against. Emit-only (built server-side; never deserialized). FAKE-only under `UNIQUE(id)` in C4, but the shape
- * ships now.
+ * `PageRootResolver.claimants` already carries), each with the per-root URL a client retries
+ * against. Emit-only (built server-side; never deserialized). Reachable on real dual-root data since C5.
  *
  * **It nests under `error` like every other REST error body** ([ErrorEnvelope], [WriteConflictEnvelope],
  * [PageExistsEnvelope], [BodyTooLargeEnvelope]), and carries the `message` they all carry — the shipped SPA client

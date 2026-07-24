@@ -68,7 +68,7 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val restarted = harness.startProcess()
                 val snapshot = restarted.builder.rebuild()
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")) shouldBe RootedPageId(RootName.MAIN, pageId)
 
                 // The acceptance criterion's wire half: the OLD canonical URL answers 301 → new.
@@ -108,7 +108,8 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start" // index correctness never depends on it
+                // index correctness never depends on it
+                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")).shouldBeNull() // the missed alias, exactly as Phase 1
             }
         }
@@ -126,7 +127,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")).shouldBeNull()
             }
         }
@@ -184,7 +185,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
             availability = availability,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+            identity = PageIdentityService(UuidV7IdProvider()),
             patcher = FrontmatterPatcher(),
             idMap = idMap,
             aliasRegistry = registry,

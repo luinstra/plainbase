@@ -82,12 +82,12 @@ class RestRedirectTest : FunSpec({
 
                 val response = client.get("/docs/main/old/loser")
                 response.status shouldBe HttpStatusCode.MovedPermanently
-                response.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}"
+                response.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}"
 
                 // The query rides the permalink fallback redirect too — same class, same hop.
                 val edit = client.get("/docs/main/old/loser?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
-                edit.headers[HttpHeaders.Location] shouldBe "/p/${loser.id.value}?mode=edit"
+                edit.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}?mode=edit"
             }
         }
     }

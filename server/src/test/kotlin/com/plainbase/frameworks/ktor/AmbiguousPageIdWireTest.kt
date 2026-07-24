@@ -218,7 +218,7 @@ title: X
         twoRoots { mainDir, notesDir ->
             multiRootTest(
                 listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
-                // no live claimant -> resolveRetired sees two -> Ambiguous
+                // no live claimant -> two retired claimants -> Ambiguous
                 resolverFactory = resolverFor(emptyList(), listOf(notes, main)),
                 absenceFactory = absenceFor(emptyList()),
             ) { _ ->

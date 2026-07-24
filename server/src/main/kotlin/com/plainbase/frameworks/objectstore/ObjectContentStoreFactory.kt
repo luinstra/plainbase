@@ -1,8 +1,9 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootBinding
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -25,10 +26,11 @@ object ObjectContentStoreFactory {
         // MINOR-1: an indexed per-path dirty check for the poll hot-path guard; defaults to membership in
         // [dirtyPaths] so a caller that has no cheaper query (a CLI over a tiny journal) need not wire one.
         isDirty: (TreePath) -> Boolean = { it in dirtyPaths() },
-        // C3: the root's durable bindings, read fresh before each LIST. Defaulted to NONE - a store built with no
-        // durable index behind it publishes generations that cover nothing, so it can prove nothing gone. That is the
-        // right authority for the offline CLIs, which reap on nobody's inference (they wire no proof source at all).
-        rowsAtStart: () -> Set<BindingRef> = { emptySet() },
+        // C3: the pagination boundary, read fresh before each LIST - the root's durable bindings AND its binding_epoch,
+        // co-read (revoke-before-stamp, C5). Defaulted to NONE - a store built with no durable index behind it publishes
+        // generations that cover nothing, so it can prove nothing gone. That is the right authority for the offline
+        // CLIs, which reap on nobody's inference (they wire no proof source at all).
+        rowsAtStart: () -> RowsAtStart = { RowsAtStart(emptySet(), BindingEpoch(0)) },
     ): ObjectContentStore {
         val storage = config.storage
         val client = S3ObjectClient(

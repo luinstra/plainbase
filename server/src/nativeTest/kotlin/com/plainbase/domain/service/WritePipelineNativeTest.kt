@@ -3,7 +3,9 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -54,7 +56,7 @@ class WritePipelineNativeTest {
                     sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+                    identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = registry,
@@ -87,7 +89,7 @@ class WritePipelineNativeTest {
                 assertEquals(citations.contentHash(saveBytes), (outcome as WriteOutcome.Written).newHash)
                 assertContentEquals(saveBytes, Files.readAllBytes(content.resolve("doc.md")))
                 // The targeted reindex ran: the snapshot reflects the new bytes.
-                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.byId.getValue(page.id).markdown)
+                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.pageAt(RootedPageId(RootName.MAIN, page.id))!!.markdown)
                 // The write-ahead mark was cleared on success.
                 assertTrue(SqlDelightDirtyPageRepository(database).all().isEmpty(), "dirty mark not cleared")
                 // The CAS resolved the indexed path (sanity that the path round-trips).

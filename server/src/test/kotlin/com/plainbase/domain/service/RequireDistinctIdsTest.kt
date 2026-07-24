@@ -1,9 +1,11 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -29,7 +31,7 @@ import kotlin.time.Clock
  *
  * A durable duplicate cannot be walked back. `id_map.bind` is key-complete, so the second bind of an id DELETES the
  * first page's row: the winner takes the permalink, the loser's binding is gone, and the only existing uniqueness
- * check (`PageIndex.byId`) throws only AFTER all of it has landed - on every boot thereafter, over rows nothing
+ * check (`PageIndex.byRootedId`) throws only AFTER all of it has landed - on every boot thereafter, over rows nothing
  * will now rewrite. Failing BEFORE the first bind aborts a pass that has changed nothing at all.
  *
  * The injected fault is a BROKEN [IdProvider] - one that violates its own documented "successive calls return
@@ -85,6 +87,31 @@ class RequireDistinctIdsTest : FunSpec({
             }
         }
     }
+
+    // R14: the check is PER-ROOT (C5) - it groups by (root, id), so the same id in two DIFFERENT roots is legal and a
+    // within-root duplicate still fails. Driven at the internal function directly, the level the flip actually changed.
+    val dup = PageId.require("01890a5d-ac96-774b-bcce-b302099a8057")
+
+    test("R14: the SAME id in two DIFFERENT roots passes - a cross-root duplicate is legal per-root") {
+        requireDistinctIds(
+            mapOf(
+                RootedPath(RootName.MAIN, TreePath.require("a.md")) to dup,
+                RootedPath(RootName.require("extra"), TreePath.require("b.md")) to dup,
+            ),
+        ) // no throw
+    }
+
+    test("R14: the SAME id twice in ONE root still throws, naming ONE id for SEVERAL pages") {
+        val failure = shouldThrow<IllegalStateException> {
+            requireDistinctIds(
+                mapOf(
+                    RootedPath(RootName.MAIN, TreePath.require("a.md")) to dup,
+                    RootedPath(RootName.MAIN, TreePath.require("b.md")) to dup,
+                ),
+            )
+        }
+        failure.message.orEmpty() shouldContain "ONE id for SEVERAL pages IN ONE ROOT"
+    }
 })
 
 /** The one id the broken provider hands out to everything it is asked for. */
@@ -115,7 +142,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
     private fun idProvider(collidingIds: Boolean): IdProvider =
         if (collidingIds) IdProvider { COLLIDING_ID } else UuidV7IdProvider()
 
-    private fun identity(collidingIds: Boolean) = PageIdentityService(idProvider(collidingIds), registry::rank)
+    private fun identity(collidingIds: Boolean) = PageIdentityService(idProvider(collidingIds))
 
     fun builder(collidingIds: Boolean): IndexBuilder = IndexBuilder(
         sources = listOf(IndexBuilder.Source(registry.main, LocalContentStore(root), NoOpHistoryProvider)),

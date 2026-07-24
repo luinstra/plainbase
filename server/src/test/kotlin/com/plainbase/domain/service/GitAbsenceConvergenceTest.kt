@@ -18,6 +18,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -68,8 +69,8 @@ class GitAbsenceConvergenceTest : FunSpec({
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild()
 
                 withClue("the binding is RETIRED, not hard-deleted: /p/{id} answers 410, never a 404") {
-                    world.idMap.pathOf(id).shouldBeNull()
-                    world.idMap.retired(id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                    world.idMap.livePathOf(id).shouldBeNull()
+                    world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 }
                 world.limbo.count(extra) shouldBe 0
                 world.retirements.gitHead(extra) shouldBe "B" // the checkpoint advances with the deletion it proved
@@ -123,7 +124,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.deleted = setOf(rollback)
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild()
 
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
                 world.limbo.holds(extra, id) shouldBe true
                 world.retirements.gitHead(extra) shouldBe "A" // pinned until reconcile - stated residue
             }
@@ -148,7 +149,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.deleted = setOf(rollback)
                 builder.rebuild()
 
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
                 world.limbo.holds(extra, id) shouldBe true
                 world.retirements.gitHead(extra) shouldBe "A" // an AbsenceUnknown may not advance a checkpoint
             }
@@ -194,7 +195,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.moveMidPass("A", "Z")
                 builder.rebuild()
 
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
                 world.limbo.holds(extra, id) shouldBe true
                 world.retirements.gitHead(extra) shouldBe "A"
             }
@@ -222,8 +223,40 @@ class GitAbsenceConvergenceTest : FunSpec({
                 val broken = BreakOnApply(world.retirements) { world.broke("extra", BreakCause.IDENTITY_REBIND) }
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git, retirements = broken).rebuild()
 
-                world.idMap.retired(id).shouldBeNull() // the token moved under it, so it authorized nothing
+                world.idMap.retiredAt(extra, id).shouldBeNull() // the token moved under it, so it authorized nothing
                 world.retirements.gitHead(extra) shouldBe "A" // and the advance rode the identical discarded token
+            }
+        }
+    }
+
+    test("a break landing between the SCAN and the MINT drops the git proof AND its advance - the stamp precedes the evidence") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            writePage(extraDir, "notes/keep.md", "# Keep\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                val git = FakeHistory(head = "A")
+                val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git)
+                    .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
+                world.retirements.gitHead(extra) shouldBe "A"
+
+                extraDir.resolve("notes/rollback.md").toFile().delete()
+                git.head = "B"
+                git.deleted = setOf(rollback)
+                // THE WINDOW, one layer EARLIER than the row above: the break lands after the scan has fixed this pass's
+                // evidence and BEFORE the mint takes its observation stamp. Read at MINT, that stamp is the POST-break
+                // token, so `applyProofs` compares it against itself, MATCHES, and the stale proof reaps the binding
+                // while its advance consumes the range for good - a break swallowed by the very source it must kill.
+                // Captured BEFORE the evidence, the break moves the token past the stamp and both are discarded.
+                val breaking = BreakAtScanEnd(LocalContentStore(extraDir)) { world.broke("extra", BreakCause.IDENTITY_REBIND) }
+                world.builder(mainDir, breaking, world.indexer, extraHistory = git).rebuild()
+
+                withClue("the binding survives: evidence gathered before a break authorizes nothing after it") {
+                    world.idMap.retiredAt(extra, id).shouldBeNull()
+                }
+                withClue("and the advance rode the identical discarded token, so the range is still unconsumed") {
+                    world.retirements.gitHead(extra) shouldBe "A"
+                }
             }
         }
     }
@@ -267,7 +300,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.deleted = setOf(rollback)
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild()
 
-                world.idMap.retired(id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
+                world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 world.limbo.count(extra) shouldBe 0
                 world.retirements.gitHead(extra) shouldBe "B"
             }
@@ -287,8 +320,8 @@ class GitAbsenceConvergenceTest : FunSpec({
                 val git = FakeHistory(head = "A")
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild()
 
-                world.idMap.retired(stranded).shouldBeNull()
-                world.idMap.pathOf(stranded).shouldNotBeNull()
+                world.idMap.retiredAt(extra, stranded).shouldBeNull()
+                world.idMap.livePathOf(stranded).shouldNotBeNull()
                 world.limbo.holds(extra, stranded) shouldBe true
                 world.retirements.gitHead(extra) shouldBe "A" // the baseline is recorded; the range starts here
             }
@@ -343,7 +376,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 shouldThrowAny {
                     world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git, retirements = crashed).rebuild()
                 }
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.retiredAt(extra, id).shouldBeNull()
                 world.retirements.gitHead(extra) shouldBe "A"
                 val crashedProof = crashed.proofs.single { it.source == ProofSource.GIT && it.root == extra }
 
@@ -355,7 +388,7 @@ class GitAbsenceConvergenceTest : FunSpec({
 
                 val reDerived = recovery.proofs.single { it.source == ProofSource.GIT && it.root == extra }
                 reDerived.covers shouldBe crashedProof.covers
-                world.idMap.retired(id).shouldNotBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull()
                 world.retirements.gitHead(extra) shouldBe "B"
             }
         }
@@ -374,7 +407,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.head = "B"
                 git.deleted = setOf(rollback)
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild() // commit lands
-                world.idMap.retired(id).shouldNotBeNull()
+                world.idMap.retiredAt(extra, id).shouldNotBeNull()
                 world.retirements.gitHead(extra) shouldBe "B"
 
                 // The reboot: the checkpoint moved with the deletions it proved, so the range oldHead..postHead is now
@@ -446,6 +479,25 @@ private class ThrowingSpyHistory(override val enabled: Boolean) : HistoryProvide
     override fun gateCheck() = Unit
 }
 
+/**
+ * A [ContentStore] that fires [onScanEnd] the FIRST time `scan()` hands back - the instant a pass's witnessed/unread
+ * evidence for this root is fixed. It models a watcher break arriving on another thread inside the (scan-end -> mint)
+ * window: the evidence is already settled, and a stamp taken any later than the scan would fold the break's own revoke
+ * into itself and match the reap it must forbid.
+ */
+private class BreakAtScanEnd(private val delegate: ContentStore, private val onScanEnd: () -> Unit) : ContentStore by delegate {
+    private var fired = false
+
+    override fun scan(): ScanResult {
+        val result = delegate.scan()
+        if (!fired) {
+            fired = true
+            onScanEnd()
+        }
+        return result
+    }
+}
+
 /** A store whose walk comes back SHORT (`complete = false`) - a view with holes, which grants no delete authority. */
 private class IncompleteWalk(private val delegate: ContentStore) : ContentStore by delegate {
     override fun scan(): ScanResult = delegate.scan().copy(complete = false)
@@ -461,7 +513,11 @@ private class UnreadableAfterArming(private val delegate: ContentStore, private 
 /** Throws on the FIRST [applyProofs] - exactly a pre-commit crash: nothing reaches the transaction. */
 private class CrashOnce(private val delegate: RetirementRepository) : RetirementRepository by delegate {
     private var crashed = false
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<RootedPageId>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<RootedPageId> {
         if (!crashed) {
             crashed = true
             throw IllegalStateException("crash before the apply commits")
@@ -476,7 +532,11 @@ private class CrashOnce(private val delegate: RetirementRepository) : Retirement
  */
 private class BreakOnApply(private val delegate: RetirementRepository, private val onApply: () -> Unit) :
     RetirementRepository by delegate {
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<RootedPageId>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<RootedPageId> {
         onApply()
         return delegate.applyProofs(proofs, witnessed, advances)
     }
@@ -486,7 +546,11 @@ private class BreakOnApply(private val delegate: RetirementRepository, private v
 private class Recording(private val delegate: RetirementRepository) : RetirementRepository by delegate {
     val proofs = mutableListOf<AbsenceProof>()
     val advances = mutableListOf<GitCheckpointAdvance>()
-    override fun applyProofs(proofs: List<AbsenceProof>, witnessed: Set<PageId>, advances: List<GitCheckpointAdvance>): Set<RootedPageId> {
+    override fun applyProofs(
+        proofs: List<AbsenceProof>,
+        witnessed: Set<RootedPageId>,
+        advances: List<GitCheckpointAdvance>,
+    ): Set<RootedPageId> {
         this.proofs += proofs
         this.advances += advances
         return delegate.applyProofs(proofs, witnessed, advances)

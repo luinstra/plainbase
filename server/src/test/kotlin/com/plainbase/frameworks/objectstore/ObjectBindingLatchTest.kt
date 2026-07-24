@@ -10,6 +10,7 @@ import com.plainbase.domain.root.BindingStatus
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -208,7 +209,7 @@ class ObjectBindingLatchTest : FunSpec({
                 world.idMap.retiredBindings().shouldBeEmpty()
             }
             withClue("the page is not gone, it is UNREAD - so it waits in limbo, and the next poll fetches it") {
-                world.idMap.pathOf(deployId).shouldNotBeNull()
+                world.idMap.livePathOf(deployId).shouldNotBeNull()
                 world.limbo.count(RootName.MAIN) shouldBe 1
             }
         }

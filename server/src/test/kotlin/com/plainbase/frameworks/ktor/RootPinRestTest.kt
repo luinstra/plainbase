@@ -183,6 +183,28 @@ class RootPinRestTest : FunSpec({
         }
     }
 
+    // ---- WINDOW FIXTURE 4: the ROOTED-permalink unbind race - bindsLive reads live, the recheck finds it gone ----
+
+    test("fixture 4 (f): a ROOTED GET /p/main/X that LOSES the unbind race is 410 Retired, never 404") {
+        twoRoots { mainDir, notesDir ->
+            // Nothing seeded under main: bindsLive (permalinkAt:319) reads X live, the unbind commits, and the
+            // requireVerifiedAbsence recheck (:321) finds it gone; the tombstone read (:326) then answers 410. The
+            // SHARED fake advances on rootsHoldingId (the read order permalinkAt uses), unlike the bare RacingUnbindIdMap.
+            var shared: RootedUnbindRaceIdMap? = null
+            fun racing(idx: com.plainbase.domain.service.IndexHarness): RootedUnbindRaceIdMap =
+                shared ?: RootedUnbindRaceIdMap(idx.idMap, id, main).also { shared = it }
+            multiRootTest(
+                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                resolverFactory = { idx -> PageRootResolver(racing(idx), idx.rootRegistry) },
+                absenceFactory = { idx -> AbsenceClassifier(racing(idx)) },
+            ) { _ ->
+                // 410 Retired naming the last-known path, NEVER 404. Back-out (collapsing the separate bindsLive gate
+                // into a single first-taken claims snapshot) flips this to 404: verified empirically, see the addendum.
+                createClient { followRedirects = false }.get("/p/main/$dupId").status shouldBe HttpStatusCode.Gone
+            }
+        }
+    }
+
     // ---- deferred-registration reads: ?root=ghost/non-owner -> 404 AFTER checkRead; malformed -> 400 ----
 
     test("read ?root pins: main->200, notes(non-owner)->404, ghost->404, a/b(malformed)->400") {

@@ -7,7 +7,9 @@ import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootBinding
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
@@ -91,7 +93,7 @@ class LostDataDirRecoveryTest : FunSpec({
             answer.total to
                 answer.hits.groupBy { it.score }.entries.sortedByDescending { it.key }.map { (score, tier) ->
                     score to tier.map { hit ->
-                        val page = snapshot.byId.getValue(hit.pageId)
+                        val page = snapshot.pageAt(RootedPageId(RootName.MAIN, hit.pageId))!!
                         HitFacet(page.path.value, hit.headingId, hit.snippet, hit.highlights)
                     }.toSet()
                 }
@@ -312,7 +314,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
         frontmatterParser = frontmatter,
         rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider(), rootRegistry::rank),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = registry,

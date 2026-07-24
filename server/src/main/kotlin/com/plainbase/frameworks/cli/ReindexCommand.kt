@@ -171,7 +171,7 @@ object ReindexCommand {
                 },
                 frontmatterParser = FrontmatterReader(),
                 rendererFactory = { view -> FlexmarkRenderer(view) },
-                identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+                identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
                 idMap = SqlDelightIdMapRepository(database),
                 aliasRegistry = aliasRegistry,

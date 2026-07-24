@@ -389,7 +389,8 @@ class RootCommandTest : FunSpec({
             val out = captureStdout { w.root("remove", "notes") shouldBe 0 }
             out shouldContain "DETACHED"
             out shouldContain "THE NEXT BOOT WILL REFUSE TO SERVE"
-            out shouldContain "APPENDS its rank" // the rename-path consequence
+            out shouldContain "APPENDS its rank" // rank now decides source precedence only (per-root, C5)
+            out shouldContain "NOT a free rename" // renaming rots every rooted /p/{root}/{id} citation into the root
         }
     }
 

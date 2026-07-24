@@ -13,6 +13,7 @@ import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.ktor.livePathOf
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -82,7 +83,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     world.checkpoints.load().keys.map { it.id } shouldContain rollback
                 }
                 withClue("the id_map binding is durable state under the same rule") {
-                    world.idMap.pathOf(rollback) shouldBe rollbackPath
+                    world.idMap.livePathOf(rollback) shouldBe rollbackPath
                 }
             }
         }
@@ -151,7 +152,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     world.checkpoints.load().keys.map { it.id } shouldContain rollback
                 }
                 withClue("the id_map binding is the permalink: losing it re-mints /p/{id} for a page that still exists") {
-                    world.idMap.pathOf(rollback) shouldBe rollbackPath
+                    world.idMap.livePathOf(rollback) shouldBe rollbackPath
                 }
                 withClue("and the search rows, which the sync listener deletes off the same authority set") {
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
@@ -192,7 +193,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 withClue("the durable rows are carried, not destroyed: an unmount and an rm -rf look identical from here") {
                     world.checkpoints.load().keys.map { it.id } shouldContain rollback
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
-                    world.idMap.pathOf(rollback) shouldBe rollbackPath
+                    world.idMap.livePathOf(rollback) shouldBe rollbackPath
                 }
             }
         }
@@ -205,7 +206,7 @@ class RootDeleteAuthorityTest : FunSpec({
     // still one non-interactive command an entrypoint can run, and which FAILS when the digest no longer matches.
     // That is the property the env var could never have.
 
-    test("a page that MOVED to another root while we were DOWN exonerates the row it left behind - a move is not a loss") {
+    test("a cross-root 'move' is UNDECIDABLE: the drained root fails closed and its binding survives in limbo, unstolen") {
         withAuthorityTrees { mainDir, extraDir ->
             val moved = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain body\n")
@@ -213,21 +214,28 @@ class RootDeleteAuthorityTest : FunSpec({
             AuthorityWorld(mainDir, extraDir).use { world ->
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
 
-                // The one-page root is emptied not by an unmount but by a MOVE: the page is in main now, carrying
-                // its id in its own file. The row extra leaves behind is exactly the row a lost corpus leaves - and
-                // the tripwire must not read it as one, because the pass is HOLDING the page it names. Firing here
-                // would refuse extra's scan, which makes its stale binding unsupersedable (D16), which costs the
-                // moved page the permalink it carried with it - on a pass that can see perfectly well where it went.
+                // extra's one page is emptied and a file carrying the SAME id turns up in main. Pre-flip a bare-id move
+                // detector exonerated extra's drain here. Post-flip a cross-root move is INDISTINGUISHABLE from a
+                // copy-plus-delete (the absence theorem, per-root identity), so extra's drain is NOT exonerated: the
+                // tripwire fires fail-closed, and - crucially - NOTHING is stolen. extra's binding survives (unobserved,
+                // so unreaped) and main gets its OWN per-root copy of the id.
                 Files.walk(extraDir.resolve("notes")).sorted(Comparator.reverseOrder()).forEach(Files::delete)
                 writePage(mainDir, "notes/arrived.md", "---\nid: ${moved.value}\ntitle: Rollback\n---\n\n# Rollback\n\nbody\n")
                 val cold = world.builder(mainDir, LocalContentStore(extraDir))
                 val snapshot = cold.rebuild()
 
-                world.availability.current().isAvailable(extra) shouldBe true
-                withClue("the page KEEPS its id - that is the permalink, and it travelled in the file") {
+                withClue("a drained corpus with no proof of a move is fail-closed to CORPUS_MISSING, not silently exonerated") {
+                    world.availability.current().unavailable.getValue(extra).cause shouldBe UnavailableCause.CORPUS_MISSING
+                }
+                withClue("main's arrival KEEPS the id it carries - a legal per-root duplicate, not a move of extra's page") {
                     snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))).id shouldBe moved
                 }
-                world.idMap.pathOf(moved) shouldBe RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))
+                withClue("extra's binding is neither exonerated nor reaped - BOTH roots hold the id, extra's in limbo") {
+                    world.idMap.rootsHoldingId(moved).toSet() shouldBe setOf(RootName.MAIN, extra)
+                    world.idMap.bindingInRoot(extra, moved)?.path shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
+                    world.idMap.bindingInRoot(RootName.MAIN, moved)?.path shouldBe
+                        RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))
+                }
             }
         }
     }
@@ -358,7 +366,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         ),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },
-        identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+        identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
         idMap = idMap,
         aliasRegistry = aliasRegistry,

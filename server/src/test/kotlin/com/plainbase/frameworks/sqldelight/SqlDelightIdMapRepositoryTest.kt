@@ -11,6 +11,7 @@ import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
@@ -22,7 +23,8 @@ import io.kotest.matchers.shouldNotBe
 
 /**
  * SqlDelightIdMapRepository over an in-memory SQLite db: composite (root, path) binding round-trips,
- * the key-complete move/cross-root supersede behind UNIQUE(id), idempotent issue recording for every
+ * the WITHIN-root move supersede under `UNIQUE(id, root)` (per-root identity, C5 - the same id may live in
+ * two roots, so a cross-root duplicate no longer supersedes), idempotent issue recording for every
  * [IdentityIssue] variant (natural key with the C2 root dimensions), and the direct-SQL
  * binary-at-rest assertion (`length(id) = 16` over the seeded table).
  *
@@ -53,7 +55,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
     )
     val idY = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")
 
-    test("bind/find round-trip, including the materialized flag and pathOf") {
+    test("bind/find round-trip, including the materialized flag and the live rooted path") {
         withRepo { repo, _ ->
             repo.find(pathA).shouldBeNull()
             repo.bind(pathA, idX, materialized = false)
@@ -61,8 +63,8 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
 
             repo.find(pathA) shouldBe IdBinding(pathA, idX, materialized = false)
             repo.find(pathB) shouldBe IdBinding(pathB, idY, materialized = true)
-            repo.pathOf(idX) shouldBe pathA
-            repo.pathOf(idY) shouldBe pathB
+            repo.livePathOf(idX) shouldBe pathA
+            repo.livePathOf(idY) shouldBe pathB
             repo.bindings() shouldContainExactlyInAnyOrder listOf(
                 IdBinding(pathA, idX, false),
                 IdBinding(pathB, idY, true),
@@ -103,7 +105,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             repo.bind(pathA, idX, materialized = false)
             repo.bind(pathA, idY, materialized = false)
             repo.find(pathA) shouldBe IdBinding(pathA, idY, false)
-            repo.pathOf(idX).shouldBeNull()
+            repo.livePathOf(idX).shouldBeNull()
         }
     }
 
@@ -111,7 +113,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         withRepo { repo, _ ->
             repo.bind(pathA, idX, materialized = true)
             repo.bind(pathB, idX, materialized = true, supersession = witnessedAll)
-            repo.pathOf(idX) shouldBe pathB
+            repo.livePathOf(idX) shouldBe pathB
             repo.find(pathA).shouldBeNull()
             repo.bindings() shouldHaveSize 1
         }
@@ -125,30 +127,34 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
 
             repo.bind(pathB, idX, materialized = true) shouldBe BindOutcome.Refused(idX, heldBy = pathA, retired = false)
 
-            repo.pathOf(idX) shouldBe pathA
+            repo.livePathOf(idX) shouldBe pathA
             repo.find(pathB).shouldBeNull()
             repo.bindings() shouldHaveSize 1
         }
     }
 
-    test("unbindStale is key-complete: binding the same relative path under another root supersedes, never a UNIQUE(id) crash") {
-        // The SQL-level pin of the round-1 panel crash case (the policy-level pin lives in
-        // IndexBuilderMultiRootTest): (main, p) holds X, then (extra, p) binds X.
+    test("per-root identity (C5): the same relative path under ANOTHER root leaves BOTH bindings live - no cross-root supersede") {
+        // The flip DELETES the key-complete CROSS-root supersede: (main, p) holds X and (extra, p) binds X too, and
+        // BOTH survive - the same id lives in two roots (the policy-level pin lives in IndexBuilderMultiRootTest).
+        // The second bind uses the DEFAULT Supersession.NONE, so it succeeds because the roots differ, NOT via any
+        // displacement authority. bindings() has 2 rows and bindingInRoot returns each root's own path.
         withRepo { repo, _ ->
             val mirrored = RootedPath(extra, pathA.path)
             repo.bind(pathA, idX, materialized = true)
-            repo.bind(mirrored, idX, materialized = true, supersession = witnessedAll)
-            repo.pathOf(idX) shouldBe mirrored
-            repo.find(pathA).shouldBeNull()
-            repo.bindings() shouldHaveSize 1
+            repo.bind(mirrored, idX, materialized = true) shouldBe BindOutcome.Bound
+            repo.bindingInRoot(main, idX)?.path shouldBe pathA
+            repo.bindingInRoot(extra, idX)?.path shouldBe mirrored
+            repo.find(pathA) shouldBe IdBinding(pathA, idX, materialized = true)
+            repo.bindings() shouldHaveSize 2
         }
     }
 
-    test("the key-complete supersede is atomic: a failed upsert rolls the stale-unbind back, never orphaning the id") {
-        // Crash-shaped fault injection below the repository: the upsert throws inside bind's transaction,
-        // so the key-complete DELETE it rides with must roll back too. A committed delete with no
-        // replacement row would leave the id bound to NOBODY - the page silently loses its permalink, and
-        // the caller's duplicate policy (which reads pathOf) can no longer see that anyone ever owned it.
+    test("the WITHIN-root move supersede is atomic: a failed upsert rolls the stale-unbind back, never orphaning the id") {
+        // Crash-shaped fault injection below the repository: the upsert throws inside bind's transaction, so the
+        // root-scoped stale-unbind (unbindStaleInRoot) it rides with must roll back too. A committed delete with no
+        // replacement row would leave the id bound to NOBODY - the page silently loses its permalink, and the
+        // caller's duplicate policy (which reads the binding) can no longer see that anyone ever owned it. The move
+        // is WITHIN one root (post-flip a cross-root duplicate is legal, so only a within-root move supersedes).
         DatabaseFactory.createInMemoryDriver().use { real ->
             var failUpsert = false
             val driver = object : SqlDriver by real {
@@ -163,19 +169,19 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
                 }
             }
             val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-            val moved = RootedPath(extra, TreePath.require("mirror/page.md"))
+            val moved = RootedPath(main, TreePath.require("mirror/page.md")) // within main: the flip only supersedes within a root
             repo.bind(moved, idX, materialized = true)
 
             failUpsert = true
             shouldThrowAny { repo.bind(pathA, idX, materialized = true, supersession = witnessedAll) }
 
             // All-or-nothing: the prior owner's row survived, and nothing half-landed.
-            repo.pathOf(idX) shouldBe moved
+            repo.livePathOf(idX) shouldBe moved
             repo.find(pathA).shouldBeNull()
 
             failUpsert = false
             repo.bind(pathA, idX, materialized = true, supersession = witnessedAll)
-            repo.pathOf(idX) shouldBe pathA
+            repo.livePathOf(idX) shouldBe pathA
             repo.bindings() shouldHaveSize 1
         }
     }

@@ -1,0 +1,7 @@
+-- v17 -> v18: per-root identity C5, revoke-before-stamp (Commit C). Add root_observation.binding_epoch, the SECOND
+-- freshness stamp orthogonal to observation_id: a successful bind advances it, so a restore's re-bind revokes an
+-- in-flight inferred AbsenceProof (minted under the old value) WITHOUT touching observation_id and so without
+-- collapsing the epoch that shares the observation compare. DEFAULT 0 back-fills every existing row. No table rebuild
+-- (SQLite ADD COLUMN with a constant default is in-place). verifyMigrations cross-checks this against schema/18.db.
+
+ALTER TABLE root_observation ADD COLUMN binding_epoch INTEGER NOT NULL DEFAULT 0;

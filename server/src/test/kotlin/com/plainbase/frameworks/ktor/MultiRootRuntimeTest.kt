@@ -108,7 +108,7 @@ class MultiRootRuntimeTest : FunSpec({
                     harness.availability.current().isAvailable(RootName.require("extra")).shouldBeFalse()
                 }
                 withClue("the section is CARRIED, so the page is still IN the snapshot (which is what stops the delete)") {
-                    harness.builder.current.byId.containsKey(extraPage).shouldBeTrue()
+                    harness.builder.current.byRootedId.containsKey(RootedPageId(RootName.require("extra"), extraPage)).shouldBeTrue()
                 }
                 withClue("the publication listeners may only delete what the pass SCANNED") {
                     harness.idMap.bindings() shouldHaveSizeOf idMapBefore
@@ -362,12 +362,13 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.builder.rebuild()
 
                 withClue("it leaves the snapshot at once - the pass serves only what it can read") {
-                    harness.builder.current.byId.containsKey(extraPage).shouldBeFalse()
+                    harness.builder.current.byRootedId.containsKey(RootedPageId(RootName.require("extra"), extraPage)).shouldBeFalse()
                 }
                 withClue("and now the DURABLE state follows it, because the epoch PROVED it gone") {
                     harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeFalse()
-                    harness.idMap.pathOf(extraPage).shouldBeNull()
-                    harness.idMap.retired(extraPage).shouldNotBeNull() // a TOMBSTONE: /p/{id} is 410, never 404
+                    harness.idMap.livePathOf(extraPage).shouldBeNull()
+                    // a TOMBSTONE: /p/{id} is 410, never 404
+                    harness.idMap.retiredAt(RootName.require("extra"), extraPage).shouldNotBeNull()
                 }
                 withClue("the root is still SERVING - a corpus we watched drain is an ordinary edit, not a lost volume") {
                     harness.availability.current().isAvailable(RootName.require("extra")).shouldBeTrue()
@@ -390,7 +391,7 @@ class MultiRootRuntimeTest : FunSpec({
 
                 withClue("NOTHING durable dies: the tail of a storm waits for real evidence, it is not inferred away") {
                     harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeTrue()
-                    harness.idMap.pathOf(extraPage).shouldNotBeNull()
+                    harness.idMap.livePathOf(extraPage).shouldNotBeNull()
                     harness.idMap.retiredBindings().shouldBeEmpty()
                 }
                 withClue("it is in LIMBO - neither present nor proven gone, so it 503s rather than 404s, and self-heals") {
@@ -417,7 +418,8 @@ class MultiRootRuntimeTest : FunSpec({
 
                 withClue("a DIFFERENT tree at the root's path is a lost root, not an emptied one") {
                     harness.availability.current().isAvailable(RootName.require("extra")).shouldBeFalse()
-                    harness.builder.current.byId.containsKey(extraPage).shouldBeTrue() // carried, not dropped
+                    // carried, not dropped
+                    harness.builder.current.byRootedId.containsKey(RootedPageId(RootName.require("extra"), extraPage)).shouldBeTrue()
                 }
                 withClue("an unplugged disk deletes NOTHING: the listeners may only delete what the pass SCANNED") {
                     harness.checkpoints.load() shouldHaveSizeOf checkpointsBefore
@@ -446,7 +448,7 @@ class MultiRootRuntimeTest : FunSpec({
                 io.ktor.server.testing.testApplication {
                     application { plainbaseModule(harness.services) }
                     withClue("the page is in NO section - a snapshot-only lookup would 404 and tell an agent it is gone") {
-                        harness.builder.current.byId.containsKey(pageId).shouldBeFalse()
+                        harness.builder.current.byRootedId.containsKey(RootedPageId(RootName.require("extra"), pageId)).shouldBeFalse()
                     }
                     val byId = client.get("/api/v1/pages/${pageId.value}")
                     byId.status shouldBe HttpStatusCode.ServiceUnavailable
@@ -478,7 +480,7 @@ class MultiRootRuntimeTest : FunSpec({
 
                 withClue("a boot-arm root was never scanned, so it is in NO section - a wholesale replace would purge it") {
                     harness.checkpoints.load().containsKey(RootedPageId(RootName.require("extra"), pageId)).shouldBeTrue()
-                    harness.idMap.pathOf(pageId).shouldNotBeNullAnd { it.root shouldBe RootName.require("extra") }
+                    harness.idMap.livePathOf(pageId).shouldNotBeNullAnd { it.root shouldBe RootName.require("extra") }
                 }
             }
         }
@@ -537,8 +539,9 @@ class MultiRootRuntimeTest : FunSpec({
                         val noFollow = createClient { followRedirects = false }
                         val redirect = noFollow.get("/docs/main/old/live")
                         redirect.status shouldBe HttpStatusCode.MovedPermanently
-                        redirect.headers[HttpHeaders.Location] shouldBe "/p/${liveId.value}"
-                        noFollow.get("/p/${liveId.value}").status shouldBe HttpStatusCode.ServiceUnavailable
+                        // The alias target is a RootedPageId in 'extra', so the permalink it 301s to is rooted (R25).
+                        redirect.headers[HttpHeaders.Location] shouldBe "/p/extra/${liveId.value}"
+                        noFollow.get("/p/extra/${liveId.value}").status shouldBe HttpStatusCode.ServiceUnavailable
                     }
                 }
             }
@@ -731,17 +734,15 @@ class MultiRootRuntimeTest : FunSpec({
 
     // ---- approve/rebase stay INSIDE the root the proposal was filed, reviewed and gated against ----
 
-    test("an approve of an EDIT whose page id was RE-AWARDED to another root NEVER writes into that other root") {
+    test("an approve of an EDIT stays inside the proposal's own root, even when another root holds the SAME id") {
         twoRoots(seedExtra = false) { main, extra ->
-            // A proposal row's root is stamped once, at propose time, and never moves. A page id DOES move: the D17
-            // cross-root duplicate-id contest re-awards it to the higher-ranked root the moment that root claims the
-            // same frontmatter id — WITHOUT moving any file. The proposal's own page is still exactly where it was,
-            // merely re-minted, so "follow the id" does not follow the page: it walks the write onto a STRANGER'S file
-            // in a repository the reviewing admin never saw. And `base_hash` is no backstop, because the corpus that
-            // makes duplicate ids routine in the first place (D2: two checkouts of ONE repo) is byte-identical, so the
-            // CAS matches and the wrong write lands clean.
+            // A proposal row's root is stamped once, at propose time, and never moves. Under per-root identity (C5)
+            // the SAME frontmatter id can live in two roots at once (D2: two checkouts of ONE repo, byte-identical),
+            // and NEITHER is re-awarded to the other - so "follow the id" must resolve to the proposal's OWN root, or
+            // it walks the write onto a STRANGER'S file in a repository the reviewing admin never saw. `base_hash` is
+            // no backstop, because the two files are byte-identical and the CAS would match either one.
             //
-            // Both roots here hold the SAME bytes, exactly so this row fails if the pin is ever removed.
+            // Both roots here hold the SAME bytes, exactly so this row fails if the root-scoping is ever removed.
             val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b60"
             val body = "---\nid: $pageId\ntitle: Rollback\n---\n\n# Rollback\n\nbody.\n"
             Files.createDirectories(extra.resolve("notes"))
@@ -749,8 +750,8 @@ class MultiRootRuntimeTest : FunSpec({
 
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
                 val id = PageId.require(pageId)
-                harness.builder.current.byId.getValue(id).root shouldBe RootName.require("extra")
-                val hash = harness.builder.current.byId.getValue(id).contentHash
+                harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull()
+                val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull().contentHash
                 val proposal = client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -762,23 +763,26 @@ class MultiRootRuntimeTest : FunSpec({
                 proposal.status shouldBe HttpStatusCode.Created
                 val proposalId = Json.parseToJsonElement(proposal.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content
 
-                // `main` gets the same repo checked out into it and OUTRANKS `extra` (D7 declaration order), so the
-                // contest hands it the id; extra's copy is re-minted. The proposal row still says `extra` — correctly,
-                // because extra's file is the one it was proposed against and it has not moved an inch.
+                // `main` gets the same repo checked out into it and OUTRANKS `extra` (D7 declaration order). Per-root
+                // identity: main takes NOTHING from extra - it holds its OWN page with the same id, and extra keeps its
+                // page too. The proposal row still says `extra`, which is where it was filed and reviewed.
                 Files.createDirectories(main.resolve("notes"))
                 Files.writeString(main.resolve("notes/rollback.md"), body)
                 harness.builder.rebuild()
-                harness.builder.current.byId.getValue(id).root shouldBe RootName.MAIN
+                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull() // main holds its own copy...
+                harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull() // ...extra keeps its own
 
                 val approved = client.post("/api/v1/changes/$proposalId/approve")
 
-                withClue("the id is gone from the root this edit was approved against, so the target is gone: CONFLICTED") {
-                    approved.status shouldBe HttpStatusCode.Conflict
+                withClue("the approve resolves the proposal's OWN root (extra), where its target still lives: it applies") {
+                    approved.status shouldBe HttpStatusCode.OK
                 }
                 withClue("the whole point: the approved bytes did NOT land in `main`, whose file nobody reviewed") {
                     Files.readString(main.resolve("notes/rollback.md")) shouldContain "body."
                 }
-                Files.readString(extra.resolve("notes/rollback.md")) shouldContain "body."
+                withClue("...they landed in `extra`, the root the proposal was filed and reviewed against") {
+                    Files.readString(extra.resolve("notes/rollback.md")) shouldContain "revised."
+                }
             }
         }
     }
@@ -792,7 +796,7 @@ class MultiRootRuntimeTest : FunSpec({
 
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
                 val id = PageId.require(pageId)
-                val hash = harness.builder.current.byId.getValue(id).contentHash
+                val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull().contentHash
                 val proposal = client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -831,7 +835,8 @@ class MultiRootRuntimeTest : FunSpec({
             Files.writeString(extra.resolve("notes/rollback.md"), body)
 
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
-                val hash = harness.builder.current.byId.getValue(PageId.require(pageId)).contentHash
+                val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), PageId.require(pageId)))
+                    .shouldNotBeNull().contentHash
                 val proposal = client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -916,7 +921,7 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.builder.rebuild()
 
                 harness.dirtyPages.all().shouldBeEmpty()
-                harness.idMap.retired(page.id).shouldNotBeNull()
+                harness.idMap.retiredAt(RootName.require("extra"), page.id).shouldNotBeNull()
             }
         }
     }

@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
@@ -60,8 +61,8 @@ class UnreadPageIsNotAbsentTest : FunSpec({
                 builder.rebuild()
 
                 withClue("the classifier calls this AbsenceUnknown, and an AbsenceUnknown must NEVER become a deletion") {
-                    world.idMap.retired(pinned).shouldBeNull()
-                    world.idMap.pathOf(pinned).shouldNotBeNull() shouldBe RootedPath(extra, rollback)
+                    world.idMap.retiredAt(extra, pinned).shouldBeNull()
+                    world.idMap.livePathOf(pinned).shouldNotBeNull() shouldBe RootedPath(extra, rollback)
                 }
                 withClue("LIMBO is where it goes - 503, self-healing, exactly what the log line promises") {
                     world.limbo.count(extra) shouldBe 1

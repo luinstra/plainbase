@@ -60,4 +60,34 @@ class IdMapClaimantQueriesNativeTest {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
+
+    @Test
+    fun `the claimant queries return BOTH rows for a dual-root id in-image`() {
+        val dir = Files.createTempDirectory("pb-native-claimants-dual")
+        try {
+            DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val repo = SqlDelightIdMapRepository(db)
+                val extra = RootName.require("extra")
+                val pA = RootedPath(RootName.MAIN, TreePath.require("guides/a.md"))
+                val pB = RootedPath(extra, TreePath.require("notes/b.md"))
+                val x = PageId.require("01010101-0101-0101-0101-010101010101")
+                val y1 = PageId.require("02020202-0202-0202-0202-020202020202")
+                val y2 = PageId.require("03030303-0303-0303-0303-030303030303")
+
+                // X lives in BOTH roots - rootsHoldingId returns both (a state UNIQUE(id) made unreachable).
+                repo.bind(pA, x, materialized = false)
+                repo.bind(pB, x, materialized = false)
+                assertEquals(setOf(RootName.MAIN, extra), repo.rootsHoldingId(x).toSet())
+
+                // Displace X in BOTH roots - two tombstones for one id; the list-shaped queries return both.
+                repo.bind(pA, y1, materialized = false)
+                repo.bind(pB, y2, materialized = false)
+                assertEquals(setOf(RootName.MAIN, extra), repo.retiredRootsHoldingId(x).toSet())
+                assertEquals(2, db.idMapQueries.selectRetiredRowsById(x).executeAsList().size)
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
 }

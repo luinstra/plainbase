@@ -27,9 +27,10 @@ data class RootSection(
  * `AtomicReference` swap safe — a reader holding a snapshot always sees a complete, internally
  * consistent index, never a torn one.
  *
- * **Per-root keying (C2):** the snapshot is a list of per-root [sections] in registry (D7) order;
- * [byPath]/[byUrlPath] key on [RootedPath] while [byId] stays global (ids are unique across roots
- * under the D17 winner policy - init-checked here). Folders and assets are deliberately NOT
+ * **Per-root keying (C2/C5):** the snapshot is a list of per-root [sections] in registry (D7) order;
+ * [byPath]/[byUrlPath] key on [RootedPath] and [byRootedId] keys on [RootedPageId] (one page id may
+ * live in several roots under per-root identity - a within-root duplicate is init-checked here).
+ * Folders and assets are deliberately NOT
  * flattened across roots (a cross-root union of root-relative paths is a semantic trap); every
  * consumer goes through [section] or [view], both total (an unknown root yields the empty
  * section/view, so `EMPTY`-snapshot readers stay total from startup).
@@ -55,8 +56,8 @@ class PageIndex(sections: List<RootSection>) {
     /** Every indexed page: section order, then each section's file-path scan order. */
     val pages: List<IndexedPage> = this.sections.flatMap { it.pages }
 
-    /** Page by stable id — the `/p/{id}` permalink and citation lookup; GLOBAL across roots. */
-    val byId: Map<PageId, IndexedPage> = pages.associateBy { it.id }
+    /** Page by rooted stable id ([RootedPageId]) — the permalink and citation lookup, per-root (C5). */
+    val byRootedId: Map<RootedPageId, IndexedPage> = pages.associateBy { it.rooted }
 
     /** Page by rooted content file path. */
     val byPath: Map<RootedPath, IndexedPage> = pages.associateBy { RootedPath(it.root, it.path) }
@@ -83,17 +84,13 @@ class PageIndex(sections: List<RootSection>) {
         // collision policy) implies FULL URL-path uniqueness within one tree. The composite
         // (root, urlPath) key makes this exact check per-root; a duplicate means the builder is broken.
         check(byUrlPath.size == pages.count { it.urlPath != null }) { "duplicate canonical URL path in snapshot" }
-        // The D17 mirror: a cross-root duplicate id reaching a snapshot means the winner policy
-        // upstream is broken - fail as loudly as the URL check.
-        check(byId.size == pages.size) { "duplicate page id in snapshot" }
+        // Per-root identity (C5): a cross-root duplicate id is LEGAL and must NOT trip; a WITHIN-root duplicate
+        // (a genuine builder bug) still collides on (root, id) and fails as loudly as the URL check.
+        check(byRootedId.size == pages.size) { "duplicate (root, page id) in snapshot" }
     }
 
-    /**
-     * The page at [rooted]'s exact ([root], [id]) identity, or null. Total shim over the global [byId] that also
-     * checks the root, so a resolved bare id served under one root never pairs with a page the snapshot holds under
-     * another (the C4-safe form of the dup-sensitive global [byId] above; the per-root `SectionView.byId` flip is C5).
-     */
-    fun pageAt(rooted: RootedPageId): IndexedPage? = byId[rooted.id]?.takeIf { it.root == rooted.root }
+    /** The page at [rooted]'s exact ([root], [id]) identity, or null - a direct read of the total per-root map. */
+    fun pageAt(rooted: RootedPageId): IndexedPage? = byRootedId[rooted]
 
     /** [root]'s slice; TOTAL - an unknown root yields an empty section, mirroring [view]. */
     fun section(root: RootName): RootSection =

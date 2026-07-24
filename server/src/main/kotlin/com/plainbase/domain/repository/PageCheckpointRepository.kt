@@ -43,13 +43,11 @@ interface PageCheckpointRepository {
  */
 fun PageCheckpointRepository.replaceFrom(snapshot: PageIndex, retired: Set<RootedPageId>) {
     val current = snapshot.pages.associate { it.rooted to it.urlPath }
-    val liveIds = snapshot.pages.mapTo(HashSet()) { it.id }
-    // Retain a prior row unless it was retired, or (PRE-FLIP-ONLY, see the move-detection follow-up in
-    // recordAliases) its id now lives in the snapshot under a DIFFERENT (root, id): under UNIQUE(id) that can only
-    // be a cross-root move that superseded it, so keep just the current rooted entry - matching the old bare-id
-    // map's one-entry-per-id behavior. A row whose id is absent from the snapshot SURVIVES (down page / collision
-    // loser). The `it.id !in liveIds` arm misfires once duplicate ids are legal (a DOWN root A + a live B holding
-    // its own X would wrongly drop A's row); its replacement with rooted-evidence-only retention is scheduled.
-    val retained = load().filterKeys { it !in retired && (it in current || it.id !in liveIds) }
+    // Per-root identity (C5): retain every prior (root, id) row this pass did NOT just retire. The old bare-id
+    // `it.id !in liveIds` clause is DROPPED - once it is keyed by (root, id) it names the SAME key set as `current`,
+    // so the guard `(it in current || it.id !in liveIds)` reduced to a tautology and, worse, its bare-id form
+    // wrongly dropped a DOWN root A's row when a live root B held its own copy of that id. The merge is keyed and
+    // snapshot-wins, so keeping a prior row whose (root, id) the snapshot also holds changes nothing.
+    val retained = load().filterKeys { it !in retired }
     replace(retained + current)
 }

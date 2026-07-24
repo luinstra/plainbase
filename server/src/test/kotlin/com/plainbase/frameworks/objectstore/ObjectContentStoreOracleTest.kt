@@ -307,7 +307,7 @@ class ObjectContentStoreOracleTest : FunSpec({
 private fun adoptionPass(store: ContentStore, idMap: IdMapRepository) = AdoptionPass(
     sources = listOf(AdoptionPass.Source(RootName.MAIN, store)),
     idMap = idMap,
-    identity = PageIdentityService(TestIdProvider()) { 0 },
+    identity = PageIdentityService(TestIdProvider()),
     patcher = FrontmatterPatcher(),
     rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
     citations = CitationFactory(),

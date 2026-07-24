@@ -46,9 +46,9 @@ class IndexBuilderRescanTest : FunSpec({
                 loser.slug shouldBe "a-b" // the slug itself is uncontested; only the path is
 
                 // The loser remains fully resolvable by id; emitted links go to its permalink (§A4).
-                snapshot.byId.getValue(loser.id) shouldBe loser
+                snapshot.pageAt(loser.rooted)!! shouldBe loser
                 snapshot.byUrlPath[rooted("a-b")] shouldBe winner
-                snapshot.view(RootName.MAIN).pageUrl(loser.path) shouldBe "/p/${loser.id.value}"
+                snapshot.view(RootName.MAIN).pageUrl(loser.path) shouldBe "/p/main/${loser.id.value}"
 
                 harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldContainExactly listOf(
                     IdentityIssue.PathSlugCollision(root = RootName.MAIN, keptPath = winner.path, loserPath = loser.path),
@@ -76,19 +76,19 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "docs/start.md", pageWithId("Start"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/docs/start"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/docs/start"
 
                 // Move 1: docs/start.md -> archive/start.md (the id travels in the frontmatter).
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
                 val afterFirst = harness.builder.rebuild()
-                afterFirst.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
+                afterFirst.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.registry.all() shouldContainExactly mapOf(rooted("docs/start") to mainPage)
 
                 // Move 2: the chain collapses — BOTH old paths map straight to the id, one hop each.
                 Files.createDirectories(root.resolve("attic"))
                 Files.move(root.resolve("archive/start.md"), root.resolve("attic/start.md"))
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/attic/start"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/attic/start"
                 harness.registry.all() shouldContainExactly mapOf(
                     rooted("docs/start") to mainPage,
                     rooted("archive/start") to mainPage,
@@ -112,7 +112,7 @@ class IndexBuilderRescanTest : FunSpec({
                 writePage(root, "docs/start.md", "---\ntitle: New Start\n---\n\n# New Start\n")
 
                 val snapshot = harness.builder.rebuild()
-                snapshot.byId.getValue(pageId).url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
                 snapshot.byUrlPath.getValue(rooted("docs/start")).id shouldNotBe pageId
                 harness.registry.find(rooted("docs/start")).shouldBeNull()
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
@@ -127,9 +127,9 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "guide.md", pageWithId("Guide"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/guide"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/guide"
                 writePage(root, "guide.md", "---\nid: ${pageId.value}\ntitle: Guide\nslug: handbook\n---\n\n# Guide\n")
-                harness.builder.rebuild().byId.getValue(pageId).url shouldBe "/docs/main/handbook"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/handbook"
                 harness.registry.find(rooted("guide")) shouldBe mainPage
             }
         }

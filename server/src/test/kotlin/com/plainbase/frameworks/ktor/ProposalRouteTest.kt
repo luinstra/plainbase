@@ -423,6 +423,7 @@ class ProposalRouteTest : FunSpec({
                             root = RootName.MAIN,
                             source = ProofSource.OPERATOR,
                             observationId = harness.retirements.observation(RootName.MAIN),
+                            bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
                             covers = setOf(BindingRef(TreePath.require("doc.md"), PageId.require(id))),
                         ),
                     ),

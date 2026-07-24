@@ -160,7 +160,7 @@ class AppDbMigrationTest : FunSpec({
                         rows.next()
                         rows.getLong(1)
                     }
-                    version shouldBe 16L
+                    version shouldBe 18L
                 }
             }
         } finally {
@@ -253,11 +253,19 @@ class AppDbMigrationTest : FunSpec({
                     id = PageId.require("02020202-0202-0202-0202-020202020202"),
                     materialized = false,
                 )
-                // ...and UNIQUE(id) still holds across roots: re-claiming a bound id under a new key throws.
+                // ...and UNIQUE is now (id, root) (per-root identity, C5): the SAME id inserts CLEANLY under a
+                // DIFFERENT root (the flip legalizes the cross-root duplicate)...
+                db.idMapQueries.upsertBinding(
+                    root = RootName.require("extra"),
+                    path = TreePath.require("guides/copy.md"),
+                    id = pageId,
+                    materialized = false,
+                )
+                // ...but re-claiming it under its OWN root at a new path still throws - one id per root.
                 shouldThrowAny {
                     db.idMapQueries.upsertBinding(
-                        root = RootName.require("extra"),
-                        path = TreePath.require("guides/copy.md"),
+                        root = RootName.MAIN,
+                        path = TreePath.require("guides/copy2.md"),
                         id = pageId,
                         materialized = false,
                     )
@@ -335,7 +343,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 16L
+                driver.queryLong("PRAGMA user_version") shouldBe 18L
 
                 // (i) every seeded row survives the rebuild.
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
@@ -423,7 +431,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 16L
+                driver.queryLong("PRAGMA user_version") shouldBe 18L
                 val id = PageId.require("05050505-0505-0505-0505-050505050505")
                 // The row survives and is reachable through the C4 index-served retired-claimant SELECT.
                 db.idMapQueries.selectRetiredRootsHoldingId(id).executeAsList().shouldContainExactly(listOf(RootName.MAIN))
@@ -436,6 +444,75 @@ class AppDbMigrationTest : FunSpec({
                     }
                     indexes shouldContain "retired_binding_id"
                 }
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    test("v16 baseline migrates to v17: id_map re-keys to UNIQUE(id, root), the row survives, a cross-root duplicate id is INSERTABLE") {
+        // C5 THE FLIP (16.sqm): seed an id_map row on a real committed v16 baseline, migrate via the production factory,
+        // and prove version 17, the row survives under its own (root, path), AND the SAME id now inserts under a
+        // DIFFERENT root where UNIQUE(id) forbade it. Initial RED: verifyMigrations fails until schema/17.db is regenerated.
+        val dir = Files.createTempDirectory("plainbase-migration-c5-flip")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("16.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            val idX = ByteArray(16) { 7 }
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 16") }
+                raw.prepareStatement("INSERT INTO id_map(root, path, id, materialized) VALUES ('main', 'guides/a.md', ?, 1)").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                driver.queryLong("PRAGMA user_version") shouldBe 18L
+                val x = PageId.require("07070707-0707-0707-0707-070707070707")
+                // The pre-flip row survives the id_map rebuild under its own (root, path).
+                db.idMapQueries.selectRootsHoldingId(x).executeAsList().shouldContainExactly(listOf(RootName.MAIN))
+                // The flip's headline: the SAME id inserts under a DIFFERENT root (UNIQUE(id, root)).
+                db.idMapQueries.upsertBinding(
+                    root = RootName.require("extra"),
+                    path = TreePath.require("guides/a.md"),
+                    id = x,
+                    materialized = false,
+                )
+                db.idMapQueries.selectRootsHoldingId(x).executeAsList()
+                    .shouldContainExactlyInAnyOrder(RootName.MAIN, RootName.require("extra"))
+            }
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    test("v17 baseline migrates to v18: root_observation gains binding_epoch defaulting 0, and the column increments") {
+        // C5 revoke-before-stamp (17.sqm): seed a v17 root_observation row (observation_id only), migrate via the
+        // production factory, and prove version 18, the row survives with binding_epoch back-filled to 0, and the new
+        // incrementBindingEpoch advances ONLY that column. Initial RED: verifyMigrations fails until schema/18.db is regenerated.
+        val dir = Files.createTempDirectory("plainbase-migration-c5-epoch")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            Files.copy(schemaBaseline("17.db"), dbPath, StandardCopyOption.REPLACE_EXISTING)
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                raw.createStatement().use { it.execute("PRAGMA user_version = 17") }
+                raw.createStatement().use { it.execute("INSERT INTO root_observation(root, observation_id) VALUES ('main', 5)") }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                driver.queryLong("PRAGMA user_version") shouldBe 18L
+
+                val before = db.rootObservationQueries.selectObservationAndEpoch(RootName.MAIN).executeAsOne()
+                before.observation_id shouldBe 5L
+                before.binding_epoch shouldBe 0L // back-filled by the DEFAULT, the observation token untouched
+
+                db.rootObservationQueries.incrementBindingEpoch(RootName.MAIN)
+                val after = db.rootObservationQueries.selectObservationAndEpoch(RootName.MAIN).executeAsOne()
+                after.observation_id shouldBe 5L // orthogonal: the increment moves ONLY binding_epoch
+                after.binding_epoch shouldBe 1L
             }
         } finally {
             dir.toFile().deleteRecursively()
@@ -504,7 +581,7 @@ class AppDbMigrationTest : FunSpec({
 
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
-                driver.queryLong("PRAGMA user_version") shouldBe 16L
+                driver.queryLong("PRAGMA user_version") shouldBe 18L
                 db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
                 db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
             }
@@ -548,7 +625,7 @@ class AppDbMigrationTest : FunSpec({
                     sources = listOf(IndexBuilder.Source(registry.main, LocalContentStore(contentDir), BaselineHistory)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
-                    identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+                    identity = PageIdentityService(UuidV7IdProvider()),
                     patcher = FrontmatterPatcher(),
                     idMap = idMap,
                     aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(db)),

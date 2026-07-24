@@ -22,6 +22,6 @@
     "path": "index.md",
     "content_hash": "{{content_hash}}",
     "commit": null,
-    "uri": "plainbase://0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01@{{content_hash}}"
+    "uri": "plainbase://main/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01@{{content_hash}}"
   }
 }

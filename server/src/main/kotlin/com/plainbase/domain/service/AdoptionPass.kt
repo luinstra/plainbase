@@ -10,6 +10,7 @@ import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -239,7 +240,7 @@ class AdoptionPass(
     fun plan(mode: Mode): Plan {
         val drafts = sources.flatMap { source -> scan(source) }
         val witnessed = drafts.mapTo(mutableSetOf()) { it.page }
-        val claimed = HashMap<PageId, RootedPath>()
+        val claimed = HashMap<RootedPageId, RootedPath>()
         val patched = HashMap<RootedPath, PlannedWrite>()
         // The SAME supersession rule `IndexBuilder` resolves and binds under (C0) - one object, so the two passes
         // cannot drift into disagreeing about whose id is whose. This pass mints no proofs either.
@@ -250,18 +251,19 @@ class AdoptionPass(
                 path = draft.page,
                 rawFrontmatterId = patcher.readIdValue(draft.bytes),
                 mappedId = idMap.find(draft.page)?.id,
-                // Duplicate-detection seam: within-run claims first, then id_map bindings classified by the shared
-                // D16 rule, then the TOMBSTONES - a retired id is reserved forever and no claimant may take it.
+                // Duplicate-detection seam, ROOT-SCOPED to this draft's own root (per-root identity, C5): within-run
+                // claims first, then id_map bindings classified by the shared D16 rule, then the TOMBSTONES - a
+                // retired id is reserved forever WITHIN its root. A cross-root duplicate is legal, so ownerOf never
+                // returns an owner in another root.
                 ownerOf = { id ->
-                    claimed[id]
-                        ?: idMap.binding(id)
+                    claimed[RootedPageId(draft.page.root, id)]
+                        ?: idMap.bindingInRoot(draft.page.root, id)
                             ?.takeIf { BindingVisibility.isLive(it, witnessed, scannedRoots, registeredRoots, supersession) }
                             ?.path
-                        ?: idMap.retired(id)?.path
+                        ?: idMap.retiredAt(draft.page.root, id)?.path
                 },
-                supersedable = { owner -> idMap.find(owner)?.let(supersession::mayDisplace) ?: (owner in witnessed) },
             )
-            claimed[assignment.id] = draft.page
+            claimed[RootedPageId(draft.page.root, assignment.id)] = draft.page
             planPage(mode, draft, assignment, patched)
         }
 

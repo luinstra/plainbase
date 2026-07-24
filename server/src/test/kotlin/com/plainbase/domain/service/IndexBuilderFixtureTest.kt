@@ -47,10 +47,10 @@ class IndexBuilderFixtureTest : FunSpec({
         }
     }
 
-    test("every page has a stable id, and byId/byPath/byUrlPath agree") {
+    test("every page has a stable id, and byRootedId/byPath/byUrlPath agree") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            snapshot.byId.size shouldBe snapshot.pages.size
+            snapshot.byRootedId.size shouldBe snapshot.pages.size
             snapshot.byPath.size shouldBe snapshot.pages.size
             snapshot.byUrlPath.size shouldBe snapshot.pages.size // no collisions in fixtures
             // Stable across a rescan: same ids on rebuild (id_map round-trip).

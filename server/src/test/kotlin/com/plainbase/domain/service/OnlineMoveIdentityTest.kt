@@ -58,7 +58,7 @@ class OnlineMoveIdentityTest : FunSpec({
                     moved.byPath.getValue(RootedPath(extra, to)).id shouldBe pinned
                 }
                 withClue("and it is NOT tombstoned - /p/{id} must not answer 410 because somebody renamed a file") {
-                    world.idMap.retired(pinned).shouldBeNull()
+                    world.idMap.retiredAt(extra, pinned).shouldBeNull()
                 }
             }
         }
@@ -85,7 +85,7 @@ class OnlineMoveIdentityTest : FunSpec({
                     moved.byPath.getValue(RootedPath(extra, to)).id shouldNotBe before
                 }
                 withClue("but the old id is TOMBSTONED, not destroyed: /p/{oldId} is a 410 that names the page, never a 404") {
-                    world.idMap.retired(before).shouldNotBeNull().path shouldBe RootedPath(extra, from)
+                    world.idMap.retiredAt(extra, before).shouldNotBeNull().path shouldBe RootedPath(extra, from)
                 }
             }
         }

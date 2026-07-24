@@ -2,6 +2,8 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.service.IndexHarness
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -170,9 +172,9 @@ class ReadAuthzRouteTest : FunSpec({
             meta.getValue("id").jsonPrimitive.content shouldBe id
             meta.getValue("path").jsonPrimitive.content shouldBe "doc.md"
             // url + permalink track the REAL IndexedPage computation, not a brittle literal (PageIndex.url/permalink).
-            val page = harness.builder.current.byId.getValue(com.plainbase.domain.page.PageId.require(id))
+            val page = harness.builder.current.pageAt(RootedPageId(RootName.MAIN, com.plainbase.domain.page.PageId.require(id)))!!
             meta.getValue("url").jsonPrimitive.content shouldBe page.url
-            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/$id"
+            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/main/$id"
             meta.getValue("permalink").jsonPrimitive.content shouldBe page.permalink
             meta.getValue("title").jsonPrimitive.content shouldBe "Doc"
             meta.getValue("content_hash").jsonPrimitive.content shouldContain "sha256:"

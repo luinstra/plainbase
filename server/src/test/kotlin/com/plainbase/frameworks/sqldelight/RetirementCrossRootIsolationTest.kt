@@ -64,6 +64,7 @@ class RetirementCrossRootIsolationTest : FunSpec({
                 root = main,
                 source = ProofSource.EPOCH,
                 observationId = observation,
+                bindingEpoch = retirements.bindingEpoch(main), // the epoch the bind above left; the two-token gate re-checks it
                 covers = setOf(BindingRef(mainPath.path, x)),
             )
             // witnessed EXCLUDES X so the refutation does not veto the proof; advances is the C4 checkpoint list, empty.

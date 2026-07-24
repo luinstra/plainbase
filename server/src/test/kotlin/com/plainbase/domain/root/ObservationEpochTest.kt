@@ -1,7 +1,6 @@
 package com.plainbase.domain.root
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.service.UuidV7IdProvider
 import io.kotest.core.spec.style.FunSpec
@@ -33,11 +32,12 @@ class ObservationEpochTest : FunSpec({
         private val tokens = mutableMapOf<RootName, ObservationId>()
         override fun applyProofs(
             proofs: List<AbsenceProof>,
-            witnessed: Set<PageId>,
+            witnessed: Set<RootedPageId>,
             advances: List<GitCheckpointAdvance>,
         ) = emptySet<RootedPageId>()
         override fun gitHead(root: RootName): String? = null
         override fun observation(root: RootName) = tokens.getOrPut(root) { ObservationId(1) }
+        override fun bindingEpoch(root: RootName) = BindingEpoch(0)
         override fun observations() = tokens.toMap()
         override fun revoke(root: RootName): ObservationId = observation(root).next().also { tokens[root] = it }
     }
@@ -75,13 +75,16 @@ class ObservationEpochTest : FunSpec({
         epochs.scanned(handbook, witnessed = setOf(deploy.path), durable = durable) // an epoch that HAS seen it
 
         // The break is the whole point: past it, this observation has a hole in it, and a hole is exactly as
-        // consistent with an unmount as with an `rm`. So the next scan re-OPENS rather than confirming...
+        // consistent with an unmount as with an `rm`. So the next PASS re-OPENS rather than confirming...
         epochs.broke(handbook, BreakCause.OVERFLOW)
         epochs.isOpen(handbook) shouldBe false
 
         // ...and the re-opened epoch has witnessed NOTHING of the page, so it cannot say a word about its absence -
         // however many times it looks. The decoy hole stays closed.
         epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldBeNull()
+        // An epoch really was re-opened: without this the rows above would also hold if nothing ever opened again,
+        // which is the same assertion passing for the opposite reason.
+        epochs.isOpen(handbook) shouldBe true
         epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldBeNull()
     }
 
@@ -151,8 +154,8 @@ class ObservationEpochTest : FunSpec({
         // must be dead anyway. That is what makes the holder's blind stores safe: the token is the fact.
         tokens.revoke(handbook)
 
-        // It proves NOTHING (the invariant), and the scan RE-OPENS on the fresh token (the state machine: a break
-        // closes an epoch, and the next complete scan earns a new one whose authority starts empty).
+        // It proves NOTHING (the invariant), and the next pass RE-OPENS on the fresh token (the state machine: a break
+        // closes an epoch, and the pass after it earns a new one whose authority starts empty).
         epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldBeNull()
 
         // ...and the epoch it just opened witnessed nothing, so it still cannot touch the page.
@@ -177,13 +180,20 @@ class ObservationEpochTest : FunSpec({
 })
 
 /**
- * Every row above is about the WITNESSED-vs-ABSENT split, over a tree with nothing UNREAD - so it says so once, here,
- * rather than twenty-two times.
+ * One PASS over [root], in production's own order: [ObservationEpoch.establish] settles the epoch this pass will reason
+ * from - which is where an OPEN now happens, above any evidence, so its revoke can never be mistaken for a mid-pass
+ * break (C5, revoke-before-stamp) - and only then does the scan speak. Every row above is a sequence of passes, so
+ * folding both halves in here is what keeps them modelling the real thing rather than a state machine driven by hand.
+ *
+ * Every row above is also about the WITNESSED-vs-ABSENT split, over a tree with nothing UNREAD - so it says so once,
+ * here, rather than twenty-two times.
  *
  * The THIRD answer (a page the walk enumerated and the read could not produce - neither witnessed nor absent) is
  * [com.plainbase.domain.service.UnreadPageIsNotAbsentTest]'s subject. Note the PRODUCTION signature takes `unread`
  * EXPLICITLY and has NO DEFAULT: a safety input that silently defaults to the optimistic value ("nothing was unread")
  * is precisely how it came to be missing in the first place, and it reaped pages that were sitting on disk.
  */
-private fun ObservationEpoch.scanned(root: RootName, witnessed: Set<TreePath>, durable: Set<BindingRef>) =
-    scanned(root = root, witnessed = witnessed, unread = emptySet(), durable = durable)
+private fun ObservationEpoch.scanned(root: RootName, witnessed: Set<TreePath>, durable: Set<BindingRef>): AbsenceProof? {
+    establish(root)
+    return scanned(root = root, witnessed = witnessed, unread = emptySet(), durable = durable, bindingEpoch = BindingEpoch(0))
+}

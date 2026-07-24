@@ -36,7 +36,7 @@ canonical-shape UUID.
 
 `GET /api/v1/search?q=`
 
-Responses carry citations: `plainbase://{page_id}#{heading_id}@{hash}`.
+Responses carry citations: `plainbase://{root}/{page_id}#{heading_id}@{hash}`.
 
 ## Changes (review queue)
 

@@ -140,28 +140,29 @@ Per-root keys:
 | `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
 | `history` | `off` \| `auto` \| `native` git history mode | `auto` (today's repo auto-detection) | `off` (Plainbase never commits into a repo it does not own) |
 
-### The ORDER of the block is a contract: it decides who keeps a permalink
+### The ORDER of the block decides SOURCE PRECEDENCE, not permalinks
 
 **A root's rank is its DECLARATION LINE in this block, and the lowest rank wins.** Two roots may hold two
 different pages carrying the same frontmatter `id:` - a copied file, a forked runbook, a page moved
-by hand between trees. Exactly one of them can answer that id's `/p/{id}` permalink, and the winner
-is the one whose root is declared **first**. The other page is a duplicate-id loser: it is minted a
-fresh id, and its old permalink now points at the winner's page.
+by hand between trees. Under per-root identity (C5) BOTH pages KEEP that id: each lives in its own root
+and each answers its OWN rooted permalink `/p/{root}/{id}`. Rank no longer decides who "wins" the id - it
+decides only SOURCE PRECEDENCE, the order a bare, root-less lookup ranks the candidate roots in.
 
-So **reordering the block reassigns permalinks, even though you changed no value.** Alphabetizing
-your roots, or tidying `main` up to the top, is enough:
+The bare `/p/{id}` permalink no longer picks a winner. A bare id held by more than one root answers
+**300 Multiple Choices**, one `Link: rel="alternate"` per candidate root in rank order, so the caller
+disambiguates by naming a root. **Reordering the block therefore reassigns NO permalink:**
 
 ```hocon
-# BEFORE - `runbooks` is rank 0, so ITS page answers /p/{a-shared-id}
+# `runbooks` is rank 0, so in a bare /p/{a-shared-id} listing ITS root is offered first.
 roots {
   runbooks { path = "/srv/runbooks" }
   main     { path = "/srv/docs" }
   archive  { path = "/srv/archive" }
 }
 
-# AFTER - the same three roots, alphabetized with main first. No value changed.
-# `main` is rank 0 now, so MAIN's page answers /p/{a-shared-id} and the runbooks
-# page has been minted a fresh id: the circulating permalink now opens a different page.
+# The same three roots, alphabetized with main first. No value changed and NO permalink moved:
+# /p/runbooks/{a-shared-id} and /p/main/{a-shared-id} both answer exactly as before. `main` is
+# rank 0 now, so it is merely offered FIRST in the bare 300 disambiguation list.
 roots {
   main     { path = "/srv/docs" }
   archive  { path = "/srv/archive" }
@@ -169,12 +170,10 @@ roots {
 }
 ```
 
-**Nothing refuses and nothing warns.** Both orders are valid topologies, and Plainbase cannot tell a
-deliberate re-rank from a tidy-up; each contest is recorded as a `cross_root_duplicate_id` issue
-(`plainbase adopt --write-ids --dry-run` previews them without writing a byte, which is the cheapest
-way to learn whether you have any shared ids at all *before* you touch the order), but nothing
-announces that a reorder just moved a permalink. **Treat the line order of `roots {}` the way you
-treat the ids themselves.**
+**Nothing refuses and nothing warns**, and nothing needs to: a shared id is no longer a contest. Both
+orders are valid topologies; a re-rank changes only the order a bare `/p/{id}` lists its candidate roots,
+never which page any rooted permalink opens. Still, the order is worth keeping deliberate - it is the
+tie-break every bare lookup reads.
 
 Three consequences worth stating outright:
 
@@ -196,9 +195,16 @@ Three consequences worth stating outright:
   outranks `zeta`. **Give each root its own line and the question never arises** - which is why every
   example here does.
 - **`roots.conf` (the CLI's file) always ranks after `plainbase.conf`'s block**, and `plainbase root
-  add` **appends**, so a newly added root ranks last and can never take an id away from a root that
-  was already serving it. `root remove` + `root add` of the same name (the rename path) therefore
-  re-ranks it to LAST - the CLI prints that consequence when you remove.
+  add` **appends**, so a newly added root ranks last. There is NO rename operation: an extra root's name
+  is IMMUTABLE, because it is part of every permalink into it, so Plainbase ships no `root rename`/`mv`.
+
+  > **Root rename/mv rots rooted citations.** A root's name is part of every permalink into it
+  > (`/p/{root}/{id}`), so removing and re-adding a root under a different name, or `mv`-ing files
+  > between root directories outside Plainbase, breaks the citations that named the old root. After the
+  > old name is removed it is UNREGISTERED, so `/p/{old}/{id}` answers **404** (an unregistered root is
+  > not found; the server never invents a page for a name it no longer knows). A rooted permalink answers
+  > **410** with a `Link: rel="alternate"` hint only while the old root remains REGISTERED and has a
+  > tombstone for that id.
 
 Rank is also why `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` are worth backing up: they are
 the only record of the order (see

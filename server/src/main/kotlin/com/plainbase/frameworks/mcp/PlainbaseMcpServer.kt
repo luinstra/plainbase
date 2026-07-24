@@ -281,9 +281,10 @@ private fun unverifiedResult(unverified: AbsenceUnverified): CallToolResult =
     )
 
 /**
- * Maps an [AmbiguousPageId] to the MCP twin of the REST 409 (C4): a bare id held by more than one root. The message
- * tells the agent to retry naming a `root`; [McpAmbiguousResponse.candidates] carries (root, id) pairs so it knows
- * which. FAKE-only under `UNIQUE(id)`, but the shape ships in C4.
+ * Maps an [AmbiguousPageId] to the MCP twin of the REST 409 (C5): a bare id the resolver refuses to pick one root
+ * for. The message tells the agent to retry naming a `root`; [McpAmbiguousResponse.candidates] carries (root, id)
+ * pairs so it knows which. Reachable on real dual-root data since C5; [AmbiguousPageId.hasRetiredCandidate] adds a
+ * STATUS-NEUTRAL note (MCP mirrors REST's 404/StaleBase, never the permalink 410, so it promises no code).
  */
 private fun ambiguousResult(ambiguous: AmbiguousPageId): CallToolResult =
     CallToolResult(
@@ -295,7 +296,8 @@ private fun ambiguousResult(ambiguous: AmbiguousPageId): CallToolResult =
                         code = ErrorCodes.AMBIGUOUS_PAGE_ID,
                         id = ambiguous.id.value,
                         candidates = ambiguous.candidates.map { McpAmbiguousCandidate(root = it.value, id = ambiguous.id.value) },
-                        message = "This id exists in more than one root; retry with the `root` argument.",
+                        message = "This id exists in more than one root; retry with the `root` argument." +
+                            if (ambiguous.hasRetiredCandidate) " (some candidate roots have retired this id)" else "",
                     ),
                 ),
             ),

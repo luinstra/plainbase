@@ -172,7 +172,7 @@ class WriteRouteTest : FunSpec({
                 put.headers["Retry-After"] shouldBe "30"
             }
             withClue("the binding is untouched: nothing about a failed READ may retire a page") {
-                harness.idMap.pathOf(PageId.require(deployGuideId)).shouldNotBeNull()
+                harness.idMap.livePathOf(PageId.require(deployGuideId)).shouldNotBeNull()
             }
         }
     }
@@ -193,6 +193,7 @@ class WriteRouteTest : FunSpec({
                         root = RootName.MAIN,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.MAIN),
+                        bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
                         covers = setOf(BindingRef(path, PageId.require(deployGuideId))),
                     ),
                 ),

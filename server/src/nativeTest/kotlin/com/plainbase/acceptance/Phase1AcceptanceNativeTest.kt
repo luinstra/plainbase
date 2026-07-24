@@ -85,7 +85,7 @@ class Phase1AcceptanceNativeTest {
             sources = listOf(IndexBuilder.Source(registry.main, store, NoOpHistoryProvider)),
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider(), registry::rank),
+            identity = PageIdentityService(UuidV7IdProvider()),
             patcher = FrontmatterPatcher(),
             idMap = SqlDelightIdMapRepository(database),
             aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),

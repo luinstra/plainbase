@@ -15,7 +15,6 @@ import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import java.io.ByteArrayOutputStream
@@ -230,26 +229,24 @@ class AdoptCommandTest : FunSpec({
         }
     }
 
-    test("the contested id goes to the root that OUTRANKS - and the loser's file is never given an id that is not its own") {
+    test("the same id in two roots is legal per-root: each root keeps and materializes its OWN claim, no cross-root steal") {
         withTwoRootCliTree { config, handbook ->
             // The lower-ranked root owns an id today (map-only, the read-only first index), and the higher-ranked
-            // root then turns out to hold a page carrying that same id in its frontmatter.
+            // root then turns out to hold a page carrying that same id in its frontmatter. Pre-flip this was a D17
+            // contest main won; post-flip (per-root identity) it is no contest at all - both roots keep the id.
             captureStdout { runAdopt(emptyList(), config) shouldBe 0 }
-            val contested = binding(config, RootName.require("handbook"), "onboarding.md")
-            Files.writeString(config.contentDir.resolve("claimant.md"), "---\nid: $contested\ntitle: Claimant\n---\nbody\n")
+            val shared = binding(config, RootName.require("handbook"), "onboarding.md")
+            Files.writeString(config.contentDir.resolve("claimant.md"), "---\nid: $shared\ntitle: Claimant\n---\nbody\n")
 
             captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
-            withClue("D17: registry rank decides, and main is declared first - so main KEEPS the id it already carries") {
-                binding(config, RootName.MAIN, "claimant.md") shouldBe contested
-                String(Files.readAllBytes(config.contentDir.resolve("claimant.md"))) shouldContain "id: $contested"
+            withClue("main keeps the id it carries in its frontmatter, materialized in its own file") {
+                binding(config, RootName.MAIN, "claimant.md") shouldBe shared
+                String(Files.readAllBytes(config.contentDir.resolve("claimant.md"))) shouldContain "id: $shared"
             }
-            withClue("THE regression: the beaten root's page must NOT be given the winner's id, DURABLY, in its own file") {
-                val reassigned = binding(config, RootName.require("handbook"), "onboarding.md")
-                reassigned shouldNotBe contested
-                val onboarding = String(Files.readAllBytes(handbook.resolve("onboarding.md")))
-                onboarding shouldContain "id: $reassigned"
-                onboarding shouldNotContain "id: $contested"
+            withClue("handbook KEEPS its own map-only claim on the SAME id (root-scoped, never stolen) and materializes it") {
+                binding(config, RootName.require("handbook"), "onboarding.md") shouldBe shared
+                String(Files.readAllBytes(handbook.resolve("onboarding.md"))) shouldContain "id: $shared"
             }
         }
     }

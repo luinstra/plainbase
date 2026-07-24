@@ -12,10 +12,12 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainAll
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -155,7 +157,7 @@ class AbsenceAuthorityTest : FunSpec({
                 builder.rebuild()
 
                 withClue("having once seen a corpus is not a licence to believe it is gone now") {
-                    world.idMap.pathOf(rollback) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
+                    world.idMap.livePathOf(rollback) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
                     world.checkpoints.load().keys.map { it.id } shouldContainAll listOf(rollback)
                     world.engine.indexedState().keys.map { it.id } shouldContainAll listOf(rollback)
                 }
@@ -183,7 +185,7 @@ class AbsenceAuthorityTest : FunSpec({
                 withClue("the page leaves the SNAPSHOT immediately - what does not happen is the durable reap") {
                     snapshot.section(extra).pages.shouldBeEmpty()
                 }
-                world.idMap.pathOf(rollback).shouldNotBeNull()
+                world.idMap.livePathOf(rollback).shouldNotBeNull()
                 world.limbo.holds(extra, rollback) shouldBe true
             }
         }
@@ -191,7 +193,7 @@ class AbsenceAuthorityTest : FunSpec({
 
     // ---- A3 / C0.1: the unbindStale gate ---------------------------------------------------------------
 
-    test("a copied id does NOT steal a permalink from an UNWITNESSED, UNMATERIALIZED incumbent") {
+    test("a copied id in ANOTHER root does NOT steal an UNWITNESSED, UNMATERIALIZED incumbent - root-scoping protects it") {
         withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "placeholder.md", "# P\n")
             // The incumbent carries NO id in its file, so its id_map row is the SOLE record it ever had one.
@@ -202,38 +204,35 @@ class AbsenceAuthorityTest : FunSpec({
                 world.idMap.find(rollbackPath)?.materialized shouldBe false
 
                 // extra's disk is a broken view (an empty mount point). Someone pastes a copy of the page - with
-                // the id in its frontmatter - into MAIN, which outranks extra. The winner's key-complete bind
-                // used to HARD-DELETE extra's row: the real page then comes back with a fresh id, its permalink
-                // pointing at the copy, and nothing anywhere recording that it ever happened.
+                // the id in its frontmatter - into MAIN. Pre-flip the winner's key-complete bind HARD-DELETED extra's
+                // row (a cross-root steal). Post-flip [bind] is root-scoped and cannot touch another root's binding, so
+                // extra's sole record survives untouched - and main simply holds its own copy of the id.
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 writePage(mainDir, "pasted.md", "---\nid: ${stolen.value}\ntitle: Pasted\n---\n\n# Pasted\n")
 
                 val snapshot = world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
 
-                withClue("the unobservable incumbent KEEPS its binding - taking it is a negative claim about a page nobody looked at") {
-                    world.idMap.pathOf(stolen) shouldBe rollbackPath
+                withClue("the unobservable incumbent KEEPS its binding - a bind in another root never removes it") {
+                    world.idMap.bindingInRoot(extra, stolen)?.path shouldBe rollbackPath
                 }
-                withClue("...and the claimant mints a FRESH id rather than taking one that is not its to take") {
-                    snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("pasted.md"))).id shouldNotBe stolen
+                withClue("...and main's copy simply holds the id in its OWN root - a legal per-root duplicate, no steal") {
+                    snapshot.pageAt(RootedPageId(RootName.MAIN, stolen)).shouldNotBeNull().path.value shouldBe "pasted.md"
+                    world.idMap.rootsHoldingId(stolen) shouldContainExactlyInAnyOrder listOf(RootName.MAIN, extra)
                 }
-                withClue("a permalink is never reassigned SILENTLY: the contest is recorded either way") {
-                    world.idMap.issues().shouldNotBe(emptyList<Any>())
+                withClue("no cross-root contest is recorded, because per-root identity has none to record") {
+                    world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
                 }
             }
         }
     }
 
-    // The OTHER side of the gate, and the line it deliberately does NOT cross. A MATERIALIZED incumbent's id lives
-    // in its FILE, so a file elsewhere carrying that id may well BE this page, moved - and a move and a copy are
-    // observationally identical (design §10, which rules the distinction a RANK problem and puts it out of scope).
-    // So C0 does not guess: the id travels, exactly as it always has, and the three frozen §A4/§B3 move tests stay
-    // green untouched (IndexBuilderCheckpointTest:59, IndexBuilderMultiRootTest:420/:440).
-    //
-    // This row drives what makes that RESIDUE SURVIVABLE rather than silent, which is a claim worth pinning: the
-    // id travelled in the FILE, so when the down root comes back BOTH pages are present, BOTH are witnessed, and
-    // the steal turns into an ordinary CONTEST that rank adjudicates and an issue records. Nothing is lost that a
-    // pass which can see both roots cannot settle.
-    test("the residue is BOUNDED, not silent: a materialized copy's steal becomes a rank CONTEST when the root returns") {
+    // The OTHER side of the gate, RE-DERIVED for per-root identity (C5). A MATERIALIZED incumbent's id lives in its
+    // FILE, so a file elsewhere carrying that id may well BE this page, moved. Pre-flip a copy in a HIGHER-ranked root
+    // could take the id from a down root - the "bounded residue" this row used to pin. Post-flip [bind] is ROOT-SCOPED:
+    // it never removes another root's binding, so a copy cannot steal at all. The id simply becomes a legal per-root
+    // duplicate - main holds its copy, extra keeps its own binding - and when the root returns BOTH pages are present,
+    // BOTH witnessed, and there is no contest to adjudicate because nothing was ever stolen.
+    test("a materialized copy in another root does NOT steal the id - the bind is root-scoped, so both roots keep it") {
         withAbsenceTrees { mainDir, extraDir ->
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val page = "---\nid: ${id.value}\ntitle: Rollback\n---\n\n# Rollback\n"
@@ -243,24 +242,18 @@ class AbsenceAuthorityTest : FunSpec({
                 val home = RootedPath(extra, TreePath.require("notes/rollback.md"))
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild().byPath.getValue(home).id shouldBe id
 
-                // extra goes dark; a copy carrying the id lands in main, which outranks it. The id transfers - the
-                // accepted residue, and the same mechanism an ordinary cross-root move rides on.
+                // extra's file goes; a copy carrying the id lands in main. Pre-flip the winner's key-complete bind
+                // hard-deleted extra's row - a cross-root steal. Post-flip the bind is root-scoped and never touches
+                // another root's binding: main gets the id in its OWN root, extra's binding stands untouched.
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 writePage(mainDir, "pasted.md", page)
-                world.builder(mainDir, LocalContentStore(extraDir)).rebuild().byId.getValue(id).root shouldBe RootName.MAIN
+                val snapshot = world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
 
-                // extra comes back, still carrying the id in its own frontmatter. Now BOTH are witnessed.
-                writePage(extraDir, "notes/rollback.md", page)
-                val settled = world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
-
-                withClue("rank settles it - main outranks extra, so main keeps the contested id") {
-                    settled.byId.getValue(id).root shouldBe RootName.MAIN
-                }
-                withClue("the loser reassigns and SAYS SO: a permalink is never moved without a record") {
-                    settled.byPath.getValue(home).id shouldNotBe id
-                    world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>()
-                        .any { it.id == id } shouldBe true
-                }
+                snapshot.pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull().path.value shouldBe "pasted.md" // main's OWN id
+                world.idMap.bindingInRoot(extra, id)?.path shouldBe home // extra's binding was never stolen
+                // Both roots hold the id in the map - a legal per-root duplicate, no steal, no cross-root issue.
+                world.idMap.rootsHoldingId(id) shouldContainExactlyInAnyOrder listOf(RootName.MAIN, extra)
+                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -274,16 +267,16 @@ class AbsenceAuthorityTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "---\nid: ${old.value}\ntitle: Deploy\n---\n\n# Deploy\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
                 val builder = world.builder(mainDir, LocalContentStore(extraDir))
-                builder.rebuild().byId.getValue(old).path.value shouldBe "guides/deploy.md"
+                builder.rebuild().pageAt(RootedPageId(RootName.MAIN, old)).shouldNotBeNull().path.value shouldBe "guides/deploy.md"
 
                 // The user edits the frontmatter. This is a DISPLACEMENT, not an absence: we are looking at the
                 // file, and it no longer carries the old id. No proof is needed - but the old id must not simply
                 // VANISH, or every citation to it degrades to "that page never existed".
                 writePage(mainDir, "guides/deploy.md", "---\nid: ${new.value}\ntitle: Deploy\n---\n\n# Deploy\n")
-                builder.rebuild().byId.getValue(new).path.value shouldBe "guides/deploy.md"
+                builder.rebuild().pageAt(RootedPageId(RootName.MAIN, new)).shouldNotBeNull().path.value shouldBe "guides/deploy.md"
 
-                world.idMap.pathOf(old).shouldBeNull()
-                val tombstone = world.idMap.retired(old)
+                world.idMap.livePathOf(old).shouldBeNull()
+                val tombstone = world.idMap.retiredAt(RootName.MAIN, old)
                 tombstone.shouldNotBeNull()
                 tombstone.path shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
             }
@@ -308,6 +301,7 @@ class AbsenceAuthorityTest : FunSpec({
                             root = RootName.MAIN,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.MAIN),
+                            bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), old)),
                         ),
                     ),
@@ -321,7 +315,7 @@ class AbsenceAuthorityTest : FunSpec({
 
                 snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))).id shouldNotBe old
                 withClue("/p/{oldId} must still answer 410 GONE, naming where the page used to live") {
-                    world.idMap.retired(old)?.path shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
+                    world.idMap.retiredAt(RootName.MAIN, old)?.path shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
                 }
             }
         }
@@ -340,6 +334,7 @@ class AbsenceAuthorityTest : FunSpec({
                             root = RootName.MAIN,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.MAIN),
+                            bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), retiredId)),
                         ),
                     ),
@@ -354,8 +349,8 @@ class AbsenceAuthorityTest : FunSpec({
                 val snapshot = builder.rebuild()
 
                 snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("restored/copy.md"))).id shouldNotBe retiredId
-                world.idMap.pathOf(retiredId).shouldBeNull()
-                world.idMap.retired(retiredId).shouldNotBeNull()
+                world.idMap.livePathOf(retiredId).shouldBeNull()
+                world.idMap.retiredAt(RootName.MAIN, retiredId).shouldNotBeNull()
             }
         }
     }
@@ -374,20 +369,21 @@ class AbsenceAuthorityTest : FunSpec({
                             root = RootName.MAIN,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.MAIN),
+                            bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                             covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), id)),
                         ),
                     ),
                     witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
-                world.idMap.retired(id).shouldNotBeNull()
+                world.idMap.retiredAt(RootName.MAIN, id).shouldNotBeNull()
 
                 // It came home. Same root, same path, same id in the file. That is the ONE case a return can be
                 // told from a paste, so it is the only case we un-retire on.
                 writePage(mainDir, "guides/deploy.md", page)
-                builder.rebuild().byId.getValue(id).path.value shouldBe "guides/deploy.md"
+                builder.rebuild().pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull().path.value shouldBe "guides/deploy.md"
 
-                world.idMap.retired(id).shouldBeNull()
-                world.idMap.pathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
+                world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
+                world.idMap.livePathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
             }
         }
     }
@@ -406,7 +402,7 @@ class AbsenceAuthorityTest : FunSpec({
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
 
                 withClue("this row is the ONLY record the path ever had this id: hard-delete it and the permalink dies with it") {
-                    world.idMap.pathOf(id) shouldBe loose
+                    world.idMap.livePathOf(id) shouldBe loose
                 }
             }
         }
@@ -429,21 +425,22 @@ class AbsenceAuthorityTest : FunSpec({
                     root = RootName.MAIN,
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.MAIN),
+                    bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                     covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), id)),
                 )
                 world.retirements.revoke(RootName.MAIN)
 
                 world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
-                world.idMap.pathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
-                world.idMap.retired(id).shouldBeNull()
+                world.idMap.livePathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
+                world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
             }
         }
     }
 
     test("a proof minted for root A cannot retire anything in root B - no cross-root replay") {
         withAbsenceTrees { mainDir, extraDir ->
-            // The SAME relative path and the SAME id in both roots is impossible (UNIQUE(id)), so the replay this
-            // guards against is a proof whose (path, id) pair happens to name a binding that lives elsewhere.
+            // The SAME relative path and the SAME id CAN now live in both roots (UNIQUE(id, root)), so the replay this
+            // guards against is a proof for ONE root whose (path, id) pair names a binding that lives in ANOTHER.
             // BindingRef carries no root; `proof.root` is the only thing standing between it and root B's row.
             val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             writePage(mainDir, "placeholder.md", "# P\n")
@@ -455,11 +452,45 @@ class AbsenceAuthorityTest : FunSpec({
                     root = RootName.MAIN, // minted for MAIN...
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.MAIN),
+                    bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                     covers = setOf(BindingRef(TreePath.require("notes/rollback.md"), id)), // ...but naming extra's binding
                 )
 
                 world.retirements.applyProofs(listOf(forRootA), witnessed = emptySet()).shouldBeEmpty()
-                world.idMap.pathOf(id) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
+                world.idMap.livePathOf(id) shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
+            }
+        }
+    }
+
+    // R11 (the §5.2 WEDGE-FIX): a live X in root B must NOT refute root A's legitimate retirement of X. Pre-flip the
+    // witness was GLOBAL by bare id, so B holding X live wedged `(A, X)` into perpetual 503 limbo with the git range
+    // consumed. Fixed at the SIGNATURE: `AbsenceProof.survives(Set<RootedPageId>)`, so only `(A, X)` in the witness
+    // refutes `(A, X)`'s retirement, and `(B, X)` never does.
+    test("a live X in root B does NOT refute root A's retirement of X - the per-root witness (R11 wedge-fix)") {
+        withAbsenceTrees { mainDir, extraDir ->
+            val x = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+            val page = "---\nid: ${x.value}\ntitle: X\n---\n\n# X\n"
+            writePage(mainDir, "guides/a.md", page) // root A (main) holds X live
+            writePage(extraDir, "notes/b.md", page) // root B (extra) holds the SAME X live - legal per-root
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
+
+                // A legitimate INFERRED absence for A's copy, applied with the witness carrying B's live observation of
+                // X - `(extra, X)`, NOT `(main, X)`. Under the global witness B's live X would refute this and nothing
+                // would reap; under the per-root witness `(extra, X)` does not match `(main, X)`, so A's retire lands.
+                val proof = AbsenceProof(
+                    root = RootName.MAIN,
+                    source = ProofSource.EPOCH,
+                    observationId = world.retirements.observation(RootName.MAIN),
+                    bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
+                    covers = setOf(BindingRef(TreePath.require("guides/a.md"), x)),
+                )
+
+                world.retirements.applyProofs(listOf(proof), witnessed = setOf(RootedPageId(extra, x))) shouldBe
+                    setOf(RootedPageId(RootName.MAIN, x))
+
+                world.idMap.retiredAt(RootName.MAIN, x).shouldNotBeNull() // A tombstoned...
+                world.idMap.bindingInRoot(extra, x)?.path shouldBe RootedPath(extra, TreePath.require("notes/b.md")) // ...B still LIVE
             }
         }
     }
@@ -475,14 +506,18 @@ class AbsenceAuthorityTest : FunSpec({
                     root = RootName.MAIN,
                     source = source,
                     observationId = world.retirements.observation(RootName.MAIN),
+                    bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                     covers = setOf(binding),
                 )
 
                 // The witness says we READ this id. For an EPOCH proof that is a CONTRADICTION: the absence was
                 // INFERRED from a gap in what we observed, and the page turns out to be one of the things we observed.
                 withClue("an INFERRED absence is a conclusion from NOT SEEING, so seeing refutes it") {
-                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.EPOCH)), witnessed = setOf(id)).shouldBeEmpty()
-                    world.idMap.retired(id).shouldBeNull()
+                    world.retirements.applyProofs(
+                        listOf(proofFrom(ProofSource.EPOCH)),
+                        witnessed = setOf(RootedPageId(RootName.MAIN, id)),
+                    ).shouldBeEmpty()
+                    world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
                 }
 
                 // ...and for an OPERATOR proof it is NOT a contradiction, because that proof never claimed to have
@@ -491,9 +526,12 @@ class AbsenceAuthorityTest : FunSpec({
                 // `reconcile` would be refused by the very copy it was run to resolve. The same holds for API_DELETE:
                 // "we CAUSED this" is not an observation, so no observation can refute it.
                 withClue("a CAUSED or ACCEPTED absence is not an inference, so no amount of looking can refute it") {
-                    world.retirements.applyProofs(listOf(proofFrom(ProofSource.OPERATOR)), witnessed = setOf(id)) shouldBe
+                    world.retirements.applyProofs(
+                        listOf(proofFrom(ProofSource.OPERATOR)),
+                        witnessed = setOf(RootedPageId(RootName.MAIN, id)),
+                    ) shouldBe
                         setOf(RootedPageId(RootName.MAIN, id))
-                    world.idMap.retired(id).shouldNotBeNull()
+                    world.idMap.retiredAt(RootName.MAIN, id).shouldNotBeNull()
                 }
             }
         }
@@ -510,18 +548,19 @@ class AbsenceAuthorityTest : FunSpec({
                     root = RootName.MAIN,
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.MAIN),
+                    bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                     covers = setOf(BindingRef(TreePath.require("guides/deploy.md"), other)), // a stale (path, id) pair
                 )
 
                 world.retirements.applyProofs(listOf(proof), witnessed = emptySet()).shouldBeEmpty()
-                world.idMap.pathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
+                world.idMap.livePathOf(id) shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
             }
         }
     }
 
     // ---- The bind gate, at the repository boundary ------------------------------------------------------
 
-    test("bind REFUSES a retired id for anyone but the page that earned it - enforced in the transaction, not by convention") {
+    test("bind REFUSES a retired id for another page of the SAME root - the tombstone reservation is per-root (C5)") {
         withAbsenceTrees { mainDir, extraDir ->
             AbsenceWorld(mainDir, extraDir).use { world ->
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
@@ -533,20 +572,28 @@ class AbsenceAuthorityTest : FunSpec({
                             root = RootName.MAIN,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.MAIN),
+                            bindingEpoch = world.retirements.bindingEpoch(RootName.MAIN),
                             covers = setOf(BindingRef(home.path, id)),
                         ),
                     ),
                     witnessed = emptySet(), // setup: no scan ran, and OPERATOR is not refutable regardless
                 )
 
-                val thief = RootedPath(extra, TreePath.require("copy.md"))
+                // A thief in the SAME root (main) is refused: main's tombstone reserves the id for the page that earned it.
+                val thief = RootedPath(RootName.MAIN, TreePath.require("copy.md"))
                 world.idMap.bind(thief, id, materialized = true) shouldBe BindOutcome.Refused(id, heldBy = home, retired = true)
                 withClue("a REFUSED bind writes NOTHING - the claimant is left to mint fresh, and nothing is destroyed") {
                     world.idMap.find(thief).shouldBeNull()
-                    world.idMap.retired(id).shouldNotBeNull()
+                    world.idMap.retiredAt(RootName.MAIN, id).shouldNotBeNull()
                 }
-                world.idMap.bind(home, id, materialized = true) shouldBe BindOutcome.Bound // ...but the page may come home
-                world.idMap.retired(id).shouldBeNull()
+                // A page in ANOTHER root is NOT refused: the tombstone is root-scoped and reserves the id for MAIN only
+                // (post-flip UNIQUE(id, root) legalizes the same id in a different root). extra's own claim stands.
+                val foreign = RootedPath(extra, TreePath.require("copy.md"))
+                world.idMap.bind(foreign, id, materialized = true) shouldBe BindOutcome.Bound
+                world.idMap.bindingInRoot(extra, id)?.path shouldBe foreign
+
+                world.idMap.bind(home, id, materialized = true) shouldBe BindOutcome.Bound // ...and MAIN's page may come home
+                world.idMap.retiredAt(RootName.MAIN, id).shouldBeNull()
             }
         }
     }
@@ -557,6 +604,7 @@ class AbsenceAuthorityTest : FunSpec({
         withAbsenceTrees { mainDir, extraDir ->
             AbsenceWorld(mainDir, extraDir).use { world ->
                 val token = world.retirements.observation(RootName.MAIN)
+                val epoch = world.retirements.bindingEpoch(RootName.MAIN)
                 world.retirements.gitHead(RootName.MAIN).shouldBeNull()
 
                 // A baseline advance carries NO proofs by construction. The old `if (proofs.isEmpty()) return` skipped
@@ -565,7 +613,7 @@ class AbsenceAuthorityTest : FunSpec({
                 world.retirements.applyProofs(
                     proofs = emptyList(),
                     witnessed = emptySet(),
-                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, "deadbeef")),
+                    advances = listOf(GitCheckpointAdvance(RootName.MAIN, token, epoch, "deadbeef")),
                 ).shouldBeEmpty()
 
                 world.retirements.gitHead(RootName.MAIN) shouldBe "deadbeef"
@@ -577,17 +625,29 @@ class AbsenceAuthorityTest : FunSpec({
         withAbsenceTrees { mainDir, extraDir ->
             AbsenceWorld(mainDir, extraDir).use { world ->
                 val minted = world.retirements.observation(RootName.MAIN)
-                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, minted, "aaaa")))
+                world.retirements.applyProofs(
+                    emptyList(),
+                    emptySet(),
+                    listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "aaaa")),
+                )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
 
                 // Revoke, then present an advance minted under the STALE token: discarded, the checkpoint holds.
                 world.retirements.revoke(RootName.MAIN)
-                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, minted, "bbbb")))
+                world.retirements.applyProofs(
+                    emptyList(),
+                    emptySet(),
+                    listOf(GitCheckpointAdvance(RootName.MAIN, minted, world.retirements.bindingEpoch(RootName.MAIN), "bbbb")),
+                )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "aaaa"
 
                 // ...and a FRESH-token advance lands.
                 val fresh = world.retirements.observation(RootName.MAIN)
-                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, fresh, "cccc")))
+                world.retirements.applyProofs(
+                    emptyList(),
+                    emptySet(),
+                    listOf(GitCheckpointAdvance(RootName.MAIN, fresh, world.retirements.bindingEpoch(RootName.MAIN), "cccc")),
+                )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "cccc"
             }
         }
@@ -598,9 +658,17 @@ class AbsenceAuthorityTest : FunSpec({
             AbsenceWorld(mainDir, extraDir).use { world ->
                 world.retirements.gitHead(RootName.MAIN).shouldBeNull()
                 val token = world.retirements.observation(RootName.MAIN)
-                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, token, "1111")))
+                world.retirements.applyProofs(
+                    emptyList(),
+                    emptySet(),
+                    listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "1111")),
+                )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "1111"
-                world.retirements.applyProofs(emptyList(), emptySet(), listOf(GitCheckpointAdvance(RootName.MAIN, token, "2222")))
+                world.retirements.applyProofs(
+                    emptyList(),
+                    emptySet(),
+                    listOf(GitCheckpointAdvance(RootName.MAIN, token, world.retirements.bindingEpoch(RootName.MAIN), "2222")),
+                )
                 world.retirements.gitHead(RootName.MAIN) shouldBe "2222"
             }
         }

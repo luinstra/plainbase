@@ -22,18 +22,20 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * WITHOUT A GAP since we last read the page.
  *
  * ```
- * CLOSED --[a COMPLETE scan under WHOLE coverage on an identity-stable tree]--> OPEN
- *         mint a NEW ObservationId; the base witness is that scan's pages; mint NO PROOFS - it has nothing to
- *         compare against, and RETROACTIVE authority IS the decoy hole.
+ * CLOSED --[establish(), at the TOP of a pass, under WHOLE coverage]--> OPEN
+ *         mint a NEW ObservationId over an EMPTY witness; mint NO PROOFS - it has nothing to compare against, and
+ *         RETROACTIVE authority IS the decoy hole. The pass's own scan then folds its pages into the witness, so an
+ *         opening pass still proves exactly nothing. The open happens HERE, before any evidence is read, so that its
+ *         revoke can never be mistaken for a mid-pass break by a stamp taken later (C5, revoke-before-stamp).
  *
- * OPEN --[another COMPLETE scan, epoch UNBROKEN]--> OPEN            (a CONFIRMATION scan)
+ * OPEN --[a COMPLETE scan, epoch UNBROKEN]--> OPEN                  (a CONFIRMATION scan)
  *         KEEP the id. Mint AbsenceProof(EPOCH) for every binding the epoch WITNESSED that this scan did NOT
  *         see; then fold the newly-seen pages into the witness set. *** This is what converges an online delete. ***
  *
  * OPEN --[any BREAK]--> CLOSED
- *         revoke the ObservationId, which invalidates every outstanding proof by the freshness rule. The next
- *         complete scan opens a FRESH epoch whose base is that scan - with NO authority over anything it did
- *         not just witness.
+ *         revoke the ObservationId, which invalidates every outstanding proof by the freshness rule. The pass the
+ *         break landed in mints NOTHING further for this root; the NEXT pass's establish() opens a FRESH epoch, whose
+ *         witness is gathered AFTER the break - with NO authority over anything it did not then witness.
  * ```
  *
  * **The asymmetry is load-bearing: an OPENING scan proves nothing; only a CONFIRMATION scan can.** An epoch must
@@ -96,6 +98,32 @@ class ObservationEpoch(
     }
 
     /**
+     * **Bring [root]'s epoch to the state this pass will reason from, BEFORE the pass reads any evidence** (C5,
+     * revoke-before-stamp extended to the observation token).
+     *
+     * An epoch OPEN mints nothing, so the only durable thing it does is REVOKE - and a revoke landing mid-pass is
+     * indistinguishable, at the freshness compare, from a watcher BREAK landing mid-pass. That is what let a break
+     * arriving in the (evidence -> mint) window be swallowed: the inferred sources had to read the token late, AFTER
+     * the epoch open they must not be killed by, so they stamped the POST-break value and matched the reap they exist
+     * to forbid. Doing the open HERE, above the scan and the head bracket, leaves the token STILL for the rest of the
+     * pass - so any later movement is a break by construction, and every stamp taken after this fails closed against it.
+     *
+     * Opening over an EMPTY witness set is not a weakening: [scanned] folds the scan's pages in on this same pass, and
+     * an epoch may only ever speak about pages it has witnessed - so an opening pass proves exactly nothing either way.
+     */
+    fun establish(root: RootName) {
+        val state = holder.load()[root] ?: Epoch.Unobserved
+        if (state == Epoch.Unobserved) return // nobody is watching: there is no epoch to be earned here
+        if (!convergence.isWhole(root)) {
+            // Coverage that STAYS partial reports nothing further, so this is the REOPEN guard - and the belt for a
+            // live epoch that somehow outlived the transition the watcher reported.
+            if (liveEpoch(root) != null) broke(root, BreakCause.COVERAGE_LOST)
+            return
+        }
+        if (liveEpoch(root) == null) open(root, emptySet())
+    }
+
+    /**
      * A BREAK: the observation now has a HOLE in it, so everything it could say about absence is worthless.
      *
      * The revoke is what actually does the work - it invalidates every outstanding proof by the freshness rule,
@@ -134,7 +162,13 @@ class ObservationEpoch(
      *
      * **Witnessed, absent, and UNREAD are three answers, not two.** The third one goes to limbo, and it self-heals.
      */
-    fun scanned(root: RootName, witnessed: Set<TreePath>, unread: Set<TreePath>, durable: Set<BindingRef>): AbsenceProof? {
+    fun scanned(
+        root: RootName,
+        witnessed: Set<TreePath>,
+        unread: Set<TreePath>,
+        durable: Set<BindingRef>,
+        bindingEpoch: BindingEpoch,
+    ): AbsenceProof? {
         val state = holder.load()[root] ?: Epoch.Unobserved
         if (state == Epoch.Unobserved) return null // nobody is watching: a scan-diff is not an observation
         val epoch = liveEpoch(root)
@@ -146,7 +180,10 @@ class ObservationEpoch(
             if (epoch != null) broke(root, BreakCause.COVERAGE_LOST)
             return null
         }
-        if (epoch == null) return open(root, witnessed)
+        // A break that landed after [establish] left this epoch behind is FINAL for this pass, and the reopen belongs
+        // to the NEXT pass - whose [establish] opens over a witness set gathered AFTER the break. Reopening HERE would
+        // open on the scan this pass already took, and so claim to have watched the very gap it just fell into.
+        if (epoch == null) return null
         val gone = durable.filterTo(mutableSetOf()) { it.path in epoch.witnessed && it.path !in witnessed && it.path !in unread }
         holder.store(holder.load() + (root to epoch.copy(witnessed = epoch.witnessed + witnessed)))
         if (gone.isEmpty()) return null
@@ -154,21 +191,38 @@ class ObservationEpoch(
             "the observation epoch for root '$root' witnessed ${gone.size} page(s) that this scan does not see: it has " +
                 "watched this tree without a gap since it read them, so they are DELETED - ${gone.joinToString { it.path.value }}"
         }
-        return AbsenceProof(root = root, source = ProofSource.EPOCH, observationId = epoch.observationId, covers = gone)
+        // [bindingEpoch] is stamped in by the CALLER (revoke-before-stamp, C5), captured BEFORE it read the negative
+        // evidence this proof rests on - the `durable` snapshot and the scan's `witnessed`/`unread`. A restore's
+        // re-bind of a covered key landing in or after that window advances the root's binding_epoch PAST this value,
+        // so the proof loses `applyProofs`' two-token compare and cannot reap the binding (and its `dirty_page`
+        // recovery row) the restore just re-created. Capturing it HERE instead - after `gone` is computed from stale
+        // evidence - would fold a bind that landed in the gap INTO the stamp, and the compare would then MATCH the
+        // reap it must forbid. It rides alongside epoch.observationId, the epoch's continuity token, not a fresh
+        // read - the two stamps are orthogonal by design.
+        return AbsenceProof(
+            root = root,
+            source = ProofSource.EPOCH,
+            observationId = epoch.observationId,
+            bindingEpoch = bindingEpoch,
+            covers = gone,
+        )
     }
 
     /**
      * Opens a fresh epoch over [witnessed], and mints NOTHING. The new [ObservationId] is what makes the break that
      * closed the last one final: a proof minted under the old token cannot be cashed against the new one.
+     *
+     * Called only from [establish], i.e. before its pass reads any evidence, so the revoke here can never be mistaken
+     * for a mid-pass break by a stamp taken later.
      */
-    private fun open(root: RootName, witnessed: Set<TreePath>): AbsenceProof? {
+    private fun open(root: RootName, witnessed: Set<TreePath>) {
         val observationId = retirements.revoke(root)
         holder.store(holder.load() + (root to Epoch.Open(observationId, witnessed)))
         logger.info {
             "opened an observation epoch for root '$root' (observation ${observationId.value}) over the ${witnessed.size} " +
-                "page(s) it just read. It proves NOTHING yet: an epoch must witness a page before it may say the page is gone"
+                "page(s) it has witnessed so far. It proves NOTHING yet: an epoch must witness a page before it may say " +
+                "the page is gone"
         }
-        return null
     }
 
     /**

@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -41,15 +42,27 @@ class PageRootResolver(
 ) {
 
     /**
-     * The Option B resolution of [id] to its durable owning root: [IdResolution.One] when exactly one REGISTERED
-     * root holds a live `id_map` binding, [IdResolution.Ambiguous] when more than one does (FAKE-only under
-     * `UNIQUE(id)`), [IdResolution.None] for an unknown id or a binding under a detached root. The claimant COUNT
-     * selects BOTH ambiguity AND the single winner (Rule A end-state); the winner is the top of the D7 rank order.
+     * The Option B, FAIL-CLOSED resolution of [id] to its durable owning root, over the ONE [claimants] snapshot.
+     * [IdResolution.One] ONLY when exactly one REGISTERED root holds it live AND no registered root holds a tombstone
+     * for it; [IdResolution.Ambiguous] when 2+ registered roots hold it live, OR a live root holds it ALONGSIDE a
+     * registered tombstone (the fail-closed MIXED case); [IdResolution.None] when NO registered root holds it live -
+     * an unknown id, a binding under a detached root, OR a PURELY-retired id (0 live, >=1 tombstone). On [None], only
+     * the permalink surface reads `claims.retired` to split 404 / 410 / 300; a purely-retired id is NEVER [Ambiguous].
+     * The property `resolve(One).root in rootsHoldingId(id)` still holds unconditionally (Rule A).
      */
-    fun resolve(id: PageId): IdResolution = classify(registeredRanked(idMap.rootsHoldingId(id)))
+    fun resolve(id: PageId): IdResolution = claimants(id).resolution()
 
-    /** The tombstone twin of [resolve] over the retired-claimant list - the permalink 410 arm consults it after a live None. */
-    fun resolveRetired(id: PageId): IdResolution = classify(registeredRanked(idMap.retiredRootsHoldingId(id)))
+    /** [IdMapRepository.claimantState] with BOTH lists registered-filtered and D7-ranked - the one snapshot every bare surface reads. */
+    fun claimants(id: PageId): ResolvedClaimants {
+        val state = idMap.claimantState(id)
+        val rank = compareBy<RootName>({ registry.rank(it) }, { it.value }) // the registeredRanked comparator
+        return ResolvedClaimants(
+            live = state.live.filter { registry.byName(it) != null }.distinct().sortedWith(rank),
+            // registered-filter + D7-rank the TOMBSTONES too, so the mixed union and the pure-tombstone 300 emit in rank order
+            retired = state.retired.filter { registry.byName(it.path.root) != null }.sortedWith(compareBy(rank) { it.path.root }),
+            rank = rank,
+        )
+    }
 
     /** True iff [root] holds a LIVE durable binding for [id] - the pinned WRITE / pinned-read-miss fresh-validate. */
     fun bindsLive(root: RootName, id: PageId): Boolean = root in idMap.rootsHoldingId(id)
@@ -75,16 +88,6 @@ class PageRootResolver(
     /** The last-known rooted path of ([root], [id])'s tombstone, or null when it was never retired there. */
     fun retirementAt(root: RootName, id: PageId): RootedPath? = idMap.retiredAt(root, id)?.path
 
-    /** REGISTERED-filtered, de-duplicated, D7-then-name-ranked - the winner order every candidate list emits. */
-    private fun registeredRanked(roots: List<RootName>): List<RootName> =
-        roots.filter { registry.byName(it) != null }.distinct().sortedWith(compareBy({ registry.rank(it) }, { it.value }))
-
-    private fun classify(ranked: List<RootName>): IdResolution = when (ranked.size) {
-        0 -> IdResolution.None
-        1 -> IdResolution.One(ranked.single())
-        else -> IdResolution.Ambiguous(ranked)
-    }
-
     /**
      * [root]'s serving status. DETACHED is checked FIRST: [RootAvailability] only ever tracks REGISTERED
      * roots, so it answers a vacuous "available" for a name the registry does not know (ADR-0011 D15) -
@@ -103,3 +106,37 @@ class PageRootResolver(
  * name revives it (ADR-0011 D2/D15).
  */
 enum class RootStatus { AVAILABLE, UNAVAILABLE, DETACHED }
+
+/**
+ * One resolved snapshot of every claim on an id, [live] and [retired] both already registered-filtered and D7-ranked
+ * by [PageRootResolver.claimants]. [rank] is that same comparator, threaded in so the class needs no registry of its
+ * own and the two lists cannot drift out of order. [resolution] folds the two lists into an [IdResolution] - the ONE
+ * fail-closed rule every bare surface shares (C5).
+ */
+class ResolvedClaimants(
+    val live: List<RootName>,
+    val retired: List<RetiredBinding>,
+    private val rank: Comparator<RootName>,
+) {
+    /** The tombstoned roots in the retired list's own D7-ranked order (de-duped). */
+    val retiredRoots: List<RootName> get() = retired.map { it.path.root }.distinct()
+
+    /** The last-known rooted path of [root]'s tombstone in this snapshot, or null when it holds none. */
+    fun retirementAt(root: RootName): RootedPath? = retired.firstOrNull { it.path.root == root }?.path
+
+    /** The rank-ordered de-duped union of two claimant lists - the `Ambiguous` candidate order. */
+    private fun rankedUnion(roots: List<RootName>): List<RootName> = roots.distinct().sortedWith(rank)
+
+    /**
+     * The fail-closed classification (§6.0), over these two ALREADY-registered-ranked lists. The live check is FIRST,
+     * so a PURELY-retired id (0 live, >=1 tombstone) returns [IdResolution.None] and the surfaces split 404/410/300
+     * off [retired] - it is NEVER [IdResolution.Ambiguous].
+     */
+    fun resolution(): IdResolution = when {
+        live.isEmpty() -> IdResolution.None // 0 live: unknown OR purely-retired
+        retired.isNotEmpty() ->
+            IdResolution.Ambiguous(rankedUnion(live + retiredRoots), hasRetiredCandidate = true) // fail-closed MIXED
+        live.size == 1 -> IdResolution.One(live.single()) // exactly 1 live, 0 tombstones
+        else -> IdResolution.Ambiguous(live, hasRetiredCandidate = false) // 2+ live only
+    }
+}

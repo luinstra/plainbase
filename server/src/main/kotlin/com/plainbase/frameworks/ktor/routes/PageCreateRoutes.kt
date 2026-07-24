@@ -337,16 +337,16 @@ internal data class CreatedIdentity(val id: PageId, val url: String)
 
 /**
  * The clean-create page's SERVER-AUTHORITATIVE identity, resolved by the LOCATION the bytes went to — [target] —
- * and never by the [minted] id. `PageIndex.byId` is GLOBAL across roots, so a rebuild racing this create (the
- * cross-root duplicate-id rank contest, D17) can award the minted id to a page in a HIGHER-RANKED root, and an
- * id lookup would then answer with that page: a 201 telling the client its new page lives at another root's url.
- * The (root, path) we just wrote is the one fact about this create that no rebuild can re-award, so it is what we
- * ask the snapshot about — and the id we return is the one the page actually carries there.
+ * and never by the [minted] id. Resolving by (root, path) is still the right rule under per-root identity (C5): a
+ * bare-id lookup answers per-root and the (root, path) we just wrote is the one fact about this create that no
+ * rebuild can move — so we ask the snapshot about that location and return the id the page actually carries there.
+ * (Pre-C5 this also guarded against the D17 cross-root rank contest re-awarding the id; that contest is now
+ * dissolved, but resolving by location remains the correct, race-free rule.)
  *
  * The published `IndexedPage.url` is the canonical path — the slugified, collision-de-duped `PercentCoding
  * .encodePath` form, which DIVERGES from the raw on-disk path on slug-override, unicode, and collision-de-dup. A
  * page that LOST the path-space race carries a null canonical `url` (it is reachable only via its permalink), so
- * the fallback is the `/p/{id}` permalink — the one URL that ALWAYS resolves for any published page (the server
+ * the fallback is the rooted `/p/{root}/{id}` permalink — the one URL that ALWAYS resolves for any published page (the server
  * 302s a winner's permalink → canonical, and serves a loser's permalink directly). We NEVER fabricate a
  * `/docs/<raw path>` url: the raw path diverges from the canonical and points at a route that may not exist (a
  * 404 for a loser). A location the snapshot does not hold at all falls back to the minted id's permalink, which
@@ -358,7 +358,7 @@ internal data class CreatedIdentity(val id: PageId, val url: String)
 internal fun createdIdentity(target: RootedPath, minted: PageId, snapshot: PageIndex): CreatedIdentity {
     val page = snapshot.byPath[target]
     val id = page?.id ?: minted
-    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(id))
+    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(target.root, id))
 }
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */

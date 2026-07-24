@@ -1,7 +1,7 @@
 package com.plainbase.domain.repository
 
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.ObservationId
@@ -10,16 +10,19 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 
 /**
- * The **proof-apply transaction**: the ONE place in the system where an ABSENCE retires a binding, and the
- * durable [ObservationId] that makes it safe to.
+ * The **proof-apply transaction**: the ONE place in the system where an ABSENCE retires a binding, and the two
+ * durable freshness stamps that make it safe to.
  *
- * **The app DB is the authoritative linearization boundary.** [applyProofs] re-reads each root's observation
- * token, compares it to the proof's, and - only if they still match - applies the `id_map` -> `retired_binding`
- * moves, the `page_checkpoint` deletes and the `dirty_page` clears, ALL IN ONE TRANSACTION. Revocation
- * ([revoke]) is itself a write to the same table in the same database, so a revoke that lands between publish
- * and apply serializes AGAINST the reap and the reap becomes a NO-OP. There is no window - which is also why
- * there is no test for a revocation landing "between the compare and the deletes": the compare and the deletes
- * are one transaction, so that interleaving cannot occur and a test for it would pass vacuously.
+ * **The app DB is the authoritative linearization boundary.** [applyProofs] re-reads each root's stamps - BOTH the
+ * [ObservationId] (epoch continuity: a restart, break or unmount mints a new one) and the [BindingEpoch] (binding
+ * freshness: every successful bind advances it) - compares them to the proof's, and, only if BOTH still match,
+ * applies the `id_map` -> `retired_binding` moves, the `page_checkpoint` deletes and the `dirty_page` clears, ALL IN
+ * ONE TRANSACTION. The two are orthogonal on purpose: either advance alone invalidates a proof, and a bind must be
+ * able to revoke one WITHOUT collapsing the epoch. Both revocations ([revoke], and the increment inside a bind) are
+ * writes to the same table in the same database, so one landing between publish and apply serializes AGAINST the reap
+ * and the reap becomes a NO-OP. There is no window - which is also why there is no test for a revocation landing
+ * "between the compare and the deletes": the compare and the deletes are one transaction, so that interleaving cannot
+ * occur and a test for it would pass vacuously.
  *
  * `search.db` cannot join that transaction and does not need to. Per ADR-0004 it is a SEPARATE database on raw
  * JDBC precisely because it is DERIVED state: the app-DB commit is the point of truth, `SearchIndexer.sync`
@@ -27,9 +30,9 @@ import com.plainbase.domain.root.RootedPageId
  * a lost page, and exactly the failure ADR-0004 already accepts. Do not invent an outbox for a derived store.
  *
  * **C0 shipped this idle** - nothing minted an [AbsenceProof], so the reaper was real, tested, and unusable. Since
- * then EPOCH (C2), OBJECT_LIST (C3) and GIT (C4 - which also rides checkpoint advances through here) mint against it;
- * OPERATOR (C5) and API_DELETE arrive later. The safety floor stands: a reaper that cannot be handed a licence cannot
- * reap, and a source that cannot answer *"what did we SEE?"* cannot call this at all.
+ * then EPOCH (C2), OBJECT_LIST (C3), GIT (C4 - which also rides checkpoint advances through here) and OPERATOR (C5's
+ * `plainbase admin force-retire`) mint against it; API_DELETE arrives later. The safety floor stands: a reaper that
+ * cannot be handed a licence cannot reap, and a source that cannot answer *"what did we SEE?"* cannot call this at all.
  */
 interface RetirementRepository {
 
@@ -40,8 +43,12 @@ interface RetirementRepository {
      * A proof is applied only when ALL of these hold, re-checked INSIDE the transaction:
      *  - it **SURVIVES [witnessed]** ([AbsenceProof.survives]) - an INFERRED absence is a conclusion drawn from a gap
      *    in what we observed, and SEEING the page refutes it. This is first because it is the one that ships bugs;
-     *  - its [AbsenceProof.observationId] still equals the root's CURRENT token (freshness - a restart, a
-     *    watcher break or a rebind has not revoked it since it was minted);
+     *  - its [AbsenceProof.observationId] still equals the root's CURRENT token (epoch CONTINUITY - a restart, an
+     *    unmount or a watcher break has not revoked it since it was minted);
+     *  - its [AbsenceProof.bindingEpoch] still equals the root's CURRENT binding epoch (binding FRESHNESS - no bind has
+     *    landed since the proof was stamped, so it cannot reap a binding a restore just re-created, nor that binding's
+     *    `dirty_page` recovery row). A bind advances THIS and deliberately leaves the observation token alone: a restore
+     *    must revoke the proof without collapsing the epoch;
      *  - `proof.root == the binding's root` (no cross-root proof replay: a [BindingRef] carries no root, so
      *    without this a proof minted for root A could retire a same-named, same-id binding in root B);
      *  - the live binding at that (root, path) still carries exactly the id the proof names (the page was not
@@ -54,11 +61,11 @@ interface RetirementRepository {
      * through the pass that remembered. Demanding the witness set at the DOOR OF THE ONLY DELETER means a source that
      * has not answered *"what did we actually SEE?"* cannot retire anything, because it cannot call this at all.
      *
-     * Pass every [com.plainbase.domain.page.PageId] this observation READ - from any root, since an id seen ANYWHERE
-     * refutes an absence claimed anywhere. A caller with no observation behind it (a boot replay of an `API_DELETE`
-     * intent, an operator's accepted digest) passes the empty set truthfully: those sources are not
-     * [ProofSource.inferred], so nothing can refute them anyway, and the empty set says the honest thing rather than
-     * a convenient one.
+     * Pass every [RootedPageId] this observation READ - the id qualified by the root it was read in, since per-root
+     * identity (C5) an id read in root B refutes only an absence claimed in root B. A caller with no observation
+     * behind it (a boot replay of an `API_DELETE` intent, an operator's accepted digest) passes the empty set
+     * truthfully: those sources are not [ProofSource.inferred], so nothing can refute them anyway, and the empty set
+     * says the honest thing rather than a convenient one.
      *
      * There is deliberately NO DEFAULT. An empty witness set means *"we saw nothing"*, which is the OPTIMISTIC value -
      * it refutes no proof and reaps the most - and a safety input that silently defaults to the optimistic value is
@@ -73,7 +80,7 @@ interface RetirementRepository {
      */
     fun applyProofs(
         proofs: List<AbsenceProof>,
-        witnessed: Set<PageId>,
+        witnessed: Set<RootedPageId>,
         advances: List<GitCheckpointAdvance> = emptyList(),
     ): Set<RootedPageId>
 
@@ -82,6 +89,13 @@ interface RetirementRepository {
 
     /** [root]'s CURRENT freshness token, minting a fresh one on first sight. */
     fun observation(root: RootName): ObservationId
+
+    /**
+     * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`) - the SECOND stamp a producer captures at
+     * MINT time and [applyProofs] re-checks. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
+     * break. Zero when the root has no observation row yet (nothing to be fresh against, and no proof outstanding).
+     */
+    fun bindingEpoch(root: RootName): BindingEpoch
 
     /** Every root's current token - the value a pass stamps into the proofs it mints. */
     fun observations(): Map<RootName, ObservationId>
@@ -102,11 +116,12 @@ interface RetirementRepository {
 object NoRetirements : RetirementRepository {
     override fun applyProofs(
         proofs: List<AbsenceProof>,
-        witnessed: Set<PageId>,
+        witnessed: Set<RootedPageId>,
         advances: List<GitCheckpointAdvance>,
     ): Set<RootedPageId> = emptySet()
     override fun gitHead(root: RootName): String? = null
     override fun observation(root: RootName): ObservationId = ObservationId(0)
+    override fun bindingEpoch(root: RootName): BindingEpoch = BindingEpoch(0)
     override fun observations(): Map<RootName, ObservationId> = emptyMap()
     override fun revoke(root: RootName): ObservationId = ObservationId(0)
 }

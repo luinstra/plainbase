@@ -2,6 +2,7 @@ package com.plainbase.frameworks.sqldelight
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
@@ -11,13 +12,15 @@ import java.sql.DriverManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The C2 id_map migration (`10.sqm`) end-to-end on the xerial JDBC/JNI divergence surface: the
- * frozen one-way v10 -> v11 rebuild (and the additive C0 tables above it) must run INSIDE the image, stamp every legacy row `'main'`,
- * and leave the composite PK + UNIQUE(id) live. The pre-C2 database is built PROGRAMMATICALLY
+ * The id_map migration chain end-to-end on the xerial JDBC/JNI divergence surface: the frozen one-way
+ * v10 -> v11 rebuild (and the additive C0 tables above it) must run INSIDE the image, stamp every legacy row `'main'`,
+ * and the full chain must leave the composite PK + UNIQUE(id, root) live (per-root identity, C5; `16.sqm` drops the
+ * bare UNIQUE(id)). The pre-C2 database is built PROGRAMMATICALLY
  * (raw DriverManager DDL of the exact v10 shapes) rather than from a committed baseline: the JVM
  * test's baseline locator walks the filesystem from `user.dir`, which is brittle under the native
  * test runner, and hermetic DDL keeps the image test self-contained.
@@ -28,7 +31,7 @@ import kotlin.test.assertTrue
 class AppDbMigrationNativeTest {
 
     @Test
-    fun `a v10 database migrates to the current schema in-image with every row stamped main and UNIQUE(id) enforced`() {
+    fun `a v10 database migrates to the current schema in-image with every row stamped main and UNIQUE(id, root) enforced`() {
         val dir = Files.createTempDirectory("pb-native-migration")
         try {
             val dbPath = dir.resolve("plainbase.db")
@@ -100,12 +103,12 @@ class AppDbMigrationNativeTest {
                 val pageId = PageId.require("01010101-0101-0101-0101-010101010101")
                 val migrated = RootedPath(RootName.MAIN, TreePath.require("guides/a.md"))
 
-                assertEquals(migrated, repo.pathOf(pageId)) // stamped 'main', decodes through the typed layer
+                assertEquals(migrated, repo.bindingInRoot(RootName.MAIN, pageId)?.path) // stamped 'main', decodes through the typed layer
                 assertEquals("reason", (repo.issues().single() as com.plainbase.domain.model.IdentityIssue.PatchRefused).message)
                 assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
                 assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
-                assertEquals(16L, driver.queryLongNative("PRAGMA user_version"))
+                assertEquals(18L, driver.queryLongNative("PRAGMA user_version"))
                 // C4 (15.sqm): the retired_binding_id index exists in-image after the full chain.
                 assertEquals(
                     1L,
@@ -166,16 +169,106 @@ class AppDbMigrationNativeTest {
                     materialized = false,
                 )
                 assertNull(repo.find(RootedPath(RootName.require("ghost"), TreePath.require("guides/a.md"))))
-                // ...and UNIQUE(id) raises through the driver when a bound id is re-claimed under a new key.
+                // UNIQUE is now (id, root) (per-root identity, C5): the SAME id inserts CLEANLY under a DIFFERENT
+                // root - the flip legalizes the cross-root duplicate...
+                db.idMapQueries.upsertBinding(
+                    root = RootName.require("extra"),
+                    path = TreePath.require("guides/copy.md"),
+                    id = pageId,
+                    materialized = false,
+                )
+                assertNotNull(repo.bindingInRoot(RootName.require("extra"), pageId)) // pageId now lives in BOTH roots
+                // ...but re-claiming it under its OWN root at a new path still raises - one id per root.
                 assertFails {
                     db.idMapQueries.upsertBinding(
-                        root = RootName.require("extra"),
-                        path = TreePath.require("guides/copy.md"),
+                        root = RootName.MAIN,
+                        path = TreePath.require("guides/copy2.md"),
                         id = pageId,
                         materialized = false,
                     )
                 }
                 assertTrue(repo.roots().contains(RootName.MAIN))
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
+    fun `a v16 database migrates to v17 in-image - the row survives and a cross-root duplicate id becomes INSERTABLE`() {
+        val dir = Files.createTempDirectory("pb-native-migration-v16")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            val idX = ByteArray(16) { 7 }
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                // The v16 id_map shape: composite PK (root, path) plus the OLD bare UNIQUE(id) that 16.sqm drops.
+                // root_observation in its v16 shape (no binding_epoch) so the 17.sqm ALTER below has a table to touch.
+                raw.createStatement().use { statement ->
+                    statement.execute(
+                        "CREATE TABLE id_map (root TEXT NOT NULL, path TEXT NOT NULL, id BLOB NOT NULL, " +
+                            "materialized INTEGER NOT NULL, PRIMARY KEY (root, path), UNIQUE (id))",
+                    )
+                    statement.execute("CREATE TABLE root_observation (root TEXT NOT NULL PRIMARY KEY, observation_id INTEGER NOT NULL)")
+                }
+                raw.prepareStatement("INSERT INTO id_map(root, path, id, materialized) VALUES ('main', 'guides/a.md', ?, 1)").use {
+                    it.setBytes(1, idX)
+                    it.executeUpdate()
+                }
+                raw.createStatement().use { it.execute("PRAGMA user_version = 16") }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val repo = SqlDelightIdMapRepository(db)
+                val pageId = PageId.require("07070707-0707-0707-0707-070707070707")
+
+                assertEquals(18L, driver.queryLongNative("PRAGMA user_version")) // 16.sqm + 17.sqm applied in-image
+                // The pre-flip row survives the id_map rebuild under its own (root, path).
+                assertEquals(
+                    RootedPath(RootName.MAIN, TreePath.require("guides/a.md")),
+                    repo.bindingInRoot(RootName.MAIN, pageId)?.path,
+                )
+                // The flip's headline: the SAME id under a DIFFERENT root now inserts, where UNIQUE(id) forbade it.
+                db.idMapQueries.upsertBinding(
+                    root = RootName.require("extra"),
+                    path = TreePath.require("guides/a.md"),
+                    id = pageId,
+                    materialized = false,
+                )
+                assertNotNull(repo.bindingInRoot(RootName.require("extra"), pageId))
+            }
+        } finally {
+            Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
+    }
+
+    @Test
+    fun `a v17 database migrates to v18 in-image - root_observation gains binding_epoch defaulting 0 and it increments`() {
+        val dir = Files.createTempDirectory("pb-native-migration-v17")
+        try {
+            val dbPath = dir.resolve("plainbase.db")
+            DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
+                // The v17 root_observation shape: observation_id only, no binding_epoch (17.sqm adds it).
+                raw.createStatement().use {
+                    it.execute("CREATE TABLE root_observation (root TEXT NOT NULL PRIMARY KEY, observation_id INTEGER NOT NULL)")
+                }
+                raw.createStatement().use { it.execute("INSERT INTO root_observation(root, observation_id) VALUES ('main', 5)") }
+                raw.createStatement().use { it.execute("PRAGMA user_version = 17") }
+            }
+
+            DatabaseFactory.createDriver(dbPath).use { driver ->
+                val db = DatabaseFactory.createDatabase(driver)
+                val repo = SqlDelightRetirementRepository(db)
+
+                assertEquals(18L, driver.queryLongNative("PRAGMA user_version")) // 17.sqm applied in-image
+                assertEquals(5L, driver.queryLongNative("SELECT observation_id FROM root_observation WHERE root = 'main'"))
+                // binding_epoch back-filled by the DEFAULT.
+                assertEquals(0L, driver.queryLongNative("SELECT binding_epoch FROM root_observation WHERE root = 'main'"))
+                assertEquals(BindingEpoch(0), repo.bindingEpoch(RootName.MAIN)) // the typed port reads it through the JNI seam
+
+                db.rootObservationQueries.incrementBindingEpoch(RootName.MAIN)
+                assertEquals(BindingEpoch(1), repo.bindingEpoch(RootName.MAIN))
+                assertEquals(5L, driver.queryLongNative("SELECT observation_id FROM root_observation WHERE root = 'main'")) // untouched
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }

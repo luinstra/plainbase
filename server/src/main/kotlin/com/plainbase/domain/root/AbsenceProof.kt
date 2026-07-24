@@ -19,17 +19,20 @@ import com.plainbase.domain.page.PageId
  *    evidence: the page is right in front of us. No proof needed; the displaced id is TOMBSTONED
  *    ([RetiredBinding]) in the same transaction as the new bind, so `/p/{oldId}` stays a 410 rather than
  *    becoming a 404.
- *  - **CONTEST** - two roots hold the same id and BOTH pages are witnessed. Registry rank decides
- *    (`RootRegistry.rank`); the loser reassigns to a fresh id and records a `CrossRootDuplicateId`. Nothing is
- *    tombstoned, because nothing DIED: the contested id is still live, at its new home, and the permalink
- *    follows the id.
+ *  - **CONTEST** - WITHIN one root, two pages resolve to the same id and BOTH are witnessed (the same id in two
+ *    DIFFERENT roots is legal post-flip and contests nothing, C5). The PREVIOUSLY-BOUND path keeps the id (on first
+ *    detection, the earlier of the two in the pass's rank-then-path resolve order); the loser reassigns to a fresh id
+ *    and records a `DuplicateId` (`PageIdentityService`). Registry rank compares ROOTS, so it decides nothing here -
+ *    within one root there is only path/scan order. Nothing is tombstoned, because nothing DIED: the contested id is
+ *    still live, at its keeper, and the permalink follows the id.
  *  - **ABSENCE** - we did NOT see it. *This is the only one that needs a proof, and it is the only one that
  *    has ever destroyed a corpus.*
  *
  * **C0 shipped with ZERO proof sources** - `proofs` was always empty and nothing could be reaped by inference at all,
  * which was the safety floor and a property of the TYPE rather than of a policy anyone could forget. `EPOCH` (C2),
  * `OBJECT_LIST` (C3) and `GIT` (C4) have since bought delete convergence back with EVIDENCE rather than with a guess;
- * `OPERATOR` (C5) and `API_DELETE` are still to come. A page no source can account for sits in limbo ([RootLimbo]) and
+ * `OPERATOR` (C5) ships as the `admin force-retire` un-wedge hatch, and `API_DELETE` is still to come. A page no
+ * source can account for sits in limbo ([RootLimbo]) and
  * reads 503 - never a 404, and never a reap.
  *
  * ---
@@ -71,15 +74,31 @@ enum class ProofSource(val inferred: Boolean) {
 }
 
 /**
- * A per-root freshness token, DURABLE (`root_observation`) because **a restart is itself a revocation** and an
- * in-memory token could not prove that after a crash. Any break, binding change or restart mints a new one,
- * which invalidates every outstanding proof by the freshness rule (see [AbsenceProof.observationId]).
+ * A per-root CONTINUITY token, DURABLE (`root_observation`) because **a restart is itself a revocation** and an
+ * in-memory token could not prove that after a crash. Any break, unmount or restart mints a new one, which invalidates
+ * every outstanding proof by the freshness rule (see [AbsenceProof.observationId]).
+ *
+ * A binding change does NOT move this one - that is [BindingEpoch]'s job, and the split is deliberate: a restore's
+ * re-bind must revoke the proof that would have reaped the page it just re-created WITHOUT collapsing the root's epoch.
  */
 @JvmInline
 value class ObservationId(val value: Long) {
     /** The next token. Monotonic per root; minting one IS the revocation of the last. */
     fun next(): ObservationId = ObservationId(value + 1)
 }
+
+/**
+ * The SECOND freshness stamp, ORTHOGONAL to [ObservationId] (`root_observation.binding_epoch`, C5 revoke-before-stamp).
+ *
+ * A per-root, monotonic, never-reset counter that ONLY a successful `bind` advances. Where [ObservationId] gates epoch
+ * CONTINUITY - a break/restart/unmount mints a new one and kills every live epoch - this gates BINDING freshness: a
+ * restore's re-bind of a covered key advances it, so an inferred proof minted under the old value loses `applyProofs`'
+ * two-token compare and cannot reap the binding (and its `dirty_page` USER-CONTENT recovery row) the restore just
+ * re-created - WITHOUT touching the observation token, so the epoch that shares that token is not collapsed. Because it
+ * is monotonic and durable (never reset by observation churn), there is no ABA hazard: a value never recurs.
+ */
+@JvmInline
+value class BindingEpoch(val value: Long)
 
 /**
  * The thing an absence proof is ABOUT: a (path, id) PAIR, never a bare path.
@@ -96,14 +115,17 @@ data class BindingRef(val path: TreePath, val id: PageId)
  * minted for root A could authorize retiring a binding in root B whose path and id happened to match -
  * cross-root proof replay, in a MULTI-ROOT feature. Authority is per-root, always.
  *
- * [observationId] is re-read from `root_observation` INSIDE the apply transaction and must still match. A
- * revocation that commits before the apply opens therefore serializes AGAINST it and the reap becomes a
- * no-op - there is no window, because the compare and the deletes are ONE transaction.
+ * [observationId] and [bindingEpoch] are BOTH re-read from `root_observation` INSIDE the apply transaction and must
+ * still match, exact-equality, fail-closed. A revocation (a new observation) OR a re-bind (an advanced binding epoch)
+ * that commits before the apply opens therefore serializes AGAINST it and the reap becomes a no-op - there is no
+ * window, because the compare and the deletes are ONE transaction. The two tokens are orthogonal: [observationId]
+ * dies on an epoch break, [bindingEpoch] advances on a bind, and either mismatch alone discards the proof.
  */
 data class AbsenceProof(
     val root: RootName,
     val source: ProofSource,
     val observationId: ObservationId,
+    val bindingEpoch: BindingEpoch,
     val covers: Set<BindingRef>,
 ) {
 
@@ -123,9 +145,9 @@ data class AbsenceProof(
      * [witnessed] is keyed by **IDENTITY**, and that is the whole point: every enforcement of this rule that came before
      * was keyed by PATH, and a rename is precisely the event that changes the path. An id is the only key that survives one.
      *
-     * It is also GLOBAL - an id read in ANY root refutes an absence claimed in ANY root. That coupling is deliberate and
-     * it fails CLOSED (the row waits in limbo, 503, self-healing), but it is worth knowing about: a stale copy of one
-     * root's corpus, mounted somewhere else, will hold up that root's legitimate deletes until it is gone.
+     * It is PER-ROOT (per-root identity, C5): the witness is `RootedPageId(this.root, it.id)`, so an id read in root B
+     * refutes only an absence claimed in root B. A stale copy of one root's corpus mounted under ANOTHER root no longer
+     * holds up this root's legitimate deletes - the copy witnesses its OWN root's id, not this one's.
      *
      * Two residues, both correct rather than merely tolerated. An **UNMATERIALIZED** page carries no id in its bytes, so
      * it cannot be witnessed this way at all and still splits on a move - its bytes cannot testify to which page they
@@ -133,17 +155,18 @@ data class AbsenceProof(
      * never 404). And a **COPY** carrying a live id refutes just as well as a move does - the two produce IDENTICAL
      * observations, so telling them apart belongs to the rank policy and never to the admission oracle.
      */
-    fun survives(witnessed: Set<PageId>): AbsenceProof? {
+    fun survives(witnessed: Set<RootedPageId>): AbsenceProof? {
         if (!source.inferred || witnessed.isEmpty()) return this
-        val gone = covers.filterNotTo(mutableSetOf()) { it.id in witnessed }
+        val gone = covers.filterNotTo(mutableSetOf()) { RootedPageId(root, it.id) in witnessed }
         return takeIf { gone.isNotEmpty() }?.copy(covers = gone)
     }
 }
 
 /**
- * A GIT-checkpoint advance (C4): move [root]'s recorded HEAD to [head] - but ONLY if [observationId] still
- * equals the root's current token INSIDE the proof-apply transaction, the SAME freshness gate a proof rides,
- * so a view revoked between the mint and the apply advances nothing.
+ * A GIT-checkpoint advance (C4): move [root]'s recorded HEAD to [head] - but ONLY if [observationId] AND
+ * [bindingEpoch] BOTH still equal the root's current tokens INSIDE the proof-apply transaction, the SAME two-token
+ * freshness gate a proof rides, so a view revoked (or a binding re-created) between the mint and the apply advances
+ * nothing.
  *
  * It carries no bindings because it is not a reap. It is the record that says *"every committed deletion up to
  * [head] has been ACCOUNTED FOR"* - retired, refuted by a witness, or already gone - and it rides the same
@@ -155,18 +178,18 @@ data class AbsenceProof(
  * that pinned the checkpoint would otherwise re-diff an ever-growing range forever), while an UNREAD path in the
  * range withholds it (a page the walk saw and the read failed on is not accounted for). See the C4 mint.
  *
- * **Two stated residues, both fail-closed, both C5 reconcile's to clear:**
- *  - **A CROSS-ROOT refutation consumes the range.** The refutation is global by id (a page seen ANYWHERE is not
- *    absent), so a copy of the deleted page living in ANOTHER root refutes this root's cover - and the advance
- *    still lands, because the deletion IS accounted for: we are looking at that id. Delete the other root's copy
- *    later and nothing re-derives the original cover; the range is spent. That row waits in limbo (503,
- *    self-healing on REAPPEARANCE) but does NOT self-heal into a retirement - it needs `root reconcile`.
+ * **One stated residue, fail-closed:**
  *  - **[head] is compared by STRING EQUALITY, so the G2 bracket has an ABA residue.** A mid-pass `A -> B -> A`
  *    (a commit and a `reset --hard` back, inside one walk) reads A at both ends and the bracket sees nothing move.
  *    The window is one pass wide and needs a history rewrite landing inside it; the alternative - a reflog walk
  *    per pass - buys a narrower race at a cost the oracle is not worth. Named, not fixed.
  */
-data class GitCheckpointAdvance(val root: RootName, val observationId: ObservationId, val head: String)
+data class GitCheckpointAdvance(
+    val root: RootName,
+    val observationId: ObservationId,
+    val bindingEpoch: BindingEpoch,
+    val head: String,
+)
 
 /**
  * What a pass actually SAW at one rooted path: the page was READ, and [observedId] is the id its frontmatter
@@ -182,17 +205,19 @@ data class GitCheckpointAdvance(val root: RootName, val observationId: Observati
 data class Witness(val observedId: PageId?)
 
 /**
- * A tombstoned binding: the id is RESERVED FOREVER, and `/p/{id}` answers **410 Gone** naming [path] rather
- * than the 404 that tells an agent to drop its citation.
+ * A tombstoned binding: the id is RESERVED within its root, and `/p/{root}/{id}` answers **410 Gone** naming
+ * [path] rather than the 404 that tells an agent to drop its citation.
  *
- * Tombstones live OUTSIDE the live `(root, path)` key space (their own table, keyed by [id] alone), so
- * ordinary path reuse - delete a page, later create a different page at the same path - cannot collide with
- * one. [path] is the LAST-KNOWN path, and it is deliberately NOT a key: reuse is legal.
+ * Tombstones live OUTSIDE the live `(root, path)` key space (their own table, keyed by `(root, id)` post-flip so
+ * two roots may each tombstone the same id, C5), so ordinary path reuse - delete a page, later create a different
+ * page at the same path - cannot collide with one. [path] is the LAST-KNOWN path, and it is deliberately NOT a
+ * key: reuse is legal.
  *
  * **Reclaim only at the page's OWN (root, path).** A retired id turning up at a different path is exactly as
  * likely to be a paste as a return, and a page that moved and a file that was COPIED are observationally
  * identical - so we must not guess. Returning to your own path is the one case that carries its own evidence.
- * Anyone else who claims the id mints a fresh one and raises a `CrossRootDuplicateId`.
+ * Anyone else claiming the id WITHIN that root mints a fresh one and raises a `DuplicateId` (the same id in
+ * another root is legal post-flip and claims nothing here, C5).
  */
 data class RetiredBinding(
     val id: PageId,

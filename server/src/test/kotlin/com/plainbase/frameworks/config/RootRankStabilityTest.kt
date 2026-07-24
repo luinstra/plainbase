@@ -1,11 +1,13 @@
 package com.plainbase.frameworks.config
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.localRoot
@@ -14,7 +16,6 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -164,11 +165,11 @@ class RootRankStabilityTest : FunSpec({
         }
     }
 
-    test("(d) the newcomer ranks LAST, so it LOSES the duplicate-id contest against an incumbent") {
-        // Asserted through the thing rank actually DECIDES, not through the integer: the contest is
-        // `rootRank(path) < rootRank(owner)`, and a rank test that never exercises it is a test of an
-        // implementation detail. The safe direction for a new root to fail is to LOSE - `root add` is an operator
-        // convenience and it must not be able to take a page id away from a root that was already serving it.
+    test("(d) a newcomer sharing an incumbent's frontmatter id is NOT a contest: BOTH roots keep the id (per-root identity, C5)") {
+        // Post-flip a cross-root duplicate id is LEGAL: both pages keep the same id and each answers its OWN
+        // /p/{root}/{id}. Rank no longer takes the id from the newcomer - it decides SOURCE ORDERING only (the
+        // higher-ranked incumbent's section still precedes the newcomer's). This asserts BOTH roots survive, never
+        // one; tests (a)-(c) still pin rank STABILITY, which is untouched by the flip.
         val contested = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
         val page = "---\nid: ${contested.value}\ntitle: Doc\n---\n\n# Doc\n"
 
@@ -178,8 +179,8 @@ class RootRankStabilityTest : FunSpec({
         try {
             writePage(incumbentDir, "guides/doc.md", page)
             writePage(newcomerDir, "guides/doc.md", page)
-            // The order `buildRoots` produces for `plainbase.conf { main, incumbent }` + `roots.conf { newcomer }`:
-            // file 1 whole, then file 2, so the CLI-added root is last.
+            val incumbent = RootName.require("incumbent")
+            val newcomer = RootName.require("newcomer")
             val registry = RootRegistry.of(
                 listOf(localRoot("main", mainDir), localRoot("incumbent", incumbentDir), localRoot("newcomer", newcomerDir)),
             )
@@ -188,9 +189,13 @@ class RootRankStabilityTest : FunSpec({
             }
             IndexHarness(mainDir, rootRegistry = registry, sources = sources).use { harness ->
                 val snapshot = harness.builder.rebuild()
-                // The INCUMBENT keeps the permalink; the newcomer's copy is reassigned a fresh id.
-                snapshot.byId.getValue(contested).root shouldBe RootName.require("incumbent")
-                snapshot.section(RootName.require("newcomer")).pages.single().id shouldNotBe contested
+                // BOTH roots hold their own page under the SAME id, each at its own path.
+                val incumbentPage = requireNotNull(snapshot.pageAt(RootedPageId(incumbent, contested)))
+                val newcomerPage = requireNotNull(snapshot.pageAt(RootedPageId(newcomer, contested)))
+                incumbentPage.path shouldBe TreePath.require("guides/doc.md")
+                newcomerPage.path shouldBe TreePath.require("guides/doc.md")
+                // Rank still decides SOURCE ORDERING: the incumbent's section precedes the newcomer's.
+                snapshot.sections.map { it.root }.filter { it == incumbent || it == newcomer } shouldBe listOf(incumbent, newcomer)
             }
         } finally {
             listOf(mainDir, incumbentDir, newcomerDir).forEach { it.toFile().deleteRecursively() }

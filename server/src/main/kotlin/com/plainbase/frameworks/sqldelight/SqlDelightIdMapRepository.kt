@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.ClaimantState
 import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Supersession
@@ -27,12 +28,10 @@ class SqlDelightIdMapRepository(
 ) : IdMapRepository {
 
     private val queries get() = db.idMapQueries
+    private val observations get() = db.rootObservationQueries
 
     override fun find(path: RootedPath): IdBinding? =
         queries.selectBinding(root = path.root, path = path.path).executeAsOneOrNull()?.toBinding()
-
-    override fun pathOf(id: PageId): RootedPath? =
-        queries.selectPathById(id).executeAsOneOrNull()?.let { RootedPath(it.root, it.path) }
 
     override fun rootsHoldingId(id: PageId): List<RootName> = queries.selectRootsHoldingId(id).executeAsList()
 
@@ -41,38 +40,67 @@ class SqlDelightIdMapRepository(
     override fun retiredAt(root: RootName, id: PageId): RetiredBinding? =
         queries.selectRetiredAt(root = root, id = id).executeAsOneOrNull()?.toRetired()
 
-    override fun binding(id: PageId): IdBinding? = queries.selectBindingById(id).executeAsOneOrNull()?.toBinding()
-
-    override fun retired(id: PageId): RetiredBinding? = queries.selectRetired(id).executeAsOneOrNull()?.toRetired()
+    override fun bindingInRoot(root: RootName, id: PageId): IdBinding? =
+        queries.selectBindingByRootId(id = id, root = root).executeAsOneOrNull()?.toBinding()
 
     override fun retiredBindings(): List<RetiredBinding> = queries.selectAllRetired().executeAsList().map { it.toRetired() }
+
+    // ONE statement (selectClaimantsById, IdMap.sq) reads both claimant lists off a single consistent SQLite snapshot,
+    // so the live and retired lists reflect the SAME durable moment WITHOUT opening a transaction. That matters on the
+    // app DB's single non-thread-safe connection: a BEGIN here raced a concurrent bare resolve's BEGIN into "cannot
+    // start a transaction within a transaction" (C5 regression). kind partitions the rows: 1 = a retired tombstone, 0 =
+    // a live claimant (root only).
+    override fun claimantState(id: PageId): ClaimantState {
+        val (retired, live) = queries.selectClaimantsById(id).executeAsList().partition { it.kind == RETIRED_CLAIMANT }
+        return ClaimantState(
+            live = live.map { it.root },
+            retired = retired.map {
+                RetiredBinding(
+                    id = requireNotNull(it.id),
+                    path = RootedPath(it.root, requireNotNull(it.path)),
+                    materialized = requireNotNull(it.materialized),
+                    retiredAt = requireNotNull(it.retired_at),
+                )
+            },
+        )
+    }
 
     /**
      * ONE transaction, and every C0 identity rule that cannot be enforced by convention lives inside it.
      *
      * The order is the argument:
-     *  1. **The tombstone reservation.** SQLite's `UNIQUE(id)` cannot span two tables, so once tombstones moved
-     *     out of `id_map` nothing but this check stopped a copied/restored file carrying a retired `id:` from
-     *     claiming it - and because the resolver checks LIVE first, `/p/{id}` would then silently redirect to
-     *     the WRONG PAGE. That is strictly worse than the 404 the tombstone exists to prevent: a dead link
-     *     announces itself, a live link to the wrong document does not. A retired id is reclaimable ONLY by the
-     *     same page returning to its OWN (root, path); anyone else is REFUSED.
-     *  2. **The supersession gate.** Removing another (root, path)'s row asserts that it no longer holds the id -
-     *     a negative claim, and negative claims need authority. Outside [Supersession] we REFUSE, having written
-     *     NOTHING, and the caller mints fresh.
+     *  1. **The tombstone reservation, PER ROOT.** The reservation is scoped to this bind's own root (the tombstone
+     *     is read at `(path.root, id)`): a retired id is reclaimable ONLY by the same page returning to its OWN
+     *     (root, path), and only that root's tombstone can refuse it. A tombstone under ANOTHER root reserves that
+     *     id for that root's own page and never speaks to this bind. Post-flip `UNIQUE(id, root)` legalizes the
+     *     same id living in two roots, so the resolver fails CLOSED on a foreign tombstone rather than serving the
+     *     wrong page (PageRootResolver.resolution): a dead link announces itself, a live link to the wrong document
+     *     does not.
+     *  2. **The supersession gate, root-scoped.** The incumbent is read at `(id, path.root)`, so it can only ever
+     *     be a SAME-root binding; removing another (root, path)'s row under this root asserts it no longer holds the
+     *     id - a negative claim, and negative claims need authority. Outside [Supersession] we REFUSE, having
+     *     written NOTHING, and the caller mints fresh.
      *  3. **The displacement tombstone.** Whatever id this key held before is leaving the live key space with no
      *     one else to hold it, so it is retired here, in the same transaction as the bind that displaces it -
      *     `/p/{oldId}` answers 410, never 404. (Safe against a same-pass claimant of that id purely by the
      *     rank-then-path bind order: a winner always binds before the page it beat. If that order ever breaks,
      *     step 1 REFUSES the late claimant - a loud failure, never a silent steal.)
+     *  4. **The binding-epoch advance (revoke-before-stamp, C5).** A successful bind is a binding change, so it
+     *     increments `path.root`'s `binding_epoch` in this SAME transaction (NOT its observation - that would collapse
+     *     the epoch every live proof rides; the two stamps are orthogonal). Any inferred `AbsenceProof` minted before
+     *     this bind was stamped with the OLD epoch, so it loses `applyProofs`' two-token compare and cannot reap the
+     *     binding a restore just re-created (its `dirty_page` recovery row is USER CONTENT). ONLY the Bound path
+     *     advances - the two `Refused` early-returns land before the upsert and advance nothing; and even an idempotent
+     *     same-`(root, path, id)` re-bind advances, because a restore's re-create IS that re-bind and must revoke the
+     *     stale proof. The counter is monotonic and never reset, so there is no ABA hazard.
      */
     override fun bind(path: RootedPath, id: PageId, materialized: Boolean, supersession: Supersession): BindOutcome =
         db.transactionWithResult {
-            val tombstone = queries.selectRetired(id).executeAsOneOrNull()?.toRetired()
+            val tombstone = queries.selectRetiredAt(root = path.root, id = id).executeAsOneOrNull()?.toRetired()
             if (tombstone != null && tombstone.path != path) {
                 return@transactionWithResult BindOutcome.Refused(id, heldBy = tombstone.path, retired = true)
             }
-            val incumbent = queries.selectBindingById(id).executeAsOneOrNull()?.toBinding()
+            val incumbent = queries.selectBindingByRootId(id = id, root = path.root).executeAsOneOrNull()?.toBinding()
             if (incumbent != null && incumbent.path != path && !supersession.mayDisplace(incumbent)) {
                 return@transactionWithResult BindOutcome.Refused(id, heldBy = incumbent.path, retired = false)
             }
@@ -88,9 +116,10 @@ class SqlDelightIdMapRepository(
                         retiredAt = clock.now().toEpochMilliseconds(),
                     )
                 }
-            if (tombstone != null) queries.unretire(id) // the page came home to its own (root, path) and reclaims it
-            queries.unbindStale(id = id, root = path.root, path = path.path)
+            if (tombstone != null) queries.unretireInRoot(root = path.root, id = id) // this page reclaims its own (root, path)
+            queries.unbindStaleInRoot(id = id, root = path.root, path = path.path)
             queries.upsertBinding(root = path.root, path = path.path, id = id, materialized = materialized)
+            observations.incrementBindingEpoch(root = path.root) // revoke-before-stamp: this bind invalidates stale proofs
             BindOutcome.Bound
         }
 
@@ -204,6 +233,9 @@ class SqlDelightIdMapRepository(
     }
 
     private companion object {
+        /** [selectClaimantsById]'s discriminator: 1 tags a retired-binding row, 0 a live claimant (see IdMap.sq). */
+        const val RETIRED_CLAIMANT = 1L
+
         /** Sentinels for absent UNIQUE-key columns (see [IssueRow]); all are impossible real values. */
         const val NO_OTHER_ROOT = ""
         const val NO_OTHER_PATH = ""

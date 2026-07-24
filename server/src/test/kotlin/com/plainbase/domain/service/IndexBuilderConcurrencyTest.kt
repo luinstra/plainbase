@@ -57,7 +57,7 @@ class IndexBuilderConcurrencyTest : FunSpec({
                             if (snapshot.pages.size != smallCount && snapshot.pages.size != largeCount) {
                                 failures += "page count ${snapshot.pages.size}"
                             }
-                            if (snapshot.byId.size != snapshot.pages.size) failures += "byId size mismatch"
+                            if (snapshot.byRootedId.size != snapshot.pages.size) failures += "byRootedId size mismatch"
                             if (snapshot.byPath.size != snapshot.pages.size) failures += "byPath size mismatch"
                             if (snapshot.byUrlPath.size != snapshot.pages.size) failures += "byUrlPath size mismatch"
                             if (snapshot.pages.any { snapshot.byPath[RootedPath(it.root, it.path)] !== it }) {

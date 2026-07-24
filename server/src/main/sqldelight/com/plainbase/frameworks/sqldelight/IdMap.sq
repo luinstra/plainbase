@@ -14,16 +14,18 @@ import com.plainbase.domain.page.PageId;
 import com.plainbase.domain.root.RootName;
 import kotlin.Boolean;
 
--- One binding per (root, path) AND per id: the within-root §5.2 duplicate policy plus the
--- cross-root registry-order winner policy (ADR-0011 D2/D17) guarantee an id is never claimed by
--- two live keys, and bind() supersedes a stale row when an id moves with its file, so UNIQUE(id)
--- is an invariant the schema can enforce across all roots.
+-- One binding per (root, path) AND per (id, root) (per-root identity, C5): the same page id may live in SEVERAL
+-- roots at once, and within a root the §5.2 duplicate policy plus bind()'s root-scoped stale sweep keep an id bound
+-- to at most one (root, path). So UNIQUE(id, root) - NOT UNIQUE(id) - is the invariant the schema enforces. The
+-- constraint is id-LEADING so its one autoindex serves both the bare resolver's WHERE id = ? and the root-scoped
+-- incumbent's WHERE id = ? AND root = ? as index SEARCHes (proved by IdMapIndexUsageTest).
 CREATE TABLE id_map (
   root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
-  id BLOB AS PageId NOT NULL UNIQUE,
+  id BLOB AS PageId NOT NULL,
   materialized INTEGER AS Boolean NOT NULL,
-  PRIMARY KEY (root, path)
+  PRIMARY KEY (root, path),
+  UNIQUE (id, root)
 );
 
 -- A flattened IdentityIssue: kind discriminates the sealed variant; the remaining columns carry
@@ -45,9 +47,9 @@ CREATE TABLE identity_issue (
   UNIQUE(kind, root, path, other_root, other_path, page_id)
 );
 
--- TOMBSTONES (C0). A binding that leaves id_map lands here, and its id is RESERVED FOREVER: /p/{id}
--- answers 410 Gone naming the last-known path instead of the 404 that tells an agent to drop its
--- citation. IdMapRepository.kt:14 says why this table has to exist at all - "durability is only
+-- TOMBSTONES (C0). A binding that leaves id_map lands here, and its id is RESERVED within its root (the PK is
+-- (root, id), per-root identity C5): /p/{root}/{id} answers 410 Gone naming the last-known path instead of the
+-- 404 that tells an agent to drop its citation. IdMapRepository.kt:14 says why this table has to exist at all - "durability is only
 -- promised for materialized ids" - so for an UNMATERIALIZED page the id_map row is the SOLE record a
 -- path ever had that id: hard-delete it and the page returns with a fresh id, permalink gone forever.
 --
@@ -57,9 +59,11 @@ CREATE TABLE identity_issue (
 -- `path` is the LAST-KNOWN path and is deliberately NOT a key - reuse is legal. `id` is the key,
 -- because the id is what the tombstone is about.
 --
--- SQLite's UNIQUE(id) cannot span two tables, so the cross-table reservation (a retired id may be
--- reclaimed ONLY by the same page returning to its OWN (root, path); anyone else mints fresh) is
--- enforced INSIDE the bind transaction - SqlDelightIdMapRepository.bind - never by convention.
+-- The reservation is PER ROOT (the PK is (root, id), and id_map is UNIQUE(id, root)): a tombstone under root R
+-- reserves id X for R's own page only, and a retired (R, X) may be reclaimed ONLY by the same page returning to its
+-- OWN (root, path) under R; anyone else mints fresh. No SQL UNIQUE can span the live and retired tables, so that
+-- cross-table reservation is enforced INSIDE the bind transaction - SqlDelightIdMapRepository.bind - never by
+-- convention. Two roots may each hold a tombstone for one id at once (a legal per-root retirement).
 --
 -- No GC. A row per page that ever existed is nothing, and a retention horizon is just soft-retirement
 -- becoming hard on a timer - i.e. the permalink-destroyer this table exists to prevent.
@@ -98,21 +102,17 @@ SELECT *
 FROM id_map
 WHERE root = :root AND path = :path;
 
-selectPathById:
-SELECT root, path
-FROM id_map
-WHERE id = :id;
-
--- The bare-id resolver's LIVE claimant list (Option B). Index-served by id_map.id UNIQUE in C4. Shaped
--- List<RootName> for the C5 multiplicity the One/Ambiguous/None contract already models; under UNIQUE(id) it is
--- always 0 or 1 rows.
+-- The bare-id resolver's LIVE claimant list (Option B). Index-served by the id-leading UNIQUE(id, root). Shaped
+-- List<RootName> for the C5 multiplicity the One/Ambiguous/None contract models - post-flip it is 0..N rows, one
+-- per root holding the id live.
 selectRootsHoldingId:
 SELECT root
 FROM id_map
 WHERE id = :id;
 
--- The retired-claimant list, index-served by retired_binding_id. Feeds the permalink tombstone arm (410) after a
--- live None.
+-- The retired-claimant list, index-served by retired_binding_id. No longer on the production hot path (the resolver
+-- reads selectClaimantsById via claimantState); KEPT as the list twin of selectRootsHoldingId, pinned by
+-- IdMapClaimantQueriesNativeTest and the resolver fakes.
 selectRetiredRootsHoldingId:
 SELECT root
 FROM retired_binding
@@ -125,13 +125,6 @@ SELECT *
 FROM retired_binding
 WHERE root = :root AND id = :id;
 
--- The whole incumbent row, not just its key: the C0 bind gate has to ask whether it may DISPLACE this
--- binding, and that question is about the binding, not about a path.
-selectBindingById:
-SELECT *
-FROM id_map
-WHERE id = :id;
-
 selectAllBindings:
 SELECT *
 FROM id_map;
@@ -140,33 +133,12 @@ selectDistinctRoots:
 SELECT DISTINCT root
 FROM id_map;
 
--- The key-complete supersede: it removes ANY other (root, path) holding the id, which is what keeps
--- UNIQUE(id) honest when an id moves with its file.
---
--- **C0 GATED.** This DELETE is a NEGATIVE CLAIM about the incumbent ("it no longer holds this id"), and
--- a negative claim needs authority like any other. A copied `id:` in another root used to hard-delete
--- the original root's binding the moment the duplicate contest resolved - with no reference to the
--- corpus-loss tripwire at all - so an unwitnessed page came back with a fresh id and its permalink
--- pointed at the COPY. bind() therefore refuses to issue this unless the incumbent was WITNESSED this
--- pass or an AbsenceProof covers it (BindingVisibility / IdMapRepository.Supersession); otherwise the
--- CLAIMANT mints a fresh id and an issue is recorded. See SqlDelightIdMapRepository.bind.
--- (The De Morgan form of `NOT (root = :root AND path = :path)`: plain SQL92, and the one shape
--- the SQLDelight 2.3 grammar accepts here.)
-unbindStale:
-DELETE FROM id_map
-WHERE id = :id AND (root != :root OR path != :path);
-
 deleteBinding:
 DELETE FROM id_map
 WHERE root = :root AND path = :path;
 
 -- Tombstone reads/writes. `retire` is an upsert so a re-retirement of the same id (an idempotent
 -- replay) refreshes the last-known path rather than failing on the primary key.
-selectRetired:
-SELECT *
-FROM retired_binding
-WHERE id = :id;
-
 selectAllRetired:
 SELECT *
 FROM retired_binding;
@@ -175,11 +147,6 @@ retire:
 INSERT INTO retired_binding(id, root, path, materialized, retired_at)
 VALUES (:id, :root, :path, :materialized, :retiredAt)
 ON CONFLICT(root, id) DO UPDATE SET path = excluded.path, materialized = excluded.materialized;
-
--- The UN-RETIREMENT: the page came home to its OWN (root, path) and reclaims the id it earned.
-unretire:
-DELETE FROM retired_binding
-WHERE id = :id;
 
 upsertBinding:
 INSERT INTO id_map(root, path, id, materialized)
@@ -217,6 +184,51 @@ selectAliasTarget:
 SELECT target_root, id
 FROM url_alias
 WHERE root = :root AND path = :path;
+
+-- C5: the ROOT-SCOPED incumbent read - every id lookup is root-qualified now (the bare-id form is gone). Index-served
+-- by UNIQUE(id, root), which is id-LEADING so the one index covers both WHERE id = ? and WHERE id = ? AND root = ?.
+selectBindingByRootId:
+SELECT *
+FROM id_map
+WHERE id = :id AND root = :root;
+
+-- C5: the ROOT-SCOPED stale sweep. The global unbindStale deletes ANOTHER root's LIVE row for the same id with NO
+-- tombstone minted, so the untouched file mints a fresh id on the next pass and its permalink breaks silently. Added
+-- UNUSED in Commit A.
+unbindStaleInRoot:
+DELETE FROM id_map
+WHERE id = :id AND root = :root AND path != :path;
+
+-- C5: the ROOT-SCOPED un-retirement. The global unretire deletes BOTH roots' tombstones, so /p/{otherRoot}/{id}
+-- flips from a truthful 410 to a false 404. Added UNUSED in Commit A.
+unretireInRoot:
+DELETE FROM retired_binding
+WHERE root = :root AND id = :id;
+
+-- C5: EVERY tombstone row for an id (0..N once two roots may each hold one). Index-served by retired_binding_id.
+-- LIST-shaped on purpose: a single-row `executeAsOneOrNull` by id would throw the moment a second root tombstones it.
+-- The resolver's claimant state is served by selectClaimantsById (both lists, one snapshot); this is the standalone
+-- retired-rows twin. Added UNUSED in Commit A.
+selectRetiredRowsById:
+SELECT *
+FROM retired_binding
+WHERE id = :id;
+
+-- C5: BOTH claimant lists for an id in ONE statement, so claimantState reads them WITHOUT a transaction. The app DB is
+-- one shared non-thread-safe JdbcSqliteDriver (a statement per read), and a BEGIN on that connection races a concurrent
+-- bare resolve's BEGIN into "cannot start a transaction within a transaction". A single SQLite SELECT is already a
+-- consistent cross-table snapshot, so this keeps the torn-read atomicity the wrapping transaction gave WITHOUT the
+-- BEGIN. The typed retired_binding SELECT leads so the shared columns inherit its path/id/materialized/retired_at
+-- adapters; the live SELECT carries NULLs there. kind: 1 = a retired tombstone (its columns non-null), 0 = a live
+-- claimant (root only). Index-served both sides (retired_binding_id; the id-leading UNIQUE(id, root)).
+selectClaimantsById:
+SELECT 1 AS kind, root, path, id, materialized, retired_at
+FROM retired_binding
+WHERE id = :id
+UNION ALL
+SELECT 0 AS kind, root, NULL, NULL, NULL, NULL
+FROM id_map
+WHERE id = :id;
 
 selectAllAliases:
 SELECT *

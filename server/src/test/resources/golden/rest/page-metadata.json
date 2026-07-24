@@ -3,7 +3,7 @@
   "root": "main",
   "path": "broken.md",
   "url": "/docs/main/broken",
-  "permalink": "/p/0197c000-0000-7000-8000-00000000b00c",
+  "permalink": "/p/main/0197c000-0000-7000-8000-00000000b00c",
   "content_hash": "{{content_hash}}",
   "commit": null,
   "title": "Broken Fixture",

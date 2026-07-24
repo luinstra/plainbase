@@ -7,6 +7,7 @@ import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
@@ -21,6 +22,7 @@ import com.plainbase.frameworks.ktor.dto.WriteWarningCode
 import com.plainbase.frameworks.ktor.routes.createdIdentity
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -94,7 +96,8 @@ class WriteGoldenTest : FunSpec({
             // PB-WRITE-1 revision). The golden pins both; `url` is the published `IndexedPage.url`, NOT a
             // client-/path-derived slug — asserted against the snapshot below so the literal can't drift.
             post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
-            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/main/guides/golden-create"
+            harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(createdId)))?.url shouldBe
+                "/docs/main/guides/golden-create"
         }
     }
 
@@ -114,7 +117,8 @@ class WriteGoldenTest : FunSpec({
             post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
             // The response url IS the published IndexedPage.url: the PercentCoding.encodePath(urlPath) form,
             // never a percent-encode of the raw on-disk filename nor a slug of the title.
-            harness.builder.current.byId[PageId.require(createdId)]?.url shouldBe "/docs/main/guides/caf%C3%A9-%CF%89"
+            harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(createdId)))?.url shouldBe
+                "/docs/main/guides/caf%C3%A9-%CF%89"
         }
     }
 
@@ -137,23 +141,23 @@ class WriteGoldenTest : FunSpec({
             writeRestTest(tree, seedCollision) { harness ->
                 val loser = PageId.require(loserId)
                 // The induction held: the loser really has a null canonical url.
-                harness.builder.current.byId[loser]?.url shouldBe null
-                // So the 201 serves the permalink — the SAME `/p/{id}` shape PermalinkRoute resolves and
-                // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication.
+                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, loser))?.url shouldBe null
+                // So the 201 serves the permalink — the SAME `/p/{root}/{id}` shape PermalinkRoute resolves and
+                // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication (rooted since C5).
                 val identity = createdIdentity(loserPath, minted = loser, snapshot = harness.builder.current)
                 identity.id shouldBe loser
-                identity.url shouldBe "/p/$loserId"
+                identity.url shouldBe "/p/main/$loserId"
             }
         } finally {
             tree.toFile().deleteRecursively()
         }
     }
 
-    test("the 201 resolves by the WRITTEN LOCATION, so a cross-root id re-award can never leak another root's url") {
-        // `byId` is GLOBAL across roots. A rebuild racing the create can award the minted id to a HIGHER-RANKED
-        // root's page (the D17 duplicate-id contest), and an id-keyed lookup would then answer with THAT page:
-        // the 201 would hand the client another root's url for bytes we wrote here. Induced directly: the id the
-        // create minted now belongs to a page in `extra`, while OUR bytes sit at main/guides/ours.md.
+    test("the 201 resolves by the WRITTEN LOCATION, so a bare id held by another root can never leak its url") {
+        // A page id no longer names ONE root (per-root identity, C5): the same id may live in several roots at once.
+        // An id-keyed lookup would be AMBIGUOUS - it could answer with a DIFFERENT root's page, handing the client
+        // another root's url for bytes we wrote here. Induced directly: the id the create minted lives in a page in
+        // `extra`, while OUR bytes sit at main/guides/ours.md, so resolving by LOCATION (not by id) is what's on trial.
         val minted = PageId.require("0190aaaa-bbbb-7ccc-8ddd-0000000000e1")
         val main = java.nio.file.Files.createTempDirectory("plainbase-award-main")
         val extra = java.nio.file.Files.createTempDirectory("plainbase-award-extra")
@@ -169,8 +173,8 @@ class WriteGoldenTest : FunSpec({
                 harness.boot()
                 val snapshot = harness.builder.current
                 val ours = RootedPath(RootName.MAIN, TreePath.require("guides/ours.md"))
-                withClue("the induction: the minted id really does belong to the OTHER root's page now") {
-                    snapshot.byId[minted]?.root shouldBe RootName.require("extra")
+                withClue("the induction: the minted id lives in the OTHER root's page (a legal per-root claimant)") {
+                    snapshot.pageAt(RootedPageId(RootName.require("extra"), minted)).shouldNotBeNull()
                 }
 
                 val identity = createdIdentity(ours, minted = minted, snapshot = snapshot)
@@ -293,6 +297,7 @@ class WriteGoldenTest : FunSpec({
                         root = RootName.MAIN,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.MAIN),
+                        bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
                         covers = setOf(BindingRef(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId))),
                     ),
                 ),

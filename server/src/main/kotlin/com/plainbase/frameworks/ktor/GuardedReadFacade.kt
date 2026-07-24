@@ -13,7 +13,6 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.render.RenderedPage
-import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -159,7 +158,7 @@ class GuardedReadFacade(
         }
         val root = when (val res = resolver.resolve(id)) {
             IdResolution.None -> return null
-            is IdResolution.Ambiguous -> throw AmbiguousPageId(id, res.candidates)
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(id, res.candidates, res.hasRetiredCandidate)
             is IdResolution.One -> res.root
         }
         requireAvailable(root)
@@ -278,25 +277,25 @@ class GuardedReadFacade(
     override fun permalink(principal: Principal, id: PageId): PermalinkResolution {
         policy.checkRead(principal, id.value)
         val snapshot = indexBuilder.current
-        // Bare permalink, id_map-FIRST (Option B, arm order per the matrix): a durable claimant decides LIVE first;
-        // only a live None consults tombstones (410, never the 404 that tells an agent the citation was never real).
-        return when (val live = resolver.resolve(id)) {
+        // Bare permalink, over ONE durable `claimants` snapshot (§6.1). `resolution()` is FAIL-CLOSED: a live root
+        // alongside a foreign tombstone is Ambiguous (300, never a 302 to a possibly-wrong page); a purely-retired id
+        // is None and splits 404/410/300 off `claims.retired`.
+        val claims = resolver.claimants(id)
+        return when (val resolution = claims.resolution()) {
             is IdResolution.One -> {
-                requireAvailable(live.root)
+                requireAvailable(resolution.root)
                 // A live binding with no page in the snapshot is LIMBO, not Unknown (C1): answering 404 for a page we
                 // still bind - because a mount came up empty - is the failure mode this redesign exists to end.
-                absence.requireVerifiedAbsence(live.root, id, snapshot)
-                val page = snapshot.pageAt(RootedPageId(live.root, id))
+                absence.requireVerifiedAbsence(resolution.root, id, snapshot)
+                val page = snapshot.pageAt(RootedPageId(resolution.root, id))
                     ?: return PermalinkResolution.Unknown
                 page.url?.let(PermalinkResolution::Found) ?: PermalinkResolution.LoserNoUrl
             }
-            is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(live.candidates)
-            IdResolution.None -> when (val dead = resolver.resolveRetired(id)) {
-                is IdResolution.One ->
-                    resolver.retirementAt(dead.root, id)?.let { PermalinkResolution.Retired(it, emptyList()) }
-                        ?: PermalinkResolution.Unknown
-                is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(dead.candidates)
-                IdResolution.None -> PermalinkResolution.Unknown
+            is IdResolution.Ambiguous -> PermalinkResolution.Ambiguous(resolution.candidates, resolution.hasRetiredCandidate)
+            IdResolution.None -> when (claims.retired.size) { // live is empty here by construction
+                0 -> PermalinkResolution.Unknown // 404
+                1 -> PermalinkResolution.Retired(claims.retired.single().path, liveElsewhere = emptyList()) // 410
+                else -> PermalinkResolution.Ambiguous(claims.retiredRoots, hasRetiredCandidate = true) // 300, WHICH tombstone
             }
         }
     }
@@ -314,19 +313,19 @@ class GuardedReadFacade(
         }
         // LIVE-miss: 503 - and through the CLASSIFIER, which is where the C1 rule lives. Re-deriving it inline here
         // would also quietly ignore an INJECTED classifier that [gatedSnapshot] honors (the C4 window fixtures thread
-        // a fake one), so the two pinned-miss arms would answer from different rules.
+        // a fake one), so the two pinned-miss arms would answer from different rules. `bindsLive` STAYS a separate
+        // read: it must gate `requireVerifiedAbsence` BEFORE any tombstone is consulted, so a live-then-unbound id
+        // still answers 410 (folding it into `claims` would let a stale live read answer 404).
         if (resolver.bindsLive(root, id)) {
             requireAvailable(root)
             absence.requireVerifiedAbsence(root, id, snapshot)
         }
-        // Not present, not live-bound here: a tombstone at (root, id) is 410, otherwise absent -> 404.
-        val here = resolver.retirementAt(root, id) ?: return PermalinkResolution.Unknown
-        val liveElsewhere = when (val live = resolver.resolve(id)) {
-            is IdResolution.One -> listOf(live.root)
-            is IdResolution.Ambiguous -> live.candidates
-            IdResolution.None -> emptyList()
-        }.filter { it != root }
-        return PermalinkResolution.Retired(here, liveElsewhere)
+        // ONE atomic recheck read, taken AFTER the limbo gate: folds the tombstone + liveElsewhere reads into a single
+        // post-absence `claims` snapshot. A tombstone at (root, id) is 410 (last-known path + live alternates),
+        // otherwise absent -> 404.
+        val claims = resolver.claimants(id)
+        val here = claims.retirementAt(root) ?: return PermalinkResolution.Unknown
+        return PermalinkResolution.Retired(here, claims.live.filter { it != root })
     }
 
     override fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String? {
@@ -355,7 +354,7 @@ class GuardedReadFacade(
                 registry.byName(id.root) != null &&
                     resolver.statusOf(id.root, availability.current()) == RootStatus.UNAVAILABLE &&
                     resolver.bindsLive(id.root, id.id)
-            }?.let { Permalink.of(id.id) }
+            }?.permalink
         // A cross-root alias's TARGET may live in an unavailable root even though the route's root is fine. The 302
         // still fires and the target surface answers 503 - an accepted, documented two-step.
         return target.url ?: target.permalink

@@ -5,8 +5,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.LinkOutcome
 import com.plainbase.domain.model.PageLink
 import com.plainbase.domain.page.IndexedPage
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -29,7 +29,7 @@ class LinkChecker {
     /** One sweep over one snapshot; memoizes each target page's emitted anchor set across links. */
     private class Sweep(private val index: PageIndex) {
 
-        private val anchorsByPage = HashMap<PageId, Set<String>>()
+        private val anchorsByPage = HashMap<RootedPageId, Set<String>>()
 
         fun broken(): List<BrokenLink> =
             index.pages.flatMap { page -> page.links.mapNotNull { link -> brokenOrNull(page, link) } }
@@ -60,7 +60,7 @@ class LinkChecker {
          * compared after the same [PercentCoding.encodeSegment] — no decode round-trip here.
          */
         private fun anchorsOf(page: IndexedPage): Set<String> =
-            anchorsByPage.getOrPut(page.id) { page.headings.map { PercentCoding.encodeSegment(it.id) }.toSet() }
+            anchorsByPage.getOrPut(page.rooted) { page.headings.map { PercentCoding.encodeSegment(it.id) }.toSet() }
 
         /**
          * A snapshot outcome can only reference a page of the SAME snapshot ([PageIndex] coherence).
