@@ -60,8 +60,15 @@ import io.kotest.matchers.shouldBe
  * (a break before all evidence arguably leaves a git range sound) but a real inconsistency: the observation and binding
  * captures were ORDERED, so one could absorb an event the other could not. Both are now taken as early as the pass can.
  *
- * Known GAP, stated rather than papered over: `OBJECT_LIST` is not exercised. Its boundary is a poll-time pagination
- * read outside `rebuild()`, so it needs its own fixture, and until it has one this matrix says nothing about it.
+ * Known GAP in THIS MATRIX, stated rather than papered over: `OBJECT_LIST` is not exercised HERE. Its boundary is a
+ * poll-time pagination read outside `rebuild()`, so it cannot be driven from a cell, and no row below says anything
+ * about it.
+ *
+ * That boundary is not uncovered, though, so do not read the paragraph above as "nothing tests it". Its own fixture
+ * lives in `ContentModuleWiringTest` ("object mode snapshots the real durable rows and binding epoch at the LIST
+ * boundary"), which pins the poll-time read this matrix cannot reach. Bringing OBJECT_LIST INTO the matrix would still
+ * need a way to inject an event at that boundary from inside a pass, which is why the gap is scoped to this file
+ * rather than closed.
  */
 class AbsenceInterleavingHarnessTest : FunSpec({
 
@@ -123,6 +130,54 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 )
             }
         }
+
+    // Not a matrix cell, and deliberately so: the matrix asks "can stale evidence reap a live binding", parameterised
+    // over Authority x Boundary x Event, and this is neither a new Event nor a new Boundary. It asks the OTHER
+    // question rebuild() answers, at its carry site: "does a section that is CARRIED rather than rescanned keep all of
+    // its pages". It lives here because that carry is inside rebuild(), the method every row in this file guards, and
+    // because a pending change to the carry filter needs a row that predates it.
+    //
+    // Anti-vacuity, in the CONTROL row's spirit, since retention alone would also hold if the pass did nothing at all.
+    // Two changes land between the passes: main GAINS a page (so a pass that never rebuilt fails), and `extra` loses
+    // notes/keep.md from disk (so a pass that RESCANNED `extra` cannot publish it, whatever else it does). Only a
+    // genuine carry satisfies both, and a DROPPED section fails them outright.
+    test("CARRY - a root skipped this pass keeps EVERY page of its last-good section, by count and by identity") {
+        withAbsenceTrees { mainDir, extraDir ->
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            writePage(extraDir, "notes/keep.md", "# Keep\n\nbody\n")
+            AbsenceWorld(mainDir, extraDir).use { world ->
+                // ONE builder across both passes: a carry is the builder's OWN last-published section coming forward,
+                // so a second builder would carry nothing and the row would pass on an empty section.
+                val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
+                val published = builder.rebuild()
+                val keep = RootedPath(extra, TreePath.require("notes/keep.md"))
+                val keptId = published.byPath.getValue(keep).rooted
+                val before = published.section(extra).pages.map { it.rooted }
+                before.size shouldBe 2
+
+                world.availability.markUnavailable(extra, UnavailableCause.VANISHED)
+                extraDir.resolve("notes/keep.md").toFile().delete()
+                writePage(mainDir, "guides/rollout.md", "# Rollout\n\nbody\n")
+
+                val snapshot = builder.rebuild()
+                val after = snapshot.section(extra).pages.map { it.rooted }
+
+                withClue("this pass never rebuilt anything, so nothing below tells a carry from a no-op") {
+                    snapshot.byPath.containsKey(RootedPath(RootName.MAIN, TreePath.require("guides/rollout.md"))) shouldBe true
+                }
+                withClue("'extra' was not carried: only a carry can publish notes/keep.md, whose file is gone from disk") {
+                    snapshot.pageAt(keptId)?.path shouldBe keep.path
+                }
+                withClue("the carried section lost page(s): had ${before.size}, carried ${after.size}") {
+                    after.size shouldBe before.size
+                }
+                withClue("the carried section holds different pages than it did - a swap or a partial drop") {
+                    after shouldBe before
+                }
+            }
+        }
+    }
 
     for (source in Authority.entries) {
         test("CONTROL ($source) - with NO event injected the pass DOES reap; without this the matrix passes vacuously") {

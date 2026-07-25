@@ -2,9 +2,12 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.PageRootResolver
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -124,6 +127,36 @@ class RootPinRestTest : FunSpec({
         }
     }
 
+    test("fixture 1 (c-agent): a COMMIT agent's PINNED write also durable-validates the owner") {
+        twoRoots { mainDir, notesDir ->
+            seedWithId(mainDir, "guides/a.md", "A")
+            var caller: Principal = Principal.Anonymous
+            val extract: io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction = {
+                PrincipalExtraction.Resolved(caller)
+            }
+            multiRootTest(
+                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                globs = listOf(CommitGlob.parse("guides/**")),
+                enforced = true,
+                extract = extract,
+                resolverFactory = fakeFactoryResolver(listOf(notes)),
+                absenceFactory = fakeFactoryAbsence(listOf(notes)),
+            ) { harness ->
+                caller = Principal.Agent(harness.index.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
+                val baseHash = baseHashOf(harness, "main", "guides/a.md")
+                val original = Files.readString(mainDir.resolve("guides/a.md"))
+                val res = client.put("/api/v1/pages/$dupId?root=main") {
+                    contentType(ContentType.parse("text/markdown"))
+                    header(HttpHeaders.IfMatch, "\"$baseHash\"")
+                    setBody("---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n")
+                }
+
+                res.status shouldBe HttpStatusCode.NotFound
+                Files.readString(mainDir.resolve("guides/a.md")) shouldBe original
+            }
+        }
+    }
+
     // ---- WINDOW FIXTURE 2: page under `notes` in the snapshot + FAKE rootsHoldingId=[main] (durable owner lag) ----
 
     test("fixture 2 (d): PINNED write ?root=main (durable owner, snapshot lags) is 503 absence_unverified") {
@@ -176,6 +209,40 @@ class RootPinRestTest : FunSpec({
                 val error = Json.parseToJsonElement(res.bodyAsText()).jsonObject.getValue("error").jsonObject
                 error.getValue("reason").jsonPrimitive.content shouldBe "page_deleted"
                 // current_* are null: there is no content to hand back for a page that is gone.
+                listOf("current_content", "current_hash", "current_path").forEach { field ->
+                    withClue(field) { error.getValue(field).jsonPrimitive.content shouldBe "null" }
+                }
+            }
+        }
+    }
+
+    test("fixture 3 (e-agent): a COMMIT agent's BARE write rechecks a live claimant that became a tombstone") {
+        twoRoots { mainDir, notesDir ->
+            var shared: RacingUnbindIdMap? = null
+            fun racing(idx: com.plainbase.domain.service.IndexHarness): RacingUnbindIdMap =
+                shared ?: RacingUnbindIdMap(idx.idMap, id, main).also { shared = it }
+            var caller: Principal = Principal.Anonymous
+            val extract: io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction = {
+                PrincipalExtraction.Resolved(caller)
+            }
+            multiRootTest(
+                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                globs = listOf(CommitGlob.parse("**")),
+                enforced = true,
+                extract = extract,
+                resolverFactory = { idx -> PageRootResolver(racing(idx), idx.rootRegistry) },
+                absenceFactory = { idx -> AbsenceClassifier(racing(idx)) },
+            ) { harness ->
+                caller = Principal.Agent(harness.index.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
+                val res = client.put("/api/v1/pages/$dupId") {
+                    contentType(ContentType.parse("text/markdown"))
+                    header(HttpHeaders.IfMatch, "\"sha256:${"0".repeat(64)}\"")
+                    setBody("---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n")
+                }
+
+                res.status shouldBe HttpStatusCode.Conflict
+                val error = Json.parseToJsonElement(res.bodyAsText()).jsonObject.getValue("error").jsonObject
+                error.getValue("reason").jsonPrimitive.content shouldBe "page_deleted"
                 listOf("current_content", "current_hash", "current_path").forEach { field ->
                     withClue(field) { error.getValue(field).jsonPrimitive.content shouldBe "null" }
                 }

@@ -10,6 +10,7 @@ import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsConfig
 import com.plainbase.frameworks.config.RootsOrigin
+import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.kotest.core.spec.style.FunSpec
@@ -101,6 +102,28 @@ class ForceRetireCommandTest : FunSpec({
             val again = CommandOutputFixture()
             AdminCommand.run(listOf("force-retire", "main", id), config, again.output) shouldBe 0
             again.stdout shouldContain "already retired"
+        }
+    }
+
+    test("a held roots.lock refuses force-retire without mutation, then the same command succeeds after release") {
+        withConfig { config ->
+            seedBinding(config, "guides/a.md")
+            val rootsLock = checkNotNull(DataDirLock.tryAcquire(config.dataDir, DataDirLock.ROOTS_LOCK_FILE_NAME))
+
+            rootsLock.use {
+                val refused = CommandOutputFixture()
+                AdminCommand.run(listOf("force-retire", "main", id), config, refused.output) shouldBe 1
+                refused.stderr shouldContain "root` command is holding"
+
+                DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+                    SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
+                        .bindingInRoot(RootName.MAIN, PageId.require(id)).shouldNotBeNull()
+                }
+            }
+
+            val retried = CommandOutputFixture()
+            AdminCommand.run(listOf("force-retire", "main", id), config, retried.output) shouldBe 0
+            retried.stdout shouldContain "force-retired"
         }
     }
 

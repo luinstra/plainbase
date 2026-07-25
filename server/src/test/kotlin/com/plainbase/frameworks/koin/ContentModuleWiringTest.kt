@@ -3,7 +3,13 @@ package com.plainbase.frameworks.koin
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.RetirementRepository
+import com.plainbase.domain.root.BindingEpoch
+import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
@@ -16,6 +22,15 @@ import com.plainbase.frameworks.objectstore.ObjectContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.route
+import io.ktor.server.routing.routing
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
@@ -114,15 +129,77 @@ class ContentModuleWiringTest : FunSpec({
             }
         }
     }
+
+    test("object mode snapshots the real durable rows and binding epoch at the LIST boundary") {
+        val listXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <ListBucketResult>
+                <IsTruncated>false</IsTruncated>
+            </ListBucketResult>
+        """.trimIndent()
+        val server = embeddedServer(CIO, host = "127.0.0.1", port = 0) {
+            routing {
+                route("{path...}") {
+                    handle {
+                        call.respondText(listXml, ContentType.Application.Xml, HttpStatusCode.OK)
+                    }
+                }
+            }
+        }.start(wait = false)
+        val port = server.engine.resolvedConnectors().first().port
+        try {
+            withTempDataDir { dataDir ->
+                val app = koinApplication {
+                    modules(
+                        objectConfigModule(dataDir, endpoint = "http://127.0.0.1:$port"),
+                        contentModule,
+                        repositoryModule,
+                        securityModule,
+                        historyModule,
+                    )
+                }
+                val store = app.koin.get<ObjectContentStore>()
+                try {
+                    val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+                    val path = TreePath.require("guides/wiring.md")
+                    val idMap = app.koin.get<IdMapRepository>()
+                    val retirements = app.koin.get<RetirementRepository>()
+
+                    retirements.observation(RootName.MAIN)
+                    idMap.bind(RootedPath(RootName.MAIN, path), id, materialized = false)
+                    val expectedEpoch = retirements.bindingEpoch(RootName.MAIN)
+                    expectedEpoch shouldBe BindingEpoch(1)
+
+                    store.pollOnce()
+
+                    val manifest = checkNotNull(store.latestManifest())
+                    manifest.rowsAtStart shouldBe setOf(BindingRef(path, id))
+                    manifest.bindingEpoch shouldBe expectedEpoch
+                } finally {
+                    store.close()
+                    app.close()
+                }
+            }
+        } finally {
+            // EmbeddedServer.stop() blocks internally; keep that runBlocking bridge off Kotest's test coroutine.
+            withContext(Dispatchers.IO) {
+                server.stop(gracePeriodMillis = 100, timeoutMillis = 1000)
+            }
+        }
+    }
 })
 
-private fun objectConfigModule(dataDir: java.nio.file.Path, gitEnabled: Boolean? = null) = module {
+private fun objectConfigModule(
+    dataDir: java.nio.file.Path,
+    gitEnabled: Boolean? = null,
+    endpoint: String = "https://acct.example.com",
+) = module {
     single {
         PlainbaseConfig.fromEnv(emptyMap()).copy(
             dataDir = dataDir,
             storage = StorageConfig(
                 backend = StorageBackend.OBJECT,
-                endpoint = "https://acct.example.com",
+                endpoint = endpoint,
                 bucket = "docs",
                 accessKeyId = "k",
                 secretAccessKey = "s",
