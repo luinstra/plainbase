@@ -276,3 +276,43 @@ jobs:
 
       - name: Playwright smoke (boots auth-off AND enforced-builtin servers)
         run: ./gradlew :frontend:smokeTest --console=plain
+
+  # ---- The ONE required status check on `main`.
+  #
+  # A required check is matched by NAME. Pinning each job's name in the branch ruleset means a rename
+  # silently detaches the requirement, and it fails OPEN: the pull request waits forever on a check
+  # nothing will ever report, which looks like a stuck test rather than a config error. That is
+  # exactly what happened when the Playwright job's name gained `+ multi-root`. So the ruleset
+  # requires this job and nothing else, and adding or renaming jobs never touches repo settings.
+  #
+  # `if: always()` is load-bearing: without it the gate is SKIPPED when an upstream job fails, and a
+  # skipped required check leaves the pull request pending rather than red. Testing
+  # `needs.*.result` is load-bearing for the same reason in the other direction: `needs` alone
+  # treats a SKIPPED dependency as satisfied, so a gate that only declared `needs` would pass when
+  # nothing ran.
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs:
+      - build-test
+      - enforced-auth-smoke
+      - multi-root-smoke
+      - docker-image
+      - native-gate
+      - frontend-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gate's own completeness check. Routing every job through one gate moves the coupling
+      # into this file rather than deleting it: forget a `needs` entry and that job quietly stops
+      # gating. This step makes that failure loud instead of silent.
+      - name: Assert the gate covers every job
+        run: python3 scripts/ci/assert-gate-covers-every-job.py
+
+      - name: Assert every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "a required job did not succeed:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
