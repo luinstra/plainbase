@@ -1,7 +1,7 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted (D1-D18 frozen at C4 merge; C5 appends implementation notes only, below - no
-  decision here is re-opened)
+- **Status:** Accepted, SUPERSEDED IN PART by per-root page identity (see the superseding note
+  directly below). D1-D18 were frozen at C4 merge; the later C5 chunk did re-open D2 and D17.
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -13,6 +13,26 @@
   never hard view-only, so policy must distinguish write classes. This ADR settles the contested
   decisions the debate resolved; C1 lands the domain types, config parsing, validation matrix, and
   the single-root-wired registry seam with behavior byte-identical for every config that boots today.
+
+## Superseded in part: per-root page identity (2026-07-24)
+
+**This ADR records what was decided at C4. It is not a description of current behavior.** The C5
+chunk reversed two of its decisions. Everything below this note is left exactly as it was frozen, so
+the original reasoning stays legible; where the frozen text and this note disagree, this note wins.
+
+- **`UNIQUE(id)` became `UNIQUE(id, root)`.** Page identity is now the pair `(RootName, PageId)`. A
+  cross-root duplicate id is therefore no longer an identity ISSUE to be contested (D2) and there is
+  no cross-root winner to elect (D17): both roots simply keep their own page. Read every `UNIQUE(id)`
+  and every cross-root contest rule below as the C4 design, not as today's.
+- **Permalinks are rooted, `/p/{root}/{id}`.** Every statement below that a permalink is bare, or
+  that `/p/{id}` is untouched, describes the C4 world. The bare form still resolves, as the pre-C5
+  regression arm. The two ambiguity surfaces answer differently and are easy to conflate: when the id
+  exists in more than one root, the bare PERMALINK answers **300 Multiple Choices** with a candidate
+  list (`PermalinkRoute.kt:156`), while an id-addressed REST read answers **409 `ambiguous_page_id`**
+  (`RouteSupport.kt:412`).
+
+Authority: the C5 commits on `multi-root` (`d934220` plus its four follow-ups, PR #14). A
+replacement identity ADR is C7's job; until that lands, this note is the pointer.
 
 ## Context
 

@@ -53,6 +53,15 @@ import io.kotest.core.spec.style.FunSpec
  * FixtureIndexStub emitter, kept matching production emission), and the frontend
  * `wire-golden.json` twin were regenerated once, under diff review, for this amendment.
  *
+ * Per-root identity, C5 (2026-07-24, owner-approved): page identity is the pair `(root, id)`, so
+ * `UNIQUE(id)` became `UNIQUE(id, root)` and every emitted permalink VALUE is now `/p/{root}/{id}`.
+ * That reshapes `PageMetadataResponse.permalink` and the `citation.uri` values
+ * (`plainbase://{root}/{id}@{hash}`). No key was added, removed or retyped. The bare `/p/{id}` still
+ * resolves as the pre-C5 arm; when that id lives in more than one root the PERMALINK answers 300
+ * Multiple Choices with its candidate list, while an id-addressed REST read answers 409
+ * `ambiguous_page_id`. Two surfaces, two codes, easy to conflate.
+ * `wire-golden.json` and its server twin moved together under diff review.
+ *
  * Multi-root C4, same amendment window: `root` is REQUIRED on the two CREATE REQUESTS - `CreatePageRequest`
  * (`POST /api/v1/pages`) and a `ProposeChangeRequest` whose operation is `create` (REST + the MCP tool). It
  * shipped defaulted to `main` and that default was the bug: which root a create names decides whose disk the
@@ -112,7 +121,7 @@ import io.kotest.core.spec.style.FunSpec
  * — pinned by a divergence golden using a non-ASCII slug. Tier-1 holds two create snapshots,
  * `golden/rest/write-post-ok.json` (the 201 create shape) and `golden/rest/write-post-ok-unicode.json`
  * (the url-divergence guard), so WriteGoldenTest is now 11 tests (incl. the path-space-loser
- * permalink fallback: a null-canonical-url create addresses the `/p/{id}` permalink, never a
+ * permalink fallback: a null-canonical-url create addresses the `/p/{root}/{id}` permalink, never a
  * fabricated `/docs/<raw path>`).
  *
  * PB-PROPOSE-1 + PB-DIFF-1 freeze ledger (froze when P1a landed, Phase 5): the agent proposal wire
@@ -144,7 +153,7 @@ import io.kotest.core.spec.style.FunSpec
  * PB-READ-2 freeze ledger (froze when P2 landed, Phase 5 — the remaining agent READ ops): the two NET-NEW agent-read
  * wire shapes `ValidateLinksResponse`/`BrokenLinkDto` (`GET /api/v1/pages/{id}/validate-links`) and
  * `PageMetadataResponse` (`GET /api/v1/pages/{id}/metadata`) are frozen. The `PageMetadataResponse` frozen fields are
- * `id`/`path`/`url` (nullable)/`permalink` (always non-null, the `/p/{id}` ID permalink)/`content_hash`/`commit`
+ * `id`/`path`/`url` (nullable)/`permalink` (always non-null; `/p/{root}/{id}` since C5, see the amendment below)/`content_hash`/`commit`
  * (nullable)/`title`/`headings`. They REUSE the frozen `HeadingDto` (metadata
  * headings) and the PB-LINK-1 `BrokenLinkReason.wireValue` vocabulary — the append-only set `broken_missing`/
  * `broken_case_mismatch`/`broken_malformed`/`outside_content_root`/`ambiguous`/`blocked_scheme` plus the checker's
