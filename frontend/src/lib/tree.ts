@@ -1,4 +1,5 @@
 import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
+import { parsePermalink, permalinkOf, permalinkSplat } from "./permalink";
 
 /**
  * A cross-root lookup's answer: the matched folder WITH its entry's root and whether that root is
@@ -18,9 +19,11 @@ export interface FolderEntry {
   folder: TreeFolder;
 }
 
-/** A page's href: the canonical URL from the tree, or the `/p/{id}` permalink for a collision loser. */
-export function pageHref(page: TreePage): string {
-  return page.url ?? `/p/${page.id}`;
+/** A page's href: the canonical URL from the tree, or its ROOTED `/p/{root}/{id}` permalink for a
+ *  collision loser. [root] is required: the tree node carries no root of its own (two roots hold the
+ *  same relative path), and a bare permalink now answers 300/409 whenever the id is duplicated. */
+export function pageHref(root: string, page: TreePage): string {
+  return page.url ?? permalinkOf(root, page.id);
 }
 
 function* walk(nodes: TreeNode[]): Generator<TreeNode> {
@@ -127,7 +130,7 @@ export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | 
 
 /**
  * The ENTRY whose `/docs/{root}` URL space owns [pathname], or null when the location is not under one (the
- * `/new`, `/review`, `/admin` and `/p/{id}` routes).
+ * `/new`, `/review`, `/admin` and `/p/...` permalink routes).
  *
  * Matched against each entry's SERVER-ISSUED root url (`RootTree.tree.url`) rather than by splitting the
  * pathname on `/`: the server is the single URL authority (§A4), and this answer decides WHICH TREE a create
@@ -149,6 +152,24 @@ export function rootEntryOfUrl(roots: RootTree[], pathname: string): RootTree | 
 /** The NAME of the root owning [pathname] - [rootEntryOfUrl]'s answer, so there stays exactly one url-ownership rule. */
 export function rootOfUrl(roots: RootTree[], pathname: string): string | null {
   return rootEntryOfUrl(roots, pathname)?.root ?? null;
+}
+
+/**
+ * The root the READER is standing in, from the address alone - `/docs/{root}` url ownership OR a rooted
+ * `/p/{root}/{id}` permalink. The two sources are disjoint (a permalink is never in a `/docs` url space)
+ * and the second one is not a nicety: a path-space collision loser has `url = null`, so its permalink is
+ * its ONLY address, and reading that location as "no root" is what sent a reader's new page into main
+ * from a page that lives somewhere else entirely.
+ *
+ * A BARE `/p/{id}` still answers null, and must: that address names no root, and the only thing that
+ * could supply one is the page response this location has not made. An UNKNOWN root name is answered
+ * VERBATIM rather than filtered to null - callers gate on the registry themselves ([rootAcceptsWrites],
+ * [entryFor]), and their answer for an unknown root is "not writable", which is the right one here too.
+ * Filtering would instead hand back "no root", which every caller reads as main.
+ */
+export function rootOfLocation(roots: RootTree[], pathname: string): string | null {
+  const splat = permalinkSplat(pathname);
+  return splat === null ? rootOfUrl(roots, pathname) : parsePermalink(splat).root;
 }
 
 /**
@@ -192,17 +213,28 @@ export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
 }
 
 /**
- * The entry whose folder's landing page (index/README) is the page `pageId`, if any. A landing
- * page has one canonical home - the folder URL - so its own bare-page URL is redirected there;
- * this is the lookup that recognizes such a URL. Each entry's root folder is included (its
- * landing answers `/docs/{root}`).
+ * The entry whose folder's landing page (index/README) is the page `pageId` WITHIN [root], if any. A
+ * landing page has one canonical home - the folder URL - so its own bare-page URL is redirected there;
+ * this is the lookup that recognizes such a URL. Each entry's root folder is included (its landing
+ * answers `/docs/{root}`).
+ *
+ * [root] is REQUIRED and is the caller's ALREADY-RESOLVED root (`PageResponse.root`), not a guess: a
+ * page id can be held by more than one root (per-root identity), and two roots holding
+ * `permalink/index.md` under the same id is the NORMAL shape of a copied corpus. An unscoped walk
+ * answers with whichever entry comes first in wire order, and the caller turns that answer into a
+ * `history.replace` - so the bug's symptom is a reader silently moved into another root's document,
+ * with the page rendering perfectly. Scoping here rather than filtering at the call site keeps the rule
+ * in the SIGNATURE, where a future caller cannot forget it.
+ *
+ * Scope first, id second: that is the argument order of the tree-lookup family it belongs to
+ * ([entryFor], [treeFor], [folderByUrl]), not the id-first order of the API helpers.
  */
-export function folderForLanding(roots: RootTree[], pageId: string): FolderEntry | null {
-  for (const entry of roots) {
-    for (const node of walk([entry.tree])) {
-      if (node.type === "folder" && landingChild(node.children)?.id === pageId) {
-        return { root: entry.root, available: entry.available, folder: node };
-      }
+export function folderForLanding(roots: RootTree[], root: string, pageId: string): FolderEntry | null {
+  const entry = entryFor(roots, root);
+  if (entry === null) return null;
+  for (const node of walk([entry.tree])) {
+    if (node.type === "folder" && landingChild(node.children)?.id === pageId) {
+      return { root: entry.root, available: entry.available, folder: node };
     }
   }
   return null;

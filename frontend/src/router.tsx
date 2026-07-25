@@ -27,9 +27,11 @@ import { Shell } from "./components/Shell";
  *   /docs/$    → canonical page route; the splat is the by-path key. `?mode=edit` mounts the
  *                editor, `?mode=history` is the W7 history seam; absent = the clean read view.
  *   /new       → new-page creation (no path exists pre-create — the server mints it)
- *   /p/$       → loser-permalink route. Winners never reach it (the server 302s
- *                /p/{id} → canonical), but a collision loser's permalink serves the
- *                shell (200), so the SPA fetches by id and renders in place.
+ *   /p/$       → permalink route, BOTH forms: the rooted `/p/{root}/{id}` the server emits
+ *                and the bare `/p/{id}` it still serves. Winners never reach it (the server
+ *                302s a permalink → canonical), but a collision loser's permalink serves the
+ *                shell (200), so the SPA parses the splat (lib/permalink.ts), fetches by
+ *                (root, id) and renders in place.
  *   anything else → 404 view (the server's static fallback returns the shell)
  */
 export interface RouterContext {

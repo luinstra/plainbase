@@ -24,7 +24,9 @@ import { Prose } from "./Prose";
 /**
  * The `?mode=edit` editor surface (W6, D-1/D-4): a CodeMirror 6 Markdown editor over the FULL document
  * buffer (frontmatter + body as one document), a debounced server-preview pane, and a CAS save against
- * `PUT /api/v1/pages/{id}` with `base_hash` carried as the `If-Match` ETag. Owns its OWN `useQuery` for
+ * `PUT /api/v1/pages/{id}?root={root}` with `base_hash` carried as the `If-Match` ETag. The root pin
+ * is REQUIRED since C5: without it a duplicated id answers 409 `ambiguous_page_id` rather than
+ * picking a root, so a save can never land on the wrong disk. Owns its OWN `useQuery` for
  * the initial buffer (component-level data-fetching — no route loader). The server is the identity
  * authority: a tampered id/slug surfaces the 422 refusal, never a silent save (D-4).
  */
@@ -64,10 +66,13 @@ export function EditorPage({ path }: { path: string }) {
     return <QueryErrorView error={page.error} />;
   }
 
-  // Key by id so a navigation to a different page remounts the editor with a fresh buffer/base_hash.
+  // Key by (root, id) so a navigation to a different page remounts the editor with a fresh
+  // buffer/base_hash. The ROOT is half the identity: two roots can hold the same id, props flow without
+  // a remount, and an id-only key would keep root A's buffer and CAS token while `root` had flipped to
+  // B - so the save lands B's disk with A's bytes, and on byte-identical copies the CAS passes.
   return (
     <Editor
-      key={page.data.id}
+      key={`${page.data.root}:${page.data.id}`}
       id={page.data.id}
       root={page.data.root}
       initialPath={page.data.path}
@@ -179,7 +184,7 @@ function Editor({
     // Capture the exact sent bytes so the saved baseline advances to them on success (even mid-request).
     mutationFn: (): Promise<{ result: SaveResult; sent: string }> => {
       const sent = bufferRef.current;
-      return putPageRaw(id, sent, baseHash).then((result) => ({ result, sent }));
+      return putPageRaw(id, root, sent, baseHash).then((result) => ({ result, sent }));
     },
     onSuccess: ({ result, sent }) => applySaveResult(result, sent),
   });
@@ -444,7 +449,8 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
     if (result.kind === "created") {
       // Invalidate the DESTINATION url's by-path/page cache BEFORE navigating — save-as-new can reuse a
       // recovered `/docs/...` URL whose by-path entry still points at the deleted old id, so the read route
-      // would otherwise render that stale id for up to its staleTime. (A `/p/{id}` permalink no-ops.)
+      // would otherwise render that stale id for up to its staleTime. (A permalink url no-ops: it is not
+      // a `/docs/` address, so it has no by-path key. The id leg still clears every root spelling.)
       invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
       if (result.created.warning || !result.created.url) {
         // Unindexed (or, defensively, no canonical url yet): the page is unpublished, so navigating

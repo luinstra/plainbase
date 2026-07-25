@@ -84,7 +84,7 @@
       "path": "guides/deploy-guide.md",
       "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "commit": null,
-      "uri": "plainbase://01970000-0000-7000-8000-000000000001@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "uri": "plainbase://main/01970000-0000-7000-8000-000000000001@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   },
   "pageHtmlResponse": {
@@ -110,7 +110,7 @@
       "path": "shadowed.md",
       "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "commit": "1111111111111111111111111111111111111111",
-      "uri": "plainbase://01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "uri": "plainbase://main/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   },
   "errorEnvelope": {
@@ -149,7 +149,7 @@
           "path": "shadowed.md",
           "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "commit": null,
-          "uri": "plainbase://01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "uri": "plainbase://main/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       }
     ]

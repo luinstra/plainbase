@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
+import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
   folderByUrl,
   folderForLanding,
@@ -43,7 +44,7 @@ export function DocsPage({ path }: { path: string }) {
   // A folder's landing page (index/README) has ONE canonical home: the folder URL. Reaching it at
   // its own bare-page URL redirects to the folder (the lookup needs the tree, kept warm by the
   // Sidebar). Otherwise the canonical target is the page's own `url` (alias → canonical).
-  const landingEntry = resolved && tree.data ? folderForLanding(tree.data.roots, resolved.id) : null;
+  const landingEntry = resolved && tree.data ? folderForLanding(tree.data.roots, resolved.root, resolved.id) : null;
   useEffect(() => {
     if (!resolved || pathname !== resolvedFor) return;
     if (landingEntry) {
@@ -74,7 +75,7 @@ export function DocsPage({ path }: { path: string }) {
   if (landingEntry?.folder.url) return <FolderLanding url={landingEntry.folder.url} />;
   // The by-path response IS the page's PageResponse (frontmatter included) — hand it to the Rail
   // directly so it reads already-loaded metadata with no redundant /api/v1/pages/:id fetch.
-  return <PageContent id={page.data.id} page={page.data} />;
+  return <PageContent id={page.data.id} root={page.data.root} page={page.data} />;
 }
 
 /**
@@ -129,7 +130,7 @@ export function FolderLanding({ url }: { url?: string }) {
   // through the sidebar tree. With no index, it's a purely-generated listing — no rail, but the rail
   // column stays reserved so the content width matches a page (see FolderListing).
   const landing = landingPage(resolved.folder);
-  return landing ? <PageContent id={landing.id} /> : <FolderListing root={resolved.root} folder={resolved.folder} />;
+  return landing ? <PageContent id={landing.id} root={resolved.root} /> : <FolderListing root={resolved.root} folder={resolved.folder} />;
 }
 
 /**
@@ -179,7 +180,7 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
         <div className="mx-auto max-w-[72ch]">
           <Breadcrumbs root={root} path={folder.path} title={title} />
           <h1 className="text-3xl font-bold text-ink">{title}</h1>
-          <FolderListingGroups folder={folder} />
+          <FolderListingGroups root={root} folder={folder} />
         </div>
       </div>
       {/* Rail column reserved (empty) — no rail/TOC here, but the reading column keeps a page's width. */}
@@ -191,10 +192,11 @@ function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
 /**
  * The generated child groups — subfolders into a card grid, pages into a compact list — each
  * group preserving the tree response's order (never re-sorted; a stable partition, not a sort).
- * Pages link via their node `url` (losers via `/p/{id}`); subfolders via their folder `url` (a
- * loser subfolder has none and stays an inert card). `data-pb-folder*` hooks are stable selectors.
+ * Pages link via their node `url` (losers via the rooted `/p/{root}/{id}`); subfolders via their
+ * folder `url` (a loser subfolder has none and stays an inert card). `data-pb-folder*` hooks are
+ * stable selectors.
  */
-function FolderListingGroups({ folder }: { folder: TreeFolder }) {
+function FolderListingGroups({ root, folder }: { root: string; folder: TreeFolder }) {
   const subfolders = folder.children.filter((c): c is TreeFolder => c.type === "folder");
   const pages = folder.children.filter((c): c is TreePage => c.type === "page");
 
@@ -217,7 +219,7 @@ function FolderListingGroups({ folder }: { folder: TreeFolder }) {
               {pages.map((child) => (
                 <a
                   key={child.id}
-                  href={pageHref(child)}
+                  href={pageHref(root, child)}
                   data-pb-folder-child="page"
                   data-pb-status={child.status}
                   className="pb-page-row"
@@ -275,21 +277,26 @@ function FolderIcon() {
 }
 
 /**
- * The `/p/$` route body — the chunk-6 amendment: a collision loser has `url = null`, so
- * its permalink cannot 302 anywhere and the server serves the SPA shell (200). Here the
- * page is fetched BY ID and rendered at the permalink itself. If the page turns out to
- * have a canonical url after all (e.g. the collision resolved since the link was minted),
- * we replaceState across to it — mirroring the server's 302 for winners.
+ * The `/p/$` route body. A collision loser has `url = null`, so its permalink cannot 302 anywhere and
+ * the server serves the SPA shell (200) — for BOTH forms of the address: the ROOTED `/p/{root}/{id}`
+ * the server emits, and the BARE `/p/{id}` that is still legal and still served. Here the page is
+ * fetched BY ID, pinned to the parsed root, and rendered at the permalink itself. If the page turns out
+ * to have a canonical url after all (e.g. the collision resolved since the link was minted), we
+ * replaceState across to it — mirroring the server's 302 for winners.
  */
 export function PermalinkPage({ splat }: { splat: string }) {
-  // Trailing segments after the id are tolerated and ignored, like the server route.
-  const id = splat.split("/")[0] ?? "";
+  // Both forms arrive here, and trailing segments after the id are decorative, like the server route.
+  // The PARSED root, not the response's: this root is what the request must CARRY, so it cannot come
+  // from the response to that same request. It is legitimately null on the bare arm.
+  const { root, id, prefix } = parsePermalink(splat);
   const router = useRouter();
-  const page = useQuery(pageQuery(id));
+  const page = useQuery(pageQuery(id, root));
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   const canonicalUrl = page.data?.url;
-  const stillHere = pathname === `/p/${id}` || pathname.startsWith(`/p/${id}/`);
+  // Compared against the parse's own `prefix`, never a rebuilt string: the guard used to reconstruct
+  // the address from a variable the parse had already mangled, so the two drifted together.
+  const stillHere = pathname === prefix || pathname.startsWith(`${prefix}/`);
   useEffect(() => {
     if (canonicalUrl && stillHere) {
       router.history.replace(canonicalUrl + window.location.search + window.location.hash);
@@ -297,9 +304,39 @@ export function PermalinkPage({ splat }: { splat: string }) {
   }, [canonicalUrl, stillHere, router]);
 
   if (page.isPending) return <PagePending />;
-  if (page.isError) return <PageError error={page.error} />;
-  // The permalink response is the page's PageResponse — hand it to the Rail, no redundant fetch.
-  return <PageContent id={page.data.id} page={page.data} />;
+  if (page.isError) return <PermalinkError error={page.error} id={id} />;
+  // The permalink response is the page's PageResponse — hand it to the Rail, no redundant fetch. Still the
+  // PARSED root, never the response's: the client acts on the address the reader used. Re-pin the html leg
+  // to the root the metadata read NAMED and this view silently resolves an ambiguity the server refuses to -
+  // once the id is duplicated, a fresh load of the same bare `/p/{id}` answers 300 while the pinned render
+  // shows a page, which is the click-vs-reload split the structural gate exists to close.
+  return <PageContent id={page.data.id} root={root} page={page.data} />;
+}
+
+/**
+ * The permalink route's error surface: the shared one, plus the single thing only THIS caller can supply. A
+ * bare `/p/{id}` whose id lives in more than one root reads 409 `ambiguous_page_id`, and that message ENDS
+ * "retry against one of the candidate roots below" - so rendering the message alone points the remedy at a
+ * list that does not exist. The envelope carries the candidate roots and the address carries the id, so the
+ * links are built here, from `permalinkOf` (the same emitter mirror `pageHref` uses - no new URL semantics).
+ * NOT the candidates' own `url`s: those are the API retry targets, and would send a reader to JSON.
+ */
+function PermalinkError({ error, id }: { error: Error; id: string }) {
+  const candidates = error instanceof ApiError ? error.candidates : [];
+  if (candidates.length === 0) return <PageError error={error} />;
+  return (
+    <QueryErrorView error={error}>
+      <ul className="mt-4 space-y-1" data-pb-candidates>
+        {candidates.map((candidate) => (
+          <li key={candidate.root}>
+            <a href={permalinkOf(candidate.root, id)} className="font-medium text-link hover:text-link-hover hover:underline">
+              {candidate.root}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </QueryErrorView>
+  );
 }
 
 /**
@@ -310,11 +347,19 @@ export function PermalinkPage({ splat }: { splat: string }) {
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
  * slow or failed fetch degrades the Rail to its always-present File row, never blanking the doc.
+ *
+ * BOTH reads carry [root], and it is NULLABLE on purpose. An id can be held by more than one root (per-root
+ * identity, C5), so a bare id-addressed read of a duplicated id answers 409 `ambiguous_page_id` and this view
+ * renders an error rather than picking a root - which is the RIGHT answer for the one caller that has no root
+ * to give: a bare `/p/{id}`, whose reader named none. The rooted callers all pass a real one (the two by-path
+ * routes from the response, the folder landing from the tree entry, the rooted permalink from its address), so
+ * making this non-nullable would only let the bare route infer a root from a response and render a page the
+ * server would refuse to serve on reload.
  */
-function PageContent({ id, page: seeded }: { id: string; page?: PageResponse }) {
-  const html = useQuery(pageHtmlQuery(id));
+function PageContent({ id, root, page: seeded }: { id: string; root: string | null; page?: PageResponse }) {
+  const html = useQuery(pageHtmlQuery(id, root));
   // Fetch by id only when the caller didn't already resolve the page (folder-landing path).
-  const fetched = useQuery({ ...pageQuery(id), enabled: seeded === undefined });
+  const fetched = useQuery({ ...pageQuery(id, root), enabled: seeded === undefined });
   const page = seeded ?? fetched.data;
   // The page names its own root; the TREE is what says whether that root takes writes. Read-only, down, and
   // not-yet-known roots get no Edit affordance - the same call Shell makes for "New", and for the same

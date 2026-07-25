@@ -94,7 +94,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             <a
               class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
               data-pb-status="active"
-              href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+              href="/p/main/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
             >
               Shadowed Page
             </a>

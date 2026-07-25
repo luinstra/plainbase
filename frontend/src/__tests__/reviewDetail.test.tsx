@@ -187,7 +187,9 @@ describe("review detail", () => {
     await waitFor(() => expect(approveBtn(view)?.disabled).toBe(true));
     fireEvent.click(approveBtn(view)!);
     // A genuinely-disabled button dispatches no click handler; no approve POST is ever issued.
-    expect(posts.some((c) => c.url.endsWith("/approve"))).toBe(false);
+    // Matched on the PATHNAME: an absence assertion that tail-matches a raw url disarms itself the day
+    // the request grows a query string, and reports green while doing it.
+    expect(posts.some((c) => new URL(c.url, "http://x").pathname.endsWith("/approve"))).toBe(false);
   });
 
   it("a 403 on approve flips the no-access state", async () => {

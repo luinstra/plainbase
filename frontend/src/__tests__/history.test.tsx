@@ -18,8 +18,12 @@ const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, edita
 
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 const PATH = "main/guides/deploy-guide"; // the by-path key IS the root-qualified splat (C3)
-const URL = "/docs/main/guides/deploy-guide";
+const PAGE_URL = "/docs/main/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
+/** A HAND-BUILT id held by BOTH roots (a copied corpus), for the cross-root rows. */
+const DUP_ID = "0197c2d1-9f3b-7a4e-8d6c-1b5a7e9c3f21";
+const EXTRA_PATH = "extra/permalink/hub";
+const EXTRA_URL = "/docs/extra/permalink/hub";
 
 function pageResponse(commit: string | null): PageResponse {
   return {
@@ -27,7 +31,7 @@ function pageResponse(commit: string | null): PageResponse {
     root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
-    url: URL,
+    url: PAGE_URL,
     title: "Deploy Guide",
     markdown: "# Deploy Guide\n",
     frontmatter: { updated: "2026-01-01" },
@@ -75,7 +79,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 /** A minimal `PageHtmlResponse` so the READ view (PageContent → Breadcrumbs/Prose) renders without crashing. */
 function htmlResponse() {
-  return jsonResponse({ id: ID, root: "main", path: "guides/deploy-guide.md", slug: "deploy-guide", url: URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
+  return jsonResponse({ id: ID, root: "main", path: "guides/deploy-guide.md", slug: "deploy-guide", url: PAGE_URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
 }
 
 function urlOf(input: RequestInfo | URL): string {
@@ -106,7 +110,7 @@ describe("W7 history affordance (read view, MF-1)", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     // commit:null → no affordance, and the read view NEVER fetches /history.
-    const nullCommit = renderAt(URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
+    const nullCommit = renderAt(PAGE_URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
     await waitFor(() => expect(nullCommit.view.container.querySelector("[data-pb-docfoot]")).not.toBeNull());
     expect(nullCommit.view.container.querySelector("[data-pb-history-page]")).toBeNull();
     expect(fetchSpy.mock.calls.some(([input]) => urlOf(input).includes("/history"))).toBe(false);
@@ -115,7 +119,7 @@ describe("W7 history affordance (read view, MF-1)", () => {
     fetchSpy.mockClear();
 
     // commit:"<sha>" → the affordance appears, STILL no /history fetch on the read view.
-    const withCommit = renderAt(URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const withCommit = renderAt(PAGE_URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
     await waitFor(() => expect(withCommit.view.container.querySelector("[data-pb-history-page]")).not.toBeNull());
     expect(fetchSpy.mock.calls.some(([input]) => urlOf(input).includes("/history"))).toBe(false);
   });
@@ -130,13 +134,13 @@ describe("W7 history affordance (read view, MF-1)", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     // Read view: a git-off page has commit:null → no affordance.
-    const read = renderAt(URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
+    const read = renderAt(PAGE_URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
     await waitFor(() => expect(read.view.container.querySelector("[data-pb-docfoot]")).not.toBeNull());
     expect(read.view.container.querySelector("[data-pb-history-page]")).toBeNull();
     read.view.unmount();
 
     // Direct ?mode=history with git_enabled:false → the git-off copy, no list.
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
     await waitFor(() => expect(view.container.querySelector("[data-pb-history-disabled]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-commit]")).toBeNull();
   });
@@ -151,7 +155,7 @@ describe("W7 history view (?mode=history)", () => {
         return jsonResponse({ html: "", headings: [] });
       }),
     );
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit]").length).toBe(2));
     const rows = view.container.querySelectorAll("[data-pb-commit]");
@@ -178,7 +182,7 @@ describe("W7 history view (?mode=history)", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
     const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
@@ -197,6 +201,119 @@ describe("W7 history view (?mode=history)", () => {
     expect(diffUrl).toContain(`to=${NEWER.sha}`);
   });
 
+  it("reads /history AND /diff with the page's own ?root=, so a duplicated id cannot 409", async () => {
+    // Both routes resolve through the same by-id lookup as every other id-addressed read, so on a
+    // duplicated id a bare read fails CLOSED. The `/history` stub must return at least TWO commits:
+    // with one, `toggle` can only set `to`, diffQuery never enables, and the /diff assertion would be
+    // unreachable while the row still passed on the /history one.
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = urlOf(input);
+      if (url.includes("/history")) return jsonResponse({ git_enabled: true, commits: [NEWER, OLDER] });
+      if (url.includes("/diff")) {
+        return jsonResponse({
+          git_enabled: true,
+          from: OLDER.sha,
+          to: NEWER.sha,
+          path: "permalink/hub.md",
+          unified_diff: ["@@ -1 +1 @@", " context", "-removed", "+added"].join("\n"),
+        });
+      }
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const { view } = renderAt(`${EXTRA_URL}?mode=history`, (qc) =>
+      qc.setQueryData(pageByPathQuery(EXTRA_PATH).queryKey, {
+        ...pageResponse(NEWER.sha),
+        id: DUP_ID,
+        root: "extra",
+        url: EXTRA_URL,
+        path: "permalink/hub.md",
+      }),
+    );
+
+    await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
+    const historyUrl = urlOf(fetchSpy.mock.calls.find(([input]) => urlOf(input).includes("/history"))![0]);
+    expect(historyUrl).toContain(`/api/v1/pages/${DUP_ID}/history?root=extra`);
+
+    const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
+    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
+
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) => urlOf(input).includes("/diff"))).toBe(true));
+    const diffUrl = urlOf(fetchSpy.mock.calls.find(([input]) => urlOf(input).includes("/diff"))![0]);
+    // The root is APPENDED here (the URL already carries a query string), and from/to survive it.
+    expect(diffUrl).toContain("&root=extra");
+    expect(diffUrl).toContain(`from=${OLDER.sha}`);
+    expect(diffUrl).toContain(`to=${NEWER.sha}`);
+  });
+
+  it("REMOUNTS across roots, so a selection made in main cannot drive a diff in extra", async () => {
+    // The mount-identity half of the same defect the editor has: two roots hold this id, props flow
+    // without a remount, and an id-only key would leave HistoryView holding MAIN's from/to while `root`
+    // had flipped to extra - a diff request for extra's page carrying main's SHAs.
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = urlOf(input);
+      if (url.includes("/history")) {
+        // DISJOINT commit lists per root, switched on the ?root= value, so "main's selection" is
+        // identifiable in a later request - and so a regression in F17a's rooting fails loudly here too.
+        const commits = url.includes("root=extra") ? [OLDEST] : [NEWER, OLDER];
+        return jsonResponse({ git_enabled: true, commits });
+      }
+      if (url.includes("/diff")) {
+        // A 200 for ANY from/to, and that is a PRECONDITION, not politeness: a 404 fires the
+        // history-rewrite self-heal, which nulls the selection WITHOUT a remount, brings the hint back
+        // and would re-green assertion 1 under the buggy key.
+        const param = (name: string) => new URL(url, "http://x").searchParams.get(name) ?? "";
+        return jsonResponse({
+          git_enabled: true,
+          from: param("from"),
+          to: param("to"),
+          path: "permalink/hub.md",
+          unified_diff: "@@ -1 +1 @@\n-x\n+y\n",
+        });
+      }
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    // BOTH by-path keys primed, or the Loading branch unmounts HistoryView for the wrong reason.
+    const { history, view } = renderAt(`/docs/main/permalink/hub?mode=history`, (qc) => {
+      qc.setQueryData(pageByPathQuery("main/permalink/hub").queryKey, {
+        ...pageResponse(NEWER.sha),
+        id: DUP_ID,
+        root: "main",
+        url: "/docs/main/permalink/hub",
+        path: "permalink/hub.md",
+      });
+      qc.setQueryData(pageByPathQuery(EXTRA_PATH).queryKey, {
+        ...pageResponse(OLDEST.sha),
+        id: DUP_ID,
+        root: "extra",
+        url: EXTRA_URL,
+        path: "permalink/hub.md",
+      });
+    });
+
+    await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
+    const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
+    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
+    // Wait for the DIFF, never for the hint's ABSENCE: the pending branch also hides the hint, so
+    // "no hint" is not a loaded signal and the step below would race.
+    await waitFor(() => expect(view.container.querySelector("[data-pb-diff]")).not.toBeNull());
+    const callsBefore = fetchSpy.mock.calls.length;
+
+    history.push(`${EXTRA_URL}?mode=history`);
+
+    // (1) the selection RESET: only DiffPane's selectedCount < 2 branch renders this hint.
+    await waitFor(() => expect(view.container.querySelector("[data-pb-diff-hint]")).not.toBeNull());
+    // The self-heal's fingerprint. If it appeared, the /diff stub 404'd somewhere and assertion 1 is
+    // measuring the self-heal instead of mount identity.
+    expect(view.container.querySelector("[data-pb-history-notice]")).toBeNull();
+    // (2) no post-navigation /diff carries main's SHAs.
+    const after = fetchSpy.mock.calls.slice(callsBefore).map(([input]) => urlOf(input));
+    expect(after.filter((u) => u.includes("/diff") && (u.includes(NEWER.sha) || u.includes(OLDER.sha)))).toEqual([]);
+  });
+
   it("an oversized diff renders the too-large state, not megabytes of rows", async () => {
     vi.stubGlobal(
       "fetch",
@@ -210,7 +327,7 @@ describe("W7 history view (?mode=history)", () => {
         return jsonResponse({ html: "", headings: [] });
       }),
     );
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
     const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
@@ -245,7 +362,7 @@ describe("W7 history view (?mode=history)", () => {
         return jsonResponse({ html: "", headings: [] });
       }),
     );
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(3));
     const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
@@ -286,7 +403,7 @@ describe("W7 history view (?mode=history)", () => {
 
     // Known extension (.ts) → hljs token spans.
     vi.stubGlobal("fetch", stubDiff("src/answer.ts"));
-    const known = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const known = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
     let buttons = await waitFor(() => {
       const b = known.view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
       expect(b.length).toBe(2);
@@ -300,7 +417,7 @@ describe("W7 history view (?mode=history)", () => {
 
     // Unknown extension → no hljs token spans (escaped plaintext, no rainbow).
     vi.stubGlobal("fetch", stubDiff("notes/answer.weirdext"));
-    const unknown = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const unknown = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
     buttons = await waitFor(() => {
       const b = unknown.view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
       expect(b.length).toBe(2);
@@ -323,13 +440,13 @@ describe("W7 history view (?mode=history)", () => {
       }),
     );
     // VIEW: git_enabled:true + empty commits → the empty state.
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
     await waitFor(() => expect(view.container.querySelector("[data-pb-history-empty]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-commit]")).toBeNull();
     view.unmount();
 
     // READ view of the SAME zero-commit page (commit:null) → no affordance (MF-1 behavior change).
-    const read = renderAt(URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
+    const read = renderAt(PAGE_URL, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(null)));
     await waitFor(() => expect(read.view.container.querySelector("[data-pb-docfoot]")).not.toBeNull());
     expect(read.view.container.querySelector("[data-pb-history-page]")).toBeNull();
   });
@@ -340,7 +457,7 @@ describe("W7 history view (?mode=history)", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit]").length).toBe(1));
     expect(view.container.querySelector("[data-pb-history-empty]")).toBeNull();
@@ -362,7 +479,7 @@ describe("W7 history view (?mode=history)", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
     const callsBeforeDiff = historyCalls;
@@ -387,7 +504,7 @@ describe("W7 history view (?mode=history)", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
     const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
@@ -419,7 +536,7 @@ describe("W7 history view (?mode=history)", () => {
         return jsonResponse({ html: "", headings: [] });
       }),
     );
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-commit] button").length).toBe(2));
     const buttons = view.container.querySelectorAll<HTMLButtonElement>("[data-pb-commit] button");
@@ -450,14 +567,14 @@ describe("W7 history view (?mode=history)", () => {
 
     // Exactly 100 (the server's DEFAULT_HISTORY_LIMIT) → the hint renders.
     vi.stubGlobal("fetch", stub(100));
-    const full = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const full = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
     await waitFor(() => expect(full.view.container.querySelectorAll("[data-pb-commit]").length).toBe(100));
     expect(full.view.container.querySelector("[data-pb-history-truncated]")).not.toBeNull();
     full.view.unmount();
 
     // 99 (below the limit) → no hint.
     vi.stubGlobal("fetch", stub(99));
-    const partial = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const partial = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
     await waitFor(() => expect(partial.view.container.querySelectorAll("[data-pb-commit]").length).toBe(99));
     expect(partial.view.container.querySelector("[data-pb-history-truncated]")).toBeNull();
   });
@@ -470,7 +587,7 @@ describe("W7 history view (?mode=history)", () => {
         return jsonResponse({ html: "", headings: [] });
       }),
     );
-    const { view } = renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
+    const { view } = renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse(NEWER.sha)));
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-commit]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-history]")).not.toBeNull();

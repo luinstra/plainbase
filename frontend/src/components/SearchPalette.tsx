@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { searchQuery, SEARCH_MAX_QUERY, treeQuery } from "../api/queries";
 import type { SearchHit } from "../api/types";
 import { fuzzyRank, type FuzzyCandidate } from "../lib/fuzzy";
+import { permalinkOf } from "../lib/permalink";
 import { pageHref, pages, type PageEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { LISTBOX_ID, optionId, SearchList } from "./SearchList";
@@ -169,7 +170,7 @@ function PaletteBody({
 
   const navigateToPage = useCallback(
     (entry: PageEntry) => {
-      router.history.push(pageHref(entry.page));
+      router.history.push(pageHref(entry.root, entry.page));
       close();
     },
     [router, close],
@@ -177,7 +178,7 @@ function PaletteBody({
 
   const navigateToHit = useCallback(
     (hit: SearchHit) => {
-      const base = hit.url ?? `/p/${hit.page_id}`;
+      const base = hit.url ?? permalinkOf(hit.root, hit.page_id);
       router.history.push(hit.heading_id ? `${base}#${hit.heading_id}` : base);
       close();
     },

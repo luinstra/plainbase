@@ -110,8 +110,20 @@ export interface PageHtmlResponse {
   citation: CitationDto;
 }
 
+/**
+ * One candidate root of a 409 `ambiguous_page_id` (a bare id held by more than one root). `url` is the
+ * caller's OWN endpoint with the `?root=` pin appended - an API retry target, never a place to send a human
+ * (the `/p/` surfaces build the reader's link from `root` + the id, via `permalinkOf`). It is null on the
+ * body-pin surface, whose remedy is a request field rather than a query string.
+ */
+export interface AmbiguousCandidate {
+  root: string;
+  url: string | null;
+}
+
 export interface ErrorEnvelope {
-  error: { code: string; message: string };
+  /** `candidates` is present only on the 409 ambiguity envelope; every other error carries code+message alone. */
+  error: { code: string; message: string; candidates?: AmbiguousCandidate[] };
 }
 
 /**

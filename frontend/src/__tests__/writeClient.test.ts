@@ -7,6 +7,8 @@ import { clearCsrfToken } from "../api/csrf";
  * typed error variant of the write unions — never an unhandled rejection that leaves "Saving…" stuck.
  */
 const HASH = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+/** Only the rooted-write row below cares what the id IS; the other rows pass the literal `"id"`. */
+const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 
 // The CSRF helper caches a module-level token across calls — reset it so each test starts from a cold cache and
 // the first mutation re-fetches `/session`.
@@ -24,7 +26,7 @@ describe("write client network-error handling", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -65,7 +67,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(413)),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(413);
@@ -77,7 +79,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(200)),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(200);
@@ -115,7 +117,7 @@ describe("write client 202 degrade-to-proposal handling", () => {
       "fetch",
       vi.fn(async () => degradedResponse()),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("degraded");
     if (result.kind === "degraded") {
       expect(result.proposalId).toBe("0198abc");
@@ -138,7 +140,7 @@ describe("write client 202 degrade-to-proposal handling", () => {
       "fetch",
       vi.fn(async () => primitiveBodyResponse(200)),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.error.status).toBe(200);
   });
@@ -163,7 +165,7 @@ describe("write client error-envelope fallback (clone keeps the body readable)",
       "fetch",
       vi.fn(async () => envelopeResponse(503, "content_unreadable", "the file is temporarily locked")),
     );
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -227,9 +229,27 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       sentCsrf = csrf;
       return writtenResponse();
     });
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("saved");
     expect(sentCsrf).toBe("tok-1");
+  });
+
+  it("putPageRaw pins the write to its root and CAS token together", async () => {
+    // The URL and the `if-match` header are asserted TOGETHER because that is the only pairing that
+    // catches an argument swap: root/body/baseHash are three consecutive `string`s, so every
+    // permutation type-checks, and a wrong root on a write is durable loss rather than a 409.
+    const spy = stubFetchWithSession(["tok-1"], () => writtenResponse());
+    const result = await putPageRaw(ID, "extra", "buffer", HASH);
+    expect(result.kind).toBe("saved");
+
+    // Select the PUT by method: on a cold token cache call 0 is always the /session preflight.
+    const put = spy.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PUT");
+    expect(put).toBeDefined();
+    const [input, init] = put!;
+    expect(typeof input === "string" ? input : input.toString()).toBe(`/api/v1/pages/${ID}?root=extra`);
+    const headers = init!.headers as Record<string, string>;
+    expect(headers["if-match"]).toBe(`"${HASH}"`);
+    expect(headers["content-type"]).toBe("text/markdown");
   });
 
   it("createPage attaches the X-CSRF-Token sourced from /session", async () => {
@@ -249,7 +269,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       seen.push(csrf);
       return seen.length === 1 ? csrfFailed() : writtenResponse();
     });
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("saved");
     // First attempt with the stale token, then the refreshed one — exactly two mutation attempts.
     expect(seen).toEqual(["stale", "fresh"]);
@@ -267,7 +287,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       seen.push(csrf);
       return forbidden;
     });
-    const result = await putPageRaw("id", "buffer", HASH);
+    const result = await putPageRaw("id", "main", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.error.code).toBe("forbidden");
     expect(seen).toEqual(["tok-1"]); // exactly one attempt — a real authz denial is not a CSRF retry

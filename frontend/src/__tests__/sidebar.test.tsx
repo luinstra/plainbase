@@ -54,7 +54,7 @@ const tree: TreeFolder = {
       page_count: 1,
       children: [
         {
-          // A path-space collision loser: url null → the link must fall back to /p/{id}.
+          // A path-space collision loser: url null → the link must fall back to the ROOTED /p/{root}/{id}.
           type: "page",
           id: "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99",
           title: "Shadowed Page",
@@ -71,7 +71,7 @@ const tree: TreeFolder = {
 
 describe("SidebarNav", () => {
   it("emits the stable selectors and links from node urls", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides/deploy-guide" />);
 
     // `.pb-sidebar`/`data-pb-sidebar` moved UP to the wrapper's single `<aside>` (multi-root C5) - a nav
     // per root, one aside for all of them. The count guard lives with the wrapper's tests below.
@@ -85,14 +85,17 @@ describe("SidebarNav", () => {
     expect(canonical).not.toBeNull();
     expect(canonical!.getAttribute("aria-current")).toBe("page");
 
-    // The collision loser links via its permalink.
-    const loser = container.querySelector('a[href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"]');
+    // The collision loser links via its ROOTED permalink: a bare one answers 300 once the id is held
+    // by more than one root, and this row is reached through the loser FOLDER, so it also proves the
+    // root survives the nested recursion.
+    const loser = container.querySelector('a[href="/p/main/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"]');
     expect(loser).not.toBeNull();
     expect(loser!.textContent).toBe("Shadowed Page");
+    expect(container.querySelector('a[href="/p/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"]')).toBeNull();
   });
 
   it("links folder labels to their landing url; a loser folder keeps an inert label", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides" />);
 
     const folderLink = container.querySelector('a[href="/docs/main/guides"]');
     expect(folderLink).not.toBeNull();
@@ -107,7 +110,7 @@ describe("SidebarNav", () => {
   });
 
   it("toggles a folder's children via the disclosure button, independent of the label link", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides/deploy-guide" />);
 
     const toggle = container.querySelector('[data-pb-nav-item="folder"] [data-pb-folder-toggle]')!;
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -123,7 +126,7 @@ describe("SidebarNav", () => {
   });
 
   it("marks exactly the active row with aria-current (the slash-bar/tint hook)", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides/deploy-guide" />);
     const active = container.querySelectorAll('[aria-current="page"]');
     expect(active).toHaveLength(1);
     expect(active[0].getAttribute("href")).toBe("/docs/main/guides/deploy-guide");
@@ -131,7 +134,7 @@ describe("SidebarNav", () => {
   });
 
   it("renders the caret as an empty host, with no text glyph", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides/deploy-guide" />);
     expect(container.textContent).not.toMatch(/[▾▸]/);
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
   });
@@ -152,7 +155,7 @@ describe("SidebarNav", () => {
         { type: "page", id: "id-home", title: "Home", slug: "index", path: "index.md", url: "/docs/main/index", status: "active", updated: null },
       ],
     };
-    const { container } = render(<SidebarNav root={withIndex} currentPathname="/docs/main" />);
+    const { container } = render(<SidebarNav tree={withIndex} root="main" currentPathname="/docs/main" />);
     const first = container.querySelector("nav [data-pb-nav-item]")!;
     expect(first.getAttribute("data-pb-nav-item")).toBe("page");
     expect(first.textContent).toContain("Home");
@@ -189,7 +192,7 @@ describe("SidebarNav", () => {
         },
       ],
     };
-    const { container } = render(<SidebarNav root={indexTitled} currentPathname="/docs" />);
+    const { container } = render(<SidebarNav tree={indexTitled} root="main" currentPathname="/docs" />);
     const folderLink = container.querySelector('a[href="/docs/main/runbooks"]')!;
     expect(folderLink).not.toBeNull();
     expect(folderLink.textContent).toBe("Runbooks"); // the index title, NOT "runbooks"
@@ -226,7 +229,7 @@ describe("SidebarNav", () => {
         },
       ],
     };
-    const { container } = render(<SidebarNav root={indexOnly} currentPathname="/docs" />);
+    const { container } = render(<SidebarNav tree={indexOnly} root="main" currentPathname="/docs" />);
     const toggle = container.querySelector<HTMLButtonElement>('[data-pb-nav-item="folder"] [data-pb-folder-toggle]')!;
     expect(toggle.disabled).toBe(true);
     expect(toggle.getAttribute("aria-expanded")).toBeNull(); // nothing to expand → no expanded state
@@ -256,19 +259,19 @@ describe("SidebarNav", () => {
           url: null,
           page_count: 1,
           children: [
-            { type: "page", id: "id-loser-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/p/id-loser-index", status: "active", updated: null },
+            { type: "page", id: "id-loser-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/p/main/id-loser-index", status: "active", updated: null },
           ],
         },
       ],
     };
-    const { container } = render(<SidebarNav root={loserWithIndex} currentPathname="/docs" />);
+    const { container } = render(<SidebarNav tree={loserWithIndex} root="main" currentPathname="/docs" />);
     // The loser folder label is inert (no link), so the index survives as a child row at its permalink.
-    expect(container.querySelector('a[href="/p/id-loser-index"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/p/main/id-loser-index"]')).not.toBeNull();
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(1);
   });
 
   it("matches the stable-markup snapshot", () => {
-    const { container } = render(<SidebarNav root={tree} currentPathname="/docs/main/guides/deploy-guide" />);
+    const { container } = render(<SidebarNav tree={tree} root="main" currentPathname="/docs/main/guides/deploy-guide" />);
     expect(container.firstChild).toMatchSnapshot();
   });
 });

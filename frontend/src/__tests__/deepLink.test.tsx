@@ -60,7 +60,7 @@ function renderAt(initialPath: string) {
   queryClient.setQueryData(treeQuery.queryKey, emptyTree);
   const canonical = "/docs/main/guides/deploy-guide";
   queryClient.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(canonical));
-  queryClient.setQueryData(pageHtmlQuery(ID).queryKey, htmlResponse(canonical));
+  queryClient.setQueryData(pageHtmlQuery(ID, "main").queryKey, htmlResponse(canonical));
   const history = createMemoryHistory({ initialEntries: [initialPath] });
   const router = createAppRouter(queryClient, history);
   const view = render(

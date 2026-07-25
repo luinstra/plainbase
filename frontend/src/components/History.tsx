@@ -39,18 +39,21 @@ export function History({ path }: { path: string }) {
     return <QueryErrorView error={page.error} />;
   }
 
-  // Key by id so a navigation to a different page remounts the view with a fresh selection/diff.
-  return <HistoryView key={page.data.id} id={page.data.id} path={path} />;
+  // Key by (root, id) so a navigation to a different page remounts the view with a fresh
+  // selection/diff. The ROOT is half the identity: two roots can hold the same id, so an id-only key
+  // survives a cross-root navigation and the surviving `from`/`to`/`notice` state (HistoryView's
+  // useStates) would drive a diff request for the NEW root against the OLD root's commits.
+  return <HistoryView key={`${page.data.root}:${page.data.id}`} id={page.data.id} root={page.data.root} path={path} />;
 }
 
-function HistoryView({ id, path }: { id: string; path: string }) {
-  const history = useQuery(historyQuery(id));
+function HistoryView({ id, root, path }: { id: string; root: string; path: string }) {
+  const history = useQuery(historyQuery(id, root));
   // The diff is driven by the FULL shas (D-5) — never a display-truncated form. `from` is the OLDER
   // commit (later in the newest-first array), `to` the NEWER, so the diff always reads old→new.
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const diff = useQuery(diffQuery(id, from, to));
+  const diff = useQuery(diffQuery(id, root, from, to));
 
   // A diff 404 means a ref vanished under us (history rewrite). The client sent valid list-sourced SHAs,
   // so this is NOT a user error: refresh the commit list, clear the selection, and show a transient notice.

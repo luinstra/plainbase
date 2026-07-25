@@ -22,7 +22,7 @@ const MISSING = { error: { code: "not_found", message: "no page at that path" } 
 
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 const PATH = "main/guides/deploy-guide";
-const URL = "/docs/main/guides/deploy-guide";
+const PAGE_URL = "/docs/main/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 
 const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
@@ -46,7 +46,7 @@ function pageResponse(): PageResponse {
     root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
-    url: URL,
+    url: PAGE_URL,
     title: "Deploy Guide",
     markdown: "# Deploy Guide\n",
     frontmatter: {},
@@ -117,17 +117,17 @@ describe("QueryErrorView: the one query-error surface", () => {
 describe("the routes that render a failed read", () => {
   it("the read view shows the outage, not a crash", async () => {
     stubOutage();
-    await expectOutage(renderAt(URL));
+    await expectOutage(renderAt(PAGE_URL));
   });
 
   it("the editor shows the outage, not a crash", async () => {
     stubOutage();
-    await expectOutage(renderAt(`${URL}?mode=edit`));
+    await expectOutage(renderAt(`${PAGE_URL}?mode=edit`));
   });
 
   it("the history view shows the outage, not a crash", async () => {
     stubOutage();
-    await expectOutage(renderAt(`${URL}?mode=history`));
+    await expectOutage(renderAt(`${PAGE_URL}?mode=history`));
   });
 
   it("the history view shows the outage when the page resolved but /history 503s (the root went down between them)", async () => {
@@ -135,13 +135,13 @@ describe("the routes that render a failed read", () => {
     // outage under "Couldn't load the page history".
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => (String(input).includes("/history") ? jsonResponse(OUTAGE, 503) : jsonResponse({}))));
 
-    await expectOutage(renderAt(`${URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse())));
+    await expectOutage(renderAt(`${PAGE_URL}?mode=history`, (qc) => qc.setQueryData(pageByPathQuery(PATH).queryKey, pageResponse())));
   });
 
   it("still calls a genuine failure a failure", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(CRASH, 500)));
 
-    const view = renderAt(URL);
+    const view = renderAt(PAGE_URL);
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-error]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-root-unavailable]")).toBeNull();

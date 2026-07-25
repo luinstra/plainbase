@@ -67,7 +67,7 @@ function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = 
     if (init?.method === "POST") return createResponse.clone();
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/pages/by-path/")) return jsonResponse(pageResponse());
-    if (url.endsWith("/html")) return jsonResponse(htmlResponse());
+    if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(htmlResponse());
     if (url.includes(`/pages/${NEW_ID}`)) return jsonResponse(pageResponse());
     // A create success invalidates the tree (Sidebar) — serve a valid empty tree so the refetch can't crash it.
     if (url.endsWith("/api/v1/tree")) return jsonResponse(emptyTree);
@@ -102,7 +102,7 @@ describe("W6 new-page creation", () => {
     const { view, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       // Prime the destination so the post-navigation read renders without a live fetch.
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -192,7 +192,7 @@ describe("W6 new-page creation", () => {
         // Prime the destination (the index page's own url canonicalizes to /docs/runbooks) so the
         // post-create navigation renders without a live fetch.
         qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
-        qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+        qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
       },
     );
 
@@ -244,7 +244,7 @@ describe("W6 new-page creation", () => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.endsWith("/api/v1/tree")) return jsonResponse(twoRoots);
       if (url.includes("/pages/by-path/")) return jsonResponse(extraPage);
-      if (url.endsWith("/html")) return jsonResponse(extraHtml);
+      if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(extraHtml);
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
@@ -253,7 +253,7 @@ describe("W6 new-page creation", () => {
     queryClient.setQueryData(treeQuery.queryKey, twoRoots);
     queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
     queryClient.setQueryData(pageByPathQuery("extra/notes/rollback").queryKey, extraPage);
-    queryClient.setQueryData(pageHtmlQuery(EXTRA_ID).queryKey, extraHtml);
+    queryClient.setQueryData(pageHtmlQuery(EXTRA_ID, "extra").queryKey, extraHtml);
     const history = createMemoryHistory({ initialEntries: [EXTRA_URL] });
     const router = createAppRouter(queryClient, history);
     const view = render(
@@ -287,7 +287,7 @@ describe("W6 new-page creation", () => {
   it("a create started OUTSIDE any root's URL space names `main` EXPLICITLY — the wire has no default to fall back on", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -337,7 +337,7 @@ describe("W6 new-page creation", () => {
   it("forwards the typed slug VERBATIM (case-preserving) — the server is the slug authority", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -359,7 +359,7 @@ describe("W6 new-page creation", () => {
   it("a trailing-slash folder is normalized once — preview shows a single slash AND the POST strips it (regression)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -398,7 +398,7 @@ describe("W6 new-page creation", () => {
   it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -415,7 +415,7 @@ describe("W6 new-page creation", () => {
   it("selecting a template fills the body textarea and POSTs that scaffold", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -438,7 +438,7 @@ describe("W6 new-page creation", () => {
     const SECTION_URL = "/docs/main/runbooks/index";
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());

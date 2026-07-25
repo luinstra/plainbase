@@ -1,4 +1,5 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { ApiError } from "../api/client";
 
@@ -72,13 +73,18 @@ export function isRootUnavailable(error: unknown): error is ApiError {
  *
  * Callers keep their OWN 404 rule (it genuinely differs: a by-path 400 is a not-found for a page route, but not for
  * a proposal id) and hand every other failure here.
+ *
+ * [children] is the caller's REMEDY, rendered inside this block so it lands under the message it answers - for the
+ * one error whose message promises something only the caller can build (the 409 ambiguity's candidate roots, which
+ * need the page id the route was addressed with). An outage ignores it: there is no remedy for an unmounted disk.
  */
-export function QueryErrorView({ error }: { error: unknown }) {
+export function QueryErrorView({ error, children }: { error: unknown; children?: ReactNode }) {
   if (isRootUnavailable(error)) return <RootUnavailableView detail={error.message} />;
   return (
     <div className="py-16 text-center" data-pb-error>
       <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
       <p className="mt-3 text-muted">{error instanceof Error ? error.message : String(error)}</p>
+      {children}
     </div>
   );
 }

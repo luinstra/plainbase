@@ -47,26 +47,38 @@ test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", 
   expect(searchRequests).toBe(0);
 });
 
-test("a collision-loser quick-switch hit navigates via /p/{id} (when the fixture has one)", async ({ page, request }) => {
-  // Discover a loser from the tree (a page whose url is null). The deterministic /p/{id}
-  // navigation contract is also unit-covered (searchPalette.test.tsx); this guards the live
-  // path only when the fixture actually carries a collision loser.
+/** The path-space collision loser the smoke corpus is mounted with - see frontend/e2e/fixtures/permalink. */
+const LOSER = "01970000-0000-7000-8000-00000000f003";
+
+test("a collision-loser quick-switch hit navigates via /p/{root}/{id}", async ({ page, request }) => {
+  // Discover the loser from the tree (a page whose url is null) and ASSERT it is there. This row used
+  // to bail out conditionally when the corpus carried no loser, and the corpus never did: it bailed on
+  // every run while six live defects sat behind it. A corpus change that removes the loser must fail
+  // this test BY NAME, never disarm it.
   const tree = await (await request.get("/api/v1/tree")).json();
-  let loserTitle: string | null = null;
+  const losers: string[] = [];
   const walk = (node: { type: string; url: string | null; title?: string; children?: unknown[] }) => {
-    if (node.type === "page" && node.url === null && node.title && !loserTitle) loserTitle = node.title;
+    if (node.type === "page" && node.url === null && node.title) losers.push(node.title);
     if (node.children) for (const child of node.children) walk(child as never);
   };
   for (const entry of tree.roots) walk(entry.tree); // one entry per root since C3
-  test.skip(loserTitle === null, "fixture tree has no collision loser");
+  // EVERY loser, not the first one the walk meets: the id asserted at the end is hardcoded, so a corpus that
+  // grows a SECOND loser must fail HERE, by name. A first-wins scan only caught an interloper that sorted
+  // BEFORE shadow.md - one that sorted after left this row green on a pinned title while the palette had two
+  // candidates to choose between.
+  expect(
+    losers,
+    "the smoke corpus must carry EXACTLY the path-space collision loser this row is pinned to: frontend/e2e/fixtures/permalink/shadow.md shares a slug with contested.md",
+  ).toEqual(["Shadowed Loser"]);
+  const loserTitle = losers[0];
 
   await page.goto("/docs/main/welcome");
   await openPalette(page);
-  await page.locator("[data-pb-search-input]").fill(loserTitle!);
-  await expect(page.locator('[data-pb-search-item="jump"]').first()).toContainText(loserTitle!);
+  await page.locator("[data-pb-search-input]").fill(loserTitle);
+  await expect(page.locator('[data-pb-search-item="jump"]').first()).toContainText(loserTitle);
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/p\/[0-9a-f-]+/);
+  await expect(page).toHaveURL(`/p/main/${LOSER}`);
 });
 
 test("activating the bridge enters Stage 2 (full-text only) with a stage label", async ({ page }) => {

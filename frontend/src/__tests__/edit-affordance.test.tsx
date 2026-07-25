@@ -66,7 +66,7 @@ function renderPage(root: string) {
   queryClient.setQueryData(treeQuery.queryKey, tree);
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
   queryClient.setQueryData(pageByPathQuery(`${root}/guides/onboarding`).queryKey, pageResponse(root, url));
-  queryClient.setQueryData(pageHtmlQuery(ID).queryKey, htmlResponse(root, url));
+  queryClient.setQueryData(pageHtmlQuery(ID, root).queryKey, htmlResponse(root, url));
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
   const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: [url] }));
   return render(

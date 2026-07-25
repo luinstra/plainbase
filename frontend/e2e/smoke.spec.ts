@@ -1,20 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { expectNoReload, plantNoReloadMarker } from "./helpers";
 
 /**
  * Chunk-7 acceptance smoke flow, driven against the real server (CIO + embedded SPA)
  * serving fixtures/demo-docs. Each test maps to a plan criterion (plan lines 626-630).
  */
-
-/** Plants a marker that a full page (re)load would wipe. */
-async function plantNoReloadMarker(page: Page) {
-  await page.evaluate(() => {
-    (window as unknown as Record<string, unknown>).__pbNoReload = true;
-  });
-}
-
-async function expectNoReload(page: Page) {
-  expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__pbNoReload)).toBe(true);
-}
 
 test("sidebar links are /docs URLs from the tree; clicking navigates without reload", async ({ page }) => {
   await page.goto("/docs/main/welcome");
@@ -24,7 +14,7 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
   await expect(sidebar).toBeVisible();
   const hrefs = await sidebar.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(30); // the whole fixture tree is in the nav
-  for (const href of hrefs) expect(href).toMatch(/^\/(docs($|\/)|p\/)/); // tree urls verbatim (incl. bare /docs home); losers via /p/{id}
+  for (const href of hrefs) expect(href).toMatch(/^\/(docs($|\/)|p\/)/); // tree urls verbatim (incl. bare /docs home); losers via /p/{root}/{id}
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Deploy Guide" }).click();
@@ -70,7 +60,7 @@ test("a LEGACY rootless /docs URL 301s to /docs/main/... (query preserved); a le
   await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
 });
 
-test("a /p/{id} permalink 302s server-side to the canonical path (stale slug tolerated)", async ({ page, request }) => {
+test("a bare /p/{id} permalink 302s server-side to the canonical path (stale slug tolerated)", async ({ page, request }) => {
   const byPath = await request.get("/api/v1/pages/by-path/guides/deploy-guide");
   expect(byPath.ok()).toBe(true);
   const { id } = (await byPath.json()) as { id: string };

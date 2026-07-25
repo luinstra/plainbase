@@ -16,6 +16,9 @@ import { createAppRouter } from "../router";
  */
 
 const HANDBOOK_PAGE = "/docs/handbook/guides/onboarding";
+const PAGE_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
+/** The ROOTED permalink of a handbook page - a collision loser's ONLY address (it has no `/docs` one). */
+const HANDBOOK_PERMALINK = `/p/handbook/${PAGE_ID}`;
 
 const tree: TreeResponse = {
   roots: [
@@ -37,7 +40,7 @@ const unavailableHandbook: TreeResponse = {
 };
 
 /** [primeTree] false leaves the tree query in flight forever — the window under test. */
-function renderShell(primeTree: boolean, seeded: TreeResponse = tree) {
+function renderShell(primeTree: boolean, seeded: TreeResponse = tree, at: string = HANDBOOK_PAGE) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(sessionQuery.queryKey, AUTHED);
   if (primeTree) queryClient.setQueryData(treeQuery.queryKey, seeded);
@@ -49,7 +52,7 @@ function renderShell(primeTree: boolean, seeded: TreeResponse = tree) {
       return new Response(JSON.stringify({ error: { code: "not_found", message: "no" } }), { status: 404 });
     }),
   );
-  const history = createMemoryHistory({ initialEntries: [HANDBOOK_PAGE] });
+  const history = createMemoryHistory({ initialEntries: [at] });
   const router = createAppRouter(queryClient, history);
   return render(
     <QueryClientProvider client={queryClient}>
@@ -97,6 +100,45 @@ describe("the chrome New action", () => {
     expect(action.tagName).toBe("BUTTON");
     expect(action.hasAttribute("disabled")).toBe(true);
     expect(action.getAttribute("title")).toBe("This root is read-only");
+  });
+
+  it("carries the root of a ROOTED PERMALINK too - a collision loser has no /docs address to read it from", async () => {
+    // `/docs/{root}` url ownership is not the only way a reader stands in a root: a path-space collision
+    // loser is reachable ONLY at `/p/{root}/{id}`, so reading the location as "no root" sends that reader's
+    // new page into main - the same silent write into the wrong repository the pending window exists to stop.
+    const view = renderShell(true, tree, HANDBOOK_PERMALINK);
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.getAttribute("href")).toBe("/new?root=handbook");
+  });
+
+  it("reads a BARE permalink as no root at all - that address names none, and main is the resolved default", async () => {
+    // The boundary of the row above: a bare `/p/{id}` genuinely carries no root, so the create falls back to
+    // the reserved `main` exactly as it does off the docs routes. Guessing a root from the id would need the
+    // page response the header never reads.
+    const view = renderShell(true, tree, `/p/${PAGE_ID}`);
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.getAttribute("href")).toBe("/new");
+  });
+
+  it("is DISABLED on a permalink naming a root the tree does not carry - unknown is not writable", async () => {
+    // The permalink root is NOT validated against the registry before it is answered: an unknown name flows
+    // into the same `entryFor` miss every other unknown root hits, and unknown roots do not take writes.
+    const view = renderShell(true, tree, `/p/nosuchroot/${PAGE_ID}`);
+    const action = await waitFor(() => {
+      const el = view.container.querySelector("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(action.tagName).toBe("BUTTON");
+    expect(action.hasAttribute("disabled")).toBe(true);
   });
 
   it("is DISABLED on an UNAVAILABLE root - an editable root whose disk is not mounted can only answer 503", async () => {

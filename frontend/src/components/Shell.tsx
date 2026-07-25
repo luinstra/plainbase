@@ -4,7 +4,7 @@ import type { MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
-import { entryFor, rootAcceptsWrites, rootOfUrl } from "../lib/tree";
+import { entryFor, rootAcceptsWrites, rootOfLocation } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
@@ -53,7 +53,7 @@ function newPageBlockedReason(target: RootTree | null): string | undefined {
 
 /**
  * App shell: header + tree sidebar + content outlet. One delegated click handler routes
- * every internal `/docs/...` / `/p/...` anchor — sidebar links AND links inside the
+ * every internal `/docs/...` / `/p/...` anchor (either permalink form) — sidebar links AND links inside the
  * server-rendered prose — through the SPA router; external links keep native behavior
  * (lib/links.ts decides).
  */
@@ -65,11 +65,12 @@ export function Shell() {
   // that would need a server DTO change, out of scope for this frontend-only chunk).
   const session = useQuery(sessionQuery);
 
-  // WHERE a new page lands: the root whose `/docs/{root}` URL space the reader is currently in, carried into
-  // `/new` as `?root=`. The wire `root` is REQUIRED and has no server-side default (an omitted one is a 400
-  // `invalid_root`, never permission to write into main), so SOMETHING must name it: off the docs routes the
-  // create has no root of its own and `NewPage` resolves it to the reserved `main` - the one legal client-side
-  // root literal.
+  // WHERE a new page lands: the root the reader's ADDRESS names - its `/docs/{root}` url space, or the root
+  // segment of a `/p/{root}/{id}` permalink - carried into `/new` as `?root=`. The wire `root` is REQUIRED and
+  // has no server-side default (an omitted one is a 400 `invalid_root`, never permission to write into main),
+  // so SOMETHING must name it: on an address that names none (a bare permalink, `/review`, `/admin`) the create
+  // has no root of its own and `NewPage` resolves it to the reserved `main` - the one legal client-side root
+  // literal.
   //
   // Until the tree RESOLVES there is no answer at all — not even "no root": the roots and their url prefixes are
   // exactly what the tree carries, so a `/new` link rendered in that window would look identical on an extra-root
@@ -79,7 +80,7 @@ export function Shell() {
   const tree = useQuery(treeQuery);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const roots = tree.data?.roots;
-  const currentRoot = roots ? rootOfUrl(roots, pathname) : null;
+  const currentRoot = roots ? rootOfLocation(roots, pathname) : null;
   // WHETHER a new page can land there at all: the target root must be editable AND serving. Off the docs routes
   // the target is the `main` the create would resolve to, so main's bits decide, not "none". Read-only, down, and
   // not-yet-known all get the SAME disabled twin, for one reason: an enabled action that can only end in a 403 or

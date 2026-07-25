@@ -46,7 +46,7 @@ function RootSection({ entry, labeled, currentPathname }: { entry: RootTree; lab
         </h2>
       )}
       {entry.available ? (
-        <SidebarNav root={entry.tree} currentPathname={currentPathname} />
+        <SidebarNav tree={entry.tree} root={entry.root} currentPathname={currentPathname} />
       ) : (
         <RootUnavailableNotice root={entry.root} />
       )}
@@ -70,35 +70,39 @@ function RootUnavailableNotice({ root }: { root: string }) {
 /**
  * Presentational tree nav — one root's rows. The `data-pb-*` attributes are stable selectors
  * (public customization API) — guarded by the snapshot test.
+ *
+ * [tree] is the root FOLDER, [root] its NAME. Two parameters, two names: a page row's permalink is
+ * built from the root name (the tree node carries none of its own), and one identifier called `root`
+ * meaning both is how a rooted href silently reverts to a bare one.
  */
-export function SidebarNav({ root, currentPathname }: { root: TreeFolder; currentPathname: string }) {
+export function SidebarNav({ tree, root, currentPathname }: { tree: TreeFolder; root: string; currentPathname: string }) {
   // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
   // home link AT THE TOP — pointing at the folder URL (`/docs/{root}` since C3), never the page's bare URL.
-  const home = landingPage(root);
+  const home = landingPage(tree);
   return (
     <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
       <ul className="space-y-0.5">
-        {home && root.url && <PageRow href={root.url} status={home.status} label={home.title} currentPathname={currentPathname} />}
-        <NodeRows nodes={nonLandingChildren(root)} currentPathname={currentPathname} />
+        {home && tree.url && <PageRow href={tree.url} status={home.status} label={home.title} currentPathname={currentPathname} />}
+        <NodeRows nodes={nonLandingChildren(tree)} root={root} currentPathname={currentPathname} />
       </ul>
     </nav>
   );
 }
 
-function NodeList({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathname: string }) {
+function NodeList({ nodes, root, currentPathname }: { nodes: TreeNode[]; root: string; currentPathname: string }) {
   return (
     <ul className="space-y-0.5">
-      <NodeRows nodes={nodes} currentPathname={currentPathname} />
+      <NodeRows nodes={nodes} root={root} currentPathname={currentPathname} />
     </ul>
   );
 }
 
-function NodeRows({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathname: string }) {
+function NodeRows({ nodes, root, currentPathname }: { nodes: TreeNode[]; root: string; currentPathname: string }) {
   return nodes.map((node) =>
     node.type === "folder" ? (
-      <FolderItem key={node.path} folder={node} currentPathname={currentPathname} />
+      <FolderItem key={node.path} folder={node} root={root} currentPathname={currentPathname} />
     ) : (
-      <PageItem key={node.id} page={node} currentPathname={currentPathname} />
+      <PageItem key={node.id} page={node} root={root} currentPathname={currentPathname} />
     ),
   );
 }
@@ -108,8 +112,12 @@ function NodeRows({ nodes, currentPathname }: { nodes: TreeNode[]; currentPathna
  * disclosure button owns expand/collapse — split affordances, so navigating and toggling
  * never contest one click (`aria-expanded` lives on the button). A collision-loser folder
  * has no `url` and keeps an inert label.
+ *
+ * It builds no href from [root] itself and still needs it: its child list is the ONLY path to a
+ * nested page row, so a `FolderItem` that drops the root un-roots every page below the top level
+ * while the top-level rows keep looking right.
  */
-function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPathname: string }) {
+function FolderItem({ folder, root, currentPathname }: { folder: TreeFolder; root: string; currentPathname: string }) {
   const [open, setOpen] = useState(true);
   const label = folderTitle(folder);
   const active = folder.url !== null && folder.url === currentPathname;
@@ -157,21 +165,21 @@ function FolderItem({ folder, currentPathname }: { folder: TreeFolder; currentPa
       </div>
       {open && expandable && (
         <div id={childrenId} className="ml-3 border-l border-edge pl-2">
-          <NodeList nodes={visibleChildren} currentPathname={currentPathname} />
+          <NodeList nodes={visibleChildren} root={root} currentPathname={currentPathname} />
         </div>
       )}
     </li>
   );
 }
 
-function PageItem({ page, currentPathname }: { page: TreePage; currentPathname: string }) {
-  return <PageRow href={pageHref(page)} status={page.status} label={page.title} currentPathname={currentPathname} />;
+function PageItem({ page, root, currentPathname }: { page: TreePage; root: string; currentPathname: string }) {
+  return <PageRow href={pageHref(root, page)} status={page.status} label={page.title} currentPathname={currentPathname} />;
 }
 
 /**
  * A leaf nav link. `href` is usually the page's own url, but the root landing passes the folder
- * url (`/docs`) so a folder's index/README has exactly one path. `data-pb-status` stays a stable
- * selector for the active-tint/slash-bar rule.
+ * url (`/docs/{root}`) so a folder's index/README has exactly one path. `data-pb-status` stays a
+ * stable selector for the active-tint/slash-bar rule.
  */
 function PageRow({
   href,

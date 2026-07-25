@@ -32,7 +32,7 @@ const tree: TreeResponse = {
           { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/main/guides/deploy-guide", status: "active", updated: null },
           { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/main/guides/getting-started", status: "active", updated: null },
           { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/main/guides/developer-setup", status: "active", updated: null },
-          // A collision loser: url null → navigates via /p/{id}.
+          // A collision loser: url null → navigates via its ROOTED /p/{root}/{id}.
           { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
         ],
       },
@@ -292,7 +292,7 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Enter on a quick-switcher row navigates via pageHref; a loser navigates via /p/{id}", async () => {
+  it("Enter on a quick-switcher row navigates via pageHref; a loser navigates via /p/{root}/{id}", async () => {
     const { history } = setup();
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
@@ -302,14 +302,14 @@ describe("two-stage search palette", () => {
     fireEvent.keyDown(getInput(), { key: "Enter" });
     await waitFor(() => expect(history.location.pathname).toBe("/docs/main/guides/deploy-guide"));
 
-    // Loser: url null → /p/{id}.
+    // Loser: url null → the rooted permalink, built from the entry's own root.
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
     fireEvent.change(getInput(), { target: { value: "shadowed" } });
     await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull());
     fireEvent.keyDown(getInput(), { key: "ArrowDown" });
     fireEvent.keyDown(getInput(), { key: "Enter" });
-    await waitFor(() => expect(history.location.pathname).toBe(`/p/${LOSER_ID}`));
+    await waitFor(() => expect(history.location.pathname).toBe(`/p/main/${LOSER_ID}`));
   });
 
   it("Stage 2 Enter on a hit pushes hit.url + #heading_id", async () => {
@@ -326,6 +326,48 @@ describe("two-stage search palette", () => {
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.keyDown(getInput(), { key: "Enter" });
       await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/main/guides/deploy-guide#rollback"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("Stage 2 Enter on a hit with NO url pushes the hit's OWN root's permalink + #heading_id", async () => {
+    // The `??` branch of navigateToHit, uncovered until now: every other fixture hit carries a url.
+    // The hit's root is `extra`, so a root-blind fallback is visible as a missing `/extra` segment
+    // rather than as a wrong-looking id.
+    const loserHit: SearchResponse = {
+      query: "rollback",
+      engine: "embedded",
+      limit: 20,
+      offset: 0,
+      total: 1,
+      hits: [
+        {
+          page_id: LOSER_ID,
+          root: "extra",
+          path: "notes/rollback.md",
+          url: null,
+          title: "Rollback Notes",
+          heading_id: "rollback",
+          heading_text: "Rollback",
+          heading_path: ["Rollback Notes", "Rollback"],
+          snippet: "…how to rollback…",
+          highlights: [{ start: 7, end: 15 }],
+          score: 4.2,
+          citation: { page_id: LOSER_ID, heading_id: "rollback", path: "notes/rollback.md", content_hash: "h", commit: null, uri: `plainbase://extra/${LOSER_ID}#rollback@h` },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(loserHit), { status: 200, headers: { "content-type": "application/json" } })));
+    try {
+      const { history } = setup();
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      fireEvent.keyDown(getInput(), { key: "Enter" });
+      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe(`/p/extra/${LOSER_ID}#rollback`));
     } finally {
       vi.unstubAllGlobals();
     }

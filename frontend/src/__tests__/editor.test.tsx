@@ -11,7 +11,7 @@ const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, edita
 
 /**
  * W6 editor (D-1/D-4/D-5 acceptance #1, #1b, #5). The `?mode=edit` dispatch reaches `<EditorPage>`,
- * a debounced edit POSTs `/api/v1/preview`, a save PUTs `/api/v1/pages/{id}` with the buffer + the
+ * a debounced edit POSTs `/api/v1/preview`, a save PUTs `/api/v1/pages/{id}?root={root}` with the buffer + the
  * `If-Match` base_hash, and the editor surfaces its stable selectors. The buffer is seeded from the
  * primed `pageByPathQuery` cache; only the preview/PUT calls hit the (mocked) network.
  */
@@ -119,7 +119,7 @@ describe("W6 editor", () => {
     expect((previewCall![1] as RequestInit).headers).toMatchObject({ "content-type": "text/markdown" });
   });
 
-  it("save PUTs /api/v1/pages/{id} with the buffer body and the If-Match base_hash", async () => {
+  it("save PUTs /api/v1/pages/{id}?root= with the buffer body and the If-Match base_hash", async () => {
     const nextHash = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") return jsonResponse({ content_hash: nextHash, commit: null });
@@ -144,7 +144,9 @@ describe("W6 editor", () => {
       expect(call).toBeDefined();
       return call!;
     });
-    expect(typeof putCall[0] === "string" ? putCall[0] : putCall[0].toString()).toContain(`/api/v1/pages/${ID}`);
+    // The WHOLE url, `?root=` included: a save is the one request that can put bytes in the wrong root,
+    // and a `toContain` of the path alone stays green while the pin silently goes missing.
+    expect(typeof putCall[0] === "string" ? putCall[0] : putCall[0].toString()).toBe(`/api/v1/pages/${ID}?root=main`);
     const headers = (putCall[1] as RequestInit).headers as Record<string, string>;
     expect(headers["if-match"]).toBe(`"${HASH}"`);
     expect(headers["content-type"]).toBe("text/markdown");

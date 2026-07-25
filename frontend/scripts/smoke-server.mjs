@@ -51,6 +51,16 @@ const contentDir = path.join(frontendDir, `.smoke-content-${port}`);
 rmSync(contentDir, { recursive: true, force: true });
 cpSync(path.join(repoRoot, "fixtures", "demo-docs"), contentDir, { recursive: true });
 
+// The rooted-permalink e2e fixture. `permalink/shadow.md` and `permalink/contested.md` share a slug,
+// so shadow.md deterministically loses path space (RawByteOrder on the raw filename) and its only
+// address is the ROOTED permalink the server emits. Mounted into main ALWAYS so search.spec.ts's loser
+// row cannot go vacuous again, and ALSO into `extra` for SMOKE_ROOTS=multi - which is what makes the
+// fixture's explicit ids a real cross-root DUPLICATE, the thing that makes every bare id read answer
+// 409 instead of quietly working. It lives under frontend/e2e/ so fixtures/demo-docs, which five
+// complete-set server goldens pin, stays byte-identical.
+const permalinkFixture = path.join(frontendDir, "e2e", "fixtures", "permalink");
+cpSync(permalinkFixture, path.join(contentDir, "permalink"), { recursive: true });
+
 // The second root, declared in DATA_DIR/plainbase.conf (the operator's file — the roots {} block must
 // declare `main` too, so CONTENT_DIR's tree is re-declared here rather than inherited). Its tree is
 // created for `multi` and deliberately NOT for `multi-missing`, which is the whole difference.
@@ -59,6 +69,9 @@ if (roots !== "single") {
   rmSync(extraDir, { recursive: true, force: true });
   if (roots === "multi") {
     cpSync(path.join(repoRoot, "fixtures", "demo-docs", "guides"), path.join(extraDir, "guides"), { recursive: true });
+    // The same directory in a SECOND root: the pages carry explicit `id:` frontmatter, so both roots
+    // bind the same ids and every bare id-addressed read of them answers 409 `ambiguous_page_id`.
+    cpSync(permalinkFixture, path.join(extraDir, "permalink"), { recursive: true });
   }
   writeFileSync(
     path.join(dataDir, "plainbase.conf"),

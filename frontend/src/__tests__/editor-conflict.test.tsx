@@ -157,7 +157,7 @@ describe("W6 conflict UX", () => {
     const { view, fetchSpy } = renderEditor(
       [jsonResponse({ error: { code: "conflict", reason: "page_deleted", message: "gone", current_content: null, current_hash: null, current_path: null } }, 409)],
       jsonResponse({ id: NEW_ID, url: "/docs/main/guides/deploy-guide", content_hash: HASH, commit: null }, 201),
-      (qc) => qc.setQueryData(pageHtmlQuery(ID).queryKey, htmlResponse),
+      (qc) => qc.setQueryData(pageHtmlQuery(ID, "main").queryKey, htmlResponse),
     );
     await editAndSave(view);
 

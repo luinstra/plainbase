@@ -1,5 +1,5 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
-import { getJson, previewRaw } from "./client";
+import { getJson, pageEndpoint, previewRaw } from "./client";
 import type {
   ChangeDetail,
   DiffResponse,
@@ -47,17 +47,44 @@ export const pageByPathQuery = (path: string) =>
     staleTime: 30_000,
   });
 
-export const pageQuery = (id: string) =>
+/** The `?root=` pin for an id-addressed read: absent for a bare read (the server reads absence as
+ *  "any root", and fails CLOSED with 409 `ambiguous_page_id` when the id is duplicated). Which is why
+ *  every `root` parameter below is REQUIRED and none of them defaults - see {@link diffQuery}. */
+function rootQuery(root: string | null): string {
+  return root === null ? "" : `?root=${encodeURIComponent(root)}`;
+}
+
+/** `diffQuery` already carries `?from=&to=`, so its pin is an APPEND, not a query string. Its own
+ *  one-liner rather than a separator parameter on `rootQuery`: two call shapes, two names, no flag. */
+function rootParam(root: string | null): string {
+  return root === null ? "" : `&root=${encodeURIComponent(root)}`;
+}
+
+/**
+ * The id PREFIX of each id-keyed page read - the invalidation unit, and the ONE definition of the key
+ * literal. The rooted `queryKey`s below are these plus the root, which is what makes the prefix match
+ * every root spelling of the same page.
+ *
+ * That ORDER is the rule: the page id stays at index 2 and the root goes IMMEDIATELY after it. Put the
+ * root first and `["page",<kind>,id]` stops being a valid "this page went stale under whatever root
+ * spelling it is cached under" prefix, which would leave a bare-keyed permalink reader's cache stale
+ * forever after a rooted write.
+ */
+export const pageKey = (id: string) => ["page", "by-id", id] as const;
+export const pageHtmlKey = (id: string) => ["page", "html", id] as const;
+export const pageHistoryKey = (id: string) => ["page", "history", id] as const;
+
+export const pageQuery = (id: string, root: string | null) =>
   queryOptions({
-    queryKey: ["page", "by-id", id],
-    queryFn: () => getJson<PageResponse>(`/api/v1/pages/${id}`),
+    queryKey: [...pageKey(id), root],
+    queryFn: () => getJson<PageResponse>(`${pageEndpoint(id)}${rootQuery(root)}`),
     staleTime: 30_000,
   });
 
-export const pageHtmlQuery = (id: string) =>
+export const pageHtmlQuery = (id: string, root: string | null) =>
   queryOptions({
-    queryKey: ["page", "html", id],
-    queryFn: () => getJson<PageHtmlResponse>(`/api/v1/pages/${id}/html`),
+    queryKey: [...pageHtmlKey(id), root],
+    queryFn: () => getJson<PageHtmlResponse>(`${pageEndpoint(id)}/html${rootQuery(root)}`),
     staleTime: 30_000,
   });
 
@@ -65,25 +92,40 @@ export const pageHtmlQuery = (id: string) =>
  * W7 per-page commit history (NEWEST-FIRST). Fired ONLY when the user OPENS `?mode=history`; the read
  * view never mounts this (the footer affordance gates on the already-loaded `PageResponse.commit`).
  * `retry: false` so a 5xx from an uncapped git subprocess isn't multiplied 3× into a subprocess storm.
+ *
+ * The `?root=` pin is honoured by the route itself, which resolves through the same by-id lookup as
+ * every other id-addressed read and so fails CLOSED on a bare duplicated id.
  */
-export const historyQuery = (id: string) =>
+export const historyQuery = (id: string, root: string | null) =>
   queryOptions({
-    queryKey: ["page", "history", id],
-    queryFn: () => getJson<HistoryResponse>(`/api/v1/pages/${id}/history`),
+    queryKey: [...pageHistoryKey(id), root],
+    queryFn: () => getJson<HistoryResponse>(`${pageEndpoint(id)}/history${rootQuery(root)}`),
     staleTime: 30_000,
     retry: false,
   });
 
 /**
- * A two-commit unified diff. Keyed on (id, from, to); only fires once both refs are chosen. `from`/`to`
- * are list-sourced full hex SHAs (always matching the server's `[0-9a-fA-F]{7,64}` guard) — they're
- * `encodeURIComponent`'d anyway as a belt-and-suspenders transport invariant. `retry: false` for the
- * same subprocess-storm reason as `historyQuery`.
+ * A two-commit unified diff. Keyed on (id, root, from, to); only fires once both refs are chosen.
+ * `from`/`to` are list-sourced full hex SHAs (always matching the server's `[0-9a-fA-F]{7,64}` guard) —
+ * they're `encodeURIComponent`'d anyway as a belt-and-suspenders transport invariant. `retry: false`
+ * for the same subprocess-storm reason as `historyQuery`, and the same `?root=` pin, appended because
+ * this URL already carries a query string.
+ *
+ * `root` is REQUIRED, as it is on all three siblings: among four positional `string | null`s a defaulted
+ * middle argument is exactly the shape a call site drops, and the value a default would supply is the
+ * optimistic one - a bare read that 409s the moment the id is duplicated. A caller that genuinely has no
+ * root (the bare `/p/{id}` permalink) says `null` out loud.
  */
-export const diffQuery = (id: string, from: string | null, to: string | null) =>
+export const diffQuery = (id: string, root: string | null, from: string | null, to: string | null) =>
   queryOptions({
-    queryKey: ["page", "diff", id, from, to],
-    queryFn: () => getJson<DiffResponse>(`/api/v1/pages/${id}/diff?from=${encodeURIComponent(from!)}&to=${encodeURIComponent(to!)}`),
+    // The root sits immediately after the id here too, BEFORE from/to: same prefix rule, so
+    // `["page","diff",id]` stays a valid "this page's diffs went stale" prefix SHAPE. Nothing
+    // invalidates it today, and that is unchanged.
+    queryKey: ["page", "diff", id, root, from, to],
+    queryFn: () =>
+      getJson<DiffResponse>(
+        `${pageEndpoint(id)}/diff?from=${encodeURIComponent(from!)}&to=${encodeURIComponent(to!)}${rootParam(root)}`,
+      ),
     enabled: from !== null && to !== null,
     staleTime: 30_000,
     retry: false,
@@ -141,16 +183,27 @@ export function previewQuery(text: string, path?: string, root?: string) {
  * AND any full-text `['search', …]` result (full-text goes stale on ANY content edit). Pass whatever of
  * {id, url} the calling path knows; an absent/non-`/docs/` url no-ops its by-path leg. Covering the whole
  * `['page', 'by-path']` namespace too leaves NEITHER a stale old nor new location after a rename/recovery.
+ *
+ * The three id-keyed legs are cleared by their id PREFIX ({@link pageKey} and friends), never by a rooted
+ * key. One page can be cached under its own root AND, through a bare permalink read, under a null root,
+ * and a write stales every spelling of it. That is the whole reason the root sits AFTER the id in these
+ * keys: `["page",<kind>,id]` stays a valid prefix, so this stays one call per leg instead of one call per
+ * (leg, root) pair — and a rooted key here would leave a bare-keyed permalink reader stale forever.
+ * Widening the other way is just as wrong: the bare namespace `["page",<kind>]` would clear every OTHER
+ * page too, on every save.
  */
 export function invalidateAfterWrite(queryClient: QueryClient, { id, url }: { id?: string; url?: string | null }): void {
   void queryClient.invalidateQueries({ queryKey: treeQuery.queryKey });
   void queryClient.invalidateQueries({ queryKey: ["search"] });
   if (id) {
-    void queryClient.invalidateQueries({ queryKey: pageQuery(id).queryKey });
-    void queryClient.invalidateQueries({ queryKey: pageHtmlQuery(id).queryKey });
-    // A save commits — the commit list grew, and the read view's freshly-non-null `commit` lights up the
-    // footer history affordance (refreshed via the pageQuery/pageByPathQuery legs above) with no extra fetch.
-    void queryClient.invalidateQueries({ queryKey: historyQuery(id).queryKey });
+    // The id PREFIX, not the rooted key: the same page can be cached under its own root AND under a
+    // bare permalink read (root null), and a write stales both. This is why the root sits AFTER the id
+    // in every id-keyed query. All THREE legs matter, history included: a save commits, the commit list
+    // grew, and the read view's freshly-non-null `commit` lights up the footer history affordance with
+    // no extra fetch — a bare-keyed reader would otherwise sit on a pre-save commit list forever.
+    void queryClient.invalidateQueries({ queryKey: pageKey(id) });
+    void queryClient.invalidateQueries({ queryKey: pageHtmlKey(id) });
+    void queryClient.invalidateQueries({ queryKey: pageHistoryKey(id) });
   }
   const byPathKey = byPathKeyForUrl(url ?? null);
   if (byPathKey !== null) void queryClient.invalidateQueries({ queryKey: pageByPathQuery(byPathKey).queryKey });

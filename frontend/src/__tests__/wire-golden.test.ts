@@ -123,7 +123,7 @@ const pageResponse: PageResponse = {
     path: "guides/deploy-guide.md",
     content_hash: HASH_A,
     commit: null,
-    uri: `plainbase://${PAGE_1}@${HASH_A}`,
+    uri: `plainbase://main/${PAGE_1}@${HASH_A}`,
   },
 };
 
@@ -146,7 +146,7 @@ const pageHtmlResponse: PageHtmlResponse = {
     path: "shadowed.md",
     content_hash: HASH_B,
     commit: COMMIT_1,
-    uri: `plainbase://${PAGE_2}@${HASH_B}`,
+    uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
   },
 };
 
@@ -179,7 +179,7 @@ const searchResponse: SearchResponse = {
         path: "shadowed.md",
         content_hash: HASH_B,
         commit: null,
-        uri: `plainbase://${PAGE_2}@${HASH_B}`,
+        uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
       },
     },
   ],
