@@ -17,7 +17,7 @@ import com.plainbase.domain.page.PageId
  *
  *  - **DISPLACEMENT** - we READ the file at (root, path) and it carries a DIFFERENT id (or none). Positive
  *    evidence: the page is right in front of us. No proof needed; the displaced id is TOMBSTONED
- *    ([RetiredBinding]) in the same transaction as the new bind, so `/p/{oldId}` stays a 410 rather than
+ *    ([RetiredBinding]) in the same transaction as the new bind, so `/p/{root}/{oldId}` stays a 410 rather than
  *    becoming a 404.
  *  - **CONTEST** - WITHIN one root, two pages resolve to the same id and BOTH are witnessed (the same id in two
  *    DIFFERENT roots is legal post-flip and contests nothing, C5). The PREVIOUSLY-BOUND path keeps the id (on first
@@ -139,7 +139,7 @@ data class AbsenceProof(
      * A proof covers a `(path, id)` whose PATH a complete pass did not see, and a RENAMED page's old path is exactly
      * that - so without this, every inferred source mints a proof over a page sitting in front of it under a different
      * name, the apply transaction tombstones the id its frontmatter still plainly carries, and one `git mv` turns
-     * `/p/{id}` into a permanent 410. That shipped. So did its two siblings, and all three were the same mistake:
+     * `/p/{root}/{id}` into a permanent 410. That shipped. So did its two siblings, and all three were the same mistake:
      * concluding from what we had FAILED TO LOOK AT.
      *
      * [witnessed] is keyed by **IDENTITY**, and that is the whole point: every enforcement of this rule that came before

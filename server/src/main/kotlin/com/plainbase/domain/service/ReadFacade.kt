@@ -136,7 +136,7 @@ interface ReadFacade {
     fun browseTarget(principal: Principal, root: RootName, path: TreePath): String?
 
     /**
-     * `/p/{id}` — the permanent ID permalink's resolution (§A4's durability layer), as ONE facade operation so the
+     * The BARE `/p/{id}` — the permanent ID permalink's resolution (§A4's durability layer), as ONE facade operation so the
      * route keeps only its 302/shell/400 mapping.
      *
      * The truth table, after `checkRead`, and it is id_map-FIRST (Option B, C4): the DURABLE claimant decides the

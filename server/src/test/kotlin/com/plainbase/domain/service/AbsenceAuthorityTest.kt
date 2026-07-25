@@ -260,7 +260,7 @@ class AbsenceAuthorityTest : FunSpec({
 
     // ---- C0.4: tombstones ------------------------------------------------------------------------------
 
-    test("an external id: change TOMBSTONES the displaced id - /p/{oldId} is 410-able, not a 404") {
+    test("an external id: change TOMBSTONES the displaced id - /p/{root}/{oldId} is 410-able, not a 404") {
         withAbsenceTrees { mainDir, extraDir ->
             val old = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
             val new = PageId.require("0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01")
@@ -292,7 +292,7 @@ class AbsenceAuthorityTest : FunSpec({
                 builder.rebuild()
 
                 // A page is deleted and a DIFFERENT one is later created at the same path. Under a `retired_at`
-                // FLAG on id_map this collided with its own tombstone and destroyed it - so /p/{oldId} answered
+                // FLAG on id_map this collided with its own tombstone and destroyed it - so /p/{root}/{oldId} answered
                 // 404, which is exactly the harm soft-retirement exists to prevent. Tombstones live OUTSIDE the
                 // live key space, keyed by ID, so path reuse is a non-event.
                 world.retirements.applyProofs(
@@ -314,7 +314,7 @@ class AbsenceAuthorityTest : FunSpec({
                 val snapshot = builder.rebuild()
 
                 snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))).id shouldNotBe old
-                withClue("/p/{oldId} must still answer 410 GONE, naming where the page used to live") {
+                withClue("/p/{root}/{oldId} must still answer 410 GONE, naming where the page used to live") {
                     world.idMap.retiredAt(RootName.MAIN, old)?.path shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/deploy.md"))
                 }
             }
@@ -343,7 +343,7 @@ class AbsenceAuthorityTest : FunSpec({
                 mainDir.resolve("guides/deploy.md").toFile().delete()
 
                 // A restore from an old backup, or a paste. It carries the retired id in its frontmatter. If it
-                // TOOK the id, /p/{id} would silently redirect to the WRONG DOCUMENT - strictly worse than the
+                // TOOK the id, /p/{root}/{id} would silently redirect to the WRONG DOCUMENT - strictly worse than the
                 // 404 the tombstone prevents, because a dead link announces itself and a live wrong one does not.
                 writePage(mainDir, "restored/copy.md", "---\nid: ${retiredId.value}\ntitle: Copy\n---\n\n# Copy\n")
                 val snapshot = builder.rebuild()

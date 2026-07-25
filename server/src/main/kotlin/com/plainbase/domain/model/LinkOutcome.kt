@@ -27,7 +27,7 @@ sealed interface LinkOutcome {
         /**
          * An internal page target. [page] is the resolved page's [TreePath]; [url] is the page's
          * canonical `/docs/...` path URL (with a re-encoded `#fragment` appended if one was present),
-         * or — for a path-space collision loser — its `/p/{id}` permalink (§A4).
+         * or — for a path-space collision loser — its `/p/{root}/{id}` permalink (§A4).
          */
         data class Page(val page: TreePath, override val url: String) : Resolved
 

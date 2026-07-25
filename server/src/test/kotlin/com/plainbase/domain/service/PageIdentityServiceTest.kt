@@ -110,7 +110,7 @@ class PageIdentityServiceTest : FunSpec({
     test("duplicate rescan is stable: a copy with an existing id_map binding keeps it (source ID_MAP), no fresh mint") {
         // Run 2 of the copied-file scenario: pathB already carries an id_map binding from run 1's
         // reassignment, and still sees the conflicting frontmatter id owned by pathA. It must reuse
-        // that binding (stable /p/{id}), not mint a new id — while still raising the duplicate issue.
+        // that binding (stable /p/{root}/{id}), not mint a new id — while still raising the duplicate issue.
         val reassigned = PageId.require("0197b111-2222-7333-8444-555566667777")
         val ownedByA = { id: PageId -> if (id == validId) pathA else null }
         val r = service.resolve(

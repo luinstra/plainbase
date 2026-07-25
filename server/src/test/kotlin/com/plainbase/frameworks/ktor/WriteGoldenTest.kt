@@ -122,7 +122,7 @@ class WriteGoldenTest : FunSpec({
         }
     }
 
-    test("the 201 identity falls back to the /p/{id} permalink for a path-space loser (no fabricated /docs/<raw path>)") {
+    test("the 201 identity falls back to the /p/{root}/{id} permalink for a path-space loser (no fabricated /docs/<raw path>)") {
         // A published page whose canonical url is null (a same-slug collision loser) is reachable ONLY via
         // its permalink. The create's identity must return that permalink — NEVER a fabricated `/docs/<raw path>`
         // that points at a 404. Both `a b.md` (0x20 wins on raw-byte order) and `a-b.md` slugify to `a-b`, so the

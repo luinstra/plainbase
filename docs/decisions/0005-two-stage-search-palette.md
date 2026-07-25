@@ -38,13 +38,13 @@ survive list reflow) were all symptoms of that one root.
 **The palette is two-stage. Only one homogeneous result list is visible at a time.**
 
 - **Stage 1 (default on open):** the quick-switcher. Typing filters page titles/paths via the
-  client-side fuzzy scorer; arrow/Enter navigate to the selected page (`node.url ?? '/p/{id}'`,
+  client-side fuzzy scorer; arrow/Enter navigate to the selected page (`node.url ?? '/p/{root}/{id}'`,
   reusing `lib/tree.ts pageHref` verbatim). Zero network.
 - **The bridge:** a stable, always-present bottom row — `Search all docs for "{query}" ↵` — is the
   only affordance that crosses into full-text. It does not move or reflow as the user types.
 - **Stage 2 (on activating the bridge):** the view transitions to **full-text results only**
   (`GET /api/v1/search`). Selection and Enter are now unambiguous because the list is homogeneous —
-  every item is a content hit, Enter always opens it (`hit.url ?? '/p/{page_id}'` + `#heading_id`
+  every item is a content hit, Enter always opens it (`hit.url ?? '/p/{root}/{page_id}'` + `#heading_id`
   when present). Esc/Backspace-at-empty returns to Stage 1.
 
 Because exactly one list is ever navigable, the selection cursor is always within a single

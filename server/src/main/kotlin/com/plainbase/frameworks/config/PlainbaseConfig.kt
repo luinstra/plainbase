@@ -1020,7 +1020,7 @@ data class PlainbaseConfig(
             if (PageId.of(key) != null) {
                 throw IllegalArgumentException(
                     "roots.$key: a root name may not look like a page id (a 32-hex or UUID string) - " +
-                        "it would be ambiguous with a /p/{id} permalink. Rename this root.",
+                        "it would be ambiguous with a bare /p/{id} permalink. Rename this root.",
                 )
             }
             val name = RootName.of(key) ?: throw IllegalArgumentException(

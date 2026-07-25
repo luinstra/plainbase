@@ -13,7 +13,7 @@ import kotlinx.datetime.LocalDate
  * A node of the nav tree (§A4 `/api/v1/tree` shape, chunk 6 maps it to DTOs).
  *
  * Page nodes carry [Page.url] — the canonical path URL, null for a slug-collision loser (the UI
- * links those via `/p/{id}`). Folder nodes carry [Folder.url] - the folder's `/docs/{root}` URL
+ * links those via `/p/{root}/{id}`). Folder nodes carry [Folder.url] - the folder's `/docs/{root}` URL
  * prefix, where the SPA renders the folder landing view (ADR-0003); null for a collision-loser
  * subtree.
  * Folder [Folder.title] comes from `_folder.yaml`, else null (the UI falls back to [Folder.name]);

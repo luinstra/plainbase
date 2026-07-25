@@ -190,7 +190,7 @@ class AdoptionPassTest : FunSpec({
             issue shouldBe IdentityIssue.DuplicateId(id = keptId, root = RootName.MAIN, keptPath = keptPath, reassignedPath = copyPath)
 
             // Rescan stability: the copy keeps its minted id on the next run (now from id_map), so
-            // its /p/{id} permalink is stable while the conflict persists.
+            // its /p/{root}/{id} permalink is stable while the conflict persists.
             val third = h.pass().run(AdoptionPass.Mode.MATERIALIZE)
             val copyAgain = third.pages.single { it.path == copyPath }
             copyAgain.id shouldBe copy.id

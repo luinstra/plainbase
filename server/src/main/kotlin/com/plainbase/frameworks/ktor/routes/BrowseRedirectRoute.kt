@@ -17,7 +17,7 @@ import io.ktor.server.routing.get
  * `/docs/{root}/...` URL.
  *
  * A path-space collision loser has no canonical URL; its permalink is the page's one durable URL,
- * so the 302 targets `/p/{id}` instead — same contract (a redirect to where the page lives now).
+ * so the 302 targets `/p/{root}/{id}` instead — same contract (a redirect to where the page lives now).
  *
  * A3: `read`-gated — the resolve goes through a dedicated guarded facade OPERATION (never a route-side snapshot
  * walk), so the gate fires (401/403) BEFORE it and the 302 cannot leak page existence to an unauthorized caller.

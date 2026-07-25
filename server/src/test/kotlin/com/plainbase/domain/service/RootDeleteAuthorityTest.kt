@@ -151,7 +151,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 withClue("the checkpoint replace would have purged the whole root - it must have had NO authority here") {
                     world.checkpoints.load().keys.map { it.id } shouldContain rollback
                 }
-                withClue("the id_map binding is the permalink: losing it re-mints /p/{id} for a page that still exists") {
+                withClue("the id_map binding is the permalink: losing it re-mints /p/{root}/{id} for a page that still exists") {
                     world.idMap.livePathOf(rollback) shouldBe rollbackPath
                 }
                 withClue("and the search rows, which the sync listener deletes off the same authority set") {

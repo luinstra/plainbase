@@ -27,7 +27,7 @@ import com.plainbase.domain.root.RootName
  * winner is the entry whose raw on-disk name bytes sort first ([RawByteOrder] — the same rule as
  * the chunk-1 B3 NFC tie-break). Every loser is excluded from path space (a losing FOLDER takes
  * its whole subtree with it) and recorded as an [IdentityIssue.PathSlugCollision]; a loser page
- * stays fully reachable via `/p/{id}`.
+ * stays fully reachable via its rooted `/p/{root}/{id}` permalink.
  *
  * Output paths are [TreePath]s of DECODED slug segments; percent-encoding happens on emit
  * (`IndexedPage.url`). Same-role per-parent uniqueness still implies full page-URL uniqueness:

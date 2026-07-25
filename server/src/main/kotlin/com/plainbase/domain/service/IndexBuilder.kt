@@ -1289,8 +1289,8 @@ class IndexBuilder(
      * UNRECORDABLE for one specific loser: a page whose identity lives in `id_map` ONLY (no frontmatter id of
      * its own). The winner's key-complete bind DELETES that row on its way through, so when the loser's own
      * draft came up for resolution its `mappedId` read back null - and a page with no frontmatter id and no
-     * mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, and its `/p/{id}`
-     * permalink moved to another page in another root with no `CrossRootDuplicateId` issue recorded anywhere.
+     * mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, so the `/p/{root}/{id}`
+     * permalink its readers held stopped naming it, with no `CrossRootDuplicateId` issue recorded anywhere.
      * A durable permalink reassignment with no record is precisely the outcome D16/D17's loser-behalf issue
      * recording exists to make impossible.
      *

@@ -31,7 +31,7 @@ interface PageIndexView {
 
     /**
      * The page's canonical emitted URL (§A4): a `/docs/{root}/...` path URL (root-qualified since
-     * C3), or a `/p/{id}` permalink for a path-space collision loser. [page] MUST be a known PAGE
+     * C3), or a `/p/{root}/{id}` permalink for a path-space collision loser. [page] MUST be a known PAGE
      * path (caller resolved it first).
      */
     fun pageUrl(page: TreePath): String

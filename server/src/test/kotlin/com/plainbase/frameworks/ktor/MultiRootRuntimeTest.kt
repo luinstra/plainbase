@@ -367,7 +367,7 @@ class MultiRootRuntimeTest : FunSpec({
                 withClue("and now the DURABLE state follows it, because the epoch PROVED it gone") {
                     harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeFalse()
                     harness.idMap.livePathOf(extraPage).shouldBeNull()
-                    // a TOMBSTONE: /p/{id} is 410, never 404
+                    // a TOMBSTONE: /p/{root}/{id} is 410, never 404
                     harness.idMap.retiredAt(RootName.require("extra"), extraPage).shouldNotBeNull()
                 }
                 withClue("the root is still SERVING - a corpus we watched drain is an ordinary edit, not a lost volume") {

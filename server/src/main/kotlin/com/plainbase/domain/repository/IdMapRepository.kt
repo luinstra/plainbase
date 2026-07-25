@@ -27,7 +27,7 @@ import com.plainbase.domain.root.RootedPath
  *
  * The three legal retirements, and only the third is an absence claim:
  *  - **DISPLACEMENT** ([bind]): the file at (root, path) now carries a DIFFERENT id. The displaced id is
- *    tombstoned in the SAME transaction as the new bind - `/p/{oldId}` stays a 410, never a 404.
+ *    tombstoned in the SAME transaction as the new bind - `/p/{root}/{oldId}` stays a 410, never a 404.
  *  - **CONTEST** (a within-root rank contest, C5 - the D17 cross-root transfer is dissolved): the id moves to
  *    the winner and stays LIVE. Nothing is tombstoned, because nothing died - the permalink follows the id.
  *  - **ABSENCE**: needs an `AbsenceProof`, and is applied nowhere but the one proof-apply transaction

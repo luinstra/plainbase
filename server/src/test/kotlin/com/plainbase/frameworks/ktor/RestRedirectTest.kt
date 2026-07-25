@@ -68,7 +68,7 @@ class RestRedirectTest : FunSpec({
         }
     }
 
-    test("an alias to a collision loser 301s to its /p/{id} permalink — its one durable URL") {
+    test("an alias to a collision loser 301s to its /p/{root}/{id} permalink — its one durable URL") {
         withTempTree(seed = { root ->
             // Both slugify to `a-b`; raw-byte order makes `a b.md` (0x20) win, so `a-b.md` is the
             // path-space loser (url = null). Its redirect_from alias must still land SOMEWHERE:

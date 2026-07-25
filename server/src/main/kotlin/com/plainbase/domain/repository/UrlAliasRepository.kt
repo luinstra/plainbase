@@ -21,7 +21,7 @@ import com.plainbase.domain.root.RootedPath
  *
  * Documented derived-state exception (§A4): the registry is app-state in DATA_DIR and NOT
  * rebuildable from the tree alone — losing DATA_DIR loses old-URL continuity; canonical URLs and
- * `/p/{id}` permalinks are unaffected.
+ * `/p/{root}/{id}` permalinks are unaffected.
  */
 interface UrlAliasRepository {
 

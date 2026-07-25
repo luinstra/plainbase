@@ -22,7 +22,7 @@ import com.plainbase.domain.root.RootedPath
  * deterministic without Git/mtime guesses.
  * **Rescan stability:** first detection mints fresh per §5.2, but a subsequent rescan of the same
  * conflict reuses this path's existing `id_map` binding rather than minting anew, so the copy's
- * `/p/{id}` permalink stays stable across rescans (the still-conflicting file keeps raising the issue).
+ * `/p/{root}/{id}` permalink stays stable across rescans (the still-conflicting file keeps raising the issue).
  *
  * **Cross-root duplicate policy (per-root identity, C5):** a cross-root duplicate is NO LONGER a contest. The same
  * frontmatter `id:` in two DIFFERENT roots is legal - both pages keep it and each answers its own `/p/{root}/{id}`.

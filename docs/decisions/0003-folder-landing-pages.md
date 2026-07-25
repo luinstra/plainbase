@@ -16,7 +16,7 @@ redirect). Owner review during the revamp changed both:
 - **Index REPLACES the listing** (refined in Phase 5.5). A folder with an index/README renders
   that authored page AS the whole landing — the in-page generated child listing is suppressed, so
   the index has full control of its folder URL. The children aren't lost: they stay in the sidebar
-  tree under the folder, and the index keeps its own `/p/{id}` permalink. A folder with no index
+  tree under the folder, and the index keeps its own `/p/{root}/{id}` permalink. A folder with no index
   stays a pure generated listing.
 - **One canonical path.** A landing page no longer has a second life at its own bare-page URL —
   that URL now redirects to the folder URL (`DocsPage` → `folderForLanding`). The sidebar surfaces
@@ -60,7 +60,7 @@ folder `url`s. On a match:
   independently reachable at its own canonical URL.
 - **Listing fallback:** otherwise a generated directory view — `_folder.yaml` title (else name)
   as heading, children in TREE ORDER (never re-sorted client-side), pages linked via their node
-  `url` (losers via `/p/{id}`), subfolders via their folder `url` (a loser subfolder stays inert
+  `url` (losers via `/p/{root}/{id}`), subfolders via their folder `url` (a loser subfolder stays inert
   text). Semantic tokens only; stable `data-pb-folder*` hooks.
 
 **Page shadows folder:** resolution order is `by-path` FIRST — a page owning the URL means the

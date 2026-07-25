@@ -38,7 +38,8 @@ import io.ktor.server.routing.get
  * ([respondRedirectPreservingQuery]), which is harmless - the target is a canonical url, not another id lookup.
  *
  * **Collision losers (documented reading):** a path-space collision loser has `url = null`; §A4 promises the loser
- * "remains fully reachable via its `/p/{id}` permalink", so we serve the SPA shell directly at the permalink (200).
+ * "remains fully reachable via its permalink" (the rooted `/p/{root}/{id}`, and the bare form too),
+ * so we serve the SPA shell directly at the permalink (200).
  *
  * A3: `read`-gated — the resolution goes through the guarded facade, so the gate fires (401/403) BEFORE the resolve.
  * **A root that is not serving answers 503, never 404** (ADR-0011 D5): the facade throws and `guarded {}` maps it.

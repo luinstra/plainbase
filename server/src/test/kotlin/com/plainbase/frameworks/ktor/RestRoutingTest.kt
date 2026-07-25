@@ -26,7 +26,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * The §A4 routing matrix (decision log #7): `/p/{id}` permalinks (302, trailing segment ignored),
+ * The §A4 routing matrix (decision log #7): `/p/{root}/{id}` permalinks (and the bare `/p/{id}`) (302, trailing segment ignored),
  * the `/docs` SPA shell (200), by-path canonical AND alias resolution, the collision-loser
  * permalink reading, and the per-snapshot tree-JSON memoization (§C4).
  */
@@ -168,7 +168,7 @@ class RestRoutingTest : FunSpec({
         }
     }
 
-    test("a slug-collision loser keeps url=null yet stays reachable at /p/{id} (serves the shell)") {
+    test("a slug-collision loser keeps url=null yet stays reachable at the bare /p/{id} (serves the shell)") {
         withTempTree(seed = { root ->
             // Both slugify to `a-b`; raw-byte order makes `a b.md` (0x20) win over `a-b.md` (0x2D).
             writePage(root, "a b.md", "---\ntitle: Winner\n---\n\n# Winner\n")
@@ -179,7 +179,7 @@ class RestRoutingTest : FunSpec({
                 val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a-b.md")))
                 loser.url.shouldBeNull()
 
-                // /p/{id} cannot redirect (no canonical path exists) — the permalink IS the loser's
+                // The bare /p/{id} cannot redirect (no canonical path exists) — the permalink IS the loser's
                 // only human URL, so it serves the SPA shell directly (documented chunk-6 reading).
                 val permalink = client.get("/p/${loser.id.value}")
                 permalink.status shouldBe HttpStatusCode.OK

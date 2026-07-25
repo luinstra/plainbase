@@ -16,7 +16,7 @@ import io.ktor.server.routing.get
  *    percent-encoding survives; query preserved).
  *  - An alias hit under a known root (move aliases recorded by the indexer + `redirect_from`
  *    registrations) → **301** to the page's CURRENT canonical `/docs/{root}/...` URL - or, when
- *    the target is a path-space collision loser (`url = null`), to its `/p/{id}` permalink: the
+ *    the target is a path-space collision loser (`url = null`), to its `/p/{root}/{id}` permalink: the
  *    same fallback `/browse` uses, because the permalink IS the loser's one durable URL. One hop
  *    from a canonical-era alias; a LEGACY-prefix hit chains two hops (the legacy 301 above, then
  *    the alias 301 - ADR-0011 D3, accepted).

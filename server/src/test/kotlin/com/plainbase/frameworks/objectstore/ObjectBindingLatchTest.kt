@@ -148,7 +148,7 @@ class ObjectBindingLatchTest : FunSpec({
 
             snapshot.pages.map { it.path } shouldContainExactlyInAnyOrder listOf(runbook)
             world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(runbookId)
-            withClue("a retired binding is TOMBSTONED, so /p/{id} stays a 410 rather than the 404 that kills a citation") {
+            withClue("a retired binding is TOMBSTONED, so /p/{root}/{id} stays a 410 rather than the 404 that kills a citation") {
                 world.idMap.retiredBindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, onboardingId)
             }
             world.limbo.count(RootName.MAIN) shouldBe 0
@@ -177,7 +177,7 @@ class ObjectBindingLatchTest : FunSpec({
                     listOf(page("guides/deploy-v2.md"), runbook, onboarding)
                 world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, runbookId, onboardingId)
             }
-            withClue("and NOTHING is tombstoned - a renamed key must not turn /p/{id} into a 410") {
+            withClue("and NOTHING is tombstoned - a renamed key must not turn /p/{root}/{id} into a 410") {
                 world.idMap.retiredBindings().shouldBeEmpty()
             }
             world.limbo.count(RootName.MAIN) shouldBe 0

@@ -69,7 +69,7 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.deleted = setOf(rollback)
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git).rebuild()
 
-                withClue("the binding is RETIRED, not hard-deleted: /p/{id} answers 410, never a 404") {
+                withClue("the binding is RETIRED, not hard-deleted: /p/{root}/{id} answers 410, never a 404") {
                     world.idMap.livePathOf(id).shouldBeNull()
                     world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 }

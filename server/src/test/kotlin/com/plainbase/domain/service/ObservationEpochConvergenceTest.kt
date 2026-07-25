@@ -52,7 +52,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                 extraDir.resolve("notes/rollback.md").toFile().delete()
                 builder.rebuild() // the CONFIRMATION scan
 
-                withClue("the binding is RETIRED, not hard-deleted: /p/{id} answers 410, never the 404 that kills a citation") {
+                withClue("the binding is RETIRED, not hard-deleted: /p/{root}/{id} answers 410, never the 404 that kills a citation") {
                     world.idMap.livePathOf(id).shouldBeNull()
                     world.idMap.retiredAt(extra, id).shouldNotBeNull().path shouldBe RootedPath(extra, rollback)
                 }
@@ -257,7 +257,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                 // The honest cost of reaping an unmaterialized page, stated rather than hidden: the file carried no
                 // id, so a file reappearing at that path is observationally identical to a BRAND NEW page there, and
                 // we do not guess. It mints fresh. What the design does promise is that the old permalink ANNOUNCES
-                // itself - the tombstone stands, `/p/{oldId}` is 410 Gone, and no agent is told its citation was
+                // itself - the tombstone stands, `/p/{root}/{oldId}` is 410 Gone, and no agent is told its citation was
                 // never real. (A hard delete would have made it a 404. That is the whole reason retirement is soft.)
                 writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
                 val healed = builder.rebuild()
