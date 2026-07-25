@@ -9,7 +9,7 @@ import { createAppRouter } from "../router";
 
 const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 new-page creation (D-2 acceptance #4). `POST /api/v1/pages` returns the minted id + the
@@ -18,7 +18,7 @@ const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null,
  */
 
 const NEW_ID = "01900000-0000-7000-8000-000000000001";
-const NEW_URL = "/docs/guides/my-new-page";
+const NEW_URL = "/docs/main/guides/my-new-page";
 const HASH = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
 function jsonResponse(body: unknown, status = 200) {
@@ -28,6 +28,7 @@ function jsonResponse(body: unknown, status = 200) {
 function pageResponse(): PageResponse {
   return {
     id: NEW_ID,
+    root: "main",
     path: "guides/my-new-page.md",
     slug: "my-new-page",
     url: NEW_URL,
@@ -44,6 +45,7 @@ function pageResponse(): PageResponse {
 function htmlResponse(): PageHtmlResponse {
   return {
     id: NEW_ID,
+    root: "main",
     path: "guides/my-new-page.md",
     slug: "my-new-page",
     url: NEW_URL,
@@ -65,7 +67,7 @@ function renderNew(createResponse: Response, prime: (qc: QueryClient) => void = 
     if (init?.method === "POST") return createResponse.clone();
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/pages/by-path/")) return jsonResponse(pageResponse());
-    if (url.endsWith("/html")) return jsonResponse(htmlResponse());
+    if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(htmlResponse());
     if (url.includes(`/pages/${NEW_ID}`)) return jsonResponse(pageResponse());
     // A create success invalidates the tree (Sidebar) — serve a valid empty tree so the refetch can't crash it.
     if (url.endsWith("/api/v1/tree")) return jsonResponse(emptyTree);
@@ -99,8 +101,8 @@ describe("W6 new-page creation", () => {
   it("creating a page POSTs /api/v1/pages and navigates directly to the server-returned url", async () => {
     const { view, history } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
       // Prime the destination so the post-navigation read renders without a live fetch.
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -183,14 +185,14 @@ describe("W6 new-page creation", () => {
   });
 
   it("the new-section checkbox POSTs slug:index with the folder field as the section path", async () => {
-    const SECTION_URL = "/docs/runbooks/index";
+    const SECTION_URL = "/docs/main/runbooks/index";
     const { view, fetchSpy } = renderNew(
       jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201),
       (qc) => {
         // Prime the destination (the index page's own url canonicalizes to /docs/runbooks) so the
         // post-create navigation renders without a live fetch.
-        qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
-        qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+        qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
+        qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
       },
     );
 
@@ -206,7 +208,100 @@ describe("W6 new-page creation", () => {
       expect(call).not.toBeUndefined();
       return call!;
     });
-    expect(JSON.parse(post[1]!.body as string)).toEqual({ folder: "runbooks", title: "Runbooks", slug: "index" });
+    expect(JSON.parse(post[1]!.body as string)).toEqual({ root: "main", folder: "runbooks", title: "Runbooks", slug: "index" });
+  });
+
+  it("a create started from an EXTRA root's URL lands in THAT root — never silently in main", async () => {
+    // The root has to survive the whole chain: the docs URL the reader is on → the "New" link's `?root=` →
+    // the POST body. (The wire now REQUIRES `root`, so a lost one is a 400 rather than a silent write into
+    // the wrong tree — but a 400 on every extra-root create would be its own outage, so the chain is pinned.)
+    const EXTRA_ID = "01900000-0000-7000-8000-0000000000ee";
+    const EXTRA_URL = "/docs/extra/notes/rollback";
+    const extraPage: PageResponse = {
+      ...pageResponse(),
+      id: EXTRA_ID,
+      root: "extra",
+      path: "notes/rollback.md",
+      slug: "rollback",
+      url: EXTRA_URL,
+      title: "Rollback",
+    };
+    const extraHtml: PageHtmlResponse = { ...htmlResponse(), id: EXTRA_ID, root: "extra", path: "notes/rollback.md", url: EXTRA_URL };
+    const twoRoots: TreeResponse = {
+      roots: [
+        ...emptyTree.roots,
+        {
+          root: "extra",
+          available: true,
+          editable: true,
+          tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/extra", page_count: 1, children: [] },
+        },
+      ],
+    };
+
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return jsonResponse({ id: NEW_ID, url: "/docs/extra/notes/fresh", content_hash: HASH, commit: null }, 201);
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/tree")) return jsonResponse(twoRoots);
+      if (url.includes("/pages/by-path/")) return jsonResponse(extraPage);
+      if (new URL(url, "http://x").pathname.endsWith("/html")) return jsonResponse(extraHtml);
+      return jsonResponse({ html: "", headings: [] });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(treeQuery.queryKey, twoRoots);
+    queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
+    queryClient.setQueryData(pageByPathQuery("extra/notes/rollback").queryKey, extraPage);
+    queryClient.setQueryData(pageHtmlQuery(EXTRA_ID, "extra").queryKey, extraHtml);
+    const history = createMemoryHistory({ initialEntries: [EXTRA_URL] });
+    const router = createAppRouter(queryClient, history);
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    // The reader is inside `extra`, and hits "New" in the header.
+    const newLink = await waitFor(() => {
+      const el = view.container.querySelector<HTMLAnchorElement>("[data-pb-new-page]");
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    fireEvent.click(newLink);
+
+    await waitFor(() => expect(history.location.pathname).toBe("/new"));
+    expect(history.location.search).toBe("?root=extra");
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    expect(JSON.parse(post[1]!.body as string).root).toBe("extra");
+  });
+
+  it("a create started OUTSIDE any root's URL space names `main` EXPLICITLY — the wire has no default to fall back on", async () => {
+    const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
+    });
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
+    submitCreate(view);
+
+    const post = await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([, init]) => init?.method === "POST");
+      expect(call).not.toBeUndefined();
+      return call!;
+    });
+    // `/new` reached with no `?root=` (the header link off the docs routes). The server used to read an
+    // omitted root as `main`, which made any client's omission an authorization decision; now the CLIENT
+    // says `main` out loud, and a request that says nothing is a 400.
+    expect(JSON.parse(post[1]!.body as string).root).toBe("main");
   });
 
   it("the new-section checkbox with a blank folder leaves Create disabled and does NOT POST", async () => {
@@ -241,8 +336,8 @@ describe("W6 new-page creation", () => {
 
   it("forwards the typed slug VERBATIM (case-preserving) — the server is the slug authority", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -263,8 +358,8 @@ describe("W6 new-page creation", () => {
 
   it("a trailing-slash folder is normalized once — preview shows a single slash AND the POST strips it (regression)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -302,8 +397,8 @@ describe("W6 new-page creation", () => {
 
   it("a default (Blank) create omits the body field entirely (byte-identical to today)", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -319,8 +414,8 @@ describe("W6 new-page creation", () => {
 
   it("selecting a template fills the body textarea and POSTs that scaffold", async () => {
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: NEW_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/my-new-page").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/guides/my-new-page").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());
@@ -340,10 +435,10 @@ describe("W6 new-page creation", () => {
   });
 
   it("a template body flows to the POST even in section mode (no special-casing)", async () => {
-    const SECTION_URL = "/docs/runbooks/index";
+    const SECTION_URL = "/docs/main/runbooks/index";
     const { view, fetchSpy } = renderNew(jsonResponse({ id: NEW_ID, url: SECTION_URL, content_hash: HASH, commit: null }, 201), (qc) => {
-      qc.setQueryData(pageByPathQuery("runbooks/index").queryKey, pageResponse());
-      qc.setQueryData(pageHtmlQuery(NEW_ID).queryKey, htmlResponse());
+      qc.setQueryData(pageByPathQuery("main/runbooks/index").queryKey, pageResponse());
+      qc.setQueryData(pageHtmlQuery(NEW_ID, "main").queryKey, htmlResponse());
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-new-page-form]")).not.toBeNull());

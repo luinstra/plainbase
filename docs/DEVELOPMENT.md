@@ -7,10 +7,11 @@ commit style, dependency policy) see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Building
 
 ```sh
-./gradlew build                      # backend + frontend + tests (universal JAR floor)
-./gradlew :server:run --args=serve   # run the server on the JVM
-./gradlew :server:run --args=spike   # full-stack native dependency spike (JVM)
-./gradlew :server:nativeCompile      # native binary (requires GraalVM 25+ on JAVA_HOME/GRAALVM_HOME)
+./gradlew build                          # backend + frontend + tests (universal JAR floor)
+./gradlew :server:run --args=serve       # run the server on the JVM
+./gradlew :server:run --args=spike       # full-stack native dependency spike (JVM)
+./gradlew :server:run --args="root list" # the topology CLI: root add|remove|list (docs/configuration.md)
+./gradlew :server:nativeCompile          # native binary (requires GraalVM 25+ on JAVA_HOME/GRAALVM_HOME)
 ```
 
 Requirements: JDK 21+ (the build auto-provisions the 21 toolchain for

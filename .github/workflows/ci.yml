@@ -81,6 +81,41 @@ jobs:
           [ ${#bins[@]} -eq 1 ] || { echo "expected exactly one launcher, got: ${bins[*]:-none}" >&2; exit 1; }
           bash scripts/ci/enforced-auth-smoke.sh "${bins[0]}"
 
+  # ---- Multi-root topology gate: the SAME binary-agnostic script the native gate runs, on the JVM
+  # dist. The universal JAR is the release floor and a native failure blocks only the native artifact
+  # — so a topology regression that reproduces on the JAR has to be able to paint the FLOOR red, and
+  # a native-only leg cannot do that. (enforced-auth-smoke runs on both legs for the same reason.) ----
+  multi-root-smoke:
+    name: Multi-root topology smoke (JVM dist)
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plainbase-jvm-dist
+          path: dist
+
+      - name: Unpack distribution
+        run: |
+          shopt -s nullglob
+          tars=(dist/*.tar)
+          [ ${#tars[@]} -eq 1 ] || { echo "expected exactly one dist tar, got: ${tars[*]:-none}" >&2; exit 1; }
+          tar -xf "${tars[0]}" -C dist
+
+      - name: Multi-root topology smoke
+        run: |
+          shopt -s nullglob
+          bins=(dist/*/bin/plainbase)
+          [ ${#bins[@]} -eq 1 ] || { echo "expected exactly one launcher, got: ${bins[*]:-none}" >&2; exit 1; }
+          bash scripts/ci/multi-root-smoke.sh "${bins[0]}"
+
   # ---- Docker image (compose tier) ----
   docker-image:
     name: Docker image build
@@ -114,6 +149,12 @@ jobs:
           done
           test "$ok" = "1"
           curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          docker logs plainbase-smoke >plainbase-smoke.log 2>&1
+          test -s plainbase-smoke.log
+          while IFS= read -r line; do
+            test -z "$line" || printf '%s\n' "$line" | jq -e . >/dev/null
+          done <plainbase-smoke.log
+          grep -q 'PLAINBASE_INSECURE_HTTP' plainbase-smoke.log
           docker rm -f plainbase-smoke
 
       # C1c: a published-port connection enters the container from the bridge gateway — a REAL
@@ -184,6 +225,12 @@ jobs:
       - name: Native startup bound (regression tripwire, 2 s on shared runner; <1 s target is local)
         run: bash scripts/ci/native-startup-bound.sh ./server/build/native/nativeCompile/plainbase 8082 2000
 
+      # The multi-root topology, end to end against the real binary: both config provenances, the
+      # `plainbase root` refusals, a missing root's 503, and the detached-root WARN boot. Port 8083 —
+      # every earlier server in this job (8080/8081/8082) has been killed by the time this one binds.
+      - name: Multi-root topology smoke (native binary)
+        run: bash scripts/ci/multi-root-smoke.sh ./server/build/native/nativeCompile/plainbase 8083
+
       - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
@@ -192,10 +239,12 @@ jobs:
 
   # ---- Playwright smoke (C1c): deliberately OUTSIDE `./gradlew build` (hermetic-floor rationale,
   # frontend/build.gradle.kts) and a separate job so a browser-download/flake never paints the JAR
-  # floor red. Boots BOTH webServers — auth-off AND enforced-builtin (review.spec.ts approval flow)
-  # — and carries the C1a CSP zero-violation gate (csp.spec.ts) into CI. ----
+  # floor red. Boots ALL FOUR webServers (playwright.config.ts) — auth-off, enforced-builtin
+  # (review.spec.ts approval flow), and the two multi-root installs: both-serving, and one whose
+  # extra root's path is gone (the 503/outage surfaces) — and carries the C1a CSP zero-violation
+  # gate (csp.spec.ts) into CI. ----
   frontend-smoke:
-    name: Playwright smoke (open + enforced-builtin, CSP gate)
+    name: Playwright smoke (open + enforced-builtin + multi-root, CSP gate)
     runs-on: ubuntu-latest
     needs: build-test
     steps:
@@ -227,3 +276,43 @@ jobs:
 
       - name: Playwright smoke (boots auth-off AND enforced-builtin servers)
         run: ./gradlew :frontend:smokeTest --console=plain
+
+  # ---- The ONE required status check on `main`.
+  #
+  # A required check is matched by NAME. Pinning each job's name in the branch ruleset means a rename
+  # silently detaches the requirement, and it fails OPEN: the pull request waits forever on a check
+  # nothing will ever report, which looks like a stuck test rather than a config error. That is
+  # exactly what happened when the Playwright job's name gained `+ multi-root`. So the ruleset
+  # requires this job and nothing else, and adding or renaming jobs never touches repo settings.
+  #
+  # `if: always()` is load-bearing: without it the gate is SKIPPED when an upstream job fails, and a
+  # skipped required check leaves the pull request pending rather than red. Testing
+  # `needs.*.result` is load-bearing for the same reason in the other direction: `needs` alone
+  # treats a SKIPPED dependency as satisfied, so a gate that only declared `needs` would pass when
+  # nothing ran.
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs:
+      - build-test
+      - enforced-auth-smoke
+      - multi-root-smoke
+      - docker-image
+      - native-gate
+      - frontend-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gate's own completeness check. Routing every job through one gate moves the coupling
+      # into this file rather than deleting it: forget a `needs` entry and that job quietly stops
+      # gating. This step makes that failure loud instead of silent.
+      - name: Assert the gate covers every job
+        run: python3 scripts/ci/assert-gate-covers-every-job.py
+
+      - name: Assert every required job succeeded
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "a required job did not succeed:"
+          echo '${{ toJSON(needs) }}'
+          exit 1

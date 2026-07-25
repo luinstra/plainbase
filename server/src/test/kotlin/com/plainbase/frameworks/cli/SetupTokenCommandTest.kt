@@ -6,8 +6,6 @@ import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 
 /**
@@ -40,20 +38,14 @@ class SetupTokenCommandTest : FunSpec({
         }
     }
 
-    fun capture(block: () -> Int): Pair<Int, String> {
-        val buffer = ByteArrayOutputStream()
-        val prev = System.out
-        System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-        return try {
-            block() to buffer.toString(Charsets.UTF_8)
-        } finally {
-            System.setOut(prev)
-        }
+    fun capture(block: (CommandOutput) -> Int): Pair<Int, String> {
+        val io = CommandOutputFixture()
+        return block(io.output) to io.stdout
     }
 
     test("setup-token mints on an empty builtin DB and the printed token consumes successfully") {
         withData { data ->
-            val (code, out) = capture { AdminCommand.run(listOf("setup-token"), config(data, AuthMode.BUILTIN)) }
+            val (code, out) = capture { AdminCommand.run(listOf("setup-token"), config(data, AuthMode.BUILTIN), it) }
             code shouldBe 0
             val token = out.lineSequence().first { it.isNotBlank() }
 
@@ -69,7 +61,7 @@ class SetupTokenCommandTest : FunSpec({
     test("a second setup-token WITHOUT --force on a now-non-empty DB refuses (exit 2)") {
         withData { data ->
             val cfg = config(data, AuthMode.BUILTIN)
-            val (code1, out1) = capture { AdminCommand.run(listOf("setup-token"), cfg) }
+            val (code1, out1) = capture { AdminCommand.run(listOf("setup-token"), cfg, it) }
             code1 shouldBe 0
             // Consume it so an enabled admin now exists.
             val token = out1.lineSequence().first { it.isNotBlank() }
@@ -77,27 +69,27 @@ class SetupTokenCommandTest : FunSpec({
                 val db = com.plainbase.frameworks.sqldelight.DatabaseFactory.createDatabase(driver)
                 com.plainbase.domain.service.setupServiceFixture(db).first.consumeBootstrap(token, "alice", "pw".toCharArray())
             }
-            AdminCommand.run(listOf("setup-token"), cfg) shouldBe 2 // an enabled admin exists → refuse
+            AdminCommand.run(listOf("setup-token"), cfg, CommandOutputFixture().output) shouldBe 2 // enabled admin → refuse
         }
     }
 
     test("--force mints regardless of DB state") {
         withData { data ->
             val cfg = config(data, AuthMode.BUILTIN)
-            val out1 = capture { AdminCommand.run(listOf("setup-token"), cfg) }.second
+            val out1 = capture { AdminCommand.run(listOf("setup-token"), cfg, it) }.second
             val token = out1.lineSequence().first { it.isNotBlank() }
             com.plainbase.frameworks.sqldelight.DatabaseFactory.createDriver(cfg.appDatabasePath).use { driver ->
                 val db = com.plainbase.frameworks.sqldelight.DatabaseFactory.createDatabase(driver)
                 com.plainbase.domain.service.setupServiceFixture(db).first.consumeBootstrap(token, "alice", "pw".toCharArray())
             }
-            AdminCommand.run(listOf("setup-token", "--force"), cfg) shouldBe 0 // re-mints despite the admin
+            AdminCommand.run(listOf("setup-token", "--force"), cfg, CommandOutputFixture().output) shouldBe 0 // re-mints despite the admin
         }
     }
 
     test("non-builtin mode refuses (exit 2)") {
         withData { data ->
-            AdminCommand.run(listOf("setup-token"), config(data, AuthMode.PROXY)) shouldBe 2
-            AdminCommand.run(listOf("setup-token"), config(data, AuthMode.OFF)) shouldBe 2
+            AdminCommand.run(listOf("setup-token"), config(data, AuthMode.PROXY), CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("setup-token"), config(data, AuthMode.OFF), CommandOutputFixture().output) shouldBe 2
         }
     }
 
@@ -105,9 +97,9 @@ class SetupTokenCommandTest : FunSpec({
     test("trailing junk after --force is a usage error (exit 2), not silently accepted") {
         withData { data ->
             val cfg = config(data, AuthMode.BUILTIN)
-            AdminCommand.run(listOf("setup-token", "--force", "extra"), cfg) shouldBe 2
-            AdminCommand.run(listOf("setup-token", "extra"), cfg) shouldBe 2
-            AdminCommand.run(listOf("setup-token", "--frce"), cfg) shouldBe 2
+            AdminCommand.run(listOf("setup-token", "--force", "extra"), cfg, CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("setup-token", "extra"), cfg, CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("setup-token", "--frce"), cfg, CommandOutputFixture().output) shouldBe 2
         }
     }
 })

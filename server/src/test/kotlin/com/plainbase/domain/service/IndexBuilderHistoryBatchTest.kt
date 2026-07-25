@@ -36,18 +36,17 @@ class IndexBuilderHistoryBatchTest : FunSpec({
         }
     }
 
-    test("reindex(pageId) does one bounded log(path,1) lookup, never an unbounded lastCommits scan") {
+    test("reindex(target) does one bounded log(path,1) lookup, never an unbounded lastCommits scan") {
         for (n in listOf(3, 30)) {
             withTempTree({ seedCorpus(it, n) }) { root ->
                 val history = CountingHistoryProvider()
                 IndexHarness(root, history = history).use { h ->
                     h.builder.rebuild()
-                    val targetId = h.builder.current.pages.first().id
-                    val target = h.builder.current.byId.getValue(targetId)
+                    val target = h.builder.current.pages.first()
                     history.reset()
                     Files.write(root.resolve(target.path.value), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 
-                    h.builder.reindex(targetId)
+                    h.builder.reindex(com.plainbase.domain.root.RootedPath(target.root, target.path))
 
                     // Bounded single-commit read (re-review P2-1): exactly ONE log(path, 1) for the single
                     // target, ZERO unbounded lastCommits — and the limit arg itself is asserted, so the
@@ -90,6 +89,9 @@ private class CountingHistoryProvider : HistoryProvider {
     override fun diff(from: String, to: String, path: TreePath) = error("not used")
     override fun prepare() = Unit
     override fun gateCheck() = Unit
+    override fun currentHead(): String? = null
+    override fun isAncestor(ancestor: String, descendant: String) = false
+    override fun deletedIn(from: String, to: String): Set<TreePath>? = null
 
     fun reset() {
         lastCommitsCalls = 0

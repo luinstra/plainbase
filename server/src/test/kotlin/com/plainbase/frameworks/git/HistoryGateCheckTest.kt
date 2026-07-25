@@ -151,9 +151,13 @@ class HistoryGateCheckTest : FunSpec({
         }
     }
 
-    // An unparseable banner is NOT a false-fail: a present git whose version line we cannot read PASSES with
-    // a logged warning (better than rejecting a perfectly modern git over an unanticipated banner shape).
-    test("git mode on with an unparseable version banner passes the gate") {
+    // An unparseable banner REFUSES. It used to pass with a logged warning, on the theory that a modern git with
+    // an unanticipated banner should not be false-failed - but the gate exists to establish the 2.31 floor, and a
+    // banner it cannot read establishes nothing. The thing that actually answers `--version` with prose is a
+    // WRAPPER script standing where git should be, and letting it through only moves the failure to the first
+    // rebuild's `--diff-merges=first-parent`, where the operator meets it as a doomed exit code instead of a
+    // message. A gate that cannot prove the property it gates on must refuse.
+    test("git mode on with an unparseable version banner FAILS the gate - an unreadable version is not a passing one") {
         val root = Files.createTempDirectory("gate-weird-git")
         val home = Files.createTempDirectory("gate-weird-git-home")
         try {
@@ -166,7 +170,10 @@ class HistoryGateCheckTest : FunSpec({
             )
             try {
                 val exec = GitExecutor(workTree = root, home = home, gitBinary = fakeGit.toString())
-                shouldNotThrowAny { providerOver(exec, root, home, maintenance = {}).gateCheck() }
+                val error = shouldThrow<GitUnavailableException> { providerOver(exec, root, home, maintenance = {}).gateCheck() }
+                error.message!! shouldContain "totally unexpected banner" // the operator sees what it actually said
+                error.message!! shouldContain "2.31"
+                error.message!! shouldContain "PLAINBASE_GIT_ENABLED=false"
             } finally {
                 fakeGit.toFile().delete()
             }

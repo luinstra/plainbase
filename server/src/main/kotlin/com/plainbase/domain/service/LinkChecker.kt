@@ -6,6 +6,8 @@ import com.plainbase.domain.model.LinkOutcome
 import com.plainbase.domain.model.PageLink
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 
 /**
  * Chunk 8 — whole-tree link + fragment validation over a published [PageIndex]: the engine behind
@@ -27,7 +29,7 @@ class LinkChecker {
     /** One sweep over one snapshot; memoizes each target page's emitted anchor set across links. */
     private class Sweep(private val index: PageIndex) {
 
-        private val anchorsByPage = HashMap<TreePath, Set<String>>()
+        private val anchorsByPage = HashMap<RootedPageId, Set<String>>()
 
         fun broken(): List<BrokenLink> =
             index.pages.flatMap { page -> page.links.mapNotNull { link -> brokenOrNull(page, link) } }
@@ -36,13 +38,13 @@ class LinkChecker {
             val reason = when (val outcome = link.outcome) {
                 is LinkOutcome.Broken -> BrokenLinkReason.Unresolved(outcome.reason)
                 // Cross-page fragment: validated against the TARGET page's heading ids.
-                is LinkOutcome.Resolved.Page -> brokenAnchorOrNull(outcome.url, targetOf(outcome.page))
+                is LinkOutcome.Resolved.Page -> brokenAnchorOrNull(outcome.url, targetOf(page, outcome.page))
                 // Same-page anchor (`#…`): validated against THIS page's heading ids.
                 is LinkOutcome.Resolved.Anchor -> brokenAnchorOrNull(outcome.url, page)
                 // Asset fragments (e.g. SVG views) and external URLs are outside the index's knowledge.
                 is LinkOutcome.Resolved.Asset, is LinkOutcome.Resolved.External -> null
             }
-            return reason?.let { BrokenLink(page = page.path, target = link.target, text = link.text, reason = it) }
+            return reason?.let { BrokenLink(page = RootedPath(page.root, page.path), target = link.target, text = link.text, reason = it) }
         }
 
         private fun brokenAnchorOrNull(url: String, target: IndexedPage): BrokenLinkReason? {
@@ -58,11 +60,16 @@ class LinkChecker {
          * compared after the same [PercentCoding.encodeSegment] — no decode round-trip here.
          */
         private fun anchorsOf(page: IndexedPage): Set<String> =
-            anchorsByPage.getOrPut(page.path) { page.headings.map { PercentCoding.encodeSegment(it.id) }.toSet() }
+            anchorsByPage.getOrPut(page.rooted) { page.headings.map { PercentCoding.encodeSegment(it.id) }.toSet() }
 
-        /** A snapshot outcome can only reference a page of the SAME snapshot ([PageIndex] coherence). */
-        private fun targetOf(path: TreePath): IndexedPage =
-            requireNotNull(index.byPath[path]) { "link outcome references a page outside the snapshot: ${path.value}" }
+        /**
+         * A snapshot outcome can only reference a page of the SAME snapshot ([PageIndex] coherence).
+         * A render-time resolution is within-root, so the SOURCE page's root qualifies the target.
+         */
+        private fun targetOf(source: IndexedPage, path: TreePath): IndexedPage =
+            requireNotNull(index.byPath[RootedPath(source.root, path)]) {
+                "link outcome references a page outside the snapshot: ${path.value}"
+            }
     }
 }
 
@@ -71,9 +78,13 @@ data class LinkReport(val broken: List<BrokenLink>) {
     val clean: Boolean get() = broken.isEmpty()
 }
 
-/** One broken link: the page it appears on, the raw target as written, the link text, and the error class. */
+/**
+ * One broken link: the rooted page it appears on, the raw target as written, the link text, and the
+ * error class. [page] is a [RootedPath] so reports from identical relative paths in two roots never
+ * merge (the wire DTO keeps emitting the bare path string in C2 - no wire shape changes).
+ */
 data class BrokenLink(
-    val page: TreePath,
+    val page: RootedPath,
     val target: String,
     val text: String,
     val reason: BrokenLinkReason,

@@ -3,9 +3,10 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { searchQuery, SEARCH_MAX_QUERY, treeQuery } from "../api/queries";
-import type { SearchHit, TreePage } from "../api/types";
+import type { SearchHit } from "../api/types";
 import { fuzzyRank, type FuzzyCandidate } from "../lib/fuzzy";
-import { pageHref, pages } from "../lib/tree";
+import { permalinkOf } from "../lib/permalink";
+import { pageHref, pages, type PageEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { LISTBOX_ID, optionId, SearchList } from "./SearchList";
 
@@ -110,14 +111,20 @@ function PaletteBody({
   // a cold cache it simply shows no Stage-1 matches (the bridge row) until the shell's fetch fills.
   const tree = useQuery({ ...treeQuery, refetchOnMount: false });
 
+  // Both stages badge their rows with the root only when there IS more than one (D-C5-11's rule): a
+  // single-root install must not sprout a "main" badge on every row.
+  const showRoots = (tree.data?.roots.length ?? 0) > 1;
+
   // ---- Stage 1: quick-switcher (synchronous, zero network) ----
   const trimmed = rawQuery.trim();
-  const candidates = useMemo<FuzzyCandidate[]>(() => {
+  const candidates = useMemo<FuzzyCandidate<PageEntry>[]>(() => {
     if (!tree.data) return [];
-    return pages(tree.data.root).map((node: TreePage) => ({ node, label: node.title, hint: node.path }));
+    // The candidate carries its root: `page.path` is root-relative, so the scorer's `hint` (and the row
+    // it renders) would otherwise be identical for the same file in two roots.
+    return pages(tree.data.roots).map((entry) => ({ node: entry, label: entry.page.title, hint: entry.page.path }));
   }, [tree.data]);
 
-  const jumpPages = useMemo<TreePage[]>(() => {
+  const jumpPages = useMemo<PageEntry[]>(() => {
     if (!trimmed) return candidates.map((c) => c.node).slice(0, QUICK_SWITCH_MAX);
     return fuzzyRank(trimmed, candidates)
       .slice(0, QUICK_SWITCH_MAX)
@@ -162,8 +169,8 @@ function PaletteBody({
   }, [activeId]);
 
   const navigateToPage = useCallback(
-    (page: TreePage) => {
-      router.history.push(pageHref(page));
+    (entry: PageEntry) => {
+      router.history.push(pageHref(entry.root, entry.page));
       close();
     },
     [router, close],
@@ -171,7 +178,7 @@ function PaletteBody({
 
   const navigateToHit = useCallback(
     (hit: SearchHit) => {
-      const base = hit.url ?? `/p/${hit.page_id}`;
+      const base = hit.url ?? permalinkOf(hit.root, hit.page_id);
       router.history.push(hit.heading_id ? `${base}#${hit.heading_id}` : base);
       close();
     },
@@ -283,6 +290,7 @@ function PaletteBody({
           status={status}
           searchedQuery={fullText.data?.query}
           errorMessage={errorMessage}
+          showRoots={showRoots}
           selectedIndex={selectedIndex}
           onSelect={setSelectedIndex}
           onActivate={enterAt}

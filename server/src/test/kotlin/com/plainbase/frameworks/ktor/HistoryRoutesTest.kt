@@ -5,6 +5,8 @@ import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.git.GitCommandException
 import com.plainbase.frameworks.git.GitExecutor
@@ -32,7 +34,9 @@ class HistoryRoutesTest : FunSpec({
 
     val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val pagePath = "notes/page.md"
-    val seed: (IdMapRepository) -> Unit = { it.bind(TreePath.require(pagePath), PageId.require(pageId), materialized = false) }
+    val seed: (
+        IdMapRepository,
+    ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
 
     /** A temp content tree with one page file, cleaned up after [block]. */
     fun withTree(block: (Path) -> Unit) {

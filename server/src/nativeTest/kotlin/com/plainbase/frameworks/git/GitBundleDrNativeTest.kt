@@ -3,6 +3,7 @@ package com.plainbase.frameworks.git
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.FetchedObject
@@ -306,6 +307,7 @@ class GitBundleDrNativeTest {
             client = fake,
             mirror = mirror,
             state = state,
+            binding = RootBinding("https://fake|bucket|"),
             keyPrefix = "",
             pollSeconds = 3600,
             dirtyPaths = { emptySet() },

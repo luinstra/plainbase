@@ -7,6 +7,7 @@ import { changeQuery, invalidateAfterDecision, invalidateAfterWrite } from "../a
 import type { ChangeDetail } from "../api/types";
 import { formatTime } from "../lib/datetime";
 import { DiffView } from "./DiffView";
+import { QueryErrorView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 
 /**
@@ -30,12 +31,7 @@ export function ReviewDetail({ id }: { id: string }) {
   }
   if (detail.isError) {
     if (detail.error instanceof ApiError && detail.error.isNotFound) return <NotFoundView />;
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{detail.error.message}</p>
-      </div>
-    );
+    return <QueryErrorView error={detail.error} />;
   }
 
   // Key by id so navigating between proposals remounts with fresh action state.
@@ -79,8 +75,9 @@ function ReviewDetailView({ change }: { change: ChangeDetail }) {
     mutationFn: () => approveChange(change.id),
     onSuccess: () => {
       onDecided();
-      // An apply moved the content tree — refresh the affected page via the one write funnel. `page_id` is null
-      // for a create (which 422s before a successful approve), so narrow + skip it (F4/WI-2).
+      // An apply moved the content tree — refresh the affected page via the one write funnel. BOTH operations carry a
+      // `page_id` here: a create RESERVES its id at propose time and applies with it. The null arm is the wire type's
+      // (a row with no id bound), not a create, so narrow and skip it (F4/WI-2).
       if (change.page_id !== null) invalidateAfterWrite(queryClient, { id: change.page_id });
     },
     onError: onActionError,
@@ -107,9 +104,15 @@ function ReviewDetailView({ change }: { change: ChangeDetail }) {
       </Link>
 
       <header className="pb-review-header" data-pb-review-header>
+        {/* The target is ROOT-QUALIFIED, and that is an approval-safety property, not cosmetics: `target_path` is
+            root-RELATIVE, so two roots can hold the same one, and an approve is the act that lands the bytes. An
+            admin looking at a bare path cannot tell WHICH repository they are about to write to. */}
         <h1 className="pb-review-title text-2xl font-bold text-ink">
           <span className="pb-review-op" data-pb-review-op={change.operation}>
             {change.operation}
+          </span>{" "}
+          <span className="pb-review-root" data-pb-review-root={change.root}>
+            {change.root}
           </span>{" "}
           {change.target_path}
         </h1>

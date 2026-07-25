@@ -4,12 +4,25 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.ProposalOperation
+import com.plainbase.domain.repository.ProposalStatus
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
+import com.plainbase.domain.service.Action
+import com.plainbase.domain.service.AmbiguousPageId
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
+import com.plainbase.domain.service.DenyReason
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IdProvider
+import com.plainbase.domain.service.IdResolution
+import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.MutatingFacade
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalApprover
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -23,9 +36,14 @@ import com.plainbase.domain.service.ProposeCommand
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.RebaseOutcome
 import com.plainbase.domain.service.RejectOutcome
+import com.plainbase.domain.service.RootStatus
+import com.plainbase.domain.service.RootUnavailable
+import com.plainbase.domain.service.RootedResource
 import com.plainbase.domain.service.SaveRequest
 import com.plainbase.domain.service.SaveResult
+import com.plainbase.domain.service.WriteClass
 import com.plainbase.domain.service.WriteOrigin
+import com.plainbase.frameworks.ktor.dto.WriteConflictReason
 
 /**
  * The frameworks-side [ProposalFacade] impl (P1a, the A3 choke point — the [GuardedReadFacade] shape): it holds the
@@ -33,9 +51,13 @@ import com.plainbase.domain.service.WriteOrigin
  * `check*` FIRST, and passes the minted grant INTO the grant-demanded [ProposalService] method (the demanded-value
  * floor). It lets [com.plainbase.domain.service.AccessDenied] propagate (the route maps it to 401/403).
  *
- *  - `propose` routes the operation: `Edit` -> `checkEdit` -> `proposeEdit(editGrant, …)`; `Create` -> `checkCreate`
- *    -> `proposeCreate(createGrant, …)`. The author snapshot is resolved from the `Principal` only AFTER the matching
- *    `check*` mints its grant — a denied propose does no labeler lookup before the deny is audited+thrown.
+ *  - `propose` routes the operation: `Edit` -> `proposeEdit`; `Create` -> `checkCreate` -> `proposeCreate(createGrant,
+ *    …)`. An EDIT is RESOLVE-then-GATE (the owner-ratified C4 order, the [GuardedMutatingFacade] write order applied to
+ *    a propose): the pin is durable-validated (or the id resolved id_map-first) to DERIVE the root, and `checkEdit` then
+ *    fires on that root as the FIRST authorization and the FIRST audit, before any arm returns an answer. Resolving is
+ *    not a read the caller receives, and gating on a root derived after the fact is what lets the audit row name the
+ *    root the proposal was actually filed against. The author snapshot is resolved from the `Principal` only AFTER the
+ *    matching `check*` mints its grant — a denied propose does no labeler lookup before the deny is audited+thrown.
  *  - `reject` -> `checkApprove` -> `proposalService.reject(approveGrant, …)` (the status transition only).
  *  - `list`/`get` -> `checkRead`.
  */
@@ -47,17 +69,67 @@ class GuardedProposalFacade(
     // C1 (SD-1): the explicit-propose create path mints the page id server-side, then PATCHES it into the agent's
     // whole-doc blob via the surgical FrontmatterPatcher (the server owns identity; the agent owns the body/title/slug).
     private val idProvider: IdProvider,
+    // The propose gates are ROOTED (ADR-0011 D6), so this facade needs a snapshot source of its own - it cannot obey
+    // the one-snapshot rule without one - plus the ONE resolver and the availability holder.
+    private val indexBuilder: IndexBuilder,
+    private val resolver: PageRootResolver,
+    private val availability: RootAvailability,
+    /** The ONE owner of "is this absence a 404 or a 503?" (C1) - the same rule the read and write facades ask. */
+    private val absence: AbsenceClassifier,
 ) : ProposalFacade {
 
     override fun propose(principal: Principal, command: ProposeCommand): ProposeOutcome =
         // Check FIRST (mint the grant), THEN resolve the author — so a DENIED propose never does the labeler's
         // token/user lookups before the deny is audited+thrown (the choke-point ordering, mirroring `reject`).
         when (command) {
-            is ProposeCommand.Edit -> {
-                val grant = policy.checkEdit(principal, ProposalCommandResource.PROPOSE)
+            is ProposeCommand.Edit -> proposeEdit(principal, command)
+            is ProposeCommand.Create -> proposeCreate(principal, command)
+        }
+
+    /**
+     * The rooted EDIT-propose (the [GuardedMutatingFacade] write ordering, applied to a propose): ONE snapshot; the root
+     * derived id_map-FIRST (a pin durable-validated, a bare edit resolved from the durable claimant - NOT read off the
+     * snapshot); `checkEdit` on that derived root as the first authorization and first audit; then the availability
+     * throw - and the GATED target THREADED into the service rather than re-resolved there.
+     *
+     * Threading is the point. `ProposalService` used to call `baseReader.pathOf` itself, which is a FRESH read of the
+     * published snapshot: a rebuild landing between the gate and the service call could re-award the id to another
+     * root, and the row would be persisted against a root the gate never authorized - possibly a non-editable or an
+     * unavailable one. Both classes are `gatedByEditable`, so a proposal against a read-only root now denies AT
+     * PROPOSE TIME with `root_not_editable` rather than surviving to surprise a reviewer at apply.
+     */
+    private fun proposeEdit(principal: Principal, command: ProposeCommand.Edit): ProposeOutcome {
+        val snapshot = indexBuilder.current
+        // RESOLVE-then-checkEdit-then-branch (audit ONCE, on the resolved root). A pinned edit-root is durable-VALIDATED
+        // (registered-and-live) rather than trusted; a bare edit resolves id_map-first.
+        val res: IdResolution = command.root?.let { resolver.resolvePinned(it, command.pageId) }
+            ?: resolver.resolve(command.pageId)
+        val grant = policy.checkEdit(
+            principal,
+            WriteClass.PageEdit,
+            RootedResource((res as? IdResolution.One)?.root, ProposalCommandResource.PROPOSE),
+        )
+        return when (res) {
+            // A bare propose to a duplicated id now answers 409 ambiguous_page_id (per-root identity, C5): resolve is
+            // still id_map-first, but a fail-closed Ambiguous reaches this arm instead of One.
+            is IdResolution.Ambiguous -> throw AmbiguousPageId(command.pageId, res.candidates, res.hasRetiredCandidate)
+            // No registered root owns the id (unknown, tombstoned, detached, or a pin that no longer holds it) ->
+            // StaleBase FROM HERE: the service is never called, so it can never re-resolve a target the gate did not
+            // see. A TOMBSTONED id deliberately lands here too - the propose vocabulary has no page_deleted (that is
+            // the CAS write's frozen 409), and StaleBase is the same answer a retired target has always gotten on
+            // this surface.
+            IdResolution.None -> ProposeOutcome.StaleBase
+            is IdResolution.One -> {
+                requireAvailable(res.root)
+                // A page we still BIND and did not witness is not a moved base - it is a page we could not read (C1).
+                // `StaleBase` would tell the agent to re-read a base that is not there; 503: come back when we see it.
+                absence.requireVerifiedAbsence(res.root, command.pageId, snapshot)
+                val target = snapshot.pageAt(RootedPageId(res.root, command.pageId))?.let { RootedPath(it.root, it.path) }
+                    ?: return ProposeOutcome.StaleBase
                 proposals.proposeEdit(
                     grant = grant,
                     pageId = command.pageId,
+                    target = target,
                     baseHash = command.baseHash,
                     clientTargetPath = command.clientTargetPath,
                     proposedContent = command.proposedContent,
@@ -65,8 +137,8 @@ class GuardedProposalFacade(
                     author = labeler.resolve(principal),
                 )
             }
-            is ProposeCommand.Create -> proposeCreate(principal, command)
         }
+    }
 
     /**
      * SD-1 — patch-the-blob: the server owns identity. `checkCreate` FIRST (READ_ONLY/revoked deny HERE, before any
@@ -76,7 +148,10 @@ class GuardedProposalFacade(
      * minted + baked the id at the create route (`command.pageId` set) — store both verbatim, no re-mint, no re-patch.
      */
     private fun proposeCreate(principal: Principal, command: ProposeCommand.Create): ProposeOutcome {
-        val grant = policy.checkCreate(principal, ProposalCommandResource.PROPOSE)
+        // A create's root is DECLARED, and the shared parser already validated it against the registry (400
+        // `invalid_root`), so the gate always sees a real root - no unrooted arm.
+        val grant = policy.checkCreate(principal, WriteClass.PageCreate, RootedResource(command.root, ProposalCommandResource.PROPOSE))
+        requireAvailable(command.root)
         val (pageId, bakedBytes) = when (val pre = command.pageId) {
             null -> {
                 val minted = idProvider.next()
@@ -96,7 +171,7 @@ class GuardedProposalFacade(
         return proposals.proposeCreate(
             grant = grant,
             pageId = pageId,
-            targetPath = command.targetPath,
+            target = RootedPath(command.root, command.targetPath),
             proposedContent = bakedBytes,
             rationale = command.rationale,
             author = labeler.resolve(principal),
@@ -114,6 +189,21 @@ class GuardedProposalFacade(
         // guarded MUTATING path so `checkEdit` mints the real EditGrant + audits the EDIT row. ApproveGrant never
         // reaches WritePipeline — grant-composition option (a).
         val grant = policy.checkApprove(principal, ProposalCommandResource.apply(id))
+        // The PRE-CLAIM guard (ADR-0011 D15). It cannot wait for the in-service recovery: by the time that runs, the
+        // PENDING -> APPLYING claim has ALREADY rewritten durable state, so a single approve of a proposal whose root
+        // is not serving would permanently convert a decidable row into an undecidable one (every later
+        // approve/reject/rebase CASes on PENDING/CONFLICTED).
+        //
+        // STATUS first, availability second - and only for the rows that will actually TOUCH the root. Answering an
+        // already-decided proposal with a 503 says "try again once the disk is back", which is a lie: no retry will
+        // ever apply it, the honest answer is the 409 the contract documents, and reporting a row as decided reads
+        // nothing off its root. This is NOT the gate order for anything that ACTS (that stays authn -> editable ->
+        // availability, below), and it introduces no status TOCTOU: the PENDING CAS in the service remains the single
+        // point of truth, so a row that turns terminal after this read is still caught there.
+        val row = proposals.guardOf(id) ?: return ApplyOutcome.NotFound
+        if (row.status != ProposalStatus.PENDING) return ApplyOutcome.NotPending
+        requireEditable(principal, row.root, ProposalCommandResource.apply(id))
+        requireAvailable(row.root)
         val approverAuthor = labeler.resolve(principal)
         val writer = ProposalContentWriter { row, author, committer ->
             // C1: the writer branches on the row's operation. BOTH paths carry already-approved, already-reviewed
@@ -130,12 +220,19 @@ class GuardedProposalFacade(
                         author = author,
                         committer = committer,
                         origin = WriteOrigin.PROPOSAL_APPLY,
+                        // An EDIT-proposal's stored root is AUTHORITATIVE too - the same rule the CREATE arm below has
+                        // always followed. The id still picks the PATH (an in-root move applies); the root is pinned, so
+                        // an id re-awarded across roots (D17) answers `page_deleted` -> CONFLICTED instead of landing an
+                        // approved edit in a repository the admin never saw.
+                        expectedRoot = row.root,
                     ),
                 ).toWriteOutcome()
                 ProposalOperation.CREATE -> mutate.create(
                     principal,
                     CreateIntent(
                         pageId = requireNotNull(row.pageId) { "a CREATE proposal must carry a page_id (minted at propose time)" },
+                        // A create-proposal's stored root is AUTHORITATIVE: there is no page to re-resolve one from.
+                        root = row.root,
                         path = row.targetPath,
                         bytes = row.proposedContent,
                         author = author,
@@ -155,7 +252,57 @@ class GuardedProposalFacade(
 
     override fun rebase(principal: Principal, id: ProposalId): RebaseOutcome {
         val grant = policy.checkApprove(principal, ProposalCommandResource.rebase(id))
+        // The same pre-guard, in the same order and for the same two reasons. A rebase whose target it cannot read
+        // stamps the row TERMINALLY FAILED (`rebase_target_gone`), which is a durable rewrite off a null a missing
+        // root produced - and one that FORECLOSES the recovery that restoring the root would give. Leave it
+        // CONFLICTED; answer 503. But a row that is NOT conflicted has no rebase to perform at all, so it answers
+        // the documented 409 without the root having to be up.
+        val row = proposals.guardOf(id) ?: return RebaseOutcome.NotFound
+        if (row.status != ProposalStatus.CONFLICTED) return RebaseOutcome.NotConflicted
+        requireAvailable(row.root)
         return proposals.rebase(grant, id)
+    }
+
+    /**
+     * The EDITABLE gate on the row's STORED root, and it runs BEFORE [requireAvailable] because a TERMINAL condition
+     * must never masquerade as a RETRYABLE one. A pending proposal whose root has since been made read-only can never
+     * be applied by any retry, ever; if that root is ALSO down, checking availability first answers 503
+     * `root_unavailable` - "try again when the disk is back" - to an admin whose proposal will be refused just as hard
+     * when it IS back. `editable = false` is topology and is knowable with the root offline, so ask it first and give
+     * the honest, final 403 `root_not_editable`.
+     *
+     * It also has to run BEFORE the claim. `mutate.save`/`mutate.create` mint the real [EditGrant] and would deny
+     * there anyway (the write classes are `gatedByEditable`) - but by then `proposals.apply` has already CASed
+     * PENDING -> APPLYING, so the deny would strand a decidable row in a state nothing can decide. This is the same
+     * pre-claim reasoning [requireAvailable] documents, applied to the gate that ranks above it. Nothing is minted
+     * here: it is the predicate, so the ONE audited EDIT decision still belongs to the write that follows.
+     *
+     * (Propose-time already denies this - [proposeEdit] - so reaching it means the root turned read-only AFTER the
+     * proposal was raised. That is a config change plus a restart, i.e. exactly the case a reviewer walks into.)
+     */
+    private fun requireEditable(principal: Principal, root: RootName, resource: String) {
+        if (!policy.editable(root)) policy.deny(principal, Action.EDIT, resource, DenyReason.ROOT_NOT_EDITABLE)
+    }
+
+    /**
+     * The availability gate. For `approve`/`rebase` it runs on the root the write will ACTUALLY land in - which, for
+     * BOTH operations, is the row's STORED root ([com.plainbase.domain.service.ProposalService.writeRootOf]), so the
+     * guard and the write ([com.plainbase.domain.service.SaveRequest.expectedRoot]) can never disagree about which
+     * root a 503 is about.
+     *
+     * It runs AFTER `checkApprove` (which stays unrooted - a proposal id is not a rooted resource), after the
+     * already-decided rows have been answered 409 (they touch no root, so they need none), and BEFORE any durable
+     * rewrite. A DETACHED root and an UNAVAILABLE one behave identically here, on purpose: the row stays
+     * exactly as it is, is never applied, never rewritten, never deleted, and re-adding the root's name to `roots {}`
+     * revives it.
+     */
+    private fun requireAvailable(root: RootName) {
+        val snapshot = availability.current()
+        when (resolver.statusOf(root, snapshot)) {
+            RootStatus.AVAILABLE -> Unit
+            RootStatus.DETACHED -> throw RootUnavailable(root, UnavailableCause.DETACHED)
+            RootStatus.UNAVAILABLE -> throw RootUnavailable(root, snapshot.unavailable.getValue(root).cause)
+        }
     }
 
     override fun list(principal: Principal): List<ProposalSummaryView> {
@@ -182,7 +329,12 @@ class GuardedProposalFacade(
  */
 private fun SaveResult.toWriteOutcome(): WriteOutcome = when (this) {
     is SaveResult.Written -> outcome
-    SaveResult.PageNotFound -> WriteOutcome.Conflict(reason = "page_deleted", currentContent = null, currentHash = null, currentPath = null)
+    SaveResult.PageNotFound -> WriteOutcome.Conflict(
+        reason = WriteConflictReason.PAGE_DELETED,
+        currentContent = null,
+        currentHash = null,
+        currentPath = null,
+    )
     SaveResult.IdMismatch -> WriteOutcome.UnsupportedEdit(field = "id")
     // P5: a degrade is DIRECT_PUT-only. The apply path passes WriteOrigin.PROPOSAL_APPLY, so GuardedMutatingFacade.save
     // NEVER enters the agent direct-commit/degrade decision here — these arms are unreachable BY THE ORIGIN

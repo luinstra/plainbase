@@ -62,13 +62,13 @@ Once connected, `listTools` returns exactly these seven:
 A typical search → read → propose flow:
 
 ```jsonc
-// search the docs
+// search the docs - hits carry the page's root (the /docs/{root}/... URL segment)
 → search            { "q": "kubernetes deploy" }
-← { "query": "...", "hits": [ { "page_id": "0197…", "snippet": "…", "citation": {…} }, … ] }
+← { "query": "...", "hits": [ { "page_id": "0197…", "root": "main", "snippet": "…", "citation": {…} }, … ] }
 
 // read the whole verbatim page (frontmatter header + body) - content_hash is your edit base
 → read_page         { "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a" }
-← { "id": "0197…", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
+← { "id": "0197…", "root": "main", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
 
 // propose an edit - proposed_content is the FULL UTF-8 markdown of the page after your change
 // (frontmatter header included), NOT a diff and NOT base64
@@ -84,11 +84,55 @@ A typical search → read → propose flow:
 
 The response is a **proposal id** in `PENDING` - a human reviews and approves it in the web UI. Agents cannot
 approve their own (or any) proposals. To create a NEW page instead of editing, use
-`{ "operation": "create", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
-(no `page_id`/`base_hash`).
+`{ "operation": "create", "root": "main", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
+(no `page_id`/`base_hash`). A create must name its `root` - there is no default, and an omitted one is
+`invalid_root`: which root a page lands in decides whose tree it joins and whose policy accepts it. An edit does
+not need one - the root comes from the page - but it MAY name `root` as an optional disambiguation pin, which is
+what you retry with if an edit comes back `ambiguous_page_id` (below).
 
 Track the review queue with `list_changes` (all proposals, newest-first) and `get_change` (one proposal's full
 detail + diff + decision state).
+
+## 4. Roots: what a page lives under, and what its errors mean
+
+Every page lives under a named **root** - a document directory the server is configured to serve
+([ADR-0011](decisions/0011-multi-root-document-directories.md)). A single-root install has exactly
+one, named `main`; a multi-root install can have more (`memoria`, `handbook`, whatever the operator
+named them). `search` and `read_page` already carry the root in their responses (see the worked
+session above); the URL grammar is always `/docs/{root}/{path}`, and a `create` (or a REST direct
+commit) **names its root explicitly, with no default** - `propose_change`'s `root` field on a `create`
+operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_root` (above), never
+permission to write into `main`.
+
+A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
+which with a code, not a guess. Four wire shapes to recognize:
+
+| code | status | what it means | what you must do |
+|---|---|---|---|
+| `root_unavailable` | **503** + `Retry-After: 300` | The root's disk is unmounted, missing at boot, or its watcher died. **The page is NOT gone.** Nothing was written. | **Keep your citations.** Retry after an operator restores the root and restarts the server - the `Retry-After` (seconds) is how long to wait before trying again. |
+| `root_not_editable` | **403** | The root is declared `editable = false`. Page writes are refused there in **every** auth mode - this is topology, not a permission you might be granted. | Do not retry. Do not propose a write into this root; read-only means read-only for every agent, always. |
+| `invalid_root` | **400** | The named root is not a legal slug, or names no root the server has configured. | Fix the name - check the `root` a `search`/`read_page` hit actually carries, or what `GET /healthz` lists. |
+| `ambiguous_page_id` | **409** | The page id you sent is held by more than one root and you named none, so the server will not pick one for you. | Retry naming `root`, choosing from the candidates the response lists. Each candidate carries the `url` to retry - the endpoint you just called with `root` added. On `propose_change` (`POST /api/v1/changes`) the pin is the request body's own `root` field instead, so those candidates carry no `url`. |
+
+The id-addressed **read** tools - `read_page`, `get_page_metadata` and `validate_links` - accept the same optional
+`root` pin, which is what makes the `ambiguous_page_id` remedy above actually available on a read. Omit it and the
+server resolves the owning root from the id; name it and you get that root's page or nothing.
+
+**The distinction that matters most is `root_unavailable` (503) versus a plain `404 page_not_found` -
+and it is deliberate, not incidental:**
+
+- **An UNPINNED `404` still means exactly what it always meant: the page is gone.** Drop your citations to it.
+- **A `404` on a request that NAMED a root means only "not in THAT root".** The page may be alive in another one -
+  a pinned read asks a narrower question and gets a narrower answer. Before you drop a citation, retry without the
+  `root` pin (or against another candidate root); only an unpinned 404 is evidence the page is gone.
+- **`503 root_unavailable` means the opposite: the page still exists.** A disk is unmounted, not a page
+  deleted, and the content is coming back once an operator restores it. **An agent that treats a 503
+  as a 404 destroys citations for a page that is still there** - that is the one failure this section
+  exists to prevent, because from the wire alone the two look like "I couldn't get the page" unless you
+  know to look at the status code and the error code together.
+
+Nothing is ever written on a `root_unavailable` or `root_not_editable` response, so retrying a read is
+always safe; retrying a write into either is not going to change the outcome until an operator acts.
 
 ## Parity with the REST API
 

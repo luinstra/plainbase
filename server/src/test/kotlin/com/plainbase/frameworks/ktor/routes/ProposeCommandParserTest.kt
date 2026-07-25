@@ -1,9 +1,12 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.ProposeCommand
+import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.ProposeChangeRequest
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 
 /**
@@ -19,24 +22,84 @@ class ProposeCommandParserTest : FunSpec({
 
     fun req(
         operation: String = "edit",
+        root: String? = "main",
         pageId: String? = null,
         baseHash: String? = null,
         targetPath: String? = null,
         proposedContent: String = "# Body",
         rationale: String = "because",
-    ) = ProposeChangeRequest(operation, pageId, baseHash, targetPath, proposedContent, rationale)
+    ) = ProposeChangeRequest(operation, root, pageId, baseHash, targetPath, proposedContent, rationale)
+
+    /** The registered root names the parser validates a DECLARED create root against (the pure `ctx.roots` set). */
+    val roots = setOf(RootName.MAIN, RootName.require("archive"))
+
+    fun parse(request: ProposeChangeRequest) = parseProposeCommand(request, roots)
 
     fun invalidMessage(request: ProposeChangeRequest): String =
-        (parseProposeCommand(request) as ProposeCommandParse.Invalid).message
+        (parse(request) as ProposeCommandParse.Invalid).message
 
     test("Ok edit: a valid edit yields ProposeCommand.Edit with the UTF-8 proposed_content bytes") {
-        val parse = parseProposeCommand(req(pageId = validPageId, baseHash = validBaseHash, proposedContent = "edited 🚀"))
+        val parse = parse(req(pageId = validPageId, baseHash = validBaseHash, proposedContent = "edited 🚀"))
         val command = parse.shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
         command.proposedContent.toList() shouldBe "edited 🚀".encodeToByteArray().toList()
     }
 
+    test("an unknown root on a CREATE is invalid_root - and the CODE rides on the parse, so both surfaces answer it") {
+        // The check lives HERE and not in a route, and that is the point: a create-PROPOSAL never goes near
+        // `POST /pages`, so a route-side check would leave the two propose surfaces (REST and MCP) falling through to
+        // the facade's fail-closed `editableOf`, which answers 403 `root_not_editable` - a LIE, because the root does
+        // not exist at all. One validator, one vocabulary, three write surfaces.
+        val parse = parse(req(operation = "create", root = "nosuchroot", targetPath = "notes/new.md"))
+        val invalid = parse.shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+        invalid.code shouldBe ErrorCodes.INVALID_ROOT
+        invalid.message shouldContain "nosuchroot"
+    }
+
+    test("an OMITTED root on a CREATE is invalid_root - never a silent proposal into main") {
+        // The old default was `main`, so an agent that never learned about roots proposed INTO main - and had its
+        // proposal judged against MAIN's editable bit and MAIN's globs. A create says where, or it is a 400.
+        val invalid = parse(req(operation = "create", root = null, targetPath = "notes/new.md"))
+            .shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+        invalid.code shouldBe ErrorCodes.INVALID_ROOT
+        invalid.message shouldBe "a create requires root"
+    }
+
+    test("an EDIT with NO root still parses - the pin is optional, and omitted means resolve from the page id") {
+        parse(req(root = null, pageId = validPageId, baseHash = validBaseHash))
+            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
+    }
+
+    test("an ILLEGAL-SLUG root is the SAME invalid_root, never a 500 - a wire string can fail two ways, one answer") {
+        val invalid = parse(req(operation = "create", root = "Not A Root", targetPath = "notes/new.md"))
+            .shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+        invalid.code shouldBe ErrorCodes.INVALID_ROOT
+    }
+
+    test("a create into a REGISTERED extra root parses to that root") {
+        val command = parse(req(operation = "create", root = "archive", targetPath = "notes/new.md"))
+            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Create>()
+        command.root shouldBe RootName.require("archive")
+    }
+
+    test("every OTHER malformed field keeps its EXISTING code byte-for-byte (the new code is additive, not a reshape)") {
+        val invalid = parse(req(operation = "create", targetPath = null)).shouldBeInstanceOf<ProposeCommandParse.Invalid>()
+        invalid.code shouldBe ErrorCodes.INVALID_PROPOSE_REQUEST
+    }
+
+    test(
+        "an EDIT root pin is GRAMMAR-only here: an unregistered-but-legal slug parses (no pre-auth leak); a malformed one is invalid_root",
+    ) {
+        // Registration is deferred to the facade AFTER checkEdit (5.2a) - a parser-side registry check would leak
+        // a root's existence pre-auth. The pin rides the command so the facade can durable-validate it.
+        val command = parse(req(root = "nosuchroot", pageId = validPageId, baseHash = validBaseHash))
+            .shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Edit>()
+        command.root shouldBe RootName.require("nosuchroot")
+        parse(req(root = "Not A Root", pageId = validPageId, baseHash = validBaseHash))
+            .shouldBeInstanceOf<ProposeCommandParse.Invalid>().code shouldBe ErrorCodes.INVALID_ROOT
+    }
+
     test("Ok create: a valid create yields ProposeCommand.Create with the target path + bytes") {
-        val parse = parseProposeCommand(req(operation = "create", targetPath = "notes/new.md", proposedContent = "新規"))
+        val parse = parse(req(operation = "create", targetPath = "notes/new.md", proposedContent = "新規"))
         val command = parse.shouldBeInstanceOf<ProposeCommandParse.Ok>().command.shouldBeInstanceOf<ProposeCommand.Create>()
         command.targetPath.value shouldBe "notes/new.md"
         command.proposedContent.toList() shouldBe "新規".encodeToByteArray().toList()

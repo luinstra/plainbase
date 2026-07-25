@@ -43,6 +43,39 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
         ObjectContentStore.constructions.get() shouldBe objectBefore
         S3ObjectClient.constructions.get() shouldBe s3Before
     }
+
+    // Multi-root C1 regression pin: an env-built object config synthesizes an Object-backed main whose
+    // localPath is NULL, and the HistoryProvider lambda evaluates mainContentRoot() EAGERLY at both
+    // selectHistoryProvider call sites - so a requireNotNull over main.localPath there would crash every
+    // real object boot. The copy()-built config above cannot catch that (its stale synthesized main is
+    // Local), hence this second, synthesized-from-env graph.
+    test("object synthesis (main has no local path): HistoryProvider resolves and gate-checks without throwing") {
+        withTempDataDir { dataDir ->
+            val objectEnvConfig = module {
+                single {
+                    PlainbaseConfig.fromEnv(
+                        mapOf(
+                            "DATA_DIR" to dataDir.toString(),
+                            "PLAINBASE_STORAGE_BACKEND" to "object",
+                            "PLAINBASE_S3_ENDPOINT" to "https://acct.example.com",
+                            "PLAINBASE_S3_BUCKET" to "docs",
+                            "PLAINBASE_S3_ACCESS_KEY_ID" to "k",
+                            "PLAINBASE_S3_SECRET_ACCESS_KEY" to "s",
+                            "PLAINBASE_GIT_ENABLED" to "true",
+                        ),
+                    )
+                }
+            }
+            val app = koinApplication {
+                modules(objectEnvConfig, contentModule, repositoryModule, securityModule, historyModule)
+            }
+            try {
+                app.koin.get<HistoryProvider>().gateCheck()
+            } finally {
+                app.close()
+            }
+        }
+    }
 })
 
 private fun objectGitEnabledConfigModule(dataDir: java.nio.file.Path) = module {

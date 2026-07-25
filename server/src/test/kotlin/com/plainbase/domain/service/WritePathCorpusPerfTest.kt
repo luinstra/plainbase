@@ -6,6 +6,8 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.search.withProvider
@@ -61,7 +63,11 @@ class WritePathCorpusPerfTest : FunSpec({
                 IndexHarness(
                     root,
                     contentStore = observing,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)), // rebuild's serve-shape engine sync
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired)
+                        },
+                    ), // rebuild's serve-shape engine sync
                     searchIndexer = indexer, // reindex's propagating syncPage
                 ).use { harness ->
                     harness.builder.rebuild()
@@ -74,11 +80,15 @@ class WritePathCorpusPerfTest : FunSpec({
                     // so the materialized frontmatter — id included — never changes and classifyEdit stays green).
                     val target = TreePath.require("section-00/page-000.md")
                     val saveTimes = (0 until 20).map { round ->
-                        val current = harness.builder.current.byPath.getValue(target)
+                        val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
                         val bytes = (current.markdown + "\nsave round $round.\n").toByteArray()
                         val outcome: WriteOutcome
                         val millis = measureTimeMillis {
-                            outcome = pipeline.write(grantForTests(), WriteIntent(current.id, current.path, current.contentHash, bytes))
+                            outcome =
+                                pipeline.write(
+                                    grantForTests(),
+                                    WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, bytes),
+                                )
                         }
                         outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                         millis
@@ -87,7 +97,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     // (c) Save-blocked-by-create: thread A creates; once A is inside its rebuild's scan (the
                     // IndexBuilderConcurrencyTest gating idiom, latch-armed so the earlier passes don't trip it),
                     // the save below blocks on the shared pipeline monitor for the create's remainder.
-                    val current = harness.builder.current.byPath.getValue(target)
+                    val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
                     val blockedBytes = (current.markdown + "\nblocked save.\n").toByteArray()
                     armed.set(true)
                     val createResult = AtomicReference<Result<WriteOutcome>>()
@@ -98,7 +108,7 @@ class WritePathCorpusPerfTest : FunSpec({
                                 val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
                                 pipeline.create(
                                     createGrantForTests(),
-                                    CreateIntent(pageId, TreePath.require("perf-blocked/created.md"), bytes),
+                                    CreateIntent(pageId, RootName.MAIN, TreePath.require("perf-blocked/created.md"), bytes),
                                 )
                             },
                         )
@@ -107,7 +117,10 @@ class WritePathCorpusPerfTest : FunSpec({
                     val blockedOutcome: WriteOutcome
                     val blockedWall = measureTimeMillis {
                         blockedOutcome =
-                            pipeline.write(grantForTests(), WriteIntent(current.id, current.path, current.contentHash, blockedBytes))
+                            pipeline.write(
+                                grantForTests(),
+                                WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, blockedBytes),
+                            )
                     }
                     // The blocked-save number only means anything if the create it blocked on genuinely
                     // completed: fail loud on a hung join, rethrow a creator-thread exception.
@@ -133,7 +146,11 @@ class WritePathCorpusPerfTest : FunSpec({
                 val indexer = SearchIndexer(provider, SectionSplitter())
                 IndexHarness(
                     root,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired)
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     harness.builder.rebuild()
@@ -175,20 +192,27 @@ class WritePathCorpusPerfTest : FunSpec({
                 IndexHarness(
                     root,
                     contentStore = counting,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired)
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     // The serve shape, assembled as WatchingRestHarness/Application.serve() wire it:
                     // scheduler over the builder, watch registered FIRST, then the startup rebuild (§B2).
                     RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm()).use { scheduler ->
-                        store.watch { scheduler.schedule() }.use {
+                        store.watch(onChange = { scheduler.schedule() }).use {
                             harness.builder.rebuild()
                             scans.set(0)
 
                             val pageId = UuidV7IdProvider().next()
                             val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
                             val outcome = harness.writePipeline()
-                                .create(createGrantForTests(), CreateIntent(pageId, TreePath.require("section-00/created.md"), bytes))
+                                .create(
+                                    createGrantForTests(),
+                                    CreateIntent(pageId, RootName.MAIN, TreePath.require("section-00/created.md"), bytes),
+                                )
                             outcome.shouldBeInstanceOf<WriteOutcome.Written>()
 
                             // Record-not-throw await (the WatcherPipelineTest awaitUntil idiom, modified): the
@@ -219,7 +243,7 @@ private fun timedCreate(pipeline: WritePipeline, path: String): Long {
     val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
     val outcome: WriteOutcome
     val millis = measureTimeMillis {
-        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, TreePath.require(path), bytes))
+        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require(path), bytes))
     }
     outcome.shouldBeInstanceOf<WriteOutcome.Written>()
     return millis

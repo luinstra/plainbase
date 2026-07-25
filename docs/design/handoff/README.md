@@ -189,7 +189,7 @@ Three columns: sidebar · reading column (≤720px) · right rail.
 **One rule for every folder, root included.** A folder with an `index.md`/`README.md`
 renders that authored page AS the whole landing — the index content IS the folder view, and
 the **generated child listing is suppressed** (the children stay in the sidebar tree, and the
-index keeps its own `/p/{id}` permalink). A folder with **no** index shows the generated
+index keeps its own `/p/{root}/{id}` permalink). A folder with **no** index shows the generated
 child listing instead:
 - **Subfolders → cards** in a responsive `auto-fill, minmax(216px,1fr)` grid. Card =
   folder icon + name + one-line description (from `_folder.yaml`) + `path/ · N pages`.

@@ -25,6 +25,8 @@ data class SearchResponse(
 @Serializable
 data class SearchHitDto(
     @SerialName("page_id") val pageId: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the hit's root-name slug. */
+    val root: String,
     val path: String,
     val url: String?,
     val title: String,
@@ -52,6 +54,7 @@ fun SearchPayload.toDto(): SearchResponse = SearchResponse(
 
 fun SearchHitPayload.toDto(): SearchHitDto = SearchHitDto(
     pageId = pageId.value,
+    root = root.value,
     path = path.value,
     url = url,
     title = title,

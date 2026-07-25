@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -65,9 +66,9 @@ class PreviewRouteTest : FunSpec({
         val tree = Files.createTempDirectory("plainbase-preview-parity")
         try {
             Files.write(tree.resolve("parity.md"), original.toByteArray())
-            val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
+            val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
                 idMap.bind(
-                    com.plainbase.domain.content.TreePath.require("parity.md"),
+                    com.plainbase.domain.root.RootedPath(RootName.MAIN, com.plainbase.domain.content.TreePath.require("parity.md")),
                     com.plainbase.domain.page.PageId.require(pageId),
                     materialized = true,
                 )
@@ -91,9 +92,12 @@ class PreviewRouteTest : FunSpec({
     // to its /docs URL; a link to a non-existent page renders inert (data-pb-link-error).
     test("preview rewrites a link to an existing page and marks a link to a missing page inert") {
         val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
-        val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
+        val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
-                com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                com.plainbase.domain.root.RootedPath(
+                    RootName.MAIN,
+                    com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                ),
                 com.plainbase.domain.page.PageId.require(pageId),
                 materialized = false,
             )
@@ -105,7 +109,7 @@ class PreviewRouteTest : FunSpec({
             }
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
-            html shouldContain "/docs/guides/deploy-guide"
+            html shouldContain "/docs/main/guides/deploy-guide"
             html shouldContain "data-pb-link-error"
         }
     }
@@ -124,7 +128,7 @@ class PreviewRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
             // Resolved against guides/ (the buffer's folder), NOT the content root.
-            html shouldContain "\"/docs/guides/getting-started\""
+            html shouldContain "\"/docs/main/guides/getting-started\""
             html shouldNotContain "data-pb-link-error"
         }
     }
@@ -133,9 +137,12 @@ class PreviewRouteTest : FunSpec({
     // follow-up GET returns the OLD content (the snapshot was never swapped).
     test("preview is read-only: no file written, no snapshot swap, the page still reads its old bytes") {
         val pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
-        val seed = { idMap: com.plainbase.domain.repository.IdMapRepository ->
+        val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
-                com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                com.plainbase.domain.root.RootedPath(
+                    RootName.MAIN,
+                    com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
+                ),
                 com.plainbase.domain.page.PageId.require(pageId),
                 materialized = false,
             )

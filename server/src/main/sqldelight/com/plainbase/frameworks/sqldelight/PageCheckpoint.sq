@@ -9,10 +9,16 @@
 
 import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
+import com.plainbase.domain.root.RootName;
 
+-- PK is (root, id): the row is keyed by the page's real (root, id) identity so a duplicate id under a
+-- future extra root cannot collide a checkpoint row (ADR-0011 D14). root also qualifies the
+-- root-relative url_path.
 CREATE TABLE page_checkpoint (
-  id BLOB AS PageId NOT NULL PRIMARY KEY,
-  url_path TEXT AS TreePath
+  id BLOB AS PageId NOT NULL,
+  root TEXT AS RootName NOT NULL,
+  url_path TEXT AS TreePath,
+  PRIMARY KEY (root, id)
 );
 
 selectAll:
@@ -23,5 +29,12 @@ deleteAll:
 DELETE FROM page_checkpoint;
 
 insertRow:
-INSERT INTO page_checkpoint(id, url_path)
-VALUES (:id, :urlPath);
+INSERT INTO page_checkpoint(id, root, url_path)
+VALUES (:id, :root, :urlPath);
+
+-- The proof-apply transaction's arm: a checkpoint row dies WITH the binding it belongs to, under the
+-- same AbsenceProof, never on its own inference (C0). Root-scoped so the retirement of one root's
+-- binding cannot reap a same-id row under another root.
+deleteRow:
+DELETE FROM page_checkpoint
+WHERE root = :root AND id = :id;

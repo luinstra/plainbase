@@ -1,5 +1,10 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.MutatingFacade
@@ -26,6 +31,27 @@ class RouteContext(
     val mutate: MutatingFacade,
     /** PB-PROPOSE-1 the guarded proposal surface for `/api/v1/changes` (P1a propose/list/get/reject + P1b approve-apply/rebase). */
     val proposals: ProposalFacade,
+    /** The configured topology, in D7 order — health enumerates it, and [roots] derives from it. */
+    val registry: RootRegistry,
+    /**
+     * Runtime per-root serving state. The only route that reads it is the UNAUTHENTICATED `/healthz` probe: every
+     * gated surface learns about availability through its facade's own throw, never by asking here, so the
+     * authn-precedes-topology rule cannot be sidestepped by a route.
+     */
+    val availability: RootAvailability,
+    /**
+     * Runtime per-root watch COVERAGE - availability's non-sticky twin, read by the same one route. A root whose
+     * watcher cannot see its whole tree is still AVAILABLE (it serves every byte); what it has lost is event-driven
+     * convergence, so `/healthz` reports it as degraded rather than down, and no gated surface consults it at all.
+     */
+    val convergence: RootConvergence,
+    /**
+     * The DERIVED per-root limbo set (C1) - rows whose pages the last pass did not witness and no proof covers. Read
+     * by the SAME one route, and for the same reason: it is an operator signal, not an authorization input. A gated
+     * surface never asks here - it asks the `AbsenceClassifier`, which reads the durable binding directly rather than
+     * a set derived once per pass, so a read cannot be answered off a snapshot older than the request.
+     */
+    val limbo: RootLimbo = RootLimbo(),
     val tokens: ApiTokenService,
     /** A4a auth services (session/login/setup/admin/rate-limit) the auth routes + the cookie seam share. */
     val auth: AuthServices,
@@ -82,4 +108,13 @@ class RouteContext(
                 proxyIdentityHeader = proxyIdentityHeader,
             )
         },
-)
+) {
+
+    /**
+     * The registry root names the URL grammar scopes by (`splitRootTail`'s known set) and the shared propose parser
+     * validates a declared root against: config TOPOLOGY only (operator-declared names, never content existence), so
+     * the pre-gate root decision leaks nothing. [RootRegistry] guarantees `main` is present — the legacy 301 arm
+     * targets `/docs/main/...`, so a set without it would redirect its own target forever.
+     */
+    val roots: Set<RootName> = registry.roots.map { it.name }.toSet()
+}

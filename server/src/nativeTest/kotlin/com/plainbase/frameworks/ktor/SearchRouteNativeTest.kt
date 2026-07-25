@@ -41,7 +41,7 @@ class SearchRouteNativeTest {
                 // §B7 assembly: snapshot fields, heading breadcrumb, and the coherent citation.
                 val hit = assertNotNull(body["hits"]?.jsonArray?.single()?.jsonObject)
                 assertEquals(pageId, hit["page_id"]?.jsonPrimitive?.content)
-                assertEquals("/docs/guides/search-smoke", hit["url"]?.jsonPrimitive?.content)
+                assertEquals("/docs/main/guides/search-smoke", hit["url"]?.jsonPrimitive?.content)
                 assertEquals("Native Search", hit["title"]?.jsonPrimitive?.content)
                 assertEquals("usage", hit["heading_id"]?.jsonPrimitive?.content)
                 val citation = assertNotNull(hit["citation"]?.jsonObject)

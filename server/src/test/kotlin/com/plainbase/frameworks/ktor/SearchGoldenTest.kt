@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
@@ -49,7 +51,11 @@ class SearchGoldenTest : FunSpec({
     val sentinelTerm = "blameless"
     val runbookId = "0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("infra/incident-runbook.md"), PageId.require(runbookId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("infra/incident-runbook.md")),
+            PageId.require(runbookId),
+            materialized = false,
+        )
     }
     val runbookHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("infra/incident-runbook.md"))
 
@@ -143,7 +149,7 @@ class SearchGoldenTest : FunSpec({
                 response.status shouldBe HttpStatusCode.OK
                 val hits = Json.parseToJsonElement(response.bodyAsText()).jsonObject.getValue("hits").jsonArray.map { it.jsonObject }
 
-                hits.map { it.getValue("url") } shouldContainExactlyInAnyOrder listOf(JsonPrimitive("/docs/a/clash"), JsonNull)
+                hits.map { it.getValue("url") } shouldContainExactlyInAnyOrder listOf(JsonPrimitive("/docs/main/a/clash"), JsonNull)
                 hits.forEach { hit ->
                     hit.getValue("heading_id") shouldBe JsonNull
                     hit.getValue("heading_text") shouldBe JsonNull

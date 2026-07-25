@@ -42,7 +42,7 @@ class SearchDbTest : FunSpec({
                     val dbPath = dir.resolve("search.db")
                     SearchDb(dbPath).use { db ->
                         val provider = Fts5SearchProvider(db)
-                        SearchIndexer(provider, SectionSplitter()).sync(snapshot)
+                        SearchIndexer(provider, SectionSplitter()).sync(snapshot, retired = emptySet())
                         provider.search(query("kubernetes")).total shouldBe 1L
                     }
 
@@ -52,10 +52,10 @@ class SearchDbTest : FunSpec({
                     SearchDb(dbPath).use { db ->
                         val provider = Fts5SearchProvider(db)
                         provider.indexedState() shouldBe emptyMap() // empty engine truth ⇒ full upsert
-                        SearchIndexer(provider, SectionSplitter()).sync(snapshot)
+                        SearchIndexer(provider, SectionSplitter()).sync(snapshot, retired = emptySet())
                         provider.search(query("kubernetes")).total shouldBe 1L
                         provider.search(query("terraform")).total shouldBe 1L
-                        provider.indexedState().keys shouldBe snapshot.pages.map { it.id }.toSet()
+                        provider.indexedState().keys shouldBe snapshot.pages.map { it.rooted }.toSet()
                     }
                 }
             }

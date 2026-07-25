@@ -20,5 +20,5 @@ class CitationFactory {
     /** A page-level citation ([Citation.headingId] null); `commit` rides the snapshot — the page's last
      *  commit in Git mode, null off Git. */
     fun pageLevel(page: IndexedPage, contentHash: String): Citation =
-        Citation(pageId = page.id, headingId = null, path = page.path, contentHash = contentHash, commit = page.commit)
+        Citation(root = page.root, pageId = page.id, headingId = null, path = page.path, contentHash = contentHash, commit = page.commit)
 }

@@ -1,6 +1,7 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
@@ -8,6 +9,8 @@ import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.GoldenTsv
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
@@ -28,6 +31,8 @@ import io.kotest.matchers.shouldBe
  */
 class IndexBuilderFixtureTest : FunSpec({
 
+    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+
     test("golden URL set: the complete fixture page->url map matches §A4 construction") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
@@ -37,15 +42,15 @@ class IndexBuilderFixtureTest : FunSpec({
             actual shouldContainExactly expected
 
             // The named criterion rows, asserted explicitly so a golden-file edit cannot soften them.
-            actual["notes/release notes 2026.md"] shouldBe "/docs/notes/release-notes-2026"
-            actual["notes/réunion.md"] shouldBe "/docs/notes/r%C3%A9union"
+            actual["notes/release notes 2026.md"] shouldBe "/docs/main/notes/release-notes-2026"
+            actual["notes/réunion.md"] shouldBe "/docs/main/notes/r%C3%A9union"
         }
     }
 
-    test("every page has a stable id, and byId/byPath/byUrlPath agree") {
+    test("every page has a stable id, and byRootedId/byPath/byUrlPath agree") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            snapshot.byId.size shouldBe snapshot.pages.size
+            snapshot.byRootedId.size shouldBe snapshot.pages.size
             snapshot.byPath.size shouldBe snapshot.pages.size
             snapshot.byUrlPath.size shouldBe snapshot.pages.size // no collisions in fixtures
             // Stable across a rescan: same ids on rebuild (id_map round-trip).
@@ -57,18 +62,18 @@ class IndexBuilderFixtureTest : FunSpec({
     test("notes/deeply/nested/folder/treasure.md is nested correctly with the full slugified URL") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            val treasure = snapshot.byPath.getValue(TreePath.require("notes/deeply/nested/folder/treasure.md"))
-            treasure.url shouldBe "/docs/notes/deeply/nested/folder/treasure"
-            snapshot.byUrlPath.getValue(TreePath.require("notes/deeply/nested/folder/treasure")) shouldBe treasure
+            val treasure = snapshot.byPath.getValue(rooted("notes/deeply/nested/folder/treasure.md"))
+            treasure.url shouldBe "/docs/main/notes/deeply/nested/folder/treasure"
+            snapshot.byUrlPath.getValue(rooted("notes/deeply/nested/folder/treasure")) shouldBe treasure
         }
     }
 
     test("redirect_from on deploy-guide registers an alias through the same URL construction") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
             val snapshot = harness.builder.rebuild()
-            val deployGuide = snapshot.byPath.getValue(TreePath.require("guides/deploy-guide.md"))
-            harness.registry.find(TreePath.require("old/deployment")) shouldBe deployGuide.id
-            harness.aliases.find(TreePath.require("old/deployment")) shouldBe deployGuide.id // persisted, not just in-memory
+            val deployGuide = snapshot.byPath.getValue(rooted("guides/deploy-guide.md"))
+            harness.registry.find(rooted("old/deployment")) shouldBe deployGuide.rooted
+            harness.aliases.find(rooted("old/deployment")) shouldBe deployGuide.rooted // persisted, not just in-memory
         }
     }
 
@@ -77,10 +82,13 @@ class IndexBuilderFixtureTest : FunSpec({
         val renders = mutableMapOf<String, Int>()
         var frontmatterParses = 0
         val store = LocalContentStore(Fixtures.demoDocs)
+        // The builder's read seam is `readClassified` (a null read cannot tell a deleted page from a downed root,
+        // and the builder must be able to), so the count lives THERE - counting the now-unused `read` would make
+        // this assertion vacuously pass whatever the builder did.
         val counting = object : ContentStore by store {
-            override fun read(path: TreePath): ByteArray? {
+            override fun readClassified(path: TreePath): StoreRead {
                 reads.merge(path.value, 1, Int::plus)
-                return store.read(path)
+                return store.readClassified(path)
             }
         }
         // The §C2 value parse is counted at the FrontmatterParser seam — the builder's single
@@ -118,6 +126,43 @@ class IndexBuilderFixtureTest : FunSpec({
             renders.size shouldBe snapshot.pages.size
             renders.filterValues { it != 1 }.keys.shouldBeEmpty()
             snapshot.pages.forEach { page -> reads[page.path.value].shouldNotBeNull() }
+        }
+    }
+
+    test("a page removed between the tree walk and its classified read is skipped without minting identity") {
+        withTempTree({ root -> writePage(root, "vanished.md", "# Vanished\n") }) { root ->
+            val real = LocalContentStore(root)
+            val disappearing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead = StoreRead.NoBytes
+            }
+
+            IndexHarness(root, contentStore = disappearing).use { harness ->
+                val snapshot = harness.builder.rebuild()
+
+                snapshot.pages.shouldBeEmpty()
+                harness.idMap.bindings().shouldBeEmpty()
+            }
+        }
+    }
+
+    test("a root that disappears during page reads carries its last-good section and becomes unavailable") {
+        withTempTree({ root -> writePage(root, "doc.md", "# Document\n") }) { root ->
+            val real = LocalContentStore(root)
+            var rootDown = false
+            val vanishing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead =
+                    if (rootDown) StoreRead.RootDown else real.readClassified(path)
+            }
+
+            IndexHarness(root, contentStore = vanishing).use { harness ->
+                val first = harness.builder.rebuild()
+                rootDown = true
+
+                val carried = harness.builder.rebuild()
+
+                carried.pages shouldBe first.pages
+                harness.availability.current().isAvailable(RootName.MAIN) shouldBe false
+            }
         }
     }
 })

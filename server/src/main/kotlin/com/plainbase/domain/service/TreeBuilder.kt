@@ -6,14 +6,16 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
 import kotlinx.datetime.LocalDate
 
 /**
  * A node of the nav tree (§A4 `/api/v1/tree` shape, chunk 6 maps it to DTOs).
  *
  * Page nodes carry [Page.url] — the canonical path URL, null for a slug-collision loser (the UI
- * links those via `/p/{id}`). Folder nodes carry [Folder.url] — the folder's `/docs` URL prefix,
- * where the SPA renders the folder landing view (ADR-0003); null for a collision-loser subtree.
+ * links those via `/p/{root}/{id}`). Folder nodes carry [Folder.url] - the folder's `/docs/{root}` URL
+ * prefix, where the SPA renders the folder landing view (ADR-0003); null for a collision-loser
+ * subtree.
  * Folder [Folder.title] comes from `_folder.yaml`, else null (the UI falls back to [Folder.name]);
  * the root folder is the synthetic node with empty name and null path.
  *
@@ -31,7 +33,7 @@ sealed interface TreeNode {
         val description: String?,
         /** The folder's content path; null only for the synthetic root node. */
         val path: TreePath?,
-        /** The folder's `/docs` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
+        /** The folder's `/docs/{root}` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
         val url: String?,
         /** Count of DIRECT child pages only (not recursive); drives the landing card's `path/ · N pages` meta. */
         val pageCount: Int,
@@ -63,31 +65,35 @@ sealed interface TreeNode {
  */
 object TreeBuilder {
 
-    fun build(index: PageIndex): TreeNode.Folder {
-        val pagesByParent = index.pages.groupBy { it.path.parent }
-        val foldersByParent = index.folders.groupBy { it.path.parent }
-        val folderUrls = CanonicalUrlBuilder.folderUrlPaths(index.folders)
-        // The synthetic root's URL prefix is bare `/docs` (its own route in the SPA, not a landing view).
-        val children = childrenOf(null, pagesByParent, foldersByParent, folderUrls)
+    fun build(index: PageIndex, root: RootName): TreeNode.Folder {
+        // One root's tree (the section accessor is total, so an unknown root yields the empty
+        // tree); the per-root wire entry wrapping is TreeJsonCache's (C3).
+        val section = index.section(root)
+        val pagesByParent = section.pages.groupBy { it.path.parent }
+        val foldersByParent = section.folders.groupBy { it.path.parent }
+        val folderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
+        val children = childrenOf(root, null, pagesByParent, foldersByParent, folderUrls)
         return TreeNode.Folder(
             name = "",
             title = null,
             description = null,
             path = null,
-            url = "/docs",
+            // The synthetic root folder's URL prefix is the bare root landing (C3, ADR-0011 D3).
+            url = "/docs/" + root.value,
             pageCount = children.count { it is TreeNode.Page },
             children = children,
         )
     }
 
     private fun childrenOf(
+        root: RootName,
         dir: TreePath?,
         pagesByParent: Map<TreePath?, List<IndexedPage>>,
         foldersByParent: Map<TreePath?, List<ContentFolder>>,
         folderUrls: Map<TreePath, TreePath?>,
     ): List<TreeNode> {
         val folders = foldersByParent[dir].orEmpty().mapNotNull { folder ->
-            val children = childrenOf(folder.path, pagesByParent, foldersByParent, folderUrls)
+            val children = childrenOf(root, folder.path, pagesByParent, foldersByParent, folderUrls)
             if (children.isEmpty()) return@mapNotNull null // no pages anywhere beneath -> omitted
             Sortable(
                 order = folder.meta?.order,
@@ -97,7 +103,7 @@ object TreeBuilder {
                     title = folder.meta?.title,
                     description = folder.meta?.description,
                     path = folder.path,
-                    url = folderUrls.getValue(folder.path)?.let { "/docs/" + PercentCoding.encodePath(it.value) },
+                    url = folderUrls.getValue(folder.path)?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) },
                     pageCount = children.count { it is TreeNode.Page }, // DIRECT child pages only
                     children = children,
                 ),

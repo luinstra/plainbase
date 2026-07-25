@@ -5,38 +5,19 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.sqldelight)
     alias(libs.plugins.graalvm.native)
-    alias(libs.plugins.spotless)
     alias(libs.plugins.kover)
+    // TODO: Re-enable with the cleanup tracked in /docs/detekt-cleanup-plan.md.
+    // alias(libs.plugins.detekt)
     application
 }
 
-// Rule ENABLEMENT must be passed via editorConfigOverride — Spotless does not honor
-// `ktlint_standard_<rule> = disabled` from .editorconfig files (rule CONFIG properties
-// like max_line_length work fine from there). Keep in sync with /.editorconfig, which
-// carries the same disables for IDE/ktlint-CLI users.
-// Owner style: author's layout wins; the formatter enforces the 140-col limit and
-// baseline style, but never restructures signatures, when-branches, or `=` wrapping.
-val ktlintDisabledRules =
-    mapOf(
-        "ktlint_standard_no-unused-imports" to "enabled",
-        "ktlint_standard_class-signature" to "disabled",
-        "ktlint_standard_function-signature" to "disabled",
-        "ktlint_standard_when-entry-bracing" to "disabled",
-        "ktlint_standard_blank-line-between-when-conditions" to "disabled",
-        "ktlint_standard_multiline-expression-wrapping" to "disabled",
-        // string-template-indent hard-depends on multiline-expression-wrapping
-        "ktlint_standard_string-template-indent" to "disabled",
-    )
+// detekt {
+//     buildUponDefaultConfig = true
+//     config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+// }
 
-spotless {
-    kotlin {
-        target("src/**/*.kt")
-        ktlint(libs.versions.ktlint.get()).editorConfigOverride(ktlintDisabledRules)
-    }
-    kotlinGradle {
-        target("*.gradle.kts")
-        ktlint(libs.versions.ktlint.get()).editorConfigOverride(ktlintDisabledRules)
-    }
+tasks.named("check") {
+    dependsOn(rootProject.tasks.named("lintKotlin"))
 }
 
 group = "com.plainbase"
@@ -311,24 +292,35 @@ val nativeTestList = tasks.register<Test>("nativeTestList") {
 // P3 metadata regen: run the full-stack spike (incl. the new mcp-sse-handshake check) on the JVM under the
 // native-image tracing agent, merging the SSE/MCP-server reachability delta into the committed kotlin-sdk metadata.
 // Deliberate, manual step (not wired into `build`): run it when the SSE path or the SDK version changes.
-tasks.register<JavaExec>("traceMcpSseMetadata") {
+tasks.register<Exec>("traceMcpSseMetadata") {
     group = "verification"
     description = "Run the spike under -agentlib:native-image-agent to regenerate kotlin-sdk SSE reflect metadata"
-    mainClass.set("com.plainbase.ApplicationKt")
-    classpath = sourceSets["main"].runtimeClasspath
-    args("spike")
+    dependsOn(tasks.named("classes"))
+    val runtimeClasspath = sourceSets["main"].runtimeClasspath
     // The native-image tracing agent ships ONLY with GraalVM; the default build toolchain is Adoptium 21 (no
     // agent). Run under the SAME GraalVM the native image uses (GRAALVM_HOME/JAVA_HOME, toolchainDetection=false)
     // so the traced reachability matches what nativeCompile sees.
-    val graalHome = System.getenv("GRAALVM_HOME")?.takeIf { it.isNotBlank() }
-        ?: System.getenv("JAVA_HOME")
-        ?: error("traceMcpSseMetadata needs GraalVM via GRAALVM_HOME or JAVA_HOME")
-    executable("$graalHome/bin/java")
-    jvmArgs(
-        "--enable-native-access=ALL-UNNAMED",
-        "-agentlib:native-image-agent=config-merge-dir=" +
-            "src/main/resources/META-INF/native-image/io.modelcontextprotocol/kotlin-sdk",
-    )
+    val graalvmHome = providers.environmentVariable("GRAALVM_HOME")
+    val javaHome = providers.environmentVariable("JAVA_HOME")
+
+    doFirst {
+        val home =
+            graalvmHome.orNull?.takeIf { it.isNotBlank() }
+                ?: javaHome.orNull?.takeIf { it.isNotBlank() }
+                ?: throw GradleException(
+                    "traceMcpSseMetadata needs GraalVM via GRAALVM_HOME or JAVA_HOME",
+                )
+        commandLine(
+            "$home/bin/java",
+            "--enable-native-access=ALL-UNNAMED",
+            "-agentlib:native-image-agent=config-merge-dir=" +
+                "src/main/resources/META-INF/native-image/io.modelcontextprotocol/kotlin-sdk",
+            "-cp",
+            runtimeClasspath.asPath,
+            "com.plainbase.ApplicationKt",
+            "spike",
+        )
+    }
 }
 
 // ---- GraalVM native image ----
@@ -434,6 +426,16 @@ run {
             }
             logger.lifecycle("Native gate: building image from ${recordedIds.size} recorded native test id(s).")
         }
+    }
+
+    tasks.named<org.graalvm.buildtools.gradle.tasks.NativeRunTask>("nativeTest") {
+        // The plugin adds the default JVM `test` UID directory to the test binary's runtime arguments.
+        // Re-point execution too, or the correctly compiled nativeTest image runs zero selected tests.
+        runtimeArgs.add(
+            nativeTestListDir.map {
+                "-Djunit.platform.listeners.uid.tracking.output.dir=${it.asFile.absolutePath}"
+            },
+        )
     }
 }
 

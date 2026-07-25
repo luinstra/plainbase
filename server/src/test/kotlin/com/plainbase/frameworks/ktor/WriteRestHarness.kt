@@ -62,7 +62,11 @@ class WriteRestHarness(
         root,
         contentStore = pipelineStore,
         history = history,
-        listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+        listeners = listOf(
+            IndexBuilder.PublicationListener { snap, retired ->
+                searchIndexer.sync(snap, retired)
+            },
+        ),
         searchIndexer = searchIndexer,
     )
 
@@ -70,6 +74,13 @@ class WriteRestHarness(
     val builder get() = harness.builder
     val registry get() = harness.registry
     val dirtyPages get() = harness.dirtyPages
+
+    /**
+     * The proof-apply transaction (C0). A write test that wants the `page_deleted` conflict has to RETIRE the binding
+     * first, because that is now the only way a deletion is a fact: no production code mints an [com.plainbase.domain
+     * .root.AbsenceProof] before C2/C4, so a test that merely deletes the file is testing LIMBO, not deletion.
+     */
+    val retirements get() = harness.retirements
 
     val services: RouteContext
 
@@ -85,11 +96,11 @@ class WriteRestHarness(
         // (possibly wrapped) store. Override wrappers delegate scan/read to the real copy via `by real`,
         // so the snapshot stays genuine; with no override, pipelineStore === store (a no-op). With no
         // explicit hook, the pipeline commits through `history` (NoOp → null; a Git provider → the SHA).
-        val hook = historyHook ?: WriteHistoryHook { path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
+        val hook = historyHook
+            ?: WriteHistoryHook { _, path, bytes, author, committer -> history.commit(path, bytes, author, committer)?.sha }
         val pipeline = harness.writePipeline(hook, store = pipelineStore)
         // A3: auth ON, loopback-dev (OFF) open behavior — the write/golden suites run byte-identically to pre-auth.
         services = harness.testRouteContext(
-            contentStore = pipelineStore,
             writePipeline = pipeline,
             searchProvider = searchProvider,
             history = history,

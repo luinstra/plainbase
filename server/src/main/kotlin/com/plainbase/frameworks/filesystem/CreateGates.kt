@@ -4,6 +4,8 @@ import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.TreePath
 import java.io.IOException
+import java.nio.file.DirectoryIteratorException
+import java.nio.file.DirectoryStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -140,7 +142,7 @@ internal class CreateGates(
         val parent = target.parent ?: return false
         val wantNfc = Nfc.normalize(target.fileName.toString())
         return try {
-            Files.newDirectoryStream(parent).use { stream ->
+            withDirectoryStream(parent) { stream ->
                 stream.any { Nfc.normalize(it.fileName.toString()) == wantNfc }
             }
         } catch (_: IOException) {
@@ -162,7 +164,7 @@ internal class CreateGates(
         // The `/`-joined on-disk-relative prefix of [dir], for the glob-ignore check (root → null).
         val dirPrefix = root.relativize(dir).joinToString("/").takeIf { it.isNotEmpty() }
         return try {
-            Files.newDirectoryStream(dir).use { stream ->
+            withDirectoryStream(dir) { stream ->
                 stream
                     .filter { child -> Nfc.normalize(child.fileName.toString()) == segment && isScanEligible(child, dirPrefix) }
                     .minWithOrNull(compareBy(RawByteOrder) { it.fileName.toString() })
@@ -206,4 +208,39 @@ internal fun isWithinRoot(root: Path, target: Path): Boolean =
         target.toRealPath().startsWith(root.toRealPath())
     } catch (_: IOException) {
         false
+    }
+
+/**
+ * Iterates [dir]'s children, translating the [DirectoryIteratorException] a mid-walk IO fault raises (an
+ * unmounted or permission-revoked root: `UnixDirectoryStream` boxes it at :169/:189) back into the
+ * [IOException] it wraps.
+ *
+ * `DirectoryStream`'s iterator cannot throw a CHECKED exception, so an IO fault DURING iteration comes out
+ * as an unchecked wrapper - which every `catch (IOException)` in this codebase silently misses. Unwrapping
+ * it HERE, at the one place a directory stream is opened, is what lets each caller keep catching
+ * `IOException` and actually SEE the fault it was written to absorb: the scan classifier, the create gates'
+ * two best-effort arms, the store's root-loss exit wrapper, and the object/DR sweeps whose own contracts
+ * promise an `IOException` (GitBundleDr's reap promises "a failed reap never fails a restore" - a
+ * `DirectoryIteratorException` escapes that catch and aborts the boot it was written not to).
+ *
+ * After this, `IOException` is the TOTAL carrier of every filesystem fault, and a direct
+ * `Files.newDirectoryStream` anywhere in the tree is a reintroduced hole.
+ *
+ * `throw e.cause` does not compile: the JDK's covariant `getCause()` override carries no nullability
+ * annotation, so Kotlin narrows it to `IOException?`. Both real throw sites construct the wrapper from a
+ * NON-NULL `IOException` by contract, so [checkNotNull] asserts a true invariant - the house idiom.
+ */
+internal fun <T> withDirectoryStream(dir: Path, body: (DirectoryStream<Path>) -> T): T =
+    try {
+        Files.newDirectoryStream(dir).use(body)
+    } catch (e: DirectoryIteratorException) {
+        throw checkNotNull(e.cause) { "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)" }
+    }
+
+/** The glob-filtered twin of [withDirectoryStream], for the DR husk reap. */
+internal fun <T> withDirectoryStream(dir: Path, glob: String, body: (DirectoryStream<Path>) -> T): T =
+    try {
+        Files.newDirectoryStream(dir, glob).use(body)
+    } catch (e: DirectoryIteratorException) {
+        throw checkNotNull(e.cause) { "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)" }
     }

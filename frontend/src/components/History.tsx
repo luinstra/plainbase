@@ -6,6 +6,7 @@ import { diffQuery, historyQuery, pageByPathQuery } from "../api/queries";
 import type { CommitDto, DiffResponse } from "../api/types";
 import { formatTime } from "../lib/datetime";
 import { DiffView } from "./DiffView";
+import { isRootUnavailable, QueryErrorView, RootUnavailableView } from "./ErrorView";
 import { NotFoundView } from "./NotFound";
 
 /**
@@ -35,26 +36,24 @@ export function History({ path }: { path: string }) {
   }
   if (page.isError) {
     if (page.error instanceof ApiError && (page.error.isNotFound || page.error.status === 400)) return <NotFoundView />;
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{page.error.message}</p>
-      </div>
-    );
+    return <QueryErrorView error={page.error} />;
   }
 
-  // Key by id so a navigation to a different page remounts the view with a fresh selection/diff.
-  return <HistoryView key={page.data.id} id={page.data.id} path={path} />;
+  // Key by (root, id) so a navigation to a different page remounts the view with a fresh
+  // selection/diff. The ROOT is half the identity: two roots can hold the same id, so an id-only key
+  // survives a cross-root navigation and the surviving `from`/`to`/`notice` state (HistoryView's
+  // useStates) would drive a diff request for the NEW root against the OLD root's commits.
+  return <HistoryView key={`${page.data.root}:${page.data.id}`} id={page.data.id} root={page.data.root} path={path} />;
 }
 
-function HistoryView({ id, path }: { id: string; path: string }) {
-  const history = useQuery(historyQuery(id));
+function HistoryView({ id, root, path }: { id: string; root: string; path: string }) {
+  const history = useQuery(historyQuery(id, root));
   // The diff is driven by the FULL shas (D-5) — never a display-truncated form. `from` is the OLDER
   // commit (later in the newest-first array), `to` the NEWER, so the diff always reads old→new.
   const [from, setFrom] = useState<string | null>(null);
   const [to, setTo] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const diff = useQuery(diffQuery(id, from, to));
+  const diff = useQuery(diffQuery(id, root, from, to));
 
   // A diff 404 means a ref vanished under us (history rewrite). The client sent valid list-sourced SHAs,
   // so this is NOT a user error: refresh the commit list, clear the selection, and show a transient notice.
@@ -87,9 +86,15 @@ function HistoryView({ id, path }: { id: string; path: string }) {
     return (
       <div className="pb-history" data-pb-history>
         {back}
-        <p className="py-16 text-center text-muted" data-pb-history-error>
-          Couldn’t load the page history. {history.error.message}
-        </p>
+        {/* `/history` gates on the page's root like every other read, so this fetch has its own 503 to answer for:
+            the root can go down between resolving the page and asking for its commits. */}
+        {isRootUnavailable(history.error) ? (
+          <RootUnavailableView detail={history.error.message} />
+        ) : (
+          <p className="py-16 text-center text-muted" data-pb-history-error>
+            Couldn’t load the page history. {history.error.message}
+          </p>
+        )}
       </div>
     );
   }

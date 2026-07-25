@@ -32,7 +32,7 @@ The canonical knowledge base is a simple tree of files and folders. Pages are Ma
 
 This content tree should be able to live on local disk, a mounted volume, a Git checkout, network storage, or cheap object storage such as S3 or Cloudflare R2.
 
-There is exactly one authority per deployment: the `CONTENT_DIR` directory in a local deploy, or the S3-compatible bucket in a cloud deploy - never two at once. The object-storage backend shipped in the v0.2 storage revamp (`storage.backend=object`); see [ADR-0010](decisions/0010-object-storage-backend.md).
+Content has exactly one authority - never a Plainbase-owned copy of it. In a local deploy that authority is the content tree on disk: the `CONTENT_DIR` directory, or, with a `roots {}` block, *every* configured root's directory (disjoint trees, each authoritative for its own pages - so each one is content to back up; see [ADR-0011](decisions/0011-multi-root-document-directories.md)). In a cloud deploy it is the S3-compatible bucket, which is single-root today. Local and object storage are never both live at once. The object-storage backend shipped in the v0.2 storage revamp (`storage.backend=object`); see [ADR-0010](decisions/0010-object-storage-backend.md).
 
 ### Git is a natural layer, not the only foundation
 

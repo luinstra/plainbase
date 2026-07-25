@@ -18,6 +18,9 @@ const PAGE_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 const README_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b01";
 const INDEX_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b02";
 const LOSER_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99";
+/** A HAND-BUILT id held by BOTH roots - the shape a copied corpus produces. Disjoint from the e2e
+ *  fixture's ids on purpose (a unit row primes a cache; it never sees the corpus). */
+const DUP_ID = "0197c2d1-9f3b-7a4e-8d6c-1b5a7e9c3f21";
 
 function pageNode(id: string, path: string, title: string, url: string | null, updated: string | null = null): TreePage {
   const slug = path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
@@ -27,24 +30,32 @@ function pageNode(id: string, path: string, title: string, url: string | null, u
 function tree(guidesChildren: TreeFolder["children"]): TreeResponse {
   const pageCount = guidesChildren.filter((c) => c.type === "page").length;
   return {
-    root: {
-      type: "folder",
-      name: "",
-      title: null,
-      description: null,
-      path: "",
-      url: "/docs",
-      page_count: 0,
-      children: [
-        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: pageCount, children: guidesChildren },
-      ],
-    },
+    roots: [
+      {
+        root: "main",
+        available: true,
+        editable: true,
+        tree: {
+          type: "folder",
+          name: "",
+          title: null,
+          description: null,
+          path: "",
+          url: "/docs/main",
+          page_count: 0,
+          children: [
+            { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/main/guides", page_count: pageCount, children: guidesChildren },
+          ],
+        },
+      },
+    ],
   };
 }
 
-function htmlResponse(id: string, title: string): PageHtmlResponse {
+function htmlResponse(id: string, title: string, root = "main"): PageHtmlResponse {
   return {
     id,
+    root,
     path: "guides/x.md",
     slug: "x",
     url: null,
@@ -57,9 +68,10 @@ function htmlResponse(id: string, title: string): PageHtmlResponse {
   };
 }
 
-function pageResponse(id: string, url: string | null, title: string): PageResponse {
+function pageResponse(id: string, url: string | null, title: string, root = "main"): PageResponse {
   return {
     id,
+    root,
     path: "guides.md",
     slug: "guides",
     url,
@@ -103,16 +115,16 @@ describe("folder landing views (ADR-0003)", () => {
   it("renders a README child's content at the folder URL — address bar unchanged, fetched by id", async () => {
     stubNotFound();
     const readmeTree = tree([
-      pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/guides/readme"),
-      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+      pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/main/guides/readme"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide"),
     ]);
-    const { history, view } = renderAt("/docs/guides", readmeTree, (qc) => {
-      qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
-      qc.setQueryData(pageQuery(README_ID).queryKey, pageResponse(README_ID, null, "Guides Overview"));
+    const { history, view } = renderAt("/docs/main/guides", readmeTree, (qc) => {
+      qc.setQueryData(pageHtmlQuery(README_ID, "main").queryKey, htmlResponse(README_ID, "Guides Overview"));
+      qc.setQueryData(pageQuery(README_ID, "main").queryKey, pageResponse(README_ID, null, "Guides Overview"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
-    expect(history.location.pathname).toBe("/docs/guides"); // a real view, not a redirect
+    expect(history.location.pathname).toBe("/docs/main/guides"); // a real view, not a redirect
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
   });
 
@@ -120,29 +132,29 @@ describe("folder landing views (ADR-0003)", () => {
     stubNotFound();
     const loserReadmeTree = tree([
       pageNode(README_ID, "guides/README.md", "Guides Overview", null),
-      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide"),
     ]);
-    const { history, view } = renderAt("/docs/guides", loserReadmeTree, (qc) => {
-      qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
-      qc.setQueryData(pageQuery(README_ID).queryKey, pageResponse(README_ID, null, "Guides Overview"));
+    const { history, view } = renderAt("/docs/main/guides", loserReadmeTree, (qc) => {
+      qc.setQueryData(pageHtmlQuery(README_ID, "main").queryKey, htmlResponse(README_ID, "Guides Overview"));
+      qc.setQueryData(pageQuery(README_ID, "main").queryKey, pageResponse(README_ID, null, "Guides Overview"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
-    expect(history.location.pathname).toBe("/docs/guides");
+    expect(history.location.pathname).toBe("/docs/main/guides");
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull(); // README content, not the listing
   });
 
   it("a landing child whose frontmatter fetch fails still renders — rail degrades, doc never blanks", async () => {
     // The landing child is the one path where PageContent fetches the page by id itself; a 404 on
     // that frontmatter fetch must degrade the rail (no chip), never error the whole document.
-    stubNotFound(); // both the by-path probe AND the un-primed pageQuery(README_ID) 404
+    stubNotFound(); // both the by-path probe AND the un-primed pageQuery(README_ID, "main") 404
     const readmeTree = tree([
-      pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/guides/readme"),
-      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+      pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/main/guides/readme"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide"),
     ]);
-    // Prime ONLY html (gates the view); leave pageQuery(README_ID) un-primed so its fetch 404s.
-    const { view } = renderAt("/docs/guides", readmeTree, (qc) => {
-      qc.setQueryData(pageHtmlQuery(README_ID).queryKey, htmlResponse(README_ID, "Guides Overview"));
+    // Prime ONLY html (gates the view); leave pageQuery(README_ID, "main") un-primed so its fetch 404s.
+    const { view } = renderAt("/docs/main/guides", readmeTree, (qc) => {
+      qc.setQueryData(pageHtmlQuery(README_ID, "main").queryKey, htmlResponse(README_ID, "Guides Overview"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Overview"));
@@ -153,12 +165,12 @@ describe("folder landing views (ADR-0003)", () => {
   it("prefers index over readme when both exist — web-native beats repo-native", async () => {
     stubNotFound();
     const bothTree = tree([
-      pageNode(README_ID, "guides/README.md", "Readme Title", "/docs/guides/readme"),
-      pageNode(INDEX_ID, "guides/Index.md", "Index Title", "/docs/guides/index"),
+      pageNode(README_ID, "guides/README.md", "Readme Title", "/docs/main/guides/readme"),
+      pageNode(INDEX_ID, "guides/Index.md", "Index Title", "/docs/main/guides/index"),
     ]);
-    const { view } = renderAt("/docs/guides", bothTree, (qc) => {
-      qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Index Title"));
-      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Index Title"));
+    const { view } = renderAt("/docs/main/guides", bothTree, (qc) => {
+      qc.setQueryData(pageHtmlQuery(INDEX_ID, "main").queryKey, htmlResponse(INDEX_ID, "Index Title"));
+      qc.setQueryData(pageQuery(INDEX_ID, "main").queryKey, pageResponse(INDEX_ID, null, "Index Title"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Index Title"));
@@ -167,13 +179,13 @@ describe("folder landing views (ADR-0003)", () => {
   it("a folder WITH an index renders ONLY the index prose, suppressing the generated listing", async () => {
     stubNotFound();
     const withIndex = tree([
-      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/guides/index"),
-      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
-      { type: "folder", name: "advanced", title: "Advanced", description: null, path: "guides/advanced", url: "/docs/guides/advanced", page_count: 0, children: [] },
+      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/main/guides/index"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide"),
+      { type: "folder", name: "advanced", title: "Advanced", description: null, path: "guides/advanced", url: "/docs/main/guides/advanced", page_count: 0, children: [] },
     ]);
-    const { view } = renderAt("/docs/guides", withIndex, (qc) => {
-      qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Guides Home"));
-      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
+    const { view } = renderAt("/docs/main/guides", withIndex, (qc) => {
+      qc.setQueryData(pageHtmlQuery(INDEX_ID, "main").queryKey, htmlResponse(INDEX_ID, "Guides Home"));
+      qc.setQueryData(pageQuery(INDEX_ID, "main").queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
     });
 
     // The authored index renders as prose…
@@ -186,23 +198,78 @@ describe("folder landing views (ADR-0003)", () => {
   it("redirects a landing page's own bare URL to its folder URL — one canonical path", async () => {
     stubNotFound();
     const withIndex = tree([
-      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/guides/index"),
-      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide"),
+      pageNode(INDEX_ID, "guides/index.md", "Guides Home", "/docs/main/guides/index"),
+      pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide"),
     ]);
     // Land directly on the index page's OWN url — the second path the design used to allow.
-    const { history, view } = renderAt("/docs/guides/index", withIndex, (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/index").queryKey, pageResponse(INDEX_ID, "/docs/guides/index", "Guides Home"));
-      qc.setQueryData(pageHtmlQuery(INDEX_ID).queryKey, htmlResponse(INDEX_ID, "Guides Home"));
-      qc.setQueryData(pageQuery(INDEX_ID).queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
+    const { history, view } = renderAt("/docs/main/guides/index", withIndex, (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/index").queryKey, pageResponse(INDEX_ID, "/docs/main/guides/index", "Guides Home"));
+      qc.setQueryData(pageHtmlQuery(INDEX_ID, "main").queryKey, htmlResponse(INDEX_ID, "Guides Home"));
+      qc.setQueryData(pageQuery(INDEX_ID, "main").queryKey, pageResponse(INDEX_ID, null, "Guides Home"));
     });
 
     // The address bar canonicalizes to the folder URL, and the folder landing renders the index
     // prose as the WHOLE landing (no generated listing) — not a bare page.
     await waitFor(() => {
-      expect(history.location.pathname).toBe("/docs/guides");
+      expect(history.location.pathname).toBe("/docs/main/guides");
       expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides Home");
       expect(view.container.querySelector("[data-pb-folder-children]")).toBeNull();
     });
+  });
+
+  it("canonicalizes a landing page's bare URL to ITS OWN root's folder, not whichever root lists first", async () => {
+    // Both roots hold `permalink/index.md` under one id - the normal shape of a copied corpus, and the
+    // likeliest duplicate of all, since every root has a top-level index. An unscoped id lookup answers
+    // with whichever entry comes first in wire order, and the caller turns that answer into a
+    // history.replace: the reader is silently moved into another root's document, rendering perfectly.
+    //
+    // stubNotFound() is a PRECONDITION of assertion 2, not hygiene: after the replace, DocsPage remounts
+    // on pageByPathQuery("extra/permalink"), deliberately unprimed, and ONLY an ApiError 404 takes the
+    // <FolderLanding /> leg. Anything else renders PageError and assertion 2 fails under correct code.
+    stubNotFound();
+    const landingEntry = (root: string, id: string): TreeResponse["roots"][number] => ({
+      root,
+      available: true,
+      editable: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: `/docs/${root}`,
+        page_count: 1,
+        children: [
+          {
+            type: "folder",
+            name: "permalink",
+            title: "Permalink",
+            description: null,
+            path: "permalink",
+            url: `/docs/${root}/permalink`,
+            page_count: 1,
+            // The landing child, at its OWN bare-page url - the second address DocsPage canonicalizes away.
+            children: [pageNode(id, "permalink/index.md", "Permalink Hub", `/docs/${root}/permalink/index`)],
+          },
+        ],
+      },
+    });
+    // `main` FIRST, and that ordering is part of the INPUT: list `extra` first and the unscoped lookup
+    // answers `extra` BY LUCK, so the row would be green in both states while looking like coverage.
+    const bothRoots: TreeResponse = { roots: [landingEntry("main", DUP_ID), landingEntry("extra", DUP_ID)] };
+    // The mounted path is the landing's OWN url (DocsPage's effect is guarded on pathname === resolvedFor),
+    // and the by-path prime's `url` equals it so the ALIAS branch cannot fire instead of the landing one.
+    const { history, view } = renderAt("/docs/extra/permalink/index", bothRoots, (qc) => {
+      qc.setQueryData(
+        pageByPathQuery("extra/permalink/index").queryKey,
+        pageResponse(DUP_ID, "/docs/extra/permalink/index", "Permalink Hub", "extra"),
+      );
+      qc.setQueryData(pageHtmlQuery(DUP_ID, "extra").queryKey, htmlResponse(DUP_ID, "Permalink Hub", "extra"));
+      qc.setQueryData(pageQuery(DUP_ID, "extra").queryKey, pageResponse(DUP_ID, null, "Permalink Hub", "extra"));
+    });
+
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/extra/permalink"));
+    await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Permalink Hub"));
   });
 
   it("renders the generated listing in TREE ORDER within groups when no README/index child exists", async () => {
@@ -212,32 +279,34 @@ describe("folder landing views (ADR-0003)", () => {
     // own sequence is the tree order — so 'advanced' (the lone folder) leads, then the two pages
     // in their tree order (Zeta before the shadowed loser).
     const listingTree = tree([
-      pageNode(PAGE_ID, "guides/zeta.md", "Zeta Page", "/docs/guides/zeta"),
-      { type: "folder", name: "advanced", title: null, description: null, path: "guides/advanced", url: "/docs/guides/advanced", page_count: 0, children: [] },
+      pageNode(PAGE_ID, "guides/zeta.md", "Zeta Page", "/docs/main/guides/zeta"),
+      { type: "folder", name: "advanced", title: null, description: null, path: "guides/advanced", url: "/docs/main/guides/advanced", page_count: 0, children: [] },
       pageNode(LOSER_ID, "guides/shadowed.md", "Shadowed Page", null),
     ]);
-    const { view } = renderAt("/docs/guides", listingTree);
+    const { view } = renderAt("/docs/main/guides", listingTree);
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("Guides"); // _folder.yaml title
     // Read each child's primary label (folder name `.fn`, page title `.pt`), not the full card text.
     const items = [...view.container.querySelectorAll("[data-pb-folder-child]")];
     expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["advanced", "Zeta Page", "Shadowed Page"]);
-    expect(view.container.querySelector('a[href="/docs/guides/zeta"]')).not.toBeNull();
-    expect(view.container.querySelector('a[href="/docs/guides/advanced"]')).not.toBeNull();
-    expect(view.container.querySelector(`a[href="/p/${LOSER_ID}"]`)).not.toBeNull(); // loser via permalink
+    expect(view.container.querySelector('a[href="/docs/main/guides/zeta"]')).not.toBeNull();
+    expect(view.container.querySelector('a[href="/docs/main/guides/advanced"]')).not.toBeNull();
+    expect(view.container.querySelector(`a[href="/p/main/${LOSER_ID}"]`)).not.toBeNull(); // loser via its ROOTED permalink
     // The folder trail is "docs / Guides" — the root crumb links home, the current crumb stays inert.
+    // SINGLE-root fixture, so the crumb stays the URL-truthful "docs" (multi-root C5 names the root only
+    // when there IS more than one — the same rule the sidebar headers and search badges follow).
     expect(view.container.querySelector('.pb-breadcrumbs a[href="/docs"]')?.textContent).toBe("docs");
   });
 
   it("renders a folder card's description + `path · N pages` meta, and a page row's date only when present", async () => {
     stubNotFound();
     const richTree = tree([
-      { type: "folder", name: "advanced", title: "Advanced", description: "Deep operational topics.", path: "guides/advanced", url: "/docs/guides/advanced", page_count: 3, children: [] },
-      pageNode(PAGE_ID, "guides/dated.md", "Dated Page", "/docs/guides/dated", "2026-05-30"),
-      pageNode(LOSER_ID, "guides/undated.md", "Undated Page", "/docs/guides/undated"),
+      { type: "folder", name: "advanced", title: "Advanced", description: "Deep operational topics.", path: "guides/advanced", url: "/docs/main/guides/advanced", page_count: 3, children: [] },
+      pageNode(PAGE_ID, "guides/dated.md", "Dated Page", "/docs/main/guides/dated", "2026-05-30"),
+      pageNode(LOSER_ID, "guides/undated.md", "Undated Page", "/docs/main/guides/undated"),
     ]);
-    const { view } = renderAt("/docs/guides", richTree);
+    const { view } = renderAt("/docs/main/guides", richTree);
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     // Scope to the listing — the sidebar nav renders the same page links without listing markup.
@@ -248,18 +317,44 @@ describe("folder landing views (ADR-0003)", () => {
     expect(card.querySelector(".fc")?.textContent).toContain("guides/advanced");
     expect(card.querySelector(".fc")?.textContent).toContain("3 pages");
     // Page rows: the dated row shows its verbatim date; the undated row has no date element.
-    const dated = listing.querySelector(`a[href="/docs/guides/dated"]`)!;
+    const dated = listing.querySelector(`a[href="/docs/main/guides/dated"]`)!;
     expect(dated.querySelector(".pdate")?.textContent).toBe("2026-05-30");
-    const undated = listing.querySelector(`a[href="/docs/guides/undated"]`)!;
+    const undated = listing.querySelector(`a[href="/docs/main/guides/undated"]`)!;
     expect(undated.querySelector(".pdate")).toBeNull();
+  });
+
+  it("an UNAVAILABLE root's folder URL renders the outage state, never an empty listing (D5)", async () => {
+    stubNotFound();
+    // What the server actually sends for a root that is not serving: `available: false` and an EMPTY subtree (it
+    // must never ship the stale carried listing). A client that reads only the tree sees a folder with no children
+    // and draws "this directory is empty", telling an operator their docs are GONE when a disk is merely unmounted.
+    // The pages under it 503 through their own requests; this view has no request to 503, so the flag is the only
+    // thing that can tell the two apart.
+    const downRoot: TreeResponse = {
+      roots: [
+        ...tree([]).roots,
+        {
+          root: "handbook",
+          available: false,
+          editable: true,
+          tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] },
+        },
+      ],
+    };
+    const { view } = renderAt("/docs/handbook", downRoot);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-root-unavailable]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-root-unavailable]")?.textContent).toContain("handbook");
+    expect(view.container.querySelector("[data-pb-folder]")).toBeNull(); // never the empty-directory lie
+    expect(view.container.querySelector("[data-pb-folder-children]")).toBeNull();
   });
 
   it("a folder with a single direct page renders `· 1 page` (singular)", async () => {
     stubNotFound();
     const singularTree = tree([
-      { type: "folder", name: "solo", title: null, description: null, path: "guides/solo", url: "/docs/guides/solo", page_count: 1, children: [] },
+      { type: "folder", name: "solo", title: null, description: null, path: "guides/solo", url: "/docs/main/guides/solo", page_count: 1, children: [] },
     ]);
-    const { view } = renderAt("/docs/guides", singularTree);
+    const { view } = renderAt("/docs/main/guides", singularTree);
     await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
     const listing = view.container.querySelector("[data-pb-folder]")!;
     expect(listing.querySelector('[data-pb-folder-child="folder"] .fc')?.textContent).toContain("1 page");
@@ -267,19 +362,26 @@ describe("folder landing views (ADR-0003)", () => {
 
   it("renders the ROOT listing at bare /docs — 'docs' fallback heading, grouped tree order, non-link root crumb", async () => {
     const rootTree: TreeResponse = {
-      root: {
-        type: "folder",
-        name: "",
-        title: null,
-        description: null,
-        path: "",
-        url: "/docs",
-        page_count: 1,
-        children: [
-          pageNode(PAGE_ID, "welcome.md", "Welcome", "/docs/welcome"),
-          { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
-        ],
-      },
+      roots: [
+        {
+          root: "main",
+          available: true,
+          editable: true,
+          tree: {
+            type: "folder",
+            name: "",
+            title: null,
+            description: null,
+            path: "",
+            url: "/docs/main",
+            page_count: 1,
+            children: [
+              pageNode(PAGE_ID, "welcome.md", "Welcome", "/docs/main/welcome"),
+              { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/main/guides", page_count: 0, children: [] },
+            ],
+          },
+        },
+      ],
     };
     const { view } = renderAt("/docs", rootTree);
 
@@ -288,8 +390,8 @@ describe("folder landing views (ADR-0003)", () => {
     // Folders (cards) group ahead of pages (rows): 'Guides' card then 'Welcome' row.
     const items = [...view.container.querySelectorAll("[data-pb-folder-child]")];
     expect(items.map((li) => li.querySelector(".fn, .pt")?.textContent?.trim())).toEqual(["Guides", "Welcome"]);
-    expect(view.container.querySelector('a[href="/docs/welcome"]')).not.toBeNull();
-    expect(view.container.querySelector('a[href="/docs/guides"]')).not.toBeNull();
+    expect(view.container.querySelector('a[href="/docs/main/welcome"]')).not.toBeNull();
+    expect(view.container.querySelector('a[href="/docs/main/guides"]')).not.toBeNull();
     // On the root landing the trail is JUST the non-link "docs" crumb.
     const breadcrumbs = view.container.querySelector(".pb-breadcrumbs")!;
     expect(breadcrumbs.textContent?.trim()).toBe("docs");
@@ -300,11 +402,11 @@ describe("folder landing views (ADR-0003)", () => {
     const fetchSpy = vi.fn(async () => new Response("{}", { status: 500 }));
     vi.stubGlobal("fetch", fetchSpy);
     // The tree carries a folder at /docs/guides WITH a README child — but a page owns the URL.
-    const shadowedTree = tree([pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/guides/readme")]);
-    const { view } = renderAt("/docs/guides", shadowedTree, (qc) => {
-      qc.setQueryData(pageByPathQuery("guides").queryKey, pageResponse(PAGE_ID, "/docs/guides", "Guides The Page"));
-      qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, htmlResponse(PAGE_ID, "Guides The Page"));
-      qc.setQueryData(pageQuery(PAGE_ID).queryKey, pageResponse(PAGE_ID, "/docs/guides", "Guides The Page"));
+    const shadowedTree = tree([pageNode(README_ID, "guides/README.md", "Guides Overview", "/docs/main/guides/readme")]);
+    const { view } = renderAt("/docs/main/guides", shadowedTree, (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides").queryKey, pageResponse(PAGE_ID, "/docs/main/guides", "Guides The Page"));
+      qc.setQueryData(pageHtmlQuery(PAGE_ID, "main").queryKey, htmlResponse(PAGE_ID, "Guides The Page"));
+      qc.setQueryData(pageQuery(PAGE_ID, "main").queryKey, pageResponse(PAGE_ID, "/docs/main/guides", "Guides The Page"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Guides The Page"));
@@ -317,67 +419,199 @@ describe("folder landing views (ADR-0003)", () => {
     // The `runbooks` folder has no _folder.yaml (title null) but carries an index titled "Runbooks";
     // its breadcrumb ancestor crumb derives that title via folderTitle, not the raw "runbooks" name.
     const crumbTree: TreeResponse = {
-      root: {
-        type: "folder",
-        name: "",
-        title: null,
-        description: null,
-        path: "",
-        url: "/docs",
-        page_count: 0,
-        children: [
-          {
+      roots: [
+        {
+          root: "main",
+          available: true,
+          editable: true,
+          tree: {
             type: "folder",
-            name: "runbooks",
+            name: "",
             title: null,
             description: null,
-            path: "runbooks",
-            url: "/docs/runbooks",
-            page_count: 2,
+            path: "",
+            url: "/docs/main",
+            page_count: 0,
             children: [
-              pageNode(INDEX_ID, "runbooks/index.md", "Runbooks", "/docs/runbooks/index"),
-              pageNode(PAGE_ID, "runbooks/deploy.md", "Deploy", "/docs/runbooks/deploy"),
+              {
+                type: "folder",
+                name: "runbooks",
+                title: null,
+                description: null,
+                path: "runbooks",
+                url: "/docs/main/runbooks",
+                page_count: 2,
+                children: [
+                  pageNode(INDEX_ID, "runbooks/index.md", "Runbooks", "/docs/main/runbooks/index"),
+                  pageNode(PAGE_ID, "runbooks/deploy.md", "Deploy", "/docs/main/runbooks/deploy"),
+                ],
+              },
             ],
           },
-        ],
-      },
+        },
+      ],
     };
-    const { view } = renderAt("/docs/runbooks/deploy", crumbTree, (qc) => {
-      qc.setQueryData(pageByPathQuery("runbooks/deploy").queryKey, { ...pageResponse(PAGE_ID, "/docs/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
-      qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, { ...htmlResponse(PAGE_ID, "Deploy"), path: "runbooks/deploy.md" });
-      qc.setQueryData(pageQuery(PAGE_ID).queryKey, { ...pageResponse(PAGE_ID, "/docs/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
+    const { view } = renderAt("/docs/main/runbooks/deploy", crumbTree, (qc) => {
+      qc.setQueryData(pageByPathQuery("main/runbooks/deploy").queryKey, { ...pageResponse(PAGE_ID, "/docs/main/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
+      qc.setQueryData(pageHtmlQuery(PAGE_ID, "main").queryKey, { ...htmlResponse(PAGE_ID, "Deploy"), path: "runbooks/deploy.md" });
+      qc.setQueryData(pageQuery(PAGE_ID, "main").queryKey, { ...pageResponse(PAGE_ID, "/docs/main/runbooks/deploy", "Deploy"), path: "runbooks/deploy.md" });
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-breadcrumbs")).not.toBeNull());
-    const crumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs/runbooks"]');
+    const crumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs/main/runbooks"]');
     expect(crumb).not.toBeNull();
     expect(crumb!.textContent).toBe("Runbooks"); // index title, not the raw "runbooks" dir name
   });
 
   it("still 404s when the location matches no folder url in the tree", async () => {
     stubNotFound();
-    const { view } = renderAt("/docs/nope/never-existed", tree([]));
+    const { view } = renderAt("/docs/main/nope/never-existed", tree([]));
     await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
   });
 
+  it("an intercepted LEGACY folder link renders the main entry's landing and replaces the URL (C3 retry)", async () => {
+    // An in-content legacy href like /docs/guides is router-intercepted (lib/links.ts), by-path
+    // 404s (folders aren't in by-path space), and the verbatim url match misses the reshaped
+    // /docs/main/guides node. The resolver retries under main and history.replace's to the
+    // canonical folder url - reload-free, no server 301.
+    stubNotFound();
+    const legacyTree = tree([pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide")]);
+    const { history, view } = renderAt("/docs/guides", legacyTree);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/guides"));
+    expect(view.container.querySelector("[data-pb-not-found]")).toBeNull();
+  });
+
+  it("a LEGACY tail whose main retry also misses stays NotFound - /docs/nope, no retry loop", async () => {
+    stubNotFound();
+    const { view } = renderAt("/docs/nope", tree([]));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
+  });
+
+  it("cross-root SAME relative folder path: the entry-returning lookup picks the right root's folder", async () => {
+    // Two entries both hold `guides/`; the /docs/extra/guides landing must render the EXTRA
+    // entry's listing (its title, its child urls), never main's - the entry carries the root.
+    stubNotFound();
+    const entry = (root: string, title: string): TreeResponse["roots"][number] => ({
+      root,
+      available: true,
+      editable: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: `/docs/${root}`,
+        page_count: 0,
+        children: [
+          {
+            type: "folder",
+            name: "guides",
+            title,
+            description: null,
+            path: "guides",
+            url: `/docs/${root}/guides`,
+            page_count: 1,
+            children: [pageNode(`${root}-page`, "guides/setup.md", `${title} Setup`, `/docs/${root}/guides/setup`)],
+          },
+        ],
+      },
+    });
+    const twoRoots: TreeResponse = { roots: [entry("main", "Main Guides"), entry("extra", "Extra Guides")] };
+    const { view } = renderAt("/docs/extra/guides", twoRoots);
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("Extra Guides"));
+    // Scoped to the LISTING: the sidebar legitimately links both roots' pages.
+    const listing = view.container.querySelector("[data-pb-folder]")!;
+    expect(listing.querySelector('a[href="/docs/extra/guides/setup"]')).not.toBeNull();
+    expect(listing.querySelector('a[href="/docs/main/guides/setup"]')).toBeNull();
+  });
+
+  it("a folder LANDING reads BOTH of its id-addressed queries by root (the one path where the by-id leg is live)", async () => {
+    // FolderLanding passes no `page` prop, so PageContent's `pageQuery` leg is ENABLED here and
+    // nowhere else - every other route seeds it. Both legs are therefore watchable, one assertion
+    // each: the prose comes from the html read, the rail's Owner row from the metadata read.
+    stubNotFound();
+    const landingEntry = (root: string, id: string): TreeResponse["roots"][number] => ({
+      root,
+      available: true,
+      editable: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: `/docs/${root}`,
+        page_count: 1,
+        children: [
+          {
+            type: "folder",
+            name: "permalink",
+            title: "Permalink",
+            description: null,
+            path: "permalink",
+            url: `/docs/${root}/permalink`,
+            page_count: 1,
+            // The folder's SOLE child is the landing (`index` stem), so landingPage picks it and
+            // FolderLanding renders <PageContent> rather than a generated listing.
+            children: [pageNode(id, "permalink/index.md", "Permalink Hub", `/docs/${root}/permalink`)],
+          },
+        ],
+      },
+    });
+    // The SAME id in both roots - the whole point of the row.
+    const bothRoots: TreeResponse = { roots: [landingEntry("main", DUP_ID), landingEntry("extra", DUP_ID)] };
+    // extra FIRST, main LAST: a key-SHAPE regression makes the two primes COLLIDE rather than miss, and
+    // the last write wins, so main's values are what a collision renders. That is what the "and NOT
+    // main-..." clauses below observe, on top of the plain miss.
+    const { view } = renderAt("/docs/extra/permalink", bothRoots, (qc) => {
+      qc.setQueryData(pageHtmlQuery(DUP_ID, "extra").queryKey, htmlResponse(DUP_ID, "Permalink Hub", "extra"));
+      qc.setQueryData(pageQuery(DUP_ID, "extra").queryKey, {
+        ...pageResponse(DUP_ID, "/docs/extra/permalink", "Permalink Hub", "extra"),
+        frontmatter: { owner: "extra-owner" },
+      });
+      qc.setQueryData(pageHtmlQuery(DUP_ID, "main").queryKey, htmlResponse(DUP_ID, "Main Hub"));
+      qc.setQueryData(pageQuery(DUP_ID, "main").queryKey, {
+        ...pageResponse(DUP_ID, "/docs/main/permalink", "Main Hub"),
+        frontmatter: { owner: "main-owner" },
+      });
+    });
+
+    // (1) the html leg
+    await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Permalink Hub"));
+    expect(view.container.querySelector(".pb-prose h1")?.textContent).not.toContain("Main Hub");
+    // (2) the metadata leg. The rail CARD renders unconditionally and only its Owner ROW is
+    // frontmatter-gated, so this reads the card's TEXT - a `not.toBeNull()` on the card would be green
+    // under every back-out in this row.
+    const rail = view.container.querySelector("[data-pb-rail-meta]");
+    expect(rail).not.toBeNull();
+    expect(rail!.textContent).toContain("extra-owner");
+    expect(rail!.textContent).not.toContain("main-owner");
+  });
+
   it("breadcrumb ancestor crumbs link to their folder landing urls", async () => {
     stubNotFound();
-    const crumbTree = tree([pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/guides/deploy-guide")]);
-    const { view } = renderAt("/docs/guides/deploy-guide", crumbTree, (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, {
-        ...pageResponse(PAGE_ID, "/docs/guides/deploy-guide", "Deploy Guide"),
+    const crumbTree = tree([pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide")]);
+    const { view } = renderAt("/docs/main/guides/deploy-guide", crumbTree, (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, {
+        ...pageResponse(PAGE_ID, "/docs/main/guides/deploy-guide", "Deploy Guide"),
         path: "guides/deploy-guide.md",
       });
-      qc.setQueryData(pageHtmlQuery(PAGE_ID).queryKey, { ...htmlResponse(PAGE_ID, "Deploy Guide"), path: "guides/deploy-guide.md" });
-      qc.setQueryData(pageQuery(PAGE_ID).queryKey, { ...pageResponse(PAGE_ID, "/docs/guides/deploy-guide", "Deploy Guide"), path: "guides/deploy-guide.md" });
+      qc.setQueryData(pageHtmlQuery(PAGE_ID, "main").queryKey, { ...htmlResponse(PAGE_ID, "Deploy Guide"), path: "guides/deploy-guide.md" });
+      qc.setQueryData(pageQuery(PAGE_ID, "main").queryKey, { ...pageResponse(PAGE_ID, "/docs/main/guides/deploy-guide", "Deploy Guide"), path: "guides/deploy-guide.md" });
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-breadcrumbs")).not.toBeNull());
-    const crumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs/guides"]');
+    const crumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs/main/guides"]');
     expect(crumb).not.toBeNull();
     expect(crumb!.textContent).toBe("Guides");
     // The trail opens with the root crumb — "docs / Guides / Deploy Guide", both ancestors clickable.
+    // SINGLE-root fixture, so the crumb keeps its URL-truthful "docs" (see the note above).
     const rootCrumb = view.container.querySelector('.pb-breadcrumbs a[href="/docs"]');
     expect(rootCrumb).not.toBeNull();
     expect(rootCrumb!.textContent).toBe("docs");

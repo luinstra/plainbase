@@ -2,11 +2,14 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -47,7 +50,11 @@ class AssetUploadRouteTest : FunSpec({
     val citations = CitationFactory()
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
     // A small valid PNG header byte sequence (the bytes are opaque to the route - written verbatim).
     val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5)
@@ -63,12 +70,12 @@ class AssetUploadRouteTest : FunSpec({
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.obj()
-            body.getValue("url").jsonPrimitive.content shouldBe "/assets/guides/diagram.png"
+            body.getValue("url").jsonPrimitive.content shouldBe "/assets/main/guides/diagram.png"
             body.getValue("path").jsonPrimitive.content shouldBe "guides/diagram.png"
             body.getValue("content_hash").jsonPrimitive.content shouldBe citations.contentHash(png)
 
             harness.diskBytes("guides/diagram.png") shouldBe png
-            val served = client.get("/assets/guides/diagram.png")
+            val served = client.get("/assets/main/guides/diagram.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -84,9 +91,9 @@ class AssetUploadRouteTest : FunSpec({
             plus.status shouldBe HttpStatusCode.Created
             val plusBody = plus.obj()
             plusBody.getValue("path").jsonPrimitive.content shouldBe "guides/my file.png"
-            plusBody.getValue("url").jsonPrimitive.content shouldBe "/assets/guides/my%20file.png"
+            plusBody.getValue("url").jsonPrimitive.content shouldBe "/assets/main/guides/my%20file.png"
             harness.diskBytes("guides/my file.png") shouldBe png
-            val served = client.get("/assets/guides/my%20file.png")
+            val served = client.get("/assets/main/guides/my%20file.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
 
@@ -169,7 +176,11 @@ class AssetUploadRouteTest : FunSpec({
                 Files.createDirectories(tree.resolve("linked"))
                 Files.write(tree.resolve("linked/page.md"), "---\ntitle: Linked\n---\n\n# Linked\n".toByteArray())
                 val seedLinked: (IdMapRepository) -> Unit = { idMap ->
-                    idMap.bind(TreePath.require("linked/page.md"), PageId.require(linkedPageId), materialized = false)
+                    idMap.bind(
+                        RootedPath(RootName.MAIN, TreePath.require("linked/page.md")),
+                        PageId.require(linkedPageId),
+                        materialized = false,
+                    )
                 }
                 writeRestTest(tree, seedLinked) { harness ->
                     // Swap the real `linked/` dir for a symlink to an external dir (an ancestor-symlink escape).
@@ -178,9 +189,16 @@ class AssetUploadRouteTest : FunSpec({
                     Files.createSymbolicLink(harness.root.resolve("linked"), outside)
 
                     val resp = client.post("/api/v1/pages/$linkedPageId/assets?filename=x.png") { setBody(png) }
-                    // The page folder vanished/became a symlink: either a containment Rejected (400) or a
-                    // ParentMissing (404) - both refuse, and crucially nothing lands through the link.
-                    (resp.status == HttpStatusCode.BadRequest || resp.status == HttpStatusCode.NotFound) shouldBe true
+                    // The page folder vanished/became a symlink: a containment Rejected (400), a ParentMissing (404),
+                    // or - since C1, and it is what wins the race here - a 503 `absence_unverified`, because the page's
+                    // own .md went with the folder and its binding is still live, so the write refuses BEFORE it ever
+                    // reaches the containment gate. All three refuse; the containment gate keeps its own direct tests
+                    // (`CreateGatesTest`, the store-level rows above).
+                    //
+                    // THE INVARIANT THIS ROW GUARDS IS UNCHANGED AND STILL ASSERTED: nothing lands through the link.
+                    val refused = resp.status in
+                        listOf(HttpStatusCode.BadRequest, HttpStatusCode.NotFound, HttpStatusCode.ServiceUnavailable)
+                    refused shouldBe true
                     Files.list(outside).use { it.count() } shouldBe 0L
                 }
             } finally {
@@ -310,7 +328,7 @@ class AssetUploadRouteTest : FunSpec({
             val post = client.post("/api/v1/pages/$deployGuideId/assets?filename=$name") { setBody(png) }
             post.status shouldBe HttpStatusCode.Created
             harness.diskBytes("guides/$name") shouldBe png
-            val served = client.get("/assets/guides/$name")
+            val served = client.get("/assets/main/guides/$name")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -408,13 +426,16 @@ class AssetUploadRouteTest : FunSpec({
         // tree (incl. this page), so we arm the throw AFTER construction, right before the upload, so ONLY
         // the route's step-4b re-check sees the fault (mirrors test 21's armed override).
         val armed = java.util.concurrent.atomic.AtomicBoolean(false)
+        // The fault is injected at `readClassified`, because that is the seam the facade's stale-page re-check now
+        // uses - and it models the REAL store faithfully: on a LIVE root the exit classifier re-probes, sees the root
+        // is fine, and RETHROWS the genuine fault (a false 503 `root_unavailable` here would be a lie about the disk).
         val readThrows: (ContentStore) -> ContentStore = { real ->
             object : ContentStore by real {
-                override fun read(path: TreePath): ByteArray? =
+                override fun readClassified(path: TreePath): StoreRead =
                     if (armed.get() && path.value == "guides/deploy-guide.md") {
                         throw java.io.IOException("simulated transient FS fault reading the page file")
                     } else {
-                        real.read(path)
+                        real.readClassified(path)
                     }
             }
         }
@@ -432,7 +453,7 @@ class AssetUploadRouteTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, seed) { _ ->
             client.post("/api/v1/pages/$deployGuideId/assets?filename=sniff.png") { setBody(png) }
                 .status shouldBe HttpStatusCode.Created
-            val served = client.get("/assets/guides/sniff.png")
+            val served = client.get("/assets/main/guides/sniff.png")
             served.status shouldBe HttpStatusCode.OK
             served.headers["X-Content-Type-Options"] shouldBe "nosniff"
         }
@@ -457,15 +478,23 @@ class AssetUploadRouteTest : FunSpec({
             root.toFile().deleteRecursively()
         }
 
-        // Route-level: delete the page's on-disk folder after indexing → 404, folder not recreated.
+        // Route-level: delete the page's on-disk folder after indexing. RE-SPEC'd in C1 - it asserted 404
+        // `page_not_found`, and that is ledger A4 on the asset surface: the page's binding is still live, so its
+        // file being unreadable is an UNVERIFIED absence, not a deletion. Telling an author uploading an image that
+        // their page no longer exists - when a submount failed, or a restore is half-done - is the same lie in a
+        // friendlier place. It answers 503 `absence_unverified` now.
+        //
+        // What this row is FOR is untouched and still asserted: NOTHING is written, and the folder is NOT recreated.
+        // (The store-level half above still pins `ParentMissing` directly, so the no-resurrection contract keeps its
+        // own unmediated test.)
         writeRestTest(Fixtures.demoDocs, seed) { harness ->
             harness.root.resolve("guides/deploy-guide.md").toFile().delete()
             Files.walk(harness.root.resolve("guides")).use { s ->
                 s.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
             }
             val resp = client.post("/api/v1/pages/$deployGuideId/assets?filename=x.png") { setBody(png) }
-            resp.status shouldBe HttpStatusCode.NotFound
-            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_not_found"
+            resp.status shouldBe HttpStatusCode.ServiceUnavailable
+            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
             Files.exists(harness.root.resolve("guides")) shouldBe false // not recreated
         }
     }
@@ -475,19 +504,22 @@ class AssetUploadRouteTest : FunSpec({
     // parent-exists check would PASS and the asset would write + 201 for a gone page. The disk re-check
     // (services.contentStore.read(page.path) == null → 404) catches it BEFORE the write. Top-level is the
     // sharpest case: the content root always exists, so only the .md re-check can detect the deletion.
-    test("a top-level page whose .md was deleted (folder survives) is 404 page_not_found; no asset written") {
+    // RE-SPEC'd in C1: the re-check still FIRES and still refuses (which is what this row exists to prove), but the
+    // refusal is 503 `absence_unverified`, not 404 `page_not_found`. The page's binding is live and its bytes are
+    // missing - an absence nobody proved - and "your page is gone" is the one thing we may not say about that.
+    test("a top-level page whose .md was deleted (folder survives) is 503 absence_unverified; no asset written") {
         val indexPageId = "0197c2d0-7a1b-7c45-8e2f-3b9d6a1c4e02"
         val seedTopLevel: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(TreePath.require("index.md"), PageId.require(indexPageId), materialized = false)
+            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(indexPageId), materialized = false)
         }
         writeRestTest(Fixtures.demoDocs, seedTopLevel) { harness ->
             // Delete the page's .md on disk WITHOUT a rebuild - the snapshot still lists it under id.
             harness.root.resolve("index.md").toFile().delete()
 
             val resp = client.post("/api/v1/pages/$indexPageId/assets?filename=x.png") { setBody(png) }
-            resp.status shouldBe HttpStatusCode.NotFound
-            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_not_found"
-            // No asset landed in the (surviving) content root for the gone page.
+            resp.status shouldBe HttpStatusCode.ServiceUnavailable
+            resp.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
+            // No asset landed in the (surviving) content root for the gone page. THAT is the invariant.
             Files.exists(harness.root.resolve("x.png")) shouldBe false
         }
     }
@@ -520,7 +552,7 @@ class AssetUploadRouteTest : FunSpec({
             // A later successful rebuild (scan no longer armed to throw) reconciles it: the asset now serves.
             armed.set(false)
             harness.builder.rebuild()
-            val served = client.get("/assets/guides/deferred.png")
+            val served = client.get("/assets/main/guides/deferred.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }
@@ -553,8 +585,8 @@ class AssetUploadRouteTest : FunSpec({
             first.status shouldBe HttpStatusCode.ServiceUnavailable
             harness.diskBytes("guides/heal.png") shouldBe png
             // The orphan is on disk but NOT yet in the published snapshot - currently 404-unreachable.
-            (TreePath.require("guides/heal.png") in harness.builder.current.assets) shouldBe false
-            client.get("/assets/guides/heal.png").status shouldBe HttpStatusCode.NotFound
+            (TreePath.require("guides/heal.png") in harness.builder.current.section(RootName.MAIN).assets) shouldBe false
+            client.get("/assets/main/guides/heal.png").status shouldBe HttpStatusCode.NotFound
 
             // Retry the SAME filename: writeAssetExclusive sees the existing file → Exists. The route runs
             // the self-heal rebuild (now disarmed → succeeds) so the orphan enters current.assets, THEN 409.
@@ -563,8 +595,8 @@ class AssetUploadRouteTest : FunSpec({
             retry.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_exists"
 
             // Healed: the asset is now reachable WITHOUT any admin/watcher rebuild, serving the original bytes.
-            (TreePath.require("guides/heal.png") in harness.builder.current.assets) shouldBe true
-            val served = client.get("/assets/guides/heal.png")
+            (TreePath.require("guides/heal.png") in harness.builder.current.section(RootName.MAIN).assets) shouldBe true
+            val served = client.get("/assets/main/guides/heal.png")
             served.status shouldBe HttpStatusCode.OK
             served.bodyAsBytes() shouldBe png
         }

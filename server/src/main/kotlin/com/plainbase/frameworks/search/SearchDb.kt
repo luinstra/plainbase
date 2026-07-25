@@ -104,17 +104,21 @@ class SearchDb(path: Path) : AutoCloseable {
             statement.execute(
                 """
                 CREATE TABLE search_page(generation INTEGER NOT NULL, page_id BLOB NOT NULL,
-                                         content_hash TEXT NOT NULL, path TEXT NOT NULL,
-                                         PRIMARY KEY(generation, page_id))
+                                         content_hash TEXT NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL,
+                                         PRIMARY KEY(generation, root, page_id))
                 """.trimIndent(),
             )
+            // root lives on the metadata tables only, NEVER the FTS virtual tables - a root column
+            // there would index root names as matchable tokens. The hit query SELECTs section_doc.root
+            // and assembly rejects a hit whose indexed root is no longer the page's root (a re-awarded
+            // id), so the column is READ on every search, not just written.
             statement.execute(
                 """
                 CREATE TABLE section_doc(doc_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL,
-                                         page_id BLOB NOT NULL, heading_id TEXT, status TEXT NOT NULL)
+                                         page_id BLOB NOT NULL, root TEXT NOT NULL, heading_id TEXT, status TEXT NOT NULL)
                 """.trimIndent(),
             )
-            statement.execute("CREATE INDEX section_doc_gen_page ON section_doc(generation, page_id)")
+            statement.execute("CREATE INDEX section_doc_gen_page ON section_doc(generation, root, page_id)")
             // heading = the section's OWN heading text only, never the breadcrumb (§B4 engine note).
             statement.execute(
                 """
@@ -138,7 +142,7 @@ class SearchDb(path: Path) : AutoCloseable {
 
     companion object {
         /** Bump on ANY schema change: the mismatch path is drop-and-recreate, never a migration. */
-        const val SCHEMA_VERSION: Int = 1
+        const val SCHEMA_VERSION: Int = 3
 
         const val READER_POOL_SIZE: Int = 4
 

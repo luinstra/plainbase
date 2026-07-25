@@ -34,7 +34,7 @@ object RestGolden {
      * carrying a `"` or `\`, a literal newline, …) is escaped correctly — never spliced as raw text
      * that could make the JSON invalid (the old pre-parse `text.replace` failure mode). Substituting
      * into the string content (not only whole-value primitives) keeps embedded placeholders working
-     * too — e.g. the PB-REST-1 citation `uri` `plainbase://<id>@{{content_hash}}`.
+     * too — e.g. the PB-REST-1 citation `uri` `plainbase://<root>/<id>@{{content_hash}}`.
      */
     fun load(name: String, substitutions: Map<String, String> = emptyMap()): JsonElement {
         val resource = checkNotNull(javaClass.getResourceAsStream("/golden/rest/$name")) { "missing golden resource: $name" }
@@ -78,9 +78,13 @@ object RestGolden {
                             .sortedBy { node -> sortKey(node as JsonObject) },
                     )
                     "id" -> normalizeId(value, seededIds)
-                    // Descend through every other object value too — the response wraps the
-                    // first folder under "root", which must be normalized like any node.
-                    else -> if (value is JsonObject) normalizeTree(value, seededIds) else value
+                    // Descend through every other object AND array value too - the response wraps
+                    // per-root entries under the "roots" array (C3), each holding its folder "tree".
+                    else -> when (value) {
+                        is JsonObject -> normalizeTree(value, seededIds)
+                        is JsonArray -> JsonArray(value.map { normalizeTree(it, seededIds) })
+                        else -> value
+                    }
                 }
             },
         )

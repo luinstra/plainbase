@@ -1,5 +1,9 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.Permalink
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.frameworks.ktor.dto.BrokenLinkDto
 import com.plainbase.frameworks.ktor.dto.HeadingDto
 import com.plainbase.frameworks.ktor.dto.PageMetadataResponse
@@ -37,14 +41,24 @@ class ReadDtoNativeTest {
 
         val metadata = PageMetadataResponse(
             id = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+            root = "main",
             path = "guides/a.md",
-            url = "/docs/guides/a",
-            permalink = "/p/0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+            url = "/docs/main/guides/a",
+            permalink = "/p/main/0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
             contentHash = "sha256:${"0".repeat(64)}",
             commit = null,
             title = "A",
             headings = listOf(HeadingDto(id = "intro", level = 1, text = "Intro")),
         )
         assertRoundTrips(PageMetadataResponse.serializer(), metadata)
+    }
+
+    @Test
+    fun `the PRODUCTION permalink emitter is rooted in-image`() {
+        // The emission proof (R8): the ONE definition of a permalink is rooted (per-root identity, C5). Backing
+        // `Permalink.of` out to the bare `/p/{id}` form reds BOTH assertions; the hand-built literal above does not.
+        val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+        assertEquals("/p/main/${id.value}", Permalink.of(RootName.MAIN, id))
+        assertEquals("/p/main/${id.value}", RootedPageId(RootName.MAIN, id).permalink)
     }
 }

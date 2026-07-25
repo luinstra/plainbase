@@ -1,9 +1,14 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.Stage
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.filesystem.LocalContentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -38,9 +43,9 @@ class WritePipelineReconcileTest : FunSpec({
                 val page = harness.builder.current.pages.single()
                 val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nsaved but unindexed.\n".toByteArray()
                 // A history hook that throws AFTER the CAS write succeeds (a post-write step failure).
-                val pipeline = harness.writePipeline(historyHook = { _, _, _, _ -> error("commit blew up") })
+                val pipeline = harness.writePipeline(historyHook = { _, _, _, _, _ -> error("commit blew up") })
 
-                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
 
                 val unindexed = outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 unindexed.newHash shouldBe citations.contentHash(saveBytes)
@@ -65,8 +70,8 @@ class WritePipelineReconcileTest : FunSpec({
                 // Attempt 1: bytes B land on disk, but a post-write step throws ⇒ WrittenButUnindexed,
                 // leaving a dirty row whose expectedHash = hash(B).
                 val bytesB = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes B on disk, unindexed.\n".toByteArray()
-                harness.writePipeline(historyHook = { _, _, _, _ -> error("commit blew up") })
-                    .write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, bytesB))
+                harness.writePipeline(historyHook = { _, _, _, _, _ -> error("commit blew up") })
+                    .write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, bytesB))
                     .shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 val hashB = citations.contentHash(bytesB)
                 harness.dirtyPages.all().single().expectedHash shouldBe hashB
@@ -75,7 +80,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // row must survive: same expectedHash = hash(B), not this attempt's hash, not cleared.
                 val bytesC = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes C never written.\n".toByteArray()
                 harness.writePipeline()
-                    .write(grantForTests(), WriteIntent(page.id, page.path, "sha256:stale-base", bytesC))
+                    .write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, "sha256:stale-base", bytesC))
                     .shouldBeInstanceOf<WriteOutcome.Conflict>().reason shouldBe "content_changed"
                 val afterConflict = harness.dirtyPages.all().single()
                 afterConflict.expectedHash shouldBe hashB // not poisoned to hash(C), not cleared
@@ -84,7 +89,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // reconcile still recovers B: on-disk hash matches the recorded hash(B) ⇒ reindexed + cleared.
                 harness.writePipeline().reconcileDirtyPages()
                 harness.dirtyPages.all().isEmpty() shouldBe true
-                harness.builder.current.byId.getValue(page.id).contentHash shouldBe hashB
+                harness.builder.current.pageAt(page.rooted)!!.contentHash shouldBe hashB
             }
         }
     }
@@ -96,12 +101,39 @@ class WritePipelineReconcileTest : FunSpec({
                 harness.builder.rebuild()
                 val page = harness.builder.current.pages.single()
                 // Simulate a crash between mark and write: mark with a hash the on-disk bytes do NOT have.
-                harness.dirtyPages.mark(page.id, page.path, expectedHash = "sha256:neverwritten", stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = "sha256:neverwritten",
+                    stage = Stage.WRITING,
+                )
 
                 harness.writePipeline().reconcileDirtyPages()
 
                 // Drift-skip: the mark is LEFT (the on-disk old bytes do not match the recorded hash).
                 harness.dirtyPages.all().single().pageId shouldBe page.id
+            }
+        }
+    }
+
+    // D16 belt: a dirty row under a FOREIGN root cannot exist in C2 (every writer is main-wired),
+    // but C4's multi-root writers could journal one - the main pipeline must skip it with a WARN,
+    // never resolve (or clear) it against its own root's tree.
+    test("reconcile skips a dirty row whose root differs from the pipeline's, leaving it marked") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(RootName.require("extra"), page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+
+                harness.writePipeline().reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().path.root shouldBe RootName.require("extra")
             }
         }
     }
@@ -114,20 +146,77 @@ class WritePipelineReconcileTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
-                val match = harness.builder.current.byPath.getValue(TreePath.require("match.md"))
-                val drift = harness.builder.current.byPath.getValue(TreePath.require("drift.md"))
+                val match = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("match.md")))
+                val drift = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("drift.md")))
 
                 // match.md: the on-disk bytes match the recorded hash (a write that completed but did not clear).
                 val matchOnDisk = Files.readAllBytes(root.resolve("match.md"))
-                harness.dirtyPages.mark(match.id, match.path, expectedHash = citations.contentHash(matchOnDisk), stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    match.id,
+                    RootedPath(match.root, match.path),
+                    expectedHash = citations.contentHash(matchOnDisk),
+                    stage = Stage.WRITING,
+                )
                 // drift.md: the recorded hash is for bytes that never landed.
-                harness.dirtyPages.mark(drift.id, drift.path, expectedHash = "sha256:neverwritten", stage = Stage.WRITING)
+                harness.dirtyPages.mark(
+                    drift.id,
+                    RootedPath(drift.root, drift.path),
+                    expectedHash = "sha256:neverwritten",
+                    stage = Stage.WRITING,
+                )
 
                 harness.writePipeline().reconcileDirtyPages()
 
                 val remaining = harness.dirtyPages.all()
                 remaining.map { it.pageId }.toSet() shouldBe setOf(drift.id) // match cleared, drift left
-                harness.builder.current.byId.getValue(match.id).contentHash shouldBe citations.contentHash(matchOnDisk)
+                harness.builder.current.pageAt(match.rooted)!!.contentHash shouldBe citations.contentHash(matchOnDisk)
+            }
+        }
+    }
+
+    test("reconcile keeps the recovery row when the root disappears under its classified read") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+                val real = LocalContentStore(root).also { it.scan() }
+                val vanishing = object : ContentStore by real {
+                    override fun readClassified(path: TreePath): StoreRead = StoreRead.RootDown
+                }
+
+                harness.writePipeline(store = vanishing).reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().pageId shouldBe page.id
+            }
+        }
+    }
+
+    test("reconcile keeps the recovery row when a post-read recovery step fails") {
+        withTempTree(::seedOne) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val page = harness.builder.current.pages.single()
+                harness.dirtyPages.mark(
+                    page.id,
+                    RootedPath(page.root, page.path),
+                    expectedHash = page.contentHash,
+                    stage = Stage.WRITING,
+                )
+                val real = LocalContentStore(root).also { it.scan() }
+                val pipeline = harness.writePipeline(
+                    store = real,
+                    historyHook = { _, _, _, _, _ -> error("recovery commit failed") },
+                )
+
+                pipeline.reconcileDirtyPages()
+
+                harness.dirtyPages.all().single().pageId shouldBe page.id
             }
         }
     }

@@ -86,7 +86,7 @@ class SearchEquivalenceTest : FunSpec({
             SearchDb(dbPath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 // No reindex — only the engine-truth diff sync against the empty (deleted) engine.
-                SearchIndexer(provider, SectionSplitter()).sync(snapshot)
+                SearchIndexer(provider, SectionSplitter()).sync(snapshot, retired = emptySet())
                 equivalent(before, capture(provider))
             }
         }
@@ -94,7 +94,9 @@ class SearchEquivalenceTest : FunSpec({
 })
 
 private fun listenerOf(indexer: SearchIndexer) =
-    com.plainbase.domain.service.IndexBuilder.PublicationListener(indexer::sync)
+    com.plainbase.domain.service.IndexBuilder.PublicationListener { snap, retired ->
+        indexer.sync(snap, retired)
+    }
 
 private fun deleteIndexFiles(dir: Path) {
     listOf("search.db", "search.db-wal", "search.db-shm").forEach { Files.deleteIfExists(dir.resolve(it)) }

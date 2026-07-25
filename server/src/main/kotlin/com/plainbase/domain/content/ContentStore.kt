@@ -1,6 +1,7 @@
 package com.plainbase.domain.content
 
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BreakCause
 
 /**
  * The single internal interface to the content tree (master plan §2.2): a small port over a
@@ -12,6 +13,20 @@ import com.plainbase.domain.principal.EditGrant
  * a read of an NFC [TreePath] reaches the correct stored bytes via the retained raw name (P4).
  */
 interface ContentStore {
+
+    /**
+     * Whether the backing tree exists and is traversable RIGHT NOW - the ONE liveness probe (ADR-0011 D5).
+     *
+     * A local store answers the same three-predicate check the config's one-probe rule uses (a readable,
+     * searchable directory); an object store answers `true` unconditionally - the bucket is the authority
+     * and transport failures have their own error paths, so availability is a LOCAL-path concept in v1 (D10).
+     *
+     * Deliberately NOT a write-capability check: a READ-ONLY remounted root exists, is readable and serves
+     * every byte correctly, so calling it "unavailable" would be false on its face - and availability is
+     * sticky-until-restart, which is the wrong remediation for a condition `mount -o remount,rw` fixes. A
+     * read-only root is a WRITE fault, and the mutation surfaces' own `Unreadable` arms already say so.
+     */
+    fun available(): Boolean
 
     /**
      * Recursively scans the content tree, honoring the configured ignore rules, and returns
@@ -27,8 +42,30 @@ interface ContentStore {
      *
      * The read goes through the scan-retained raw on-disk name (P4) so a collision winner's
      * content is served even when its raw name is the non-NFC byte-form.
+     *
+     * A read that FEEDS A DECISION - one whose failure would drive a durable rewrite or a not-found wire
+     * answer - must use [readClassified] instead: a bare null here cannot tell a deleted FILE from a downed
+     * ROOT, and they are not the same answer (ADR-0011 D5).
      */
     fun read(path: TreePath): ByteArray?
+
+    /**
+     * [read], CLASSIFIED - and classified as far as a STORE can honestly go, which is not all the way (C1).
+     *
+     * EVERY rooted read whose FAILURE would drive a durable rewrite or a not-found WIRE answer calls this and
+     * never [read] - neither a bare null NOR a raw `IOException` can distinguish "no bytes here" from a downed
+     * root, and the two must never produce the same answer: telling an agent "page gone" for a root whose disk
+     * is unmounted is the exact lie ADR-0011 D5 forbids.
+     *
+     * It returns [StoreRead], NOT [ContentRead]: a store knows about BYTES, not about PAGES. "There is nothing
+     * at that path" ([StoreRead.NoBytes]) is the whole of what it can say, and turning that into "this page was
+     * deleted" needs the durable index, which a store has never heard of. The domain's [com.plainbase.domain
+     * .service.AbsenceClassifier] makes that call, in one place, for every consumer.
+     *
+     * The liveness probe fires ONLY on a failure, so the hot read path is untouched. [read] itself is left
+     * exactly as it is - reading for RENDERING is unchanged; only reading to DECIDE is classified.
+     */
+    fun readClassified(path: TreePath): StoreRead
 
     /**
      * Lists the immediate children (files and folders) of the directory at [dir], or of the
@@ -40,11 +77,20 @@ interface ContentStore {
     fun stat(path: TreePath): ContentStat?
 
     /**
-     * Atomically replaces the single file at [path] with [bytes], creating missing parents as
-     * the backend requires. Unconditional replace, last-writer-wins: no precondition is checked,
-     * and any stage failing THROWS rather than returning a typed result (Q8c; the sole production
-     * caller is the single-writer adoption pass). Each intended write is logged (path) before it
-     * is performed, so an interrupted run is detectable (the adopt durability requirement).
+     * Atomically CREATES-OR-REPLACES the single file at [path] with [bytes], **making missing parent
+     * directories**. Unconditional, last-writer-wins: no precondition is checked, and any stage failing
+     * THROWS rather than returning a typed result (Q8c).
+     *
+     * **Not a content-mutation surface, and the parent creation is why.** A tree whose root has been deleted
+     * or unmounted is RECREATED by this call - as a partial skeleton holding only the pages the caller happened
+     * to write, at wherever that path now resolves. Anything patching a page that is supposed to ALREADY EXIST
+     * wants [compareAndSwapWrite] instead, which replaces a file it resolved and creates nothing; anything
+     * making a genuinely new page wants [createExclusive], which enforces containment. The remaining caller is
+     * the object backend's local MIRROR apply, whose target is derived DATA_DIR state that is CONTRACTUALLY
+     * allowed to be absent and re-materialized from the bucket - the one place "make the parents" is the
+     * correct answer rather than a resurrection.
+     *
+     * Each intended write is logged (path) before it is performed, so an interrupted run is detectable.
      */
     fun write(path: TreePath, bytes: ByteArray)
 
@@ -127,13 +173,140 @@ interface ContentStore {
      * rebuild, never a direct state mutation. An event-queue overflow is delivered as the synthetic
      * [OVERFLOW] path: the convergence operation is already a full pass, so overflow needs nothing
      * beyond scheduling one.
+     *
+     * [onFailure] is invoked at most ONCE when the watch worker dies UNEXPECTEDLY (a `WatchService` fault) -
+     * not on a graceful close. It is one of the two things a watcher exists to notice, and it is the narrower
+     * one: an unexpected worker death would otherwise leave a healthy-looking server whose changes silently
+     * stop converging.
+     *
+     * [onCoverage] reports how much of the tree the watcher can actually SEE ([WatchCoverage]), and it is
+     * deliberately NOT a failure: a subtree the backend cannot register (the inotify watch limit, a
+     * permission-denied directory) degrades CONVERGENCE, never AVAILABILITY - the root is there, every byte of
+     * it serves, and the backend keeps converging it the slow way (a periodic full pass) while it retries the
+     * registration in place. Reporting it as a root fault would 503 a healthy root over a host-wide kernel
+     * limit, sticky until a restart that re-registers, re-fails and re-marks: an outage the server inflicts on
+     * itself and cannot leave. Both transitions are reported, so a raised limit or a fixed permission clears
+     * the flag with no restart.
+     *
+     * [onBreak] is the C2 seam, and it is the reason [onChange] stays UNINTERPRETED. An observation epoch turns
+     * "this scan does not see a page the last one did" into a DELETE, and that is only sound while the watch has had
+     * no GAP in it - so what the epoch needs from a watcher is not the kind of each event (an unmount, a rename-flip's
+     * `rm -rf`, a watcher fault all raise delete events, and on macOS the JDK watcher is a POLLER, so its "delete
+     * event" is a scan-diff and the proof would be circular) but the honest admission that events were MISSED. Every
+     * [BreakCause] revokes the root's observation wholesale. A backend that cannot report its own gaps must not call
+     * this at all: silence would be a claim of continuity it cannot make, so a store with nothing to say here simply
+     * never earns an epoch (the object backend's absence authority is its bucket LIST, not its poller).
+     *
+     * The other is ROOT LOSS, and a backend that watches a root MUST detect it (ADR-0011 D5): a deleted or
+     * unmounted root does not necessarily fail its watcher and may raise no event at all, so a root with no
+     * write traffic has NO other detector - every one of them (the write probe, the rebuild probe) is driven by
+     * an operation somebody asked for. An undetected root loss is not a slow 503, it is a permanent 200 over
+     * carried-forward bytes. The local backend therefore probes the root on an interval and, on loss, marks it
+     * unavailable and schedules the converging pass (see `LocalContentStore.watch`); no callback is added here
+     * for it, because both mechanisms are ones the store already holds.
      */
-    fun watch(onChange: (TreePath) -> Unit): AutoCloseable
+    fun watch(
+        onChange: (TreePath) -> Unit,
+        onFailure: (Throwable) -> Unit = {},
+        onCoverage: (WatchCoverage) -> Unit = {},
+        onBreak: (BreakCause) -> Unit = {},
+    ): AutoCloseable
 
     companion object {
         /** The synthetic path [watch] delivers on an event-queue overflow (consumers just schedule - §B2). */
         val OVERFLOW: TreePath = TreePath.require("(overflow)")
+
+        /**
+         * The bound every [watch] handle's `close()` honors: both backends join a worker thread, and neither may
+         * wait longer than this for it. It is what the graceful-shutdown budget counts per watcher, so a backend
+         * that waited longer would be cut off mid-close.
+         */
+        const val WATCH_CLOSE_BOUND_MILLIS: Long = 10_000
     }
+}
+
+/**
+ * How much of a root's tree its watcher is actually watching - a CONVERGENCE fact, never an availability one
+ * (see [ContentStore.watch]'s `onCoverage`).
+ */
+enum class WatchCoverage {
+    /** Every directory in the tree is registered: an edit anywhere converges within the change-to-visible bound. */
+    WHOLE,
+
+    /**
+     * Part of the tree could not be registered (the inotify watch limit, an unreadable directory): edits under it
+     * raise no event, so they converge only on the backend's periodic full pass - slower, never never. The backend
+     * keeps retrying the registration, so this can go back to [WHOLE] without a restart.
+     */
+    PARTIAL,
+}
+
+/**
+ * **Everything a STORE can honestly say about a read** (C1). It knows about BYTES; it does not know about pages,
+ * and it has never heard of the durable index - so it cannot, and no longer may, decide that a page is DELETED.
+ *
+ * A sealed RESULT rather than a throw, deliberately: several consumers must SWALLOW a root-down condition (leave
+ * an APPLYING proposal APPLYING, leave a dirty journal row dirty, answer `base_drifted = true`) rather than
+ * propagate it, and two blanket `catch (Exception)` arms already sitting on these paths would otherwise launder
+ * an honest 503 back into one of the very codes ADR-0011 D5 forbids.
+ */
+sealed interface StoreRead {
+
+    data class Bytes(val bytes: ByteArray) : StoreRead {
+        override fun equals(other: Any?): Boolean = this === other || (other is Bytes && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /**
+     * There are no bytes at that path, on a root that IS live. **That is ALL it means.**
+     *
+     * It is NOT "the page was deleted". An empty mount point, a half-finished restore, a decoy tree and a real
+     * deletion produce the identical observation here, and no probe a store can run separates them - so the
+     * store hands the fact up and the domain decides what it MEANS ([com.plainbase.domain.service.AbsenceClassifier]).
+     */
+    data object NoBytes : StoreRead
+
+    /** The backing tree is not traversable right now - NOTHING may be concluded about the file. */
+    data object RootDown : StoreRead
+}
+
+/**
+ * **What the DOMAIN concludes** by combining a [StoreRead] with the durable index (C1). The compiler makes each
+ * consumer name its behavior for all four arms; a `catch` nobody remembered to narrow cannot swallow one.
+ *
+ * The rule, and it closes ledger A4 by REMOVING a check rather than adding one:
+ *
+ * > A read for a page **the durable index HAS**, whose bytes the store cannot produce, is **503**.
+ * > **404** only for a page the index does not have.
+ *
+ * The adapter used to decide this from `available()`, and after an ext4 inode-reused replacement `available()`
+ * says LIVE - so a read for a page sitting safe on an unmounted disk answered 404 ("drop your citations") and a
+ * CAS write answered `page_deleted`. The index knew better the whole time; nobody asked it.
+ */
+sealed interface ContentRead {
+
+    data class Bytes(val bytes: ByteArray) : ContentRead {
+        override fun equals(other: Any?): Boolean = this === other || (other is Bytes && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /** No bytes, AND the durable index does not have this page either. Nothing is in doubt: the honest **404**. */
+    data object ConfirmedAbsent : ContentRead
+
+    /**
+     * No bytes, BUT the durable index HAS a live binding for it. The page is in LIMBO - neither present nor
+     * proven gone - and the only honest answer is **503 `absence_unverified`: come back later**.
+     *
+     * **An `AbsenceUnknown` is never allowed to become a fact.** It ends every path in "we do not know yet",
+     * never in "it's gone": no 404, no `page_deleted`, no `rebase_target_gone`, no cleared recovery row, no
+     * adoption against a view we cannot verify. It self-heals the moment the page is witnessed again.
+     */
+    data object AbsenceUnknown : ContentRead
+
+    /** The backing tree is not traversable right now - NOTHING may be concluded about the file. */
+    data object RootDown : ContentRead
 }
 
 /** The outcome of [ContentStore.compareAndSwapWrite] (PB-WRITE-1). */

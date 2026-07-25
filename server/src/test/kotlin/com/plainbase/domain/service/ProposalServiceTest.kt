@@ -1,5 +1,6 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
@@ -12,7 +13,10 @@ import com.plainbase.domain.repository.ProposalRepository
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
 import com.plainbase.domain.repository.ProposalSummaryRow
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -21,6 +25,7 @@ import io.kotest.matchers.ints.shouldBeExactly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlin.time.Clock
@@ -43,15 +48,43 @@ class ProposalServiceTest : FunSpec({
     val createPageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
     val path = TreePath.require("guides/deploy.md")
 
+    /**
+     * A [ProposalBaseReader] double — LEGITIMATE here, and worth saying why: the SUBJECT of these rows is what
+     * [ProposalService] DOES with a classified read, so the reader is the service's COLLABORATOR, not the code under
+     * test. (A row pinning the STORE's own classification would have to run against a real store; that lives in the
+     * native suite.) Its API stays TreePath-keyed — every root here is main — so the rooted port is an implementation
+     * detail of the double rather than noise in every fixture.
+     */
     class FakeReader(
         var pathById: Map<PageId, TreePath> = emptyMap(),
         var bytesByPath: Map<TreePath, ByteArray> = emptyMap(),
         var occupiedPaths: Set<TreePath> = emptySet(),
+        /** Paths whose ROOT is not serving — the arm that must never drive a durable rewrite (ADR-0011 D5). */
+        var rootDownPaths: Set<TreePath> = emptySet(),
+        /**
+         * Paths whose bytes are missing while the durable index STILL BINDS the page (C1): the root is healthy, the
+         * page is in LIMBO, and its absence is unproven. The arm that must never become `StaleBase` or
+         * `rebase_target_gone` - both of those are assertions that the page is GONE, and nothing here has established
+         * that. A path NOT in this set and absent from [bytesByPath] is a real, index-confirmed absence.
+         */
+        var unverifiedPaths: Set<TreePath> = emptySet(),
     ) : ProposalBaseReader {
-        override fun pathOf(pageId: PageId): TreePath? = pathById[pageId]
-        override fun currentBytes(path: TreePath): ByteArray? = bytesByPath[path]
-        override fun occupied(path: TreePath): Boolean = path in occupiedPaths
+        // Root-scoped like the real reader: a page lives in main here, so a lookup under any OTHER root answers null -
+        // which is what makes the cross-root rows below assert something rather than accidentally pass.
+        override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
+            pathById[pageId]?.takeIf { root == RootName.MAIN }?.let { RootedPath(RootName.MAIN, it) }
+
+        override fun currentBytes(target: RootedPath): ContentRead = when {
+            target.path in rootDownPaths -> ContentRead.RootDown
+            target.path in unverifiedPaths -> ContentRead.AbsenceUnknown
+            else -> bytesByPath[target.path]?.let(ContentRead::Bytes) ?: ContentRead.ConfirmedAbsent
+        }
+
+        override fun occupied(target: RootedPath): Boolean = target.path in occupiedPaths
     }
+
+    /** Main-rooted, since every fixture here is main's. */
+    fun rooted(p: TreePath) = RootedPath(RootName.MAIN, p)
 
     /** A trivial in-memory ProposalRepository capturing inserts + the P1b status CASes (no SQLite needed). */
     class MemRepo : ProposalRepository {
@@ -64,7 +97,7 @@ class ProposalServiceTest : FunSpec({
         override fun findById(id: com.plainbase.domain.page.ProposalId) = rows.firstOrNull { it.id == id }
         override fun all(): List<ProposalSummaryRow> = rows.sortedByDescending { it.createdAt }.map {
             ProposalSummaryRow(
-                it.id, it.operation, it.pageId, it.targetPath, it.baseHash, it.status, it.rationale,
+                it.id, it.operation, it.pageId, it.targetPath, it.root, it.baseHash, it.status, it.rationale,
                 it.authorIssuer, it.authorExternalId, it.authorLabel, it.approverIssuer, it.approverExternalId,
                 it.decisionComment, it.createdAt, it.decidedAt,
             )
@@ -84,7 +117,7 @@ class ProposalServiceTest : FunSpec({
             appliedCommit: String? = r.appliedCommit,
             statusReason: String? = r.statusReason,
         ) = ProposalRow(
-            r.id, r.operation, r.pageId, baseHash, targetPath, r.proposedContent, r.rationale, diffArtifact,
+            r.id, r.operation, r.pageId, r.root, baseHash, targetPath, r.proposedContent, r.rationale, diffArtifact,
             status, r.authorIssuer, r.authorExternalId, r.authorLabel, approverIssuer, approverExternalId,
             decisionComment, r.createdAt, decidedAt, appliedCommit, statusReason,
         )
@@ -212,7 +245,16 @@ class ProposalServiceTest : FunSpec({
         val current = "# Old\n".toByteArray()
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
         val (svc, repo) = service(reader)
-        val outcome = svc.proposeEdit(grantForTests(), pageId, citations.contentHash(current), null, "# New\n".toByteArray(), "r", author)
+        val outcome = svc.proposeEdit(
+            grantForTests(),
+            pageId,
+            rooted(path),
+            citations.contentHash(current),
+            null,
+            "# New\n".toByteArray(),
+            "r",
+            author,
+        )
         outcome.shouldBeInstanceOf<ProposeOutcome.Created>()
         val row = (repo as MemRepo).rows.single()
         row.status shouldBe ProposalStatus.PENDING
@@ -225,7 +267,16 @@ class ProposalServiceTest : FunSpec({
         val current = "# Old\n".toByteArray()
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
         val (svc, repo) = service(reader)
-        val outcome = svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "# New\n".toByteArray(), "r", author)
+        val outcome = svc.proposeEdit(
+            grantForTests(),
+            pageId,
+            rooted(path),
+            "sha256:" + "0".repeat(64),
+            null,
+            "# New\n".toByteArray(),
+            "r",
+            author,
+        )
         outcome shouldBe ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -233,7 +284,7 @@ class ProposalServiceTest : FunSpec({
     test("an edit whose page_id resolves to no published page is stale_base, nothing inserted (target-missing branch)") {
         val reader = FakeReader(pathById = emptyMap())
         val (svc, repo) = service(reader)
-        svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
+        svc.proposeEdit(grantForTests(), pageId, rooted(path), "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
             ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -241,7 +292,7 @@ class ProposalServiceTest : FunSpec({
     test("an edit whose currentBytes is null (target deleted) is stale_base, nothing inserted") {
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = emptyMap())
         val (svc, repo) = service(reader)
-        svc.proposeEdit(grantForTests(), pageId, "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
+        svc.proposeEdit(grantForTests(), pageId, rooted(path), "sha256:" + "0".repeat(64), null, "x".toByteArray(), "r", author) shouldBe
             ProposeOutcome.StaleBase
         (repo as MemRepo).rows.shouldBeEmpty()
     }
@@ -253,6 +304,7 @@ class ProposalServiceTest : FunSpec({
         val outcome = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             TreePath.require("other.md"),
             "# New\n".toByteArray(),
@@ -267,7 +319,7 @@ class ProposalServiceTest : FunSpec({
         val (svc, repo) = service(FakeReader())
         val target = TreePath.require("guides/new.md")
         val blob = "# Brand New\n".toByteArray()
-        val outcome = svc.proposeCreate(createGrantForTests(), createPageId, target, blob, "r", author)
+        val outcome = svc.proposeCreate(createGrantForTests(), createPageId, rooted(target), blob, "r", author)
         outcome.shouldBeInstanceOf<ProposeOutcome.Created>()
         val row = (repo as MemRepo).rows.single()
         row.operation shouldBe ProposalOperation.CREATE
@@ -285,6 +337,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             proposed,
@@ -306,7 +359,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeCreate(
             createGrantForTests(),
             createPageId,
-            target,
+            rooted(target),
             "# X\n".toByteArray(),
             "r",
             author,
@@ -323,6 +376,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             "# New\n".toByteArray(),
@@ -341,6 +395,7 @@ class ProposalServiceTest : FunSpec({
         val created = svc.proposeEdit(
             grantForTests(),
             pageId,
+            rooted(path),
             citations.contentHash(current),
             null,
             "# New\n".toByteArray(),
@@ -379,6 +434,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -473,7 +529,7 @@ class ProposalServiceTest : FunSpec({
                 svc.proposeCreate(
                     createGrantForTests(),
                     createPageId,
-                    TreePath.require("guides/new.md"),
+                    rooted(TreePath.require("guides/new.md")),
                     "# X\n".toByteArray(),
                     "r",
                     author,
@@ -594,6 +650,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -642,6 +699,90 @@ class ProposalServiceTest : FunSpec({
         svc.rebase(approveGrantForTests(), id) shouldBe RebaseOutcome.NotConflicted
     }
 
+    // C1: the three ProposalService rows where an UNVERIFIED absence must not become a fact. `rebase_target_gone` and
+    // `StaleBase` are both assertions that the page is GONE, and they are both DURABLE (the first stamps the row
+    // terminally FAILED, foreclosing the recovery that restoring the page would otherwise give). A page whose binding
+    // is still live and whose bytes we cannot read has established neither.
+    test("rebase against an UNVERIFIED absence throws 503 - it does NOT stamp the row terminally rebase_target_gone") {
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = (
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
+            ).id
+        svc.apply(
+            approveGrantForTests(),
+            id,
+            approver,
+            FakeWriter(WriteOutcome.Conflict("content_changed", "x", "sha256:" + "b".repeat(64), path)),
+        )
+        repo.findById(id)!!.status shouldBe ProposalStatus.CONFLICTED
+
+        // The page's bytes are unreadable while the index still binds it - limbo, not deletion.
+        reader.bytesByPath = emptyMap()
+        reader.unverifiedPaths = setOf(path)
+
+        shouldThrow<AbsenceUnverified> { svc.rebase(approveGrantForTests(), id) }
+        withClue(
+            "the row stays CONFLICTED and REBASABLE: restoring the page restores the decision, which a FAILED stamp would have foreclosed",
+        ) {
+            repo.findById(id)!!.status shouldBe ProposalStatus.CONFLICTED
+            repo.findById(id)!!.statusReason shouldNotBe "rebase_target_gone"
+        }
+    }
+
+    test("proposeEdit against an UNVERIFIED absence throws 503 - never StaleBase ('your base moved' is a lie here)") {
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), unverifiedPaths = setOf(path))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+
+        shouldThrow<AbsenceUnverified> {
+            svc.proposeEdit(grantForTests(), pageId, rooted(path), citations.contentHash(current), null, proposed, "r", author)
+        }
+        withClue("and nothing was persisted - a 503 files no proposal") {
+            repo.all().shouldBeEmpty()
+        }
+    }
+
+    test("the review QUEUE still renders over an unverified absence: base_drifted = true, and it does NOT throw") {
+        // The one place a 503 would be the wrong answer: `list`/`get` render the queue, and the rows an operator most
+        // needs to see during an outage are exactly the ones a throw would take the whole page down for. An unreadable
+        // base IS drift - "not applyable right now" - and it is an explicitly NON-AUTHORITATIVE triage flag.
+        val current = "# Old\n".toByteArray()
+        val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
+        val repo = MemRepo()
+        val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
+        val id = (
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
+            ).id
+
+        reader.bytesByPath = emptyMap()
+        reader.unverifiedPaths = setOf(path)
+
+        svc.get(id).shouldNotBeNull().baseDrifted shouldBe true
+        svc.list().single().baseDrifted shouldBe true
+    }
+
     test("rebase whose pathOf returns null -> Gone AND the row is FAILED with status_reason rebase_target_gone") {
         val current = "# Old\n".toByteArray()
         val reader = FakeReader(pathById = mapOf(pageId to path), bytesByPath = mapOf(path to current))
@@ -651,6 +792,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeEdit(
                 grantForTests(),
                 pageId,
+                rooted(path),
                 citations.contentHash(current),
                 null,
                 proposed,
@@ -684,7 +826,16 @@ class ProposalServiceTest : FunSpec({
         }
         val svc = ProposalService(repo, citations, reader, TestProposalIdProvider(), clock)
         val id = (
-            svc.proposeEdit(grantForTests(), pageId, citations.contentHash(current), null, proposed, "r", author) as ProposeOutcome.Created
+            svc.proposeEdit(
+                grantForTests(),
+                pageId,
+                rooted(path),
+                citations.contentHash(current),
+                null,
+                proposed,
+                "r",
+                author,
+            ) as ProposeOutcome.Created
             ).id
         svc.apply(
             approveGrantForTests(),
@@ -706,7 +857,7 @@ class ProposalServiceTest : FunSpec({
         val id = TestProposalIdProvider().next()
         repo.insert(
             ProposalRow(
-                id = id, operation = ProposalOperation.EDIT, pageId = pageId, baseHash = "sha256:" + "0".repeat(64),
+                id = id, operation = ProposalOperation.EDIT, pageId = pageId, root = RootName.MAIN, baseHash = "sha256:" + "0".repeat(64),
                 targetPath = path, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,
@@ -722,7 +873,7 @@ class ProposalServiceTest : FunSpec({
         repo.insert(
             ProposalRow(
                 // A CREATE APPLYING row carries a non-null page_id (minted at propose time) but NO base_hash.
-                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, baseHash = null,
+                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, root = RootName.MAIN, baseHash = null,
                 targetPath = targetPath, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,
@@ -759,7 +910,7 @@ class ProposalServiceTest : FunSpec({
             svc.proposeCreate(
                 createGrantForTests(),
                 createPageId,
-                TreePath.require("guides/new.md"),
+                rooted(TreePath.require("guides/new.md")),
                 "# X\n".toByteArray(),
                 "r",
                 author,
@@ -806,5 +957,44 @@ class ProposalServiceTest : FunSpec({
         val id = insertApplying(repo, proposed) // its stored target_path is the STALE `path`, never read here
         svc.reconcileApplying()
         repo.findById(id)!!.status shouldBe ProposalStatus.APPLIED
+    }
+
+    test("reconcileApplying never rewrites a durable row when its root cannot supply trustworthy evidence") {
+        data class UnavailableCase(
+            val clue: String,
+            val status: RootStatus,
+            val rootDown: Boolean = false,
+            val absenceUnverified: Boolean = false,
+        )
+
+        listOf(
+            UnavailableCase("the row names a detached root", RootStatus.DETACHED),
+            UnavailableCase("the row names an unavailable root", RootStatus.UNAVAILABLE),
+            UnavailableCase("the root disappears after the status check", RootStatus.AVAILABLE, rootDown = true),
+            UnavailableCase("the page remains bound but its bytes are missing", RootStatus.AVAILABLE, absenceUnverified = true),
+        ).forEach { case ->
+            withClue(case.clue) {
+                val reader = FakeReader(
+                    pathById = mapOf(pageId to path),
+                    bytesByPath = mapOf(path to proposed),
+                    rootDownPaths = if (case.rootDown) setOf(path) else emptySet(),
+                    unverifiedPaths = if (case.absenceUnverified) setOf(path) else emptySet(),
+                )
+                val repo = MemRepo()
+                val svc = ProposalService(
+                    repo,
+                    citations,
+                    reader,
+                    TestProposalIdProvider(),
+                    clock,
+                    rootStatus = { case.status },
+                )
+                val id = insertApplying(repo, proposed)
+
+                svc.reconcileApplying()
+
+                repo.findById(id)!!.status shouldBe ProposalStatus.APPLYING
+            }
+        }
     }
 })

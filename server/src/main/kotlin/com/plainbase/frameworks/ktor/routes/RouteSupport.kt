@@ -4,11 +4,19 @@ import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.AbsenceUnverified
 import com.plainbase.domain.service.AccessDenied
+import com.plainbase.domain.service.AmbiguousPageId
+import com.plainbase.domain.service.DenyReason
+import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.CsrfGuard
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.Source
+import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
+import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdBody
+import com.plainbase.frameworks.ktor.dto.AmbiguousPageIdEnvelope
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeBody
 import com.plainbase.frameworks.ktor.dto.BodyTooLargeEnvelope
 import com.plainbase.frameworks.ktor.dto.ErrorBody
@@ -333,23 +341,159 @@ internal sealed interface ExtractedPrincipal {
 }
 
 /**
- * Runs [body] under the A3 choke point, mapping a [AccessDenied] thrown by a facade `check*` to the frozen
- * auth envelope: 401 `unauthorized` for an [Principal.Anonymous] (no credential), 403 `forbidden` for an
- * authenticated-but-unauthorized principal (the role×action matrix denied it). Every gated route wraps its
- * facade call(s) in this so the deny → status mapping lives in ONE place. The facade's [AccessDenied] is thrown
- * BEFORE any resolve/membership work, so a denied read never leaks page existence.
+ * Runs [body] under the A3 choke point, mapping the four facade-thrown conditions to their frozen envelopes — and it
+ * is the ONE place any of those mappings lives, so a route never catches or re-mints them:
+ *  - [AccessDenied] with [DenyReason.POLICY] → 401 `unauthorized` for an [Principal.Anonymous] (no credential),
+ *    403 `forbidden` for an authenticated-but-unauthorized principal (the role×action matrix denied it);
+ *  - [AccessDenied] with [DenyReason.ROOT_NOT_EDITABLE] → 403 `root_not_editable` (the root refuses page writes in
+ *    EVERY auth mode — but only ever AFTER authn has passed, so anonymous still sees 401 and the flag never leaks);
+ *  - [RootUnavailable] → 503 `root_unavailable` + [ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS];
+ *  - [AbsenceUnverified] → 503 `absence_unverified` + [ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS] (C1) — a HEALTHY
+ *    root holding ONE page whose absence nobody has proven. A separate code, because it is a separate fact and a
+ *    separate remedy: nothing to restore, nothing to restart, and it clears itself.
+ *  - [AmbiguousPageId] → 409 `ambiguous_page_id` + one candidate root/URL per holding root (C4). The ONE arm here
+ *    that is thrown AFTER the resolve rather than before it, because ambiguity is a fact about the resolution.
+ *
+ * The other three are thrown BEFORE any resolve/membership work (or, for availability, immediately after the gate passes), so
+ * a denied read never leaks page existence and an unauthenticated prober never learns a root's topology.
  */
-internal suspend inline fun ApplicationCall.guarded(body: () -> Unit) {
+internal suspend inline fun ApplicationCall.guarded(remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin, body: () -> Unit) {
     try {
         body()
     } catch (denied: AccessDenied) {
-        if (denied.principal is Principal.Anonymous) {
-            respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
-        } else {
-            respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
+        when {
+            // The REASON is checked BEFORE the principal type, and that ordering is load-bearing. A
+            // ROOT_NOT_EDITABLE deny can only ever be produced AFTER authn has passed (the gate's own arms run
+            // authn -> editable -> matrix), so 401 is never the right answer for it - and under `auth.mode = off`,
+            // where Anonymous is a legitimate principal and the server is not asking for credentials at all, a 401
+            // would be nonsense. The enforced-anonymous case still gets its 401, because there the AUTHN arm denies
+            // first and arrives here as POLICY.
+            denied.reason == DenyReason.ROOT_NOT_EDITABLE ->
+                respondError(
+                    HttpStatusCode.Forbidden,
+                    ErrorCodes.ROOT_NOT_EDITABLE,
+                    "This root is configured read-only (editable = false); page writes are not accepted here",
+                )
+            denied.principal is Principal.Anonymous ->
+                respondError(HttpStatusCode.Unauthorized, ErrorCodes.UNAUTHORIZED, "Authentication required")
+            else -> respondError(HttpStatusCode.Forbidden, ErrorCodes.FORBIDDEN, "You do not have permission for this action")
         }
+    } catch (unavailable: RootUnavailable) {
+        response.header(HttpHeaders.RetryAfter, ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS.toString())
+        respondError(
+            HttpStatusCode.ServiceUnavailable,
+            ErrorCodes.ROOT_UNAVAILABLE,
+            // The MESSAGE carries the difference between the causes, because the operator ACTION differs: a vanished
+            // root wants its disk back; a detached one wants its name back in roots{}. The CODE stays one.
+            "Root '${unavailable.root.value}' is not serving (${unavailable.reason.name.lowercase()}). Nothing was " +
+                "written. The page still exists - do not discard it. Restore the root and restart the server.",
+        )
+    } catch (unverified: AbsenceUnverified) {
+        response.header(HttpHeaders.RetryAfter, ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS.toString())
+        respondError(
+            HttpStatusCode.ServiceUnavailable,
+            ErrorCodes.ABSENCE_UNVERIFIED,
+            "The page '${unverified.subject}' is still bound in root '${unverified.root.value}' and its content cannot be " +
+                "read right now. It is NOT deleted - nothing here has proven that, and nothing was written. Do not discard " +
+                "the page or its citations; retry shortly. If its file really is gone for good, the page converges once an " +
+                "absence proof arrives (a git commit, a completed observation, or `plainbase root reconcile`).",
+        )
+    } catch (ambiguous: AmbiguousPageId) {
+        // 409 (§5-sanctioned): a bare id held by more than one root. The candidates let a client retry pinned; rank
+        // order is the resolver's; NO Link headers (that is the permalink 300's shape, not REST's).
+        //
+        // The retry target is DERIVED from the request that threw, never a constant: this funnel serves the page read,
+        // the PUT, /history, /diff, validate-links and the asset upload, and a hardcoded `/api/v1/pages/{id}?root=` was
+        // simply the wrong endpoint for most of them. A body-pin surface gets no url at all - see [AmbiguityRemedy].
+        //
+        // Ambiguity is TRANSIENT state: it ends the moment the duplicate is resolved, so no intermediary may hold on to
+        // it (the permalink 300 carries the same header for the same reason).
+        response.header(HttpHeaders.CacheControl, "no-store")
+        respondRest(
+            AmbiguousPageIdEnvelope.serializer(),
+            AmbiguousPageIdEnvelope(
+                AmbiguousPageIdBody(
+                    code = ErrorCodes.AMBIGUOUS_PAGE_ID,
+                    message = ambiguousMessage(ambiguous.id, remedy, ambiguous.hasRetiredCandidate),
+                    candidates = ambiguous.candidates.map {
+                        AmbiguousCandidate(
+                            root = it.value,
+                            url = when (remedy) {
+                                AmbiguityRemedy.QueryPin -> retryUrlPinnedTo(it)
+                                is AmbiguityRemedy.BodyPin -> null
+                            },
+                        )
+                    },
+                ),
+            ),
+            HttpStatusCode.Conflict,
+        )
     }
 }
+
+/**
+ * How a caller of THIS endpoint names a root, which is the only thing that decides what a 409 candidate can offer.
+ *
+ * Every id-addressed REST surface takes the pin as `?root=` ([QueryPin], the default). `POST /api/v1/changes` takes it
+ * as a body field ([BodyPin]) - so its candidates carry no url and its message names the field instead.
+ */
+internal sealed interface AmbiguityRemedy {
+    data object QueryPin : AmbiguityRemedy
+
+    data class BodyPin(val field: String) : AmbiguityRemedy
+}
+
+/**
+ * The request's OWN endpoint with the `root` pin added - the retry url a 409 candidate hands back.
+ *
+ * The RAW path is used (`request.uri` up to the query, the [rawPathAfter] idiom), never Ktor's decoded routing
+ * parameters: re-encoding a decoded path would be the forbidden second decoder. Any existing query string is carried
+ * through and `root` appended, which is total here because a request that ALREADY named a root can never reach this -
+ * only [com.plainbase.domain.service.PageRootResolver.resolve] returns `Ambiguous`, and a pinned request goes through
+ * `resolvePinned`, which answers One or None and never Ambiguous. A [RootName] is a validated slug, so it needs no
+ * escaping.
+ */
+internal fun ApplicationCall.retryUrlPinnedTo(root: RootName): String {
+    val path = request.uri.substringBefore('?').substringBefore('#')
+    val query = request.queryString()
+    return if (query.isEmpty()) "$path?root=${root.value}" else "$path?$query&root=${root.value}"
+}
+
+/**
+ * The one wording behind both ambiguity surfaces (the REST 409 and the permalink 300), kept a hair from the MCP
+ * twin's ("retry with the `root` argument") only where the surfaces genuinely differ in how a root is named.
+ */
+internal fun ambiguousMessage(
+    id: PageId,
+    remedy: AmbiguityRemedy = AmbiguityRemedy.QueryPin,
+    hasRetiredCandidate: Boolean = false,
+): String {
+    val retry = when (remedy) {
+        AmbiguityRemedy.QueryPin -> "retry against one of the candidate roots below."
+        // Naming the FIELD, because this surface has no url to follow and an agent told to "retry against a candidate
+        // url" would go looking for a query string it never sent.
+        is AmbiguityRemedy.BodyPin ->
+            "retry with the \"${remedy.field}\" field in your request body naming one of the candidate roots below."
+    }
+    val base = "The id ${id.value} exists in more than one root, so the server cannot pick one; $retry"
+    // STATUS-NEUTRAL (the permalink 300 and REST 409 share this helper, and only the permalink answers 410): warn that
+    // a candidate is a tombstone without promising a status this surface may not deliver.
+    return if (hasRetiredCandidate) "$base (some candidate roots have retired this id)" else base
+}
+
+/**
+ * The `Retry-After` a 503 `root_unavailable` advertises. Recovery is an operator restart, not a transient blip, so
+ * five minutes balances agent politeness against how long a fixed deployment sits unnoticed.
+ */
+internal const val ROOT_UNAVAILABLE_RETRY_AFTER_SECONDS: Int = 300
+
+/**
+ * The `Retry-After` a 503 `absence_unverified` advertises (C1) - SHORTER than the root-unavailable one, and for a
+ * reason rather than as a nicety: limbo is derived per pass and SELF-HEALS the moment the page is witnessed again.
+ * A page that comes back with the next watcher-driven rebuild is serving in seconds, with no operator in the loop,
+ * so a five-minute window would leave an agent sitting out an outage that had already ended.
+ */
+internal const val ABSENCE_UNVERIFIED_RETRY_AFTER_SECONDS: Int = 30
 
 /**
  * Reads the request body as a stream, counting bytes, and returns the buffered bytes — or null the
@@ -438,6 +582,75 @@ internal fun ApplicationCall.rawPathAfter(prefix: String): String? =
 internal fun decodedTreePath(raw: String): TreePath? {
     val decoded = PercentCoding.decodeOnce(raw) as? PercentCoding.DecodeResult.Success ?: return null
     return TreePath.of(decoded.value)
+}
+
+/**
+ * The `?root=` query pin shape (C4, the 5.2a auth-defer sweep). GRAMMAR only: a [Named] carries a legal slug
+ * (whether or not it names a REGISTERED root - registration/ownership is deferred to AFTER the auth gate, in the
+ * facade), and only a [Malformed] slug or a [Repeated] parameter is answered pre-auth (400 `invalid_root`).
+ * [Absent] is a bare read/write.
+ */
+internal sealed interface RootPin {
+    data object Absent : RootPin
+
+    data class Named(val root: RootName) : RootPin
+
+    data class Malformed(val raw: String) : RootPin
+
+    /** `?root=a&root=b` - two pins, one decision. Both may be perfectly legal slugs; that is not the problem. */
+    data object Repeated : RootPin
+}
+
+/**
+ * Classifies the optional `?root=` query parameter by GRAMMAR ([RootName.of]); never consults the registry.
+ *
+ * A REPEATED parameter is its own refusal rather than a first-value read. This is the one surface whose entire job
+ * is disambiguation, so silently keeping `a` out of `?root=a&root=b` would answer a question the caller did not ask
+ * - and answer it about which root's disk a write lands on. Two pins is a malformed request, not a preference.
+ */
+internal fun ApplicationCall.rootPin(): RootPin {
+    val values = request.queryParameters.getAll("root") ?: return RootPin.Absent
+    if (values.size > 1) return RootPin.Repeated
+    val raw = values.single()
+    return RootName.of(raw)?.let(RootPin::Named) ?: RootPin.Malformed(raw)
+}
+
+/**
+ * The `?root=` pin as a plain [RootName]? for the id-addressed reads/writes: [RootPin.Absent] -> null (a bare
+ * read), [RootPin.Named] -> its root (registration deferred to the facade), and a [RootPin.Malformed] slug or a
+ * [RootPin.Repeated] parameter responds 400 `invalid_root` here (both syntax errors, the sole pre-auth exception)
+ * and returns null. The caller does `val pin = call.pinnedRootOrRefuse() ?: return@guarded` (null ==
+ * already-answered) and then reads `pin.root`, distinguished from a legal absent pin because absent yields
+ * [PinResolved]`(null)`, not null.
+ */
+internal suspend fun ApplicationCall.pinnedRootOrRefuse(): PinResolved? = when (val pin = rootPin()) {
+    RootPin.Absent -> PinResolved(null)
+    is RootPin.Named -> PinResolved(pin.root)
+    is RootPin.Malformed -> {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "?root must be a valid root name: '${pin.raw}'")
+        null
+    }
+    RootPin.Repeated -> {
+        respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "?root was given more than once; name exactly one root")
+        null
+    }
+}
+
+/** A resolved (grammar-valid or absent) `?root=` pin: [root] is null for an absent pin. */
+internal data class PinResolved(val root: RootName?)
+
+/**
+ * The ONE first-segment rule every root-scoped route grammar shares (C3, ADR-0011 D3): if the
+ * decoded tail's first segment names a [known] registry root, that root scopes the remainder
+ * (null remainder = a bare-root tail); otherwise null - the WHOLE tail is a legacy main-relative
+ * path. One implementation so the docs/assets/by-path/browse grammars can never drift; how a
+ * non-root answer responds (301 on browser surfaces, resolve-under-main on API surfaces) is the
+ * caller's decision, never encoded here.
+ */
+internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName, TreePath?>? {
+    val root = RootName.of(path.segments.first())?.takeIf { it in known } ?: return null
+    val remainder = path.segments.drop(1).takeIf { it.isNotEmpty() }?.let { TreePath.require(it.joinToString("/")) }
+    return root to remainder
 }
 
 /**

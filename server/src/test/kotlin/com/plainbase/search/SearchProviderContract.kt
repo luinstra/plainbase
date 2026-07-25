@@ -1,5 +1,7 @@
 package com.plainbase.search
 
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.SearchProvider
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -150,10 +152,10 @@ abstract class SearchProviderContract(
                     page(2, preamble = "survivor"),
                 ),
             )
-            engine.provider.delete(listOf(pageId(1)))
+            engine.provider.delete(listOf(rooted(1, RootName.MAIN)))
             engine.provider.search(query("vanishing")).total shouldBe 0L
             engine.provider.search(query("survivor")).total shouldBe 1L
-            engine.provider.indexedState().keys shouldBe setOf(pageId(2))
+            engine.provider.indexedState().keys shouldBe setOf(rooted(2, RootName.MAIN))
         }
     }
 
@@ -177,7 +179,7 @@ abstract class SearchProviderContract(
             engine.provider.rebuild(new.asSequence())
             engine.provider.search(query("relic")).total shouldBe 0L
             engine.provider.search(query("artifact")).total shouldBe 2L
-            engine.provider.indexedState().keys shouldBe new.map { it.pageId }.toSet()
+            engine.provider.indexedState().keys shouldBe new.map { RootedPageId(it.root, it.pageId) }.toSet()
 
             engine.provider.rebuild(emptySequence())
             engine.provider.search(query("artifact")).total shouldBe 0L
@@ -205,15 +207,15 @@ abstract class SearchProviderContract(
             engine.provider.indexedState() shouldBe emptyMap()
             engine.provider.index(listOf(page(1, contentHash = "sha256:v1"), page(2, contentHash = "sha256:v2")))
             engine.provider.indexedState().mapValues { it.value.contentHash } shouldBe
-                mapOf(pageId(1) to "sha256:v1", pageId(2) to "sha256:v2")
+                mapOf(rooted(1, RootName.MAIN) to "sha256:v1", rooted(2, RootName.MAIN) to "sha256:v2")
 
             engine.provider.index(listOf(page(1, contentHash = "sha256:v1b", path = "moved/page-1.md")))
-            val state = engine.provider.indexedState().getValue(pageId(1))
+            val state = engine.provider.indexedState().getValue(rooted(1, RootName.MAIN))
             state.contentHash shouldBe "sha256:v1b"
             state.path.value shouldBe "moved/page-1.md"
 
-            engine.provider.delete(listOf(pageId(2)))
-            engine.provider.indexedState().keys shouldBe setOf(pageId(1))
+            engine.provider.delete(listOf(rooted(2, RootName.MAIN)))
+            engine.provider.indexedState().keys shouldBe setOf(rooted(1, RootName.MAIN))
         }
     }
 
@@ -319,7 +321,7 @@ abstract class SearchProviderContract(
             val before = ReindexEquivalence.capture(engine.provider)
             engine.reopen()
             equivalence.compare(before, ReindexEquivalence.capture(engine.provider))
-            engine.provider.indexedState().keys shouldBe corpus.map { it.pageId }.toSet()
+            engine.provider.indexedState().keys shouldBe corpus.map { RootedPageId(it.root, it.pageId) }.toSet()
         }
     }
 

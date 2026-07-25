@@ -4,6 +4,8 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
@@ -48,7 +50,11 @@ class ObjectHybridRouteParityTest : FunSpec({
     val citations = CitationFactory()
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
 
     fun markdown(): ContentType = ContentType.parse("text/markdown")
@@ -128,7 +134,13 @@ class ObjectHybridRouteParityTest : FunSpec({
         }
     }
 
-    test("edit Deleted: the object is gone at the BUCKET (the authority) - 409 page_deleted with current_* null") {
+    // RE-SPEC'd in C1, and PARITY IS THE POINT OF THIS FILE: the local backend answers 503 `absence_unverified` for
+    // exactly this shape (WriteRouteTest), so the hybrid must too. A gone OBJECT is no more a proof than a gone FILE
+    // is - "the authority says there are no bytes" and "the page was deleted" are different sentences, and a wrong
+    // bucket, a wrong prefix and a still-hydrating mirror all produce the first one. The binding is live; it 503s.
+    // (C3 gives the object backend its own proof source - a complete LIST under a TRUSTED binding - and THAT is what
+    // will let a drained bucket converge to `page_deleted` again, on evidence rather than on an empty answer.)
+    test("edit Deleted: the object is gone at the BUCKET, and an UNPROVEN absence is 503 - the local parity") {
         // For the hybrid, "deleted" means gone at the bucket (the authority), not merely absent from the
         // local mirror render - deleting only the mirror file would let the fake bucket's copy heal it
         // right back (a legitimate hybrid behavior, not the scenario under test). Delete via the fake.
@@ -143,9 +155,8 @@ class ObjectHybridRouteParityTest : FunSpec({
                 contentType(markdown())
                 setBody(original)
             }
-            put.status shouldBe HttpStatusCode.Conflict
-            put.errorJson().getValue("reason").jsonPrimitive.content shouldBe "page_deleted"
-            put.errorJson().getValue("current_content").toString() shouldBe "null"
+            put.status shouldBe HttpStatusCode.ServiceUnavailable
+            put.errorJson().getValue("code").jsonPrimitive.content shouldBe "absence_unverified"
         }
     }
 
@@ -172,7 +183,7 @@ class ObjectHybridRouteParityTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider(), storeOverride = hybridOverride) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"folder":"guides","title":"Hybrid Page","body":"# Hybrid\n\nbody.\n"}""")
+                setBody("""{"root":"main","folder":"guides","title":"Hybrid Page","body":"# Hybrid\n\nbody.\n"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.json()
@@ -190,7 +201,7 @@ class ObjectHybridRouteParityTest : FunSpec({
             val before = harness.diskBytes("guides/deploy-guide.md")
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"folder":"guides","slug":"deploy-guide","title":"Clash"}""")
+                setBody("""{"root":"main","folder":"guides","slug":"deploy-guide","title":"Clash"}""")
             }
             post.status shouldBe HttpStatusCode.Conflict
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_exists"
@@ -202,7 +213,7 @@ class ObjectHybridRouteParityTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider(), storeOverride = hybridOverride) { _ ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"folder":"../escape","title":"Escape"}""")
+                setBody("""{"root":"main","folder":"../escape","title":"Escape"}""")
             }
             post.status shouldBe HttpStatusCode.BadRequest
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -216,7 +227,7 @@ class ObjectHybridRouteParityTest : FunSpec({
             writeRestTest(tree, idProvider = TestIdProvider(), storeOverride = hybridOverride) { harness ->
                 val post = client.post("/api/v1/pages") {
                     contentType(ContentType.Application.Json)
-                    setBody("""{"folder":"","slug":"foo","title":"Foo"}""")
+                    setBody("""{"root":"main","folder":"","slug":"foo","title":"Foo"}""")
                 }
                 post.status shouldBe HttpStatusCode.Conflict
                 post.errorJson().getValue("code").jsonPrimitive.content shouldBe "slug_conflict"
@@ -228,7 +239,7 @@ class ObjectHybridRouteParityTest : FunSpec({
     }
 
     test("WrittenButUnindexed: a post-write hook failure is 200 with warning reindex_deferred, bytes on disk") {
-        val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _ -> throw RuntimeException("boom") }
+        val throwingHook = com.plainbase.domain.service.WriteHistoryHook { _, _, _, _, _ -> throw RuntimeException("boom") }
         writeRestTest(Fixtures.demoDocs, seed, historyHook = throwingHook, storeOverride = hybridOverride) { harness ->
             val original = harness.diskBytes("guides/deploy-guide.md")
             val edited = original + "\ndeferred.\n".toByteArray()
@@ -288,6 +299,7 @@ private fun hybridOverride(fakeSlot: Array<FakeObjectStore?>? = null): (LocalCon
         client = fake,
         mirror = mirror,
         state = MirrorState(stateFile),
+        binding = com.plainbase.domain.root.RootBinding("https://fake|bucket|"),
         keyPrefix = "",
         pollSeconds = 3_600,
         dirtyPaths = { emptySet() },

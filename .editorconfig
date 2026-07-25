@@ -12,11 +12,8 @@ indent_size = 4
 # Pinned explicitly so ktlint upgrades can't silently change it (owner preference: >= 120).
 max_line_length = 140
 
-# Owner style: author's layout wins. The disables below are honored by IDEs and the
-# ktlint CLI; Spotless ignores enablement properties from this file, so the SAME list
-# is passed via editorConfigOverride in server/build.gradle.kts — keep them in sync.
-# no-unused-imports: ktlint_official leaves this OFF by default; we force it ON (it caught
-# real dead imports that had accumulated while it was dormant). Spotless honors it via the map.
+# Owner style: author's layout wins. no-unused-imports is off by default under
+# ktlint_official, so force it on while keeping layout-changing rules off.
 ktlint_standard_no-unused-imports = enabled
 ktlint_standard_class-signature = disabled
 ktlint_standard_function-signature = disabled
@@ -24,3 +21,10 @@ ktlint_standard_when-entry-bracing = disabled
 ktlint_standard_blank-line-between-when-conditions = disabled
 ktlint_standard_multiline-expression-wrapping = disabled
 ktlint_standard_string-template-indent = disabled
+ktlint_standard_chain-method-continuation = disabled
+ktlint_standard_argument-list-wrapping = disabled
+ktlint_standard_no-empty-first-line-in-class-body = disabled
+ktlint_standard_indent = disabled
+ktlint_standard_blank-line-before-declaration = disabled
+ktlint_standard_parameter-list-wrapping = disabled
+ktlint_standard_no-consecutive-comments = disabled

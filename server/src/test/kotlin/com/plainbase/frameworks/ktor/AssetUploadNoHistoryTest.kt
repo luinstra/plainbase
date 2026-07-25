@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
@@ -22,13 +24,17 @@ class AssetUploadNoHistoryTest : FunSpec({
 
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId), materialized = false)
+        idMap.bind(
+            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            PageId.require(deployGuideId),
+            materialized = false,
+        )
     }
     val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5)
 
     test("an asset upload fires no history commit (assets are unversioned in Phase 3)") {
         val commits = AtomicInteger(0)
-        val countingHook = WriteHistoryHook { _, _, _, _ ->
+        val countingHook = WriteHistoryHook { _, _, _, _, _ ->
             commits.incrementAndGet()
             null
         }

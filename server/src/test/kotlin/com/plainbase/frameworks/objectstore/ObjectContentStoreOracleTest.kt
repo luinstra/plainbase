@@ -6,10 +6,14 @@ import com.plainbase.domain.content.CreateResult
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.principal.grantForTests
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.service.AdoptWriteFailed
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.PageIdentityService
+import com.plainbase.domain.service.RootLossClassifier
 import com.plainbase.domain.service.TestIdProvider
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -17,11 +21,13 @@ import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
+import kotlin.time.Clock
 
 /**
  * The C4 differential-oracle suite: [ObjectContentStore] over the [FakeObjectStore] (the hybrid)
@@ -246,20 +252,8 @@ class ObjectContentStoreOracleTest : FunSpec({
                 // align page-for-page in scan order - otherwise UUIDv7 randomness would defeat equality.
                 inMemoryIdMap { hybridIdMap ->
                     inMemoryIdMap { localIdMap ->
-                        val hybridReport = AdoptionPass(
-                            hybrid.store,
-                            hybridIdMap,
-                            PageIdentityService(TestIdProvider()),
-                            FrontmatterPatcher(),
-                        )
-                            .run(AdoptionPass.Mode.MATERIALIZE)
-                        val localReport = AdoptionPass(
-                            oracle.store,
-                            localIdMap,
-                            PageIdentityService(TestIdProvider()),
-                            FrontmatterPatcher(),
-                        )
-                            .run(AdoptionPass.Mode.MATERIALIZE)
+                        val hybridReport = adoptionPass(hybrid.store, hybridIdMap).run(AdoptionPass.Mode.MATERIALIZE)
+                        val localReport = adoptionPass(oracle.store, localIdMap).run(AdoptionPass.Mode.MATERIALIZE)
 
                         hybridReport.pages.map { it.path to it.disposition } shouldBe localReport.pages.map { it.path to it.disposition }
                         pages.keys.forEach { path ->
@@ -282,10 +276,15 @@ class ObjectContentStoreOracleTest : FunSpec({
             hybrid.mirrorAtomics.failAlways() // every mirror write in this pass throws (the injected mid-pass failure)
 
             inMemoryIdMap { idMap ->
-                shouldThrow<ObjectStoreException> {
-                    AdoptionPass(hybrid.store, idMap, PageIdentityService(TestIdProvider()), FrontmatterPatcher())
-                        .run(AdoptionPass.Mode.MATERIALIZE)
+                // The store is still THERE (its probe passes) - this is a WRITE fault, not a disappearance - so the
+                // shared root-loss boundary rethrows it as itself instead of laundering it into "the disk is gone".
+                val failed = shouldThrow<AdoptWriteFailed> {
+                    adoptionPass(hybrid.store, idMap).run(AdoptionPass.Mode.MATERIALIZE)
                 }
+                // ...and it says WHICH kind of write fault, which is the whole operational difference: the conditional
+                // PUT landed, so the bytes ARE durable at the authority and only the local mirror is behind. The two
+                // assertions below are that same claim, checked the long way round.
+                failed.targetMutated.shouldBeTrue()
             }
             // The bucket PUT landed BEFORE the mirror write failed (bucket-first): the patched id line is
             // durable at the authority even though the local apply threw.
@@ -299,6 +298,22 @@ class ObjectContentStoreOracleTest : FunSpec({
         }
     }
 })
+
+/**
+ * A single-root adoption pass over [store] — object mode is single-root by decision (ADR-0011 D10), so the
+ * one source here IS every configured root. The deterministic [TestIdProvider] is what lets the hybrid's and
+ * the local oracle's patched bytes be compared page-for-page (UUIDv7 randomness would defeat equality).
+ */
+private fun adoptionPass(store: ContentStore, idMap: IdMapRepository) = AdoptionPass(
+    sources = listOf(AdoptionPass.Source(RootName.MAIN, store)),
+    idMap = idMap,
+    identity = PageIdentityService(TestIdProvider()),
+    patcher = FrontmatterPatcher(),
+    rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
+    citations = CitationFactory(),
+    rootRank = { 0 },
+    registeredRoots = setOf(RootName.MAIN),
+)
 
 /** An in-memory SQLDelight-backed [IdMapRepository] scoped to [block] (the AdoptionPassTest idiom). */
 private fun inMemoryIdMap(block: (IdMapRepository) -> Unit) {

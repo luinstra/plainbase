@@ -5,6 +5,11 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBinding
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
@@ -18,6 +23,7 @@ import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.service.localRoot
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
@@ -87,7 +93,7 @@ class LostDataDirRecoveryTest : FunSpec({
             answer.total to
                 answer.hits.groupBy { it.score }.entries.sortedByDescending { it.key }.map { (score, tier) ->
                     score to tier.map { hit ->
-                        val page = snapshot.byId.getValue(hit.pageId)
+                        val page = snapshot.pageAt(RootedPageId(RootName.MAIN, hit.pageId))!!
                         HitFacet(page.path.value, hit.headingId, hit.snippet, hit.highlights)
                     }.toSet()
                 }
@@ -133,7 +139,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 projected(capture(boot.provider), snapshotB) shouldBe projected(answersA, snapshotA)
 
                 // Search fully populated as a side effect of the boot rebuild — no manual reindex step.
-                boot.provider.indexedState().keys shouldBe snapshotB.pages.map { it.id }.toSet()
+                boot.provider.indexedState().keys shouldBe snapshotB.pages.map { it.rooted }.toSet()
             }
         }
     }
@@ -164,6 +170,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 client = fake,
                 mirror = mirrorA,
                 state = MirrorState(tmpDirA.resolve("mirror-state")),
+                binding = RootBinding("https://fake|bucket|"),
                 keyPrefix = "",
                 pollSeconds = 3600,
                 dirtyPaths = { emptySet() },
@@ -218,6 +225,7 @@ class LostDataDirRecoveryTest : FunSpec({
                 client = fake,
                 mirror = mirrorB,
                 state = MirrorState(tmpDirB.resolve("mirror-state")),
+                binding = RootBinding("https://fake|bucket|"),
                 keyPrefix = "",
                 pollSeconds = 3600,
                 dirtyPaths = { emptySet() },
@@ -297,8 +305,13 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val frontmatter = FrontmatterReader()
     private val searchIndexer = SearchIndexer(provider, SectionSplitter())
 
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", config.contentDir)))
+
+    private val availability = RootAvailability(kotlin.time.Clock.System)
+
     val builder = IndexBuilder(
-        contentStore = store,
+        // git state lives under CONTENT_DIR, untouched by the loss - hence NoOpHistoryProvider
+        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
         frontmatterParser = frontmatter,
         rendererFactory = { view -> FlexmarkRenderer(view) },
         identity = PageIdentityService(UuidV7IdProvider()),
@@ -307,23 +320,26 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         aliasRegistry = registry,
         checkpoint = checkpoint,
         citations = citations,
-        history = NoOpHistoryProvider, // git state lives under CONTENT_DIR, untouched by the loss
+        availability = availability,
+        rootRank = rootRegistry::rank,
+        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
             IndexBuilder.PublicationListener(checkpoint::replaceFrom),
-            IndexBuilder.PublicationListener(searchIndexer::sync),
+            IndexBuilder.PublicationListener { snap, retired -> searchIndexer.sync(snap, retired) },
         ),
         searchIndexer = searchIndexer,
     )
 
     val pipeline = WritePipeline(
-        contentStore = store,
+        stores = { store },
         indexBuilder = builder,
         citations = citations,
         frontmatterParser = frontmatter,
         dirtyPages = dirtyPages,
         idMap = idMap,
         aliasRegistry = registry,
-        historyHook = WriteHistoryHook { _, _, _, _ -> null },
+        availability = availability,
+        historyHook = WriteHistoryHook { _, _, _, _, _ -> null },
     )
 
     override fun close() {

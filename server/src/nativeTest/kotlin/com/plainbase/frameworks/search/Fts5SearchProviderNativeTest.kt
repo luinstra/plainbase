@@ -2,6 +2,8 @@ package com.plainbase.frameworks.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
@@ -48,14 +50,32 @@ class Fts5SearchProviderNativeTest {
                     assertEquals("cluster", cluster.snippet.substring(h.start, h.end).lowercase())
                 }
 
-                assertEquals(2, provider.indexedState().size)
+                val state = provider.indexedState()
+                assertEquals(2, state.size)
+                // The rooted key round-trips through the engine's own state (the same JDBC surface).
+                assertTrue(state.keys.all { it.root == RootName.MAIN }, "rooted key did not round-trip")
+
+                // Two roots sharing ONE id coexist across the JNI boundary. rebuild (not index) so the swap
+                // replaces the whole corpus and indexedState is EXACTLY the pair.
+                val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+                val extraRoot = RootName.require("extra")
+                provider.rebuild(
+                    sequenceOf(
+                        page(id.value, "a.md", "Twin", "coexist body", root = RootName.MAIN),
+                        page(id.value, "b.md", "Twin", "coexist body", root = extraRoot),
+                    ),
+                )
+                assertEquals(setOf(RootedPageId(RootName.MAIN, id), RootedPageId(extraRoot, id)), provider.indexedState().keys)
+                val hits = provider.search(SearchQuery("coexist", 10, 0)).hits
+                assertEquals(2, hits.size)
+                assertEquals(setOf(RootName.MAIN, extraRoot), hits.map { it.root }.toSet())
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 
-    private fun page(id: String, path: String, title: String, body: String): PageDocuments {
+    private fun page(id: String, path: String, title: String, body: String, root: RootName = RootName.MAIN): PageDocuments {
         val pageId = PageId.require(id)
         val treePath = TreePath.require(path)
         val doc = SectionDocument(
@@ -71,6 +91,6 @@ class Fts5SearchProviderNativeTest {
             path = treePath,
             status = "active",
         )
-        return PageDocuments(pageId = pageId, contentHash = "sha256:$title", path = treePath, sections = listOf(doc))
+        return PageDocuments(pageId = pageId, contentHash = "sha256:$title", root = root, path = treePath, sections = listOf(doc))
     }
 }

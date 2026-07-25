@@ -1,0 +1,27 @@
+-- v11 -> v12: the absence-authority safety floor (C0).
+--
+-- Purely ADDITIVE - no backfill, no rewrite. `id_map` is UNCHANGED (no `retired_at` column, no
+-- `WHERE retired_at IS NULL` sprinkled through every query, no un-retire dance): tombstones live in
+-- their OWN table, outside the live (root, path) key space, so nothing can collide with one.
+--
+-- Existing installs need no migration of MEANING either: on the first boot after upgrade every durable
+-- row is unwitnessed by definition, and `limbo = durableRows - witnessed - retired` resolves it safely
+-- by construction. A healthy install witnesses every page, so limbo is EMPTY and the upgrade is
+-- invisible. An install upgraded DURING an outage puts the unreachable pages in limbo, which is the
+-- bug being fixed arriving as intended behavior.
+--
+-- Plain migration SQL: the `AS`/import banners live only in the .sq files. verifyMigrations
+-- cross-checks this against schema/12.db.
+
+CREATE TABLE retired_binding (
+  id BLOB NOT NULL PRIMARY KEY,
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  materialized INTEGER NOT NULL,
+  retired_at INTEGER NOT NULL
+);
+
+CREATE TABLE root_observation (
+  root TEXT NOT NULL PRIMARY KEY,
+  observation_id INTEGER NOT NULL
+);

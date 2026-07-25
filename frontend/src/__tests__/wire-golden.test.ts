@@ -59,40 +59,47 @@ const REINDEX_WARNING = {
 };
 
 const treeResponse: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 0,
-    children: [
-      {
+  roots: [
+    {
+      root: "main",
+      available: true,
+      editable: true,
+      tree: {
         type: "folder",
-        name: "guides",
-        title: "Guides",
-        description: "How-to guides",
-        path: "guides",
-        url: "/docs/guides",
-        page_count: 1,
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/main",
+        page_count: 0,
         children: [
           {
-            type: "page",
-            id: PAGE_1,
-            title: "Deploy Guide",
-            slug: "deploy-guide",
-            path: "guides/deploy-guide.md",
-            url: "/docs/guides/deploy-guide",
-            status: "published",
-            updated: "2026-06-01",
+            type: "folder",
+            name: "guides",
+            title: "Guides",
+            description: "How-to guides",
+            path: "guides",
+            url: "/docs/main/guides",
+            page_count: 1,
+            children: [
+              {
+                type: "page",
+                id: PAGE_1,
+                title: "Deploy Guide",
+                slug: "deploy-guide",
+                path: "guides/deploy-guide.md",
+                url: "/docs/main/guides/deploy-guide",
+                status: "published",
+                updated: "2026-06-01",
+              },
+            ],
           },
+          { type: "folder", name: "attic", title: null, description: null, path: "attic", url: null, page_count: 0, children: [] },
+          { type: "page", id: PAGE_2, title: "Shadowed", slug: "shadowed", path: "shadowed.md", url: null, status: "published", updated: null },
         ],
       },
-      { type: "folder", name: "attic", title: null, description: null, path: "attic", url: null, page_count: 0, children: [] },
-      { type: "page", id: PAGE_2, title: "Shadowed", slug: "shadowed", path: "shadowed.md", url: null, status: "published", updated: null },
-    ],
-  },
+    },
+  ],
 };
 
 // url is deliberately null here (the collision-loser branch): every `| null` field must be null in
@@ -100,6 +107,7 @@ const treeResponse: TreeResponse = {
 // stays pinned by treeResponse/createdResponse.
 const pageResponse: PageResponse = {
   id: PAGE_1,
+  root: "main",
   path: "guides/deploy-guide.md",
   slug: "deploy-guide",
   url: null,
@@ -115,12 +123,13 @@ const pageResponse: PageResponse = {
     path: "guides/deploy-guide.md",
     content_hash: HASH_A,
     commit: null,
-    uri: `plainbase://${PAGE_1}@${HASH_A}`,
+    uri: `plainbase://main/${PAGE_1}@${HASH_A}`,
   },
 };
 
 const pageHtmlResponse: PageHtmlResponse = {
   id: PAGE_2,
+  root: "main",
   path: "shadowed.md",
   slug: "shadowed",
   url: null,
@@ -137,7 +146,7 @@ const pageHtmlResponse: PageHtmlResponse = {
     path: "shadowed.md",
     content_hash: HASH_B,
     commit: COMMIT_1,
-    uri: `plainbase://${PAGE_2}@${HASH_B}`,
+    uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
   },
 };
 
@@ -154,6 +163,7 @@ const searchResponse: SearchResponse = {
   hits: [
     {
       page_id: PAGE_2,
+      root: "main",
       path: "shadowed.md",
       url: null,
       title: "Shadowed",
@@ -169,7 +179,7 @@ const searchResponse: SearchResponse = {
         path: "shadowed.md",
         content_hash: HASH_B,
         commit: null,
-        uri: `plainbase://${PAGE_2}@${HASH_B}`,
+        uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
       },
     },
   ],
@@ -224,11 +234,13 @@ const pageExistsEnvelope: PageExistsEnvelope = {
   error: { code: "page_exists", message: "A page already exists at guides/deploy-guide.md", path: "guides/deploy-guide.md" },
 };
 
-const createPageRequest: CreatePageRequest = { title: "Deploy Guide" };
+// `root` rides the create request (multi-root C4). It is pinned HERE because omitting it is not a type error -
+// it is a SILENT default to `main`, i.e. the page lands in the wrong tree with no failure anywhere.
+const createPageRequest: CreatePageRequest = { root: "extra", title: "Deploy Guide" };
 
 const createdResponse: CreatedResponse = {
   id: PAGE_1,
-  url: "/docs/guides/deploy-guide",
+  url: "/docs/main/guides/deploy-guide",
   content_hash: HASH_A,
   commit: null,
 };
@@ -327,6 +339,7 @@ const listChangesResponse: ListChangesResponse = {
       id: "01970000-0000-7000-8000-0000000000a2",
       operation: "create",
       status: "PENDING",
+      root: "main",
       target_path: "guides/rollback.md",
       page_id: null,
       base_drifted: false,
@@ -341,6 +354,7 @@ const changeDetail: ChangeDetail = {
   id: "01970000-0000-7000-8000-0000000000a3",
   operation: "create",
   status: "PENDING",
+  root: "main",
   target_path: "guides/rollback.md",
   page_id: null,
   base_hash: null,

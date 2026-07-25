@@ -55,7 +55,7 @@ class SectionSplitter {
             add(document(headingId = null, body = preamble))
             page.sections.filter { it.headingId != null }.forEach { add(document(it.headingId, it.text)) }
         }
-        return PageDocuments(pageId = page.id, contentHash = page.contentHash, path = page.path, sections = documents)
+        return PageDocuments(pageId = page.id, contentHash = page.contentHash, root = page.root, path = page.path, sections = documents)
     }
 
     /** The display breadcrumb per heading (§B7 rule): ancestor texts root-first, own text last. */

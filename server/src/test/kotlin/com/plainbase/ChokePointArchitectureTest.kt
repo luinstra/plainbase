@@ -101,7 +101,7 @@ internal fun referencesToken(text: String, token: String): Boolean {
 }
 
 /** Removes line (`//`) and block (`/* … */`) comments so only CODE remains (a tiny, sufficient stripper). */
-private fun stripComments(text: String): String {
+internal fun stripComments(text: String): String {
     val noBlock = text.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), " ")
     return noBlock.lineSequence().joinToString("\n") { it.substringBefore("//") }
 }

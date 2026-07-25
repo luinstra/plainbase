@@ -3,6 +3,7 @@ package com.plainbase.frameworks.mcp
 import com.plainbase.domain.principal.Principal
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.decidePrincipalExtraction
+import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -76,6 +77,24 @@ class McpServerEnforcedTest : FunSpec({
                 val created = client.call("propose_change", proposeArgs(harness.seedPageId, harness.seedBaseHash))
                 created.isErr() shouldBe false
                 created.text() shouldContain "PENDING"
+            }
+        }
+    }
+
+    test("a READ-ONLY ROOT denies propose_change with the SHARED `root_not_editable` code - one vocabulary across surfaces") {
+        McpHarness(editable = false).use { harness ->
+            harness.session(harness.proposeBearer) { client ->
+                withClue("`editable` is topology, not authorization: it never gates a READ") {
+                    client.call("read_page", mapOf("id" to harness.seedPageId)).isErr() shouldBe false
+                }
+                val denied = client.call("propose_change", proposeArgs(harness.seedPageId, harness.seedBaseHash))
+                denied.isErr() shouldBe true
+                withClue(
+                    "a generic `forbidden` says 'you may not' - the truth is 'nobody may, this root is read-only'. An " +
+                        "agent that learns the code over REST must read the SAME code here, or it retries with a new token.",
+                ) {
+                    denied.text() shouldContain "root_not_editable"
+                }
             }
         }
     }

@@ -1089,6 +1089,18 @@ body {
   color: var(--pb-text);
   font-weight: 500;
 }
+/* The root badge (queue + detail): `target_path` is root-relative, so the root is what makes a
+   change's target unambiguous - an approver must never have to guess which repository they land in. */
+.pb-review-root {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  padding: 1px 6px;
+  border: 1px solid var(--pb-border);
+  border-radius: 4px;
+  color: var(--pb-text-muted);
+  white-space: nowrap;
+}
 .pb-review-row-meta,
 .pb-review-meta {
   display: flex;

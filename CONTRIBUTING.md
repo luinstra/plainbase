@@ -37,7 +37,7 @@ unsigned commits fail the DCO check and can't merge.
   `./gradlew :server:writeDependencyAllowlist`. Netty, Jackson, Gson, and
   Exposed are banned outright; the stack is Ktor CIO, kotlinx.serialization,
   and SQLDelight - see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
-- **Formatting:** Spotless + ktlint (`./gradlew spotlessApply`), 140-column
+- **Formatting:** Kotlinter + ktlint (`./gradlew formatKotlin`), 140-column
   limit. The build fails on formatting drift, so let the tool do the arguing.
 - **Commits:** conventional style (`feat:`, `fix:`, `docs:`, `chore:`, ...),
   one logical concern per commit.

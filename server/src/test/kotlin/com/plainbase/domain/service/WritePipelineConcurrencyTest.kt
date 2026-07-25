@@ -1,7 +1,10 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
@@ -18,6 +21,8 @@ import kotlin.concurrent.thread
  */
 class WritePipelineConcurrencyTest : FunSpec({
 
+    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+
     fun seedTwo(root: Path) {
         writePage(root, "a.md", "---\ntitle: A\n---\n\n# A\n\nbody a.\n")
         writePage(root, "b.md", "---\ntitle: B\n---\n\n# B\n\nbody b.\n")
@@ -28,8 +33,8 @@ class WritePipelineConcurrencyTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val pipeline = harness.writePipeline()
-                val pageA = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("a.md"))
-                val pageB = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("b.md"))
+                val pageA = harness.builder.current.byPath.getValue(mainPath("a.md"))
+                val pageB = harness.builder.current.byPath.getValue(mainPath("b.md"))
                 val saveA = "---\ntitle: A\n---\n\n# A\n\nnew a.\n".toByteArray()
                 val saveB = "---\ntitle: B\n---\n\n# B\n\nnew b.\n".toByteArray()
 
@@ -38,11 +43,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val outB = AtomicReference<WriteOutcome>()
                 val ta = thread {
                     start.await()
-                    outA.set(pipeline.write(grantForTests(), WriteIntent(pageA.id, pageA.path, pageA.contentHash, saveA)))
+                    outA.set(pipeline.write(grantForTests(), WriteIntent(pageA.id, RootName.MAIN, pageA.path, pageA.contentHash, saveA)))
                 }
                 val tb = thread {
                     start.await()
-                    outB.set(pipeline.write(grantForTests(), WriteIntent(pageB.id, pageB.path, pageB.contentHash, saveB)))
+                    outB.set(pipeline.write(grantForTests(), WriteIntent(pageB.id, RootName.MAIN, pageB.path, pageB.contentHash, saveB)))
                 }
                 start.countDown()
                 ta.join(10_000)
@@ -61,7 +66,7 @@ class WritePipelineConcurrencyTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val pipeline = harness.writePipeline()
-                val page = harness.builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("a.md"))
+                val page = harness.builder.current.byPath.getValue(mainPath("a.md"))
                 val baseHash = page.contentHash
                 val save1 = "---\ntitle: A\n---\n\n# A\n\nwriter one.\n".toByteArray()
                 val save2 = "---\ntitle: A\n---\n\n# A\n\nwriter two.\n".toByteArray()
@@ -71,11 +76,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val out2 = AtomicReference<WriteOutcome>()
                 val t1 = thread {
                     start.await()
-                    out1.set(pipeline.write(grantForTests(), WriteIntent(page.id, page.path, baseHash, save1)))
+                    out1.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, baseHash, save1)))
                 }
                 val t2 = thread {
                     start.await()
-                    out2.set(pipeline.write(grantForTests(), WriteIntent(page.id, page.path, baseHash, save2)))
+                    out2.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, baseHash, save2)))
                 }
                 start.countDown()
                 t1.join(10_000)

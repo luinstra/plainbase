@@ -91,7 +91,7 @@ and the source of the repeated corruption holes found in review.
   frontmatter by the patcher — even when that value is perfectly valid YAML.
 
 **Mitigation (why the cost is tolerable)**
-- Such a page still resolves a **stable `/p/{id}` URL via `id_map`** — it simply isn't *materialized*
+- Such a page still resolves a **stable `/p/{root}/{id}` URL via `id_map`** — it simply isn't *materialized*
   into the file's frontmatter. Identity is preserved; only in-file id-stamping is skipped.
 - `adopt --dry-run` measures the real refusal rate against actual corpora. If quoted or flow values
   prove common enough to matter, the asymmetric freeze lets us relax the rule in a later documented

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -10,8 +11,11 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 
 /**
- * `GET /assets/{path}` (§A4): serves any non-`.md`, non-ignored file from the content tree, plus the
- * SPA's own embedded bundle under `static/assets/`.
+ * `GET /assets/{root}/{path}` (§A4 + C3): serves any non-`.md`, non-ignored file from the content
+ * tree, plus the SPA's own embedded bundle under `static/assets/`. The root grammar mirrors
+ * `/docs` (ADR-0011 D3): a first segment naming a known registry root scopes the remainder; any
+ * other tail is a legacy main-relative asset path and 301s to `/assets/main/{tail}`, query
+ * preserved. The bundle check stays FIRST and root-BLIND on the full tail (see below).
  *
  * Security path (frozen, chunk 1.5 rules): the RAW url tail → `PercentCoding.decodeOnce` (the one
  * decoder; `%2F`, malformed escapes, invalid UTF-8 all rejected) → `TreePath` (NFC; traversal and
@@ -74,18 +78,31 @@ fun Route.assetRoute(ctx: RouteContext) {
                     ErrorCodes.INVALID_PATH,
                     "Expected an asset path: /assets/{path}",
                 )
-            val path = decodedTreePath(raw)
+            val decoded = decodedTreePath(raw)
                 ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid asset path: '$raw'")
             // Bundle-wins (item 1): the SPA's OWN trusted static asset (Vite js/css/etc.). PUBLIC in every
             // mode (the shell + login page must load anonymously), NEVER sandboxed (its js must execute),
-            // and ALWAYS the embedded bytes — a content asset shadowing a bundle name can never be served.
-            val bundled = staticResourceBytes(path.value)
+            // ALWAYS the embedded bytes - a content asset shadowing a bundle name can never be served -
+            // and checked on the FULL tail BEFORE the root split: the shell's absolute
+            // `/assets/index-<hash>.js` references must keep resolving with zero hops and zero root
+            // semantics. No collision is possible: a root name cannot contain a dot (the RootName
+            // grammar), a bundle file name always does.
+            val bundled = staticResourceBytes(decoded.value)
             if (bundled != null) {
                 call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
-                call.respondBytes(bundled, assetContentType(path.name))
+                call.respondBytes(bundled, assetContentType(decoded.name))
                 return@guarded
             }
-            when (val outcome = ctx.read.assetRead(principal, path)) {
+            // The C3 root grammar, mirroring /docs: a non-root first segment is a legacy
+            // main-relative asset path (301, raw tail so encoding survives, query preserved;
+            // pre-gate is leak-free - the root decision is config topology only). A bare known
+            // root names no asset.
+            val (root, path) = splitRootTail(decoded, ctx.roots)
+                ?: return@guarded call.respondRedirectPreservingQuery("/assets/${RootName.MAIN}/$raw", permanent = true)
+            if (path == null) {
+                return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${decoded.value}")
+            }
+            when (val outcome = ctx.read.assetRead(principal, root, path)) {
                 AssetReadOutcome.NotContentAsset, AssetReadOutcome.IndexedButMissing ->
                     call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${path.value}")
                 is AssetReadOutcome.Found -> {

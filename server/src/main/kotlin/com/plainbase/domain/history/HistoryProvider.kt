@@ -64,6 +64,23 @@ interface HistoryProvider {
      * adapter is always ready.
      */
     fun gateCheck()
+
+    /**
+     * The repo's current HEAD as a full object id, or null (no repo, no commits yet, a SHALLOW repo, any
+     * failure). The GIT absence oracle (C4) brackets a pass between two reads of this and diffs the range;
+     * everything about it fails CLOSED, so an inconclusive answer is null, never a licence.
+     */
+    fun currentHead(): String?
+
+    /** Whether [ancestor] is an ancestor of [descendant]. FALSE on ANY failure — an unknown sha, a non-zero exit. */
+    fun isAncestor(ancestor: String, descendant: String): Boolean
+
+    /**
+     * The `.md` tree paths DELETED between commits [from] and [to] (renames NOT resolved — a rename is a `D`
+     * of its old path, refuted later by the witness that read it under its new name), or null on ANY failure
+     * (a diff we could not fully understand is not a smaller diff, and never "no deletions").
+     */
+    fun deletedIn(from: String, to: String): Set<TreePath>?
 }
 
 /** One commit's recorded identity + timestamps + message (read shape; the history layer owns its evolution). */
@@ -78,3 +95,18 @@ data class Commit(
 
 /** A Git identity — a name and an email. The author/committer split is settable per [HistoryProvider.commit]. */
 data class CommitIdentity(val name: String, val email: String)
+
+/**
+ * A history BACKEND operation failed (ADR-0006's fail-loud rule) — the PORT's operational failure type.
+ *
+ * It lives here, in the domain, rather than in the git adapter for one concrete reason: a DOMAIN consumer has
+ * to be able to CATCH it, and `IndexBuilder`'s root-loss classifier is exactly such a consumer. Every history
+ * call is rooted at a work tree, so a work tree that has VANISHED makes the backend exit non-zero and raise
+ * this — it is the carrier a lost root produces out of the history collaborator, the way an `IOException` is
+ * the carrier it produces out of the content store. A classifier that could not see it would let a vanished
+ * root escape unmarked and keep serving its carried content.
+ *
+ * The git adapter's `GitCommandException` is the concrete subtype, so every existing throw site, catch and
+ * `shouldThrow<GitCommandException>` is untouched.
+ */
+open class HistoryCommandException(message: String) : RuntimeException(message)

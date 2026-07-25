@@ -4,6 +4,7 @@
       "id": "01900000-0000-7000-9000-000000000001",
       "operation": "edit",
       "status": "PENDING",
+      "root": "main",
       "target_path": "guides/deploy-guide.md",
       "page_id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
       "base_drifted": false,

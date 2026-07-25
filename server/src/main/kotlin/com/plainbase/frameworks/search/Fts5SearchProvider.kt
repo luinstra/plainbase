@@ -2,6 +2,8 @@ package com.plainbase.frameworks.search
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
@@ -19,12 +21,13 @@ import java.sql.Statement
  *
  *  - [index]/[delete]: one transaction PER PAGE against the active generation — a concurrent query
  *    sees a page's document set entirely old or entirely new, never half (§B4 per-page atomicity).
- *  - [rebuild]: generation swap as ONE write transaction — insert every generation-N+1 row, flip
- *    `active_generation`, GC, commit. Under WAL, readers never observe uncommitted writer rows,
+ *  - [rebuild]: generation swap as ONE write transaction — insert every generation-N+1 row, carry
+ *    the rows no caller has authority to delete ([carryUnretired]), flip `active_generation`, GC,
+ *    commit. Under WAL, readers never observe uncommitted writer rows,
  *    which buys three §B4 guarantees at once: an in-progress rebuild is invisible even to FTS5's
  *    TABLE-WIDE bm25 statistics (concurrent scores cannot drift while a rebuild runs); a rebuild
  *    that dies anywhere rolls back to nothing, so the next rebuild repairs for free (never a
- *    wedge on the (generation, page_id) primary key); and partial/duplicate corpora are
+ *    wedge on the (generation, root, page_id) primary key); and partial/duplicate corpora are
  *    impossible. An in-flight read transaction holding the pre-swap WAL snapshot still sees its
  *    complete generation.
  *  - [search]: hits and total run inside ONE deferred read transaction — the first SELECT
@@ -40,7 +43,7 @@ import java.sql.Statement
  * Scores are negated bm25 (FTS5 reports better-is-more-negative; the wire promises higher=better)
  * with the [WEIGHT_TITLE]…[WEIGHT_OWNER] column weights — tier-2 pinned-but-reviewable values,
  * tuned against the BM25 golden query set, explicitly NOT frozen (§A6). Ordering is fully
- * deterministic via the explicit tiebreak (score DESC, page_id, heading_id — §A4).
+ * deterministic via the explicit tiebreak (score DESC, root, page_id, heading_id — §A4).
  */
 class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
 
@@ -48,27 +51,28 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         pages.forEach { page ->
             connection.transaction {
                 val generation = connection.activeGeneration()
-                connection.deletePage(generation, page.pageId)
+                connection.deletePage(generation, page.root, page.pageId)
                 connection.insertPage(generation, page)
             }
         }
     }
 
-    override fun delete(ids: Collection<PageId>) = db.write { connection ->
-        ids.forEach { id ->
-            connection.transaction { connection.deletePage(connection.activeGeneration(), id) }
+    override fun delete(ids: Collection<RootedPageId>) = db.write { connection ->
+        ids.forEach { rooted ->
+            connection.transaction { connection.deletePage(connection.activeGeneration(), rooted.root, rooted.id) }
         }
     }
 
-    override fun rebuild(pages: Sequence<PageDocuments>) = db.write { connection ->
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) = db.write { connection ->
         val published = connection.transaction {
             val active = connection.activeGeneration()
             // Belt-and-braces: rows outside the active generation can only be debris (a crash
             // mid-commit, or a database written by the historical multi-transaction rebuild).
-            // Clearing them first means the (generation, page_id) key below can never collide.
+            // Clearing them first means the (generation, root, page_id) key below can never collide.
             connection.deleteGenerations("!= ?", active)
             val next = active + 1
             pages.forEach { page -> connection.insertPage(next, page) }
+            if (retired != null) connection.carryUnretired(retired, from = active, to = next)
             connection.prepareStatement("UPDATE search_meta SET value = ? WHERE key = 'active_generation'").use { statement ->
                 statement.setString(1, next.toString())
                 statement.executeUpdate()
@@ -82,14 +86,50 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         logger.debug { "search rebuild published generation $published" }
     }
 
-    override fun indexedState(): Map<PageId, PageSearchState> = db.write { connection ->
-        connection.prepareStatement("SELECT page_id, content_hash, path FROM search_page WHERE generation = ?").use { statement ->
+    /**
+     * Carries every row the proof did NOT retire into the swap's new generation - the absence-authority half of
+     * [rebuild] (C0). A carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so
+     * the `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its
+     * own) follow their document for free and the GC that runs after the flip no longer sees them. It is all
+     * inside the swap's ONE transaction, so a concurrent reader still observes one complete generation, old or new.
+     *
+     * ORDER MATTERS: `section_doc` re-stamps BEFORE `search_page`, because both ask "is this page already in the
+     * new generation?" of `search_page@to` - which, until the second statement runs, holds exactly the pages the
+     * swap inserted from the snapshot. A page whose section WAS carried into the snapshot is therefore skipped
+     * here (the freshly inserted rows are the newer truth) and its stale generation is GC'd as usual.
+     */
+    private fun Connection.carryUnretired(retired: Set<RootedPageId>, from: Long, to: Long) {
+        // An EMPTY set retires nothing, so the predicate simply vanishes and EVERY row rides. That is C0's
+        // steady state, and it is the whole safety floor showing up as one absent SQL clause.
+        val kept = if (retired.isEmpty()) {
+            ""
+        } else {
+            " AND (root, page_id) NOT IN (VALUES ${retired.joinToString(", ") { "(?, ?)" }})"
+        }
+        val notSuperseded = " AND (root, page_id) NOT IN (SELECT root, page_id FROM search_page WHERE generation = ?)"
+        listOf("section_doc", "search_page").forEach { table ->
+            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$kept$notSuperseded").use { statement ->
+                var p = 1
+                statement.setLong(p++, to)
+                statement.setLong(p++, from)
+                retired.forEach {
+                    statement.setString(p++, it.root.value)
+                    statement.setBytes(p++, it.id.toByteArray())
+                }
+                statement.setLong(p, to)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    override fun indexedState(): Map<RootedPageId, PageSearchState> = db.write { connection ->
+        connection.prepareStatement("SELECT page_id, content_hash, root, path FROM search_page WHERE generation = ?").use { statement ->
             statement.setLong(1, connection.activeGeneration())
             statement.executeQuery().use { rows ->
                 buildMap {
                     while (rows.next()) {
-                        val state = PageSearchState(contentHash = rows.getString(2), path = TreePath.require(rows.getString(3)))
-                        put(PageId.fromByteArray(rows.getBytes(1)), state)
+                        val key = RootedPageId(RootName.require(rows.getString(3)), PageId.fromByteArray(rows.getBytes(1)))
+                        put(key, PageSearchState(contentHash = rows.getString(2), path = TreePath.require(rows.getString(4))))
                     }
                 }
             }
@@ -122,14 +162,17 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
               $statusPredicate
         """.trimIndent()
 
+        // `d.root` is part of the hit, not decoration: the row says which root's bytes produced this snippet, and
+        // assembly can only tell a re-awarded page id from an honest one by comparing it to the snapshot (§B7).
         val hits = prepareStatement(
             """
             SELECT d.page_id, d.heading_id,
                    -bm25(${index.table}, ${index.weights}) AS score,
-                   snippet(${index.table}, -1, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip
+                   snippet(${index.table}, -1, char(1), char(2), '…', $SNIPPET_TOKENS) AS snip,
+                   d.root
             $from
             $where
-            ORDER BY score DESC, d.page_id, d.heading_id
+            ORDER BY score DESC, d.root, d.page_id, d.heading_id
             LIMIT ? OFFSET ?
             """.trimIndent(),
         ).use { statement ->
@@ -143,6 +186,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
                         add(
                             SearchHit(
                                 pageId = PageId.fromByteArray(rows.getBytes(1)),
+                                root = RootName.require(rows.getString(5)),
                                 headingId = rows.getString(2),
                                 snippet = snippet,
                                 highlights = highlights,
@@ -182,15 +226,16 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         }
 
     private fun Connection.insertPage(generation: Long, page: PageDocuments) {
-        prepareStatement("INSERT INTO search_page(generation, page_id, content_hash, path) VALUES (?, ?, ?, ?)").use { statement ->
+        prepareStatement("INSERT INTO search_page(generation, page_id, content_hash, root, path) VALUES (?, ?, ?, ?, ?)").use { statement ->
             statement.setLong(1, generation)
             statement.setBytes(2, page.pageId.toByteArray())
             statement.setString(3, page.contentHash)
-            statement.setString(4, page.path.value)
+            statement.setString(4, page.root.value)
+            statement.setString(5, page.path.value)
             statement.executeUpdate()
         }
         val insertDoc = prepareStatement(
-            "INSERT INTO section_doc(generation, page_id, heading_id, status) VALUES (?, ?, ?, ?)",
+            "INSERT INTO section_doc(generation, page_id, root, heading_id, status) VALUES (?, ?, ?, ?, ?)",
             Statement.RETURN_GENERATED_KEYS,
         )
         val insertFts =
@@ -202,8 +247,9 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
                     page.sections.forEach { section ->
                         insertDoc.setLong(1, generation)
                         insertDoc.setBytes(2, page.pageId.toByteArray())
-                        insertDoc.setString(3, section.headingId)
-                        insertDoc.setString(4, section.status)
+                        insertDoc.setString(3, page.root.value)
+                        insertDoc.setString(4, section.headingId)
+                        insertDoc.setString(5, section.status)
                         insertDoc.executeUpdate()
                         val docId = insertDoc.generatedKeys.use { keys ->
                             keys.next()
@@ -229,18 +275,19 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         }
     }
 
-    private fun Connection.deletePage(generation: Long, id: PageId) {
-        val docFilter = "(SELECT doc_id FROM section_doc WHERE generation = ? AND page_id = ?)"
+    private fun Connection.deletePage(generation: Long, root: RootName, id: PageId) {
+        val docFilter = "(SELECT doc_id FROM section_doc WHERE generation = ? AND root = ? AND page_id = ?)"
         val bytes = id.toByteArray()
         listOf(
             "DELETE FROM section_fts WHERE rowid IN $docFilter",
             "DELETE FROM section_trigram WHERE rowid IN $docFilter",
-            "DELETE FROM section_doc WHERE generation = ? AND page_id = ?",
-            "DELETE FROM search_page WHERE generation = ? AND page_id = ?",
+            "DELETE FROM section_doc WHERE generation = ? AND root = ? AND page_id = ?",
+            "DELETE FROM search_page WHERE generation = ? AND root = ? AND page_id = ?",
         ).forEach { sql ->
             prepareStatement(sql).use { statement ->
                 statement.setLong(1, generation)
-                statement.setBytes(2, bytes)
+                statement.setString(2, root.value)
+                statement.setBytes(3, bytes)
                 statement.executeUpdate()
             }
         }

@@ -23,6 +23,8 @@ val searchModule = module {
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
     single { SearchIndexer(get(), get()) }
+    // The listener seam hands each listener its delete authority as rooted ids, and SearchIndexer.sync now keys
+    // by (root, id) too, so the rooted retired set flows straight through.
     single<IndexBuilder.PublicationListener>(named("searchSync")) {
         val indexer = get<SearchIndexer>()
         IndexBuilder.PublicationListener(indexer::sync)

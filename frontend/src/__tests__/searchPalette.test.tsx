@@ -15,22 +15,29 @@ import { createAppRouter } from "../router";
 const LOSER_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99";
 
 const tree: TreeResponse = {
-  root: {
-    type: "folder",
-    name: "",
-    title: null,
-    description: null,
-    path: "",
-    url: "/docs",
-    page_count: 4,
-    children: [
-      { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/guides/deploy-guide", status: "active", updated: null },
-      { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/guides/getting-started", status: "active", updated: null },
-      { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/guides/developer-setup", status: "active", updated: null },
-      // A collision loser: url null → navigates via /p/{id}.
-      { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
-    ],
-  },
+  roots: [
+    {
+      root: "main",
+      available: true,
+      editable: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/main",
+        page_count: 4,
+        children: [
+          { type: "page", id: "p-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/main/guides/deploy-guide", status: "active", updated: null },
+          { type: "page", id: "p-getting", title: "Getting Started", slug: "getting-started", path: "guides/getting-started.md", url: "/docs/main/guides/getting-started", status: "active", updated: null },
+          { type: "page", id: "p-dev", title: "Developer Setup", slug: "developer-setup", path: "guides/developer-setup.md", url: "/docs/main/guides/developer-setup", status: "active", updated: null },
+          // A collision loser: url null → navigates via its ROOTED /p/{root}/{id}.
+          { type: "page", id: LOSER_ID, title: "Shadowed Page", slug: "shadowed", path: "notes/shadowed.md", url: null, status: "active", updated: null },
+        ],
+      },
+    },
+  ],
 };
 
 function searchResponse(query: string): SearchResponse {
@@ -43,8 +50,9 @@ function searchResponse(query: string): SearchResponse {
     hits: [
       {
         page_id: "p-deploy",
+        root: "main",
         path: "guides/deploy-guide.md",
-        url: "/docs/guides/deploy-guide",
+        url: "/docs/main/guides/deploy-guide",
         title: "Deploy Guide",
         heading_id: "rollback",
         heading_text: "Rollback",
@@ -58,9 +66,46 @@ function searchResponse(query: string): SearchResponse {
   };
 }
 
-function setup(initialPath = "/docs") {
+/**
+ * Two roots each holding the SAME relative path with the SAME title - the ambiguity a root-blind palette
+ * cannot survive: `path` is root-relative, so "Deploy Guide · guides/deploy-guide.md" describes both.
+ */
+const twoRootTree: TreeResponse = {
+  roots: [
+    tree.roots[0],
+    {
+      root: "handbook",
+      available: true,
+      editable: true,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/docs/handbook",
+        page_count: 1,
+        children: [
+          { type: "page", id: "h-deploy", title: "Deploy Guide", slug: "deploy-guide", path: "guides/deploy-guide.md", url: "/docs/handbook/guides/deploy-guide", status: "active", updated: null },
+        ],
+      },
+    },
+  ],
+};
+
+/** The same hit shape, one per root - what a corpus-wide query routinely returns once there are two roots. */
+function crossRootSearchResponse(query: string): SearchResponse {
+  const [hit] = searchResponse(query).hits;
+  return {
+    ...searchResponse(query),
+    total: 2,
+    hits: [hit, { ...hit, page_id: "h-deploy", root: "handbook", url: "/docs/handbook/guides/deploy-guide" }],
+  };
+}
+
+function setup(initialPath = "/docs", treeData: TreeResponse = tree) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  queryClient.setQueryData(treeQuery.queryKey, tree);
+  queryClient.setQueryData(treeQuery.queryKey, treeData);
   // The Shell gates its "Review" nav on a session read — prime it (unauthenticated) so it serves from cache
   // and the no-fetch assertions stay honest.
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
@@ -247,7 +292,7 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("Enter on a quick-switcher row navigates via pageHref; a loser navigates via /p/{id}", async () => {
+  it("Enter on a quick-switcher row navigates via pageHref; a loser navigates via /p/{root}/{id}", async () => {
     const { history } = setup();
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
@@ -255,16 +300,16 @@ describe("two-stage search palette", () => {
     await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull());
     fireEvent.keyDown(getInput(), { key: "ArrowDown" }); // select the top fuzzy match (row 0)
     fireEvent.keyDown(getInput(), { key: "Enter" });
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/guides/deploy-guide"));
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/guides/deploy-guide"));
 
-    // Loser: url null → /p/{id}.
+    // Loser: url null → the rooted permalink, built from the entry's own root.
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
     fireEvent.change(getInput(), { target: { value: "shadowed" } });
     await waitFor(() => expect(document.querySelector('[data-pb-search-item="jump"]')).not.toBeNull());
     fireEvent.keyDown(getInput(), { key: "ArrowDown" });
     fireEvent.keyDown(getInput(), { key: "Enter" });
-    await waitFor(() => expect(history.location.pathname).toBe(`/p/${LOSER_ID}`));
+    await waitFor(() => expect(history.location.pathname).toBe(`/p/main/${LOSER_ID}`));
   });
 
   it("Stage 2 Enter on a hit pushes hit.url + #heading_id", async () => {
@@ -280,7 +325,49 @@ describe("two-stage search palette", () => {
       fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
       fireEvent.keyDown(getInput(), { key: "Enter" });
-      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/guides/deploy-guide#rollback"));
+      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe("/docs/main/guides/deploy-guide#rollback"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("Stage 2 Enter on a hit with NO url pushes the hit's OWN root's permalink + #heading_id", async () => {
+    // The `??` branch of navigateToHit, uncovered until now: every other fixture hit carries a url.
+    // The hit's root is `extra`, so a root-blind fallback is visible as a missing `/extra` segment
+    // rather than as a wrong-looking id.
+    const loserHit: SearchResponse = {
+      query: "rollback",
+      engine: "embedded",
+      limit: 20,
+      offset: 0,
+      total: 1,
+      hits: [
+        {
+          page_id: LOSER_ID,
+          root: "extra",
+          path: "notes/rollback.md",
+          url: null,
+          title: "Rollback Notes",
+          heading_id: "rollback",
+          heading_text: "Rollback",
+          heading_path: ["Rollback Notes", "Rollback"],
+          snippet: "…how to rollback…",
+          highlights: [{ start: 7, end: 15 }],
+          score: 4.2,
+          citation: { page_id: LOSER_ID, heading_id: "rollback", path: "notes/rollback.md", content_hash: "h", commit: null, uri: `plainbase://extra/${LOSER_ID}#rollback@h` },
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(loserHit), { status: 200, headers: { "content-type": "application/json" } })));
+    try {
+      const { history } = setup();
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      fireEvent.keyDown(getInput(), { key: "Enter" });
+      await waitFor(() => expect(history.location.pathname + history.location.hash).toBe(`/p/extra/${LOSER_ID}#rollback`));
     } finally {
       vi.unstubAllGlobals();
     }
@@ -448,5 +535,68 @@ describe("two-stage search palette", () => {
     const active = document.querySelectorAll("[data-pb-search-active]");
     expect(active).toHaveLength(1);
     expect(active[0].id).toBe("pb-search-opt-jump-0");
+  });
+});
+
+/**
+ * A page is named by its ROOT-RELATIVE path on both search surfaces, so with two roots the same file
+ * renders the same row twice - same title, same hint - and the reader picks one at random. Navigation
+ * still lands correctly (the url carries the root), which is what makes it insidious: they only learn
+ * they opened the wrong tree after they read it. Both assertions are on the RENDERED rows, so carrying
+ * the root in the data without ever showing it still fails.
+ */
+describe("the palette with more than one root", () => {
+  it("makes two roots' same-titled, same-path quick-switcher rows distinguishable", async () => {
+    setup("/docs", twoRootTree);
+    await openPalette();
+    await waitFor(() => expect(getInput()).not.toBeNull());
+    fireEvent.change(getInput(), { target: { value: "deploy guide" } });
+    await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="jump"]')).toHaveLength(2));
+
+    const rows = [...document.querySelectorAll('[data-pb-search-item="jump"]')];
+    // Both rows are the same page, in name and in path...
+    expect(rows.map((row) => row.querySelector("[data-pb-root-badge]")?.getAttribute("data-pb-root-badge"))).toEqual(["main", "handbook"]);
+    // ...and the ONE thing that tells them apart is on screen, not just in the props.
+    expect(rows.map((row) => row.textContent)).toEqual(["Deploy Guidemainguides/deploy-guide.md", "Deploy Guidehandbookguides/deploy-guide.md"]);
+  });
+
+  it("badges each full-text hit with the root it came from", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => new Response(JSON.stringify(crossRootSearchResponse(new URL(url, "http://x").searchParams.get("q") ?? "")), { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    try {
+      setup("/docs", twoRootTree);
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelectorAll('[data-pb-search-item="hit"]')).toHaveLength(2));
+
+      const badges = [...document.querySelectorAll('[data-pb-search-item="hit"] [data-pb-root-badge]')];
+      expect(badges.map((badge) => badge.textContent)).toEqual(["main", "handbook"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("badges nothing with a single root (no gratuitous 'main' on every row)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => new Response(JSON.stringify(searchResponse(new URL(url, "http://x").searchParams.get("q") ?? "")), { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    try {
+      setup(); // the one-root fixture — every legacy install
+      await openPalette();
+      await waitFor(() => expect(getInput()).not.toBeNull());
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 1
+
+      fireEvent.change(getInput(), { target: { value: "rollback" } });
+      fireEvent.mouseDown(document.querySelector("[data-pb-search-bridge]")!);
+      await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
+      expect(document.querySelectorAll("[data-pb-root-badge]")).toHaveLength(0); // Stage 2
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

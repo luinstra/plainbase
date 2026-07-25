@@ -18,9 +18,10 @@ junit = "5.10.1"
 # JUnit Platform trails Jupiter by one major (Jupiter 5.10.x ⇄ Platform 1.10.x) — bump together.
 junit-platform = "1.10.1"
 node-gradle = "7.1.0"
-spotless = "8.6.0"
+kotlinter = "5.6.0"
 ktlint = "1.8.0"
 kover = "0.9.9"
+detekt = "2.0.0-alpha.5"
 kotest = "5.9.1"
 mockk = "1.14.3"
 snakeyaml = "2.4"
@@ -120,7 +121,8 @@ snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
-spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+kotlinter = { id = "org.jmailen.kotlinter", version.ref = "kotlinter" }
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-buildtools" }
 node-gradle = { id = "com.github.node-gradle.node", version.ref = "node-gradle" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+detekt = { id = "dev.detekt", version.ref = "detekt" }

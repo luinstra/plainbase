@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
@@ -16,6 +17,7 @@ import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.WritePipeline
+import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -84,8 +86,10 @@ fun withRestServices(
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
                 val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
                 val builder = IndexBuilder(
-                    contentStore = store,
+                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
@@ -94,8 +98,13 @@ fun withRestServices(
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = CitationFactory(),
-                    history = NoOpHistoryProvider,
-                    listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+                    rootRank = rootRegistry::rank,
+                    registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            searchIndexer.sync(snap, retired)
+                        },
+                    ),
                     searchIndexer = searchIndexer,
                 )
                 builder.rebuild()
@@ -185,31 +194,40 @@ fun withRestServices(
                         database,
                     ).upsert("proxy", subject, com.plainbase.domain.repository.Role.ADMIN, Clock.System.now())
                 }
-                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, contentStore = store)
+                val stores: (com.plainbase.domain.root.RootName) -> com.plainbase.domain.content.ContentStore = { store }
+                val resolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry)
+                val absence = com.plainbase.domain.service.AbsenceClassifier(idMap)
+                val proposalBaseReader = IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
                 val proposalService = com.plainbase.domain.service.ProposalService(
                     repository = SqlDelightProposalRepository(database),
                     citations = CitationFactory(),
                     baseReader = proposalBaseReader,
                     proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                     clock = Clock.System,
+                    rootStatus = { root -> resolver.statusOf(root, availability.current()) },
                 )
                 val services = buildRouteContext(
                     policy = policy,
                     indexBuilder = builder,
                     pageService = PageService(builder, registry, CitationFactory()),
-                    searchService = SearchService(provider = searchProvider, indexBuilder = builder),
+                    searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability),
                     aliasRegistry = registry,
-                    contentStore = store,
                     writePipeline = WritePipeline(
-                        contentStore = store,
+                        stores = stores,
                         indexBuilder = builder,
                         citations = writeCitations,
                         frontmatterParser = FrontmatterReader(),
                         dirtyPages = SqlDelightDirtyPageRepository(database),
                         idMap = idMap,
                         aliasRegistry = registry,
+                        availability = availability,
                     ),
-                    history = NoOpHistoryProvider,
+                    registry = rootRegistry,
+                    availability = availability,
+                    resolver = resolver,
+                    absence = absence,
+                    stores = stores,
+                    histories = { NoOpHistoryProvider },
                     idProvider = UuidV7IdProvider(),
                     proposalService = proposalService,
                     proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(

@@ -1,12 +1,15 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndexView
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.PageCheckpointRepository
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -41,27 +44,27 @@ class IndexBuilderReindexTargetedTest : FunSpec({
         repeat(n) { i -> writePage(root, "p%03d.md".format(i), "---\ntitle: Page $i\n---\n\n# Page $i\n\nbody $i.\n") }
     }
 
-    test("reindex(pageId) re-renders exactly one page and shares every other page instance") {
+    test("reindex(target) re-renders exactly one page and shares every other page instance") {
         withTempTree({ seedCorpus(it, 5) }) { root ->
             ReindexHarness(root).use { h ->
                 h.builder.rebuild()
                 val before = h.builder.current
                 val targetId = before.pages.first().id
-                val targetPath = before.byId.getValue(targetId).path.value
+                val targetPath = before.pageAt(RootedPageId(RootName.MAIN, targetId))!!.path.value
                 h.renders.clear()
 
                 // Change that page's bytes on disk so reindex re-reads.
                 val edited = "---\ntitle: Page 0\n---\n\n# Page 0\n\nedited.\n"
                 Files.write(root.resolve(targetPath), edited.toByteArray())
 
-                val after = h.builder.reindex(targetId)
+                val after = h.builder.reindex(mainPath(targetPath))
 
                 h.renders.keys shouldBe setOf(targetPath)
                 h.renders.values.all { it == 1 } shouldBe true
-                after.byId.getValue(targetId).markdown shouldBe edited
+                after.pageAt(RootedPageId(RootName.MAIN, targetId))!!.markdown shouldBe edited
                 // Every other page is the SAME instance — untouched.
                 for (page in before.pages) {
-                    if (page.id != targetId) after.byId.getValue(page.id) shouldBeSameInstanceAs page
+                    if (page.id != targetId) after.pageAt(page.rooted)!! shouldBeSameInstanceAs page
                 }
             }
         }
@@ -73,13 +76,13 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                 ReindexHarness(root).use { h ->
                     h.builder.rebuild()
                     val targetId = h.builder.current.pages.first().id
-                    val targetPath = h.builder.current.byId.getValue(targetId).path.value
+                    val targetPath = h.builder.current.pageAt(RootedPageId(RootName.MAIN, targetId))!!.path.value
                     h.renders.clear()
                     h.search.reset()
                     h.checkpoint.replaceCalls = 0
                     Files.write(root.resolve(targetPath), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 
-                    h.builder.reindex(targetId)
+                    h.builder.reindex(mainPath(targetPath))
 
                     // render count = 1, regardless of N.
                     h.renders.values.sum() shouldBe 1
@@ -109,17 +112,21 @@ class IndexBuilderReindexTargetedTest : FunSpec({
         withTempTree({ seedCorpus(it, 2) }) { root ->
             ReindexHarness(root).use { h ->
                 h.builder.rebuild()
-                shouldThrow<IllegalStateException> { h.builder.reindex(PageId.require("00000000-0000-0000-0000-000000000000")) }
+                shouldThrow<IllegalStateException> { h.builder.reindex(mainPath("gone.md")) }
             }
         }
     }
 })
+
+/** The reindex target for a path in `main` — the write location, which is what [IndexBuilder.reindex] addresses. */
+private fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
 
 /** A reindex harness with counting collaborators — built directly (not via IndexHarness) for spy control. */
 private class ReindexHarness(root: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
 
     val renders = ConcurrentHashMap<String, Int>()
     val search = CountingSearchProvider()
@@ -136,7 +143,7 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     }
 
     val builder = IndexBuilder(
-        contentStore = store,
+        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = countingRenderer,
         identity = PageIdentityService(UuidV7IdProvider()),
@@ -145,7 +152,8 @@ private class ReindexHarness(root: Path) : AutoCloseable {
         aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
         checkpoint = checkpoint,
         citations = CitationFactory(),
-        history = NoOpHistoryProvider,
+        rootRank = rootRegistry::rank,
+        registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
         searchIndexer = SearchIndexer(search, SectionSplitter()),
     )
@@ -165,14 +173,14 @@ private class CountingSearchProvider : SearchProvider {
         lastIndexSize = pages.size
     }
 
-    override fun delete(ids: Collection<PageId>) = Unit
+    override fun delete(ids: Collection<RootedPageId>) = Unit
     override fun search(query: SearchQuery): SearchResults = SearchResults(hits = emptyList(), total = 0L)
-    override fun rebuild(pages: Sequence<PageDocuments>) {
+    override fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>?) {
         rebuildCalls += 1
         pages.count() // drain
     }
 
-    override fun indexedState(): Map<PageId, PageSearchState> {
+    override fun indexedState(): Map<RootedPageId, PageSearchState> {
         indexedStateCalls += 1
         return emptyMap()
     }
@@ -189,7 +197,7 @@ private class CountingSearchProvider : SearchProvider {
 private class CountingCheckpoint(private val delegate: PageCheckpointRepository) : PageCheckpointRepository {
     var replaceCalls = 0
     override fun load() = delegate.load()
-    override fun replace(urlPaths: Map<PageId, TreePath?>) {
+    override fun replace(urlPaths: Map<RootedPageId, TreePath?>) {
         replaceCalls += 1
         delegate.replace(urlPaths)
     }

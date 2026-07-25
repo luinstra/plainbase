@@ -2,8 +2,11 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -26,6 +29,8 @@ import kotlin.concurrent.thread
  * agrees with the saved bytes) and never calls back into [WritePipeline] (no such edge exists).
  */
 class WritePipelineLockOrderingTest : FunSpec({
+
+    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
 
     test("a watcher rebuild racing a save cannot deadlock, and the save re-syncs search") {
         val dir = Files.createTempDirectory("pb-write-lock")
@@ -54,12 +59,16 @@ class WritePipelineLockOrderingTest : FunSpec({
                 IndexHarness(
                     dir,
                     contentStore = gating,
-                    listeners = listOf(IndexBuilder.PublicationListener(indexer::sync)),
+                    listeners = listOf(
+                        IndexBuilder.PublicationListener { snap, retired ->
+                            indexer.sync(snap, retired)
+                        },
+                    ),
                     searchIndexer = indexer,
                 ).use { harness ->
                     val builder = harness.builder
                     builder.rebuild() // initial publish + sync
-                    val page = builder.current.byPath.getValue(com.plainbase.domain.content.TreePath.require("doc.md"))
+                    val page = builder.current.byPath.getValue(mainPath("doc.md"))
                     val pipeline = harness.writePipeline()
                     val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nfreshterm only now.\n".toByteArray()
 
@@ -70,7 +79,8 @@ class WritePipelineLockOrderingTest : FunSpec({
                     // Fire the save; its reindex must BLOCK at the @Synchronized IndexBuilder monitor.
                     var outcome: WriteOutcome? = null
                     val saver = thread(name = "save") {
-                        outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                        outcome =
+                            pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
                     }
                     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
                     while (saver.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)

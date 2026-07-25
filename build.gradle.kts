@@ -1,9 +1,12 @@
+import org.jmailen.gradle.kotlinter.tasks.FormatTask
+import org.jmailen.gradle.kotlinter.tasks.LintTask
+
 // Root build — module configuration lives in :server and :frontend and the
 // version catalog (gradle/libs.versions.toml). The root only carries
 // project-wide formatting for the root-level Gradle scripts.
 
 plugins {
-    alias(libs.plugins.spotless)
+    alias(libs.plugins.kotlinter)
     alias(libs.plugins.kover)
 }
 
@@ -17,9 +20,24 @@ dependencies {
     kover(project(":server"))
 }
 
-spotless {
-    kotlinGradle {
-        target("*.gradle.kts")
-        ktlint(libs.versions.ktlint.get())
+kotlinter {
+    ktlintVersion = libs.versions.ktlint.get()
+}
+
+val kotlinFormattingSources =
+    fileTree(rootDir) {
+        include("*.gradle.kts")
+        include("server/*.gradle.kts")
+        include("server/src/**/*.kt")
+        exclude("**/build/**")
     }
+
+tasks.register<LintTask>("lintKotlin") {
+    source(kotlinFormattingSources)
+    reports.set(mapOf("plain" to layout.buildDirectory.file("reports/kotlinter/lint.txt").get().asFile))
+}
+
+tasks.register<FormatTask>("formatKotlin") {
+    source(kotlinFormattingSources)
+    report.set(layout.buildDirectory.file("reports/kotlinter/format.txt"))
 }

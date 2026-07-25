@@ -44,8 +44,12 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
             false
         }
 
-    private companion object {
+    companion object {
         private val logger = KotlinLogging.logger {}
-        const val SHUTDOWN_GRACE_SECONDS = 30L
+        private const val SHUTDOWN_GRACE_SECONDS = 30L
+
+        /** What [close] can honestly take: the grace await, then the post-interrupt one - the bound the
+         *  graceful-shutdown budget counts for the step that closes a scheduler (see `serve()`). */
+        const val CLOSE_BOUND_MILLIS: Long = 2 * SHUTDOWN_GRACE_SECONDS * 1_000
     }
 }

@@ -13,7 +13,7 @@ import { expect, test } from "@playwright/test";
 // A page NO other smoke spec mutates (edit.spec.ts owns deploy-guide; smoke.spec.ts only navigates to
 // getting-started). An isolated page keeps this spec's baseline-empty → grows-after-save flow clean,
 // regardless of test ordering on the shared git-on server.
-const PATH = "/docs/guides/getting-started";
+const PATH = "/docs/main/guides/getting-started";
 
 test("editing a page grows its history without a server restart", async ({ page }) => {
   const marker = `e2e history ${Date.now()}`;

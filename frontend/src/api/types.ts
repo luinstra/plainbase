@@ -15,7 +15,7 @@ export interface TreeFolder {
   /** The `_folder.yaml` plaintext summary on the landing card — null when absent/blank (provisional, Chunk-3). */
   description: string | null;
   path: string;
-  /** The folder's `/docs` URL prefix (percent-encoded, ready to use) — the landing-view address (ADR-0003); null for a collision-loser subtree. */
+  /** The folder's `/docs/{root}` URL prefix (percent-encoded, ready to use) - the landing-view address (ADR-0003); null for a collision-loser subtree. */
   url: string | null;
   /** Count of DIRECT child pages only (not recursive) — drives the `path/ · N pages` meta (provisional, Chunk-3). */
   page_count: number;
@@ -29,7 +29,7 @@ export interface TreePage {
   slug: string;
   /** Content-relative file path, e.g. "guides/deploy-guide.md". */
   path: string;
-  /** Canonical `/docs/...` URL (percent-encoded, ready to use) — null for a collision loser. */
+  /** Canonical `/docs/{root}/...` URL (percent-encoded, ready to use) - null for a collision loser. */
   url: string | null;
   status: string;
   /** Editorial frontmatter date, server-validated to `YYYY-MM-DD` — null when absent/invalid (provisional, Chunk-3). */
@@ -38,8 +38,30 @@ export interface TreePage {
 
 export type TreeNode = TreeFolder | TreePage;
 
+/** One root's tree entry (multi-root C3): the root-name slug + its synthetic root folder node. */
+export interface RootTree {
+  root: string;
+  /**
+   * Whether the root is currently SERVING. `false` means it is configured but its content is not reachable
+   * (an unmounted disk, a failed watcher): `tree` is EMPTY - never a stale listing - and every read of it
+   * answers 503. It is listed rather than omitted so the client can tell "this root is down" from "this root
+   * does not exist", and so the client's known-root set matches the server's exactly.
+   */
+  available: boolean;
+  /**
+   * The root's CONFIGURED write disposition (`roots.<name>.editable`). `false` means every page write into this
+   * root answers 403 `root_not_editable`, in EVERY auth mode - so the Edit/New affordances are not offered for it.
+   * Topology, not authorization: `true` says the ROOT accepts writes, never that THIS reader may make one (the
+   * server's 403 remains the authority, and the editor's buffer-preserving 403 path remains the backstop).
+   * `plainbase root add` defaults an extra root to `false`, so a read-only root is the common case, not the odd one.
+   */
+  editable: boolean;
+  tree: TreeFolder;
+}
+
+/** One entry per CONFIGURED root, in the server's registry (D7) order. */
 export interface TreeResponse {
-  root: TreeFolder;
+  roots: RootTree[];
 }
 
 export interface CitationDto {
@@ -53,6 +75,8 @@ export interface CitationDto {
 
 export interface PageResponse {
   id: string;
+  /** The page's root-name slug (additive, multi-root C3). */
+  root: string;
   path: string;
   slug: string;
   url: string | null;
@@ -73,6 +97,8 @@ export interface HeadingDto {
 
 export interface PageHtmlResponse {
   id: string;
+  /** The page's root-name slug (additive, multi-root C3) - scopes the breadcrumb folder lookup. */
+  root: string;
   path: string;
   slug: string;
   url: string | null;
@@ -84,8 +110,20 @@ export interface PageHtmlResponse {
   citation: CitationDto;
 }
 
+/**
+ * One candidate root of a 409 `ambiguous_page_id` (a bare id held by more than one root). `url` is the
+ * caller's OWN endpoint with the `?root=` pin appended - an API retry target, never a place to send a human
+ * (the `/p/` surfaces build the reader's link from `root` + the id, via `permalinkOf`). It is null on the
+ * body-pin surface, whose remedy is a request field rather than a query string.
+ */
+export interface AmbiguousCandidate {
+  root: string;
+  url: string | null;
+}
+
 export interface ErrorEnvelope {
-  error: { code: string; message: string };
+  /** `candidates` is present only on the 409 ambiguity envelope; every other error carries code+message alone. */
+  error: { code: string; message: string; candidates?: AmbiguousCandidate[] };
 }
 
 /**
@@ -96,6 +134,8 @@ export interface ErrorEnvelope {
  */
 export interface SearchHit {
   page_id: string;
+  /** The hit's root-name slug (additive, multi-root C3). */
+  root: string;
   path: string;
   url: string | null;
   title: string;
@@ -184,6 +224,13 @@ export interface PageExistsEnvelope {
 
 /** `POST /api/v1/pages` request — the server mints the id and derives the path/slug; the client never does. */
 export interface CreatePageRequest {
+  /**
+   * WHICH document root the page lands in (multi-root C4) — REQUIRED, with no server-side default. It decides
+   * whose disk the bytes land on and whose editable/glob policy authorizes the write, so omitting it is a 400
+   * `invalid_create_request`, never a quiet relocation into `main`. Every call site threads the root it is
+   * creating in. An unknown name is a 400 `invalid_root`.
+   */
+  root: string;
   folder?: string;
   title: string;
   slug?: string | null;
@@ -336,6 +383,9 @@ export interface ChangeSummary {
   id: string;
   operation: ProposalOperation;
   status: ProposalStatus;
+  /** The root `target_path` lives under. A reviewer needs it to read a `base_drifted` row correctly: a proposal
+   *  against a root that is not serving reads as drifted, and this is how they see why. */
+  root: string;
   target_path: string;
   page_id: string | null;
   base_drifted: boolean;
@@ -354,6 +404,8 @@ export interface ChangeDetail {
   id: string;
   operation: ProposalOperation;
   status: ProposalStatus;
+  /** The root `target_path` lives under (see `ChangeSummary.root`). */
+  root: string;
   target_path: string;
   page_id: string | null;
   base_hash: string | null;

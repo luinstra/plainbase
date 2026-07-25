@@ -7,8 +7,9 @@
   "hits": [
     {
       "page_id": "0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d",
+      "root": "main",
       "path": "infra/incident-runbook.md",
-      "url": "/docs/infra/incident-runbook",
+      "url": "/docs/main/infra/incident-runbook",
       "title": "Incident Runbook",
       "heading_id": "postmortems",
       "heading_text": "Postmortems",
@@ -22,7 +23,7 @@
         "path": "infra/incident-runbook.md",
         "content_hash": "{{content_hash}}",
         "commit": null,
-        "uri": "plainbase://0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d#postmortems@{{content_hash}}"
+        "uri": "plainbase://main/0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d#postmortems@{{content_hash}}"
       }
     }
   ]

@@ -4,8 +4,12 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.FileDiff
+import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.deleteRecursively
@@ -51,6 +55,19 @@ class GitCliHistoryProvider(
     // (default false) keeps the full access probe — a Docker uid-mismatch/dubious-ownership `.git` there
     // has no self-heal path and must still fail loud at the gate, byte-identical to pre-C5 behavior.
     private val objectMode: Boolean = false,
+    /**
+     * The operator EXPLICITLY claimed this root's existing repository (`history = native`, ADR-0011 D4) - so
+     * Plainbase is a GUEST in a repo it does not own, and two things follow, which is why this is ONE flag and not
+     * two that could drift apart:
+     *  - it NEVER `git init`s. A missing `.git` is an operator error to REPORT, not a repo to mint. That binds the
+     *    racy commit-time belt call too, not just [prepare] - the belt is precisely where an init would slip through.
+     *  - [gateCheck] runs the STRICT four-check guard ([nativeRootGuardFailure]) and refuses the boot loudly on a
+     *    linked worktree, a submodule, or a `.git` that does not root exactly here.
+     *
+     * False for main's grandfathered AUTO detection (which may init, and deliberately tolerates a `.git`-as-a-file
+     * worktree) and for the object-mode mirror, which Plainbase owns outright.
+     */
+    private val claimedRepo: Boolean = false,
 ) : HistoryProvider {
 
     override val enabled: Boolean = true
@@ -283,13 +300,68 @@ class GitCliHistoryProvider(
     }
 
     /**
+     * The GIT absence oracle's HEAD read (C4), fail-closed at every step. A SHALLOW repo is disabled OUTRIGHT
+     * (plan #19): its history is truncated, so a `checkpoint..HEAD` range could miss the very commit that
+     * deleted a page. The gate is STRICT - proceed ONLY when the shallow probe ran ok AND printed exactly
+     * `false`; `true`, a failed probe, or garbage all return null, because "I do not know whether this repo is
+     * shallow" is never a licence to trust a range from it. Then `rev-parse HEAD`; a non-ok exit or no sha
+     * (unborn HEAD, empty repo) is null. Both reads carry `-c core.useReplaceRefs=false` so a hostile replace
+     * ref cannot rewrite what HEAD resolves to.
+     */
+    override fun currentHead(): String? {
+        val shallow = exec.run(NO_REPLACE_REFS + listOf("rev-parse", "--is-shallow-repository"))
+        if (!shallow.ok || shallow.stdoutText.trim() != "false") return null
+        val head = exec.run(NO_REPLACE_REFS + listOf("rev-parse", "HEAD"))
+        return if (head.ok) GitExecutor.parseSha(head.stdout) else null
+    }
+
+    /**
+     * Whether [ancestor] is an ancestor of [descendant], via `merge-base --is-ancestor` - exit 0 is the ONLY
+     * true. Exit 1 is "not an ancestor"; exit 128 (unknown object) and every other non-zero (a missing binary
+     * comes back exit -1 from [GitExecutor]) collapse to false, so every failure is "no". A shallow repo never
+     * reaches here - [currentHead] already nulled it. `-c core.useReplaceRefs=false` seals the ancestry check
+     * against a replace ref that grafts an unrelated parent.
+     */
+    override fun isAncestor(ancestor: String, descendant: String): Boolean =
+        exec.run(NO_REPLACE_REFS + listOf("merge-base", "--is-ancestor", ancestor, descendant)).ok
+
+    /**
+     * The `.md` tree paths DELETED across [from]..[to], or null on ANY failure. `--no-renames` is DELIBERATE:
+     * a rename surfaces as `D old` + `A new`, and the `D` becomes a proof candidate that the pass's own witness
+     * (which read the file under its new name) refutes in the apply transaction - rename safety comes from the
+     * refutation, never from git's similarity-scored rename heuristic. `--no-ext-diff --no-textconv` disarm a
+     * hostile repo-local `diff.external`/`textconv` (the RCE class caught on the `/diff` route); `--relative`
+     * (with [GitExecutor]'s `-C workTree`) scopes and filters paths to the content root in one flag;
+     * `-c core.useReplaceRefs=false` seals the range against a replace ref. The page filter lives HERE (the
+     * §3.4 mint re-checks defensively); any record the pure parser cannot frame or convert nulls the whole diff.
+     */
+    override fun deletedIn(from: String, to: String): Set<TreePath>? {
+        val result = exec.run(
+            NO_REPLACE_REFS + listOf(
+                "diff", "--name-status", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--relative", from, to,
+            ),
+        )
+        if (!result.ok) return null
+        val records = parseNameStatusRecords(result.stdout) ?: return null
+        return records.filter { it.status == "D" && it.path.name.endsWith(".md") }.mapTo(mutableSetOf()) { it.path }
+    }
+
+    /**
      * Readies the content-root repo at startup: a NESTED `git init` at [workTree] when it has no
      * own `.git`, never advancing an ancestor checkout (the [ensureRepo] `Files.exists(workTree/.git)`
      * guard). Called AFTER the data-dir lock and BEFORE the first rebuild's `lastCommits` read, so
      * a forced-on content root never aborts serve (plain dir → operational failure) nor reads the wrong
      * ancestor repo. Idempotent — [commit] still calls [ensureRepo] too (harmless belt-and-suspenders).
      */
-    override fun prepare() = ensureRepo()
+    override fun prepare() {
+        // A CLAIMED root's repo already exists (gateCheck refused the boot otherwise), and creating one is exactly
+        // what this provider may not do - so prepare readies the git-home and nothing else.
+        if (claimedRepo) {
+            Files.createDirectories(gitHome)
+            return
+        }
+        ensureRepo()
+    }
 
     override fun gateCheck() {
         // Cluster-1 (C5): the `--version` probe never touches `-C workTree`, so this passes even when
@@ -304,20 +376,22 @@ class GitCliHistoryProvider(
         // The read path (`log`/`lastCommits`) passes `--diff-merges=first-parent`, which git only learned in
         // 2.31.0; on an older-but-present git every read exits non-zero and Git-mode startup (`rebuild` →
         // `lastCommits`) aborts serve AFTER this gate passes. Validate the version floor here so it fails LOUD
-        // and actionable at the gate instead. An UNPARSEABLE `git version` line passes with a logged warning
-        // rather than false-failing a perfectly modern git whose banner we did not anticipate.
-        val parsed = parseGitVersion(version.stdoutText)
-        if (parsed == null) {
-            logger.warn { "could not parse git version from '${version.stdoutText.trim()}'; skipping the version-floor check" }
-        } else {
-            val (major, minor) = parsed
-            if (major < MIN_GIT_MAJOR || (major == MIN_GIT_MAJOR && minor < MIN_GIT_MINOR)) {
-                throw GitUnavailableException(
-                    "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
-                        "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
-                        "to run without history.",
-                )
-            }
+        // and actionable at the gate instead - INCLUDING when the banner does not parse. A gate that cannot
+        // establish the property it exists to establish must refuse, not shrug: an unrecognized banner is most
+        // likely a WRAPPER script standing where git should be, and passing it just moves the failure to the
+        // first rebuild, where it surfaces as a doomed command's exit code instead of an actionable message.
+        val (major, minor) = parseGitVersion(version.stdoutText) ?: throw GitUnavailableException(
+            "Git mode is on but the `git --version` banner is unrecognizable ('${version.stdoutText.trim()}'), so the " +
+                "required version (git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR, for --diff-merges=first-parent, used by " +
+                "Plainbase history reads) cannot be established. Point PATH at a real git, or set " +
+                "PLAINBASE_GIT_ENABLED=false to run without history.",
+        )
+        if (major < MIN_GIT_MAJOR || (major == MIN_GIT_MAJOR && minor < MIN_GIT_MINOR)) {
+            throw GitUnavailableException(
+                "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
+                    "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
+                    "to run without history.",
+            )
         }
         // The binary is present, but `--version` never opens the worktree. When a repo IS present, validate
         // ACCESS to it so an inaccessible repo (Docker uid-mismatch `fatal: detected dubious ownership`,
@@ -345,6 +419,12 @@ class GitCliHistoryProvider(
                 )
             }
         }
+        // The D4 strict guard, for a root whose repo the operator CLAIMED. It runs after the shared version/access
+        // probes above, so it can assume a working git; it refuses the boot loudly rather than degrading, because a
+        // root that silently commits into the WRONG repository is worse than one that will not start.
+        if (claimedRepo) {
+            nativeRootGuardFailure(exec, workTree)?.let { throw GitUnavailableException(it) }
+        }
     }
 
     /**
@@ -357,9 +437,19 @@ class GitCliHistoryProvider(
      */
     private fun ensureRepo() {
         Files.createDirectories(gitHome)
-        if (!Files.exists(workTree.resolve(".git"))) {
-            exec.run(listOf("init")).orThrow("git init")
+        if (Files.exists(workTree.resolve(".git"))) return
+        // Plainbase must NEVER `git init` a repo it does not own (ADR-0011 D4). A claimed root's missing `.git` is
+        // an operator error to REPORT - and this binds the commit-time belt call, not just prepare().
+        if (claimedRepo) {
+            throw GitCommandException(
+                "history = native",
+                1,
+                "no git repository at $workTree. This root declares `history = native`, so Plainbase expects to find a " +
+                    "repository it does not own and will never create one. Run `git init` there yourself, or set " +
+                    "`history = off` for this root.",
+            )
         }
+        exec.run(listOf("init")).orThrow("git init")
     }
 
     /**
@@ -548,8 +638,8 @@ class GitCliHistoryProvider(
     /**
      * Extracts (major, minor) from a `git --version` banner, tolerant of vendor suffixes:
      * `git version 2.54.0` → (2, 54); `git version 2.39.5 (Apple Git-154)` → (2, 39); `git version 2.25.1`
-     * → (2, 25). Anything that does not match the `git version <major>.<minor>` shape → null (the caller
-     * then PASSES with a warning rather than false-failing an unexpected-but-modern banner).
+     * → (2, 25). Anything that does not match the `git version <major>.<minor>` shape → null, and the gate
+     * REFUSES on it: an unreadable version is an unestablished floor, not a passing grade.
      */
     private fun parseGitVersion(banner: String): Pair<Int, Int>? {
         val match = GIT_VERSION_LINE.find(banner) ?: return null
@@ -576,6 +666,12 @@ class GitCliHistoryProvider(
          *  (traversal alone hides merge-resolved changes; display alone leaks side-branch commits). */
         private val FIRST_PARENT = listOf("--first-parent", "--diff-merges=first-parent")
 
+        // Leading `-c` seal for the C4 absence-oracle reads (currentHead/isAncestor/deletedIn): a repo-local
+        // replace ref CAN rewrite ancestry and what HEAD resolves to, which would let a hostile repo steer the
+        // oracle. GitExecutor prepends its own PINNED_CONFIG `-c` flags, so extra leading `-c` args before the
+        // subcommand are legal and precede it.
+        private val NO_REPLACE_REFS = listOf("-c", "core.useReplaceRefs=false")
+
         // The git version floor for the read path: `--diff-merges=first-parent` (in [FIRST_PARENT]) is only
         // a valid value since git 2.31.0 — that release taught `--diff-merges` the named convenience values
         // (`first-parent`, `m`, `c`, `cc`, `on`, `off`); 2.30 accepted only `off`/`none`/`on`. Source: git
@@ -586,9 +682,9 @@ class GitCliHistoryProvider(
         private const val MIN_GIT_MAJOR = 2
         private const val MIN_GIT_MINOR = 31
 
-        // `git version <major>.<minor>...` — anchored at the banner head, vendor suffixes (`(Apple Git-154)`)
-        // and the patch component ignored. Tolerant: an unrecognized banner yields no match (gate then PASSES
-        // with a warning rather than false-failing).
+        // `git version <major>.<minor>...` — matched anywhere in the banner, vendor suffixes (`(Apple Git-154)`)
+        // and the patch component ignored. Tolerant of what real gits PRINT, and of nothing else: a banner it
+        // cannot read yields no match, and the gate refuses rather than assuming a modern git behind it.
         private val GIT_VERSION_LINE = Regex("""git version (\d+)\.(\d+)""")
 
         private const val COMMIT_FIELD_COUNT = 8
@@ -622,6 +718,53 @@ class GitCliHistoryProvider(
     }
 }
 
+/** One `git diff --name-status -z` record: the status token and the path it converted to. */
+internal data class NameStatusRecord(val status: String, val path: TreePath)
+
+/**
+ * Parses a `git diff --name-status -z` byte stream into (status, path) records, or null when it cannot be
+ * FULLY understood - the fail-closed contract the C4 oracle rides on ([GitCliHistoryProvider.deletedIn]),
+ * extracted pure so its malformed-stream arms run as plain JVM tests without a git binary.
+ *
+ * Under `-z` the stream is NUL-TERMINATED tokens alternating status, path, status, path... (`--no-renames`,
+ * so never the three-token rename form). A well-formed non-empty stream ends in one trailing empty token, so a
+ * non-empty final token is a TRUNCATED record. Odd arity (a status with no path), an empty status, or a path
+ * that is not a valid [TreePath] (empty, absolute, `..`, hostile bytes) each null the whole parse - "a diff we
+ * half-understood is not a smaller diff". An empty stream is zero records (a clean no-change diff).
+ *
+ * **The decode is STRICT for the same reason** ([decodeStrictUtf8]). A git path is BYTES, and `-z` hands them over
+ * raw; a lenient decode turns bytes that are not UTF-8 into U+FFFD, which is a path we invented. It matches no
+ * binding, so it covers nothing - but it is still IN the range, so the advance would consume the deletion it
+ * misread, and the real page's absence could never be proven again. Half-understanding a path is not understanding
+ * a smaller diff either.
+ */
+internal fun parseNameStatusRecords(stdout: ByteArray): List<NameStatusRecord>? {
+    val tokens = decodeStrictUtf8(stdout)?.split(Char(0)) ?: return null
+    if (tokens.last().isNotEmpty()) return null // a non-empty final token: the last record was cut off
+    val fields = tokens.dropLast(1)
+    if (fields.size % 2 != 0) return null
+    val records = ArrayList<NameStatusRecord>(fields.size / 2)
+    for (i in fields.indices step 2) {
+        val status = fields[i]
+        if (status.isEmpty()) return null
+        val path = TreePath.of(fields[i + 1]) ?: return null
+        records += NameStatusRecord(status, path)
+    }
+    return records
+}
+
+/** [bytes] as UTF-8, or null if they are not UTF-8 - REPORT, never the silently-lossy U+FFFD replacement. */
+private fun decodeStrictUtf8(bytes: ByteArray): String? =
+    try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (_: CharacterCodingException) {
+        null
+    }
+
 /**
  * Best-effort git auto-maintenance: `maintenance run --auto` on modern git, falling back to `gc --auto`
  * on hosts predating `git maintenance` (< 2.30). Shared by the provider's default dispatcher and the
@@ -633,9 +776,15 @@ internal fun runAutoMaintenance(exec: GitExecutor) {
     if (!auto.ok) exec.run(listOf("gc", "--auto"))
 }
 
-/** A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the write-pipeline catch. */
+/**
+ * A failed git plumbing step in the commit recipe — surfaces the step + exit + stderr to the write-pipeline catch.
+ *
+ * The concrete git flavor of the port's [HistoryCommandException], which is what a DOMAIN root-loss classifier
+ * catches: every git call is `git -C <workTree>`, so a work tree that vanished under a running server exits
+ * non-zero here and this is the carrier it arrives as.
+ */
 open class GitCommandException(step: String, exitCode: Int, stderr: String) :
-    RuntimeException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
+    HistoryCommandException("git $step failed (exit $exitCode): ${stderr.ifBlank { "<no stderr>" }}")
 
 /**
  * A `git diff` over a ref that does not resolve to a commit — a CLIENT error the diff route maps to

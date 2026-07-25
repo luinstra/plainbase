@@ -1,0 +1,18 @@
+-- v12 -> v13: the binding latch (C3) - where each root points, and whether we believe it.
+--
+-- Purely ADDITIVE. No backfill, and deliberately no rows: a root with no `root_topology` row has never
+-- been observed, which is the no-authority state, and the first boot after the upgrade writes it as
+-- UNRESOLVED (first sight IS a binding change: `null -> X`). A healthy install then witnesses its at-risk
+-- bindings by identity on its very first pass and is TRUSTED with no ceremony; an operator who
+-- misconfigured the bucket AND upgraded in one step gets an empty LIST that proves NOTHING, instead of
+-- one that reaps the corpus.
+--
+-- Plain migration SQL: the `AS`/import banners live only in the .sq files. verifyMigrations cross-checks
+-- this against schema/13.db.
+
+CREATE TABLE root_topology (
+  root TEXT NOT NULL PRIMARY KEY,
+  binding TEXT NOT NULL,
+  status TEXT NOT NULL,
+  at_risk TEXT NOT NULL
+);

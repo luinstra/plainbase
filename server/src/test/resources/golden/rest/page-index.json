@@ -1,8 +1,9 @@
 {
   "id": "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01",
+  "root": "main",
   "path": "index.md",
   "slug": "welcome",
-  "url": "/docs/welcome",
+  "url": "/docs/main/welcome",
   "title": "Welcome to Demo Docs",
   "markdown": "---\ntitle: Welcome to Demo Docs\nslug: welcome\ntags: [intro]\nowner: kevin\nstatus: active\n---\n\n# Welcome to Demo Docs\n\nThis fixture tree exercises Plainbase end to end: nested folders, assets,\nrelative links, frontmatter variety, and unicode edge cases.\n\nStart with the [Getting Started guide](guides/getting-started.md) or browse\nthe [API overview](api/overview.md). Operations live under\n[infrastructure](infra/kubernetes.md).\n",
   "frontmatter": {
@@ -21,6 +22,6 @@
     "path": "index.md",
     "content_hash": "{{content_hash}}",
     "commit": null,
-    "uri": "plainbase://0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01@{{content_hash}}"
+    "uri": "plainbase://main/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01@{{content_hash}}"
   }
 }

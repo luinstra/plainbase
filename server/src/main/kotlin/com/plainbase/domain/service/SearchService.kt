@@ -5,6 +5,9 @@ import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.Heading
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.Highlight
 import com.plainbase.domain.search.SearchHit
 import com.plainbase.domain.search.SearchProvider
@@ -28,6 +31,15 @@ import com.plainbase.domain.search.SearchQuery
 class SearchService(
     private val provider: SearchProvider,
     private val indexBuilder: IndexBuilder,
+    /**
+     * The liveness filter's source (ADR-0011 D5). It lands HERE, at §B7 assembly, not in SQL: assembly already joins
+     * every display field against the published snapshot and has `page.root` in hand, so the filter is one predicate,
+     * it respects the never-read-display-fields-from-engine-copies rule, and it needs no search.db query change.
+     *
+     * The honest consequence: the ENGINE's `total` still counts hits from unavailable roots, so a page of results
+     * simply runs SHORT - the same documented shape as the §A2 narrow race a snapshot-departed page already produces.
+     */
+    private val availability: RootAvailability = RootAvailability(kotlin.time.Clock.System),
 ) {
 
     sealed interface Outcome {
@@ -49,6 +61,11 @@ class SearchService(
 
         val results = provider.search(SearchQuery(text = query, limit = limitValue, offset = offsetValue))
         val snapshot = indexBuilder.current
+        // ONE availability snapshot per request, threaded - the same discipline as the page snapshot beside it.
+        // A hit whose root is not serving is DROPPED here: a vanished root's section is carried forward, so its
+        // pages are still in `byRootedId` and would otherwise be served, stale, from a root that answers 503 everywhere
+        // else. A DETACHED root needs no arm - it has no section, so its hits already drop at the `byRootedId` join.
+        val available = availability.current()
         return Outcome.Results(
             SearchPayload(
                 query = query,
@@ -56,7 +73,13 @@ class SearchService(
                 limit = limitValue,
                 offset = offsetValue,
                 total = results.total,
-                hits = results.hits.mapNotNull { hit -> snapshot.byId[hit.pageId]?.let { page -> assemble(hit, page) } },
+                hits = results.hits.mapNotNull { hit ->
+                    // pageAt keys on (root, id) - the page id is not enough (see [assemble]'s root rule): a
+                    // cross-root re-award must not pair one root's hit with another's page.
+                    snapshot.pageAt(RootedPageId(hit.root, hit.pageId))
+                        ?.takeIf { available.isAvailable(it.root) }
+                        ?.let { page -> assemble(hit, page) }
+                },
             ),
         )
     }
@@ -70,6 +93,15 @@ class SearchService(
      * ranking but never citations"); the citation still verifies against the concurrent
      * `GET /pages/{id}`, and the §B4 listener seam closes the window at the next sync. Engine
      * visibility is always absent-or-old-or-new, never torn (the Appendix G rule).
+     *
+     * **The one lag that is NOT adjudicated is a CROSS-ROOT one, and the caller drops it before we get here.**
+     * A page id is global across roots and a rebuild can re-award it (the D17 rank contest); the snapshot
+     * publishes BEFORE the search sync that follows it, so a query landing in that window can return a hit the
+     * engine still holds under root A for an id the snapshot has just moved to root B. Joining on the id alone
+     * would then pair root A's snippet with root B's url, root B's citation and root B's availability check -
+     * serving one root's content under another's name, and slipping past the stale-content filter entirely when
+     * A is the root that is unavailable. Same id, different root = a different page, and the hit is dropped
+     * (the §A2 short-page race, again). It returns at the next sync, correctly attributed.
      */
     private fun assemble(hit: SearchHit, page: IndexedPage): SearchHitPayload {
         // §B7: null breadcrumb = the heading left the snapshot since the engine indexed — degrade
@@ -78,6 +110,7 @@ class SearchService(
         val headingId = breadcrumb?.let { hit.headingId }
         return SearchHitPayload(
             pageId = page.id,
+            root = page.root,
             path = page.path,
             url = page.url,
             title = page.title,
@@ -88,6 +121,7 @@ class SearchService(
             highlights = hit.highlights,
             score = hit.score,
             citation = Citation(
+                root = page.root,
                 pageId = page.id,
                 headingId = headingId,
                 path = page.path,
@@ -145,9 +179,10 @@ data class SearchPayload(
     val hits: List<SearchHitPayload>,
 )
 
-/** One §A2 hit: engine fields ([snippet]/[highlights]/[score]) + snapshot fields (everything else, §B7). */
+/** One §A2 hit: engine fields ([snippet]/[highlights]/[score]) + snapshot fields (everything else, §B7 - [root] included: display fields join against the published snapshot, never engine-stored copies). */
 data class SearchHitPayload(
     val pageId: PageId,
+    val root: RootName,
     val path: TreePath,
     val url: String?,
     val title: String,

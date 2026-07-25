@@ -3,11 +3,14 @@ package com.plainbase.frameworks.spike
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.search.SectionDocument
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.frameworks.cli.CommandOutput
+import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.contentModule
@@ -117,21 +120,21 @@ object NativeSpike {
         check("s3-sigv4-vector") { sigV4Vectors() },
     )
 
-    fun runAsMain(): Int {
-        println("Plainbase full-stack native dependency spike (v${PlainbaseConfig.VERSION})")
+    fun runAsMain(output: CommandOutput = systemCommandOutput()): Int {
+        output.result("Plainbase full-stack native dependency spike (v${PlainbaseConfig.VERSION})")
         val vm = System.getProperty("java.vm.name")
         val vmVersion = System.getProperty("java.vendor.version") ?: System.getProperty("java.version")
-        println("runtime: $vm / $vmVersion")
+        output.result("runtime: $vm / $vmVersion")
         val results = runAll()
         for (r in results) {
-            println("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")
+            output.result("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")
         }
         val failed = results.count { !it.passed }
         return if (failed == 0) {
-            println("SPIKE OK — ${results.size}/${results.size} checks passed")
+            output.result("SPIKE OK — ${results.size}/${results.size} checks passed")
             0
         } else {
-            println("SPIKE FAILED — $failed/${results.size} checks failed")
+            output.result("SPIKE FAILED — $failed/${results.size} checks failed")
             1
         }
     }
@@ -307,7 +310,7 @@ object NativeSpike {
                 // Per-page replace + indexedState (the engine-truth diff base).
                 provider.index(listOf(spikeWelcomePage(contentHash = "sha256:replaced", body = "deploy on metal only")))
                 require(provider.search(SearchQuery("kubernetes", 10, 0)).total == 0L) { "replaced section still matches" }
-                val state = provider.indexedState().mapKeys { it.key.value }
+                val state = provider.indexedState().mapKeys { it.key.id.value }
                 require(state[SPIKE_WELCOME_ID]?.contentHash == "sha256:replaced") { "indexedState stale: $state" }
             }
             val journalMode = DriverManager.getConnection("jdbc:sqlite:$dbPath").use { probe ->
@@ -357,7 +360,7 @@ object NativeSpike {
             path = treePath,
             status = "active",
         )
-        return PageDocuments(pageId = pageId, contentHash = contentHash, path = treePath, sections = listOf(section))
+        return PageDocuments(pageId = pageId, contentHash = contentHash, root = RootName.MAIN, path = treePath, sections = listOf(section))
     }
 
     // ---- 5. flexmark ---------------------------------------------------------------------

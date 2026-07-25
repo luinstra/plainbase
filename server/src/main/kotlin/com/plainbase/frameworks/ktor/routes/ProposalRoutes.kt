@@ -52,7 +52,9 @@ fun Route.proposalRoutes(ctx: RouteContext) {
     route("/api/v1/changes") {
         post {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            call.guarded {
+            // This surface's root pin is the propose body's own `root` field, not `?root=` - so an ambiguity 409 here
+            // names that field instead of handing back a query url the caller could not have sent.
+            call.guarded(AmbiguityRemedy.BodyPin("root")) {
                 if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
                     return@guarded call.respondError(
                         HttpStatusCode.UnsupportedMediaType,
@@ -67,9 +69,12 @@ fun Route.proposalRoutes(ctx: RouteContext) {
                         "Request body must be JSON: {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
                     )
 
-                val command = when (val parse = parseProposeCommand(request)) {
+                // The parser owns the code, not this mapping site: an unknown root answers 400 `invalid_root`
+                // here and `invalid_root` on MCP, because BOTH read `parse.code` rather than hardcoding one.
+                val command = when (val parse = parseProposeCommand(request, ctx.roots)) {
                     is ProposeCommandParse.Ok -> parse.command
-                    is ProposeCommandParse.Invalid -> return@guarded call.invalidProposeRequest(parse.message)
+                    is ProposeCommandParse.Invalid ->
+                        return@guarded call.respondError(HttpStatusCode.BadRequest, parse.code, parse.message)
                 }
                 when (val outcome = ctx.proposals.propose(principal, command)) {
                     is ProposeOutcome.Created -> call.respondRest(

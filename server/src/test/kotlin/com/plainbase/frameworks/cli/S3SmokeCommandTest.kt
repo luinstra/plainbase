@@ -3,8 +3,6 @@ package com.plainbase.frameworks.cli
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 
 /**
  * The `s3-smoke` config-validation contract: the endpoint https gate and the strict soak-count
@@ -23,52 +21,43 @@ class S3SmokeCommandTest : FunSpec({
     ) + overrides
 
     test("an http endpoint is refused as a usage error (never SigV4 creds over cleartext) unless the insecure override is set") {
-        val err = captureStderr {
-            S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_ENDPOINT" to "http://acct.r2.cloudflarestorage.com")) shouldBe 2
-        }
-        err shouldContain "must be https"
-        err shouldContain "PLAINBASE_INSECURE_HTTP=1"
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(
+            emptyList(),
+            validEnv("PLAINBASE_SMOKE_ENDPOINT" to "http://acct.r2.cloudflarestorage.com"),
+            io.output,
+        ) shouldBe 2
+        io.stderr shouldContain "must be https"
+        io.stderr shouldContain "PLAINBASE_INSECURE_HTTP=1"
     }
 
     test("a non-URL endpoint is refused as a usage error") {
-        val err = captureStderr {
-            S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_ENDPOINT" to "not-a-url")) shouldBe 2
-        }
-        err shouldContain "not an absolute http(s) URL"
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_ENDPOINT" to "not-a-url"), io.output) shouldBe 2
+        io.stderr shouldContain "not an absolute http(s) URL"
     }
 
     test("a negative PLAINBASE_SMOKE_SOAK_GETS is a usage error (never a silent skip)") {
-        val err = captureStderr {
-            S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_SOAK_GETS" to "-1")) shouldBe 2
-        }
-        err shouldContain "PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer"
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_SOAK_GETS" to "-1"), io.output) shouldBe 2
+        io.stderr shouldContain "PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer"
     }
 
     test("a non-integer PLAINBASE_SMOKE_SOAK_GETS is a usage error (never a silent coerce to 100)") {
-        val err = captureStderr {
-            S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_SOAK_GETS" to "lots")) shouldBe 2
-        }
-        err shouldContain "PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer"
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(emptyList(), validEnv("PLAINBASE_SMOKE_SOAK_GETS" to "lots"), io.output) shouldBe 2
+        io.stderr shouldContain "PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer"
     }
 
     test("missing required env is a usage error naming the gaps") {
-        val err = captureStderr { S3SmokeCommand.run(emptyList(), emptyMap()) shouldBe 2 }
-        err shouldContain "missing env"
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(emptyList(), emptyMap(), io.output) shouldBe 2
+        io.stderr shouldContain "missing env"
     }
 
     test("any argument is a usage error (config comes from env, never argv)") {
-        S3SmokeCommand.run(listOf("--bogus"), validEnv()) shouldBe 2
+        val io = CommandOutputFixture()
+        S3SmokeCommand.run(listOf("--bogus"), validEnv(), io.output) shouldBe 2
+        io.stderr shouldContain "usage: plainbase s3-smoke"
     }
 })
-
-private fun captureStderr(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.err
-    System.setErr(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setErr(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}

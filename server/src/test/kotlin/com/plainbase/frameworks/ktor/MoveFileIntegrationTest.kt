@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.cli.AdoptCommand
+import com.plainbase.frameworks.cli.CommandOutputFixture
 import com.plainbase.frameworks.config.PlainbaseConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -37,7 +38,7 @@ class MoveFileIntegrationTest : FunSpec({
             try {
                 // `adopt --write-ids` (the real CLI) materializes the page ids into the files.
                 val config = PlainbaseConfig(contentDir = root, dataDir = dataDir, host = "127.0.0.1", port = 0)
-                AdoptCommand.run(listOf("--write-ids"), config) shouldBe 0
+                AdoptCommand.run(listOf("--write-ids"), config, CommandOutputFixture().output) shouldBe 0
 
                 // A FRESH harness (in-memory id_map): identity must come from the materialized
                 // frontmatter alone — the durability §5.2 actually promises.
@@ -48,7 +49,7 @@ class MoveFileIntegrationTest : FunSpec({
                     val id = before.getValue("id").jsonPrimitive.content
                     val markdownBefore = before.getValue("markdown").jsonPrimitive.content
                     val permalink = "/p/$id"
-                    client.get(permalink).headers[HttpHeaders.Location] shouldBe "/docs/guides/portable"
+                    client.get(permalink).headers[HttpHeaders.Location] shouldBe "/docs/main/guides/portable"
 
                     // Move the file on disk, then rescan through the REST hook.
                     Files.createDirectories(root.resolve("manuals"))
@@ -58,18 +59,18 @@ class MoveFileIntegrationTest : FunSpec({
                     // Permalink -> 302 -> NEW canonical -> 200, same content.
                     val redirect = client.get(permalink)
                     redirect.status shouldBe HttpStatusCode.Found
-                    redirect.headers[HttpHeaders.Location] shouldBe "/docs/manuals/portable"
-                    val landing = client.get("/docs/manuals/portable")
+                    redirect.headers[HttpHeaders.Location] shouldBe "/docs/main/manuals/portable"
+                    val landing = client.get("/docs/main/manuals/portable")
                     landing.status shouldBe HttpStatusCode.OK
                     landing.bodyAsText() shouldContain "<div id=\"root\">"
                     val after = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/manuals/portable").bodyAsText()).jsonObject
                     after.getValue("id").jsonPrimitive.content shouldBe id
                     after.getValue("markdown").jsonPrimitive.content shouldBe markdownBefore
 
-                    // Old path URL -> 301 -> new (the move alias, one hop).
-                    val old = client.get("/docs/guides/portable")
+                    // Old path URL -> 301 -> new (the move alias, one hop from the rooted form).
+                    val old = client.get("/docs/main/guides/portable")
                     old.status shouldBe HttpStatusCode.MovedPermanently
-                    old.headers[HttpHeaders.Location] shouldBe "/docs/manuals/portable"
+                    old.headers[HttpHeaders.Location] shouldBe "/docs/main/manuals/portable"
                 }
             } finally {
                 dataDir.toFile().deleteRecursively()

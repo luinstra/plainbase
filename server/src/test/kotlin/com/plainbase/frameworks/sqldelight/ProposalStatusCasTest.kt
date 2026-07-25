@@ -6,6 +6,7 @@ import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
+import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.util.concurrent.atomic.AtomicInteger
@@ -45,6 +46,7 @@ class ProposalStatusCasTest : FunSpec({
                     decidedAt = null,
                     appliedCommit = null,
                     statusReason = null,
+                    root = RootName.MAIN,
                 ),
             )
 

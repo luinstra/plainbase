@@ -2,6 +2,7 @@ package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
@@ -40,6 +41,7 @@ class ObjectMirrorApplyFailureTest {
             client = client,
             mirror = mirror,
             state = state,
+            binding = RootBinding("https://fake|bucket|"),
             keyPrefix = "",
             pollSeconds = 3_600,
             dirtyPaths = { emptySet() },
@@ -220,6 +222,8 @@ private class MiniFailableAtomics(private val delegate: FileAtomics = FileAtomic
         if (shouldFailFor(target)) throw IOException("simulated native mirror write failure")
         delegate.copyReplace(source, target)
     }
+
+    override fun fsync(path: Path) = delegate.fsync(path)
 
     fun failAlways() {
         shouldFailFor = { true }

@@ -16,6 +16,7 @@ import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { previewPath } from "../lib/slugPreview";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
+import { isRootUnavailable, QueryErrorView } from "./ErrorView";
 import { MetaForm } from "./MetaForm";
 import { NotFoundView } from "./NotFound";
 import { Prose } from "./Prose";
@@ -23,7 +24,9 @@ import { Prose } from "./Prose";
 /**
  * The `?mode=edit` editor surface (W6, D-1/D-4): a CodeMirror 6 Markdown editor over the FULL document
  * buffer (frontmatter + body as one document), a debounced server-preview pane, and a CAS save against
- * `PUT /api/v1/pages/{id}` with `base_hash` carried as the `If-Match` ETag. Owns its OWN `useQuery` for
+ * `PUT /api/v1/pages/{id}?root={root}` with `base_hash` carried as the `If-Match` ETag. The root pin
+ * is REQUIRED since C5: without it a duplicated id answers 409 `ambiguous_page_id` rather than
+ * picking a root, so a save can never land on the wrong disk. Owns its OWN `useQuery` for
  * the initial buffer (component-level data-fetching — no route loader). The server is the identity
  * authority: a tampered id/slug surfaces the 422 refusal, never a silent save (D-4).
  */
@@ -60,19 +63,18 @@ export function EditorPage({ path }: { path: string }) {
   }
   if (page.isError) {
     if (page.error instanceof ApiError && (page.error.isNotFound || page.error.status === 400)) return <NotFoundView />;
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{page.error.message}</p>
-      </div>
-    );
+    return <QueryErrorView error={page.error} />;
   }
 
-  // Key by id so a navigation to a different page remounts the editor with a fresh buffer/base_hash.
+  // Key by (root, id) so a navigation to a different page remounts the editor with a fresh
+  // buffer/base_hash. The ROOT is half the identity: two roots can hold the same id, props flow without
+  // a remount, and an id-only key would keep root A's buffer and CAS token while `root` had flipped to
+  // B - so the save lands B's disk with A's bytes, and on byte-identical copies the CAS passes.
   return (
     <Editor
-      key={page.data.id}
+      key={`${page.data.root}:${page.data.id}`}
       id={page.data.id}
+      root={page.data.root}
       initialPath={page.data.path}
       initialUrl={page.data.url}
       initialBuffer={page.data.markdown}
@@ -99,12 +101,15 @@ type SaveOutcome =
 
 function Editor({
   id,
+  root,
   initialPath,
   initialUrl,
   initialBuffer,
   initialHash,
 }: {
   id: string;
+  /** The page's OWN root — the preview must resolve its links against that root's space, never main's. */
+  root: string;
   initialPath: string;
   initialUrl: string | null;
   initialBuffer: string;
@@ -155,7 +160,9 @@ function Editor({
   const debounced = useDebounced(buffer, 300);
   // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
   // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
-  const previewOptions = previewQuery(debounced, docPath);
+  // The page's OWN root: link resolution is per-root, so previewing an extra root's page against main's
+  // link space would render `[[other page]]` as a broken (or, worse, a WRONG) link.
+  const previewOptions = previewQuery(debounced, docPath, root);
   const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
 
   // Split-view (C2/D-3): the body CodeMirror holds the BODY SLICE only — the `---` fence and metadata
@@ -177,7 +184,7 @@ function Editor({
     // Capture the exact sent bytes so the saved baseline advances to them on success (even mid-request).
     mutationFn: (): Promise<{ result: SaveResult; sent: string }> => {
       const sent = bufferRef.current;
-      return putPageRaw(id, sent, baseHash).then((result) => ({ result, sent }));
+      return putPageRaw(id, root, sent, baseHash).then((result) => ({ result, sent }));
     },
     onSuccess: ({ result, sent }) => applySaveResult(result, sent),
   });
@@ -229,9 +236,15 @@ function Editor({
       case "too-large":
         setOutcome({ kind: "notice", message: `Document exceeds ${result.maxBytes} bytes — trim it and try again.` });
         return;
-      case "error":
-        setOutcome({ kind: "notice", message: result.error.status === 503 ? "Couldn't save (transient) — please retry." : result.error.message });
+      case "error": {
+        // A 503 is retryable when it is a transient FS fault (`content_unreadable`, `written_but_unindexed`), and NOT
+        // when the ROOT is not serving: that one lasts until an operator restores the path AND restarts, so "please
+        // retry" would send the author looping against a disk that is not coming back on its own. The outage
+        // envelope's own message names the root and the remedy, so it is the one to show.
+        const transient = result.error.status === 503 && !isRootUnavailable(result.error);
+        setOutcome({ kind: "notice", message: transient ? "Couldn't save (transient) — please retry." : result.error.message });
         return;
+      }
     }
   }
 
@@ -268,7 +281,7 @@ function Editor({
         {/* The narrowed outcome is a SUPERSET of the prop's {field, message} — legal only because TS
             skips excess-property checks on non-literal args; don't assume the prop type is exact. */}
         {outcome?.kind === "refusal" && <RefusalBanner refusal={outcome} />}
-        {outcome?.kind === "deleted" && <DeletedBanner buffer={buffer} initialPath={initialPath} />}
+        {outcome?.kind === "deleted" && <DeletedBanner buffer={buffer} root={root} initialPath={initialPath} />}
         {outcome?.kind === "notice" && (
           <p className="text-sm text-muted" data-pb-editor-notice>
             {outcome.message}
@@ -411,7 +424,7 @@ async function sha256Hex(text: string): Promise<string | null> {
 const stripHashPrefix = (hash: string): string => (hash.startsWith("sha256:") ? hash.slice("sha256:".length) : hash);
 
 /** page_deleted — no rebase target; offer "save as new page" prefilled with the buffer (no dead-end, D-5). */
-function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: string }) {
+function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: string; initialPath: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
@@ -428,12 +441,16 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
     // frontmatter blocks). The title comes from the user's possibly-edited frontmatter, else the filename.
     const { frontmatter, body } = splitFrontmatter(buffer);
     const title = (frontmatter && frontmatterValue(frontmatter, "title")) || fallbackTitle;
-    const result = await createPage({ folder, title, body });
+    // The recovered page is re-created in the root it was deleted FROM. The wire root is required (an omitted
+    // one is a 400 `invalid_root`, never a silent `main`), and a rescue path is the last place to fumble the
+    // user's tree - so it is threaded from the page, never re-derived.
+    const result = await createPage({ root, folder, title, body });
     setSaving(false);
     if (result.kind === "created") {
       // Invalidate the DESTINATION url's by-path/page cache BEFORE navigating — save-as-new can reuse a
       // recovered `/docs/...` URL whose by-path entry still points at the deleted old id, so the read route
-      // would otherwise render that stale id for up to its staleTime. (A `/p/{id}` permalink no-ops.)
+      // would otherwise render that stale id for up to its staleTime. (A permalink url no-ops: it is not
+      // a `/docs/` address, so it has no by-path key. The id leg still clears every root spelling.)
       invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
       if (result.created.warning || !result.created.url) {
         // Unindexed (or, defensively, no canonical url yet): the page is unpublished, so navigating
@@ -474,8 +491,14 @@ function DeletedBanner({ buffer, initialPath }: { buffer: string; initialPath: s
 /**
  * The `/new` route body (D-2/D-3): title (+ optional folder/slug) → `POST /api/v1/pages` → navigate
  * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
+ *
+ * [root] is the document root the page lands in (multi-root C4), carried from the `/docs/{root}/…` location
+ * the "New" action was started from (the route's `?root=` search param). It is absent for a create started
+ * outside any root's URL space (`/new` from the home view), and THIS component resolves that to the reserved
+ * `main` — the wire has no default, because a server-side one would let any client's omission decide whose
+ * tree a page joins. The choice is the client's to make, explicitly, and it is made here.
  */
-export function NewPage() {
+export function NewPage({ root }: { root?: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("");
@@ -497,6 +520,7 @@ export function NewPage() {
   const create = useMutation({
     mutationFn: () =>
       createPage({
+        root: root ?? "main", // no `?root=` means the create started outside any root's URL space (D1's reserved name)
         folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the

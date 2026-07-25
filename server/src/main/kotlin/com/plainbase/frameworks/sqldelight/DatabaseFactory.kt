@@ -17,25 +17,61 @@ object DatabaseFactory {
      */
     fun createDriver(path: Path): SqlDriver {
         path.parent?.let(Files::createDirectories)
-        val driver = JdbcSqliteDriver("jdbc:sqlite:$path")
-        migrate(driver)
+        return migrateOrClose(JdbcSqliteDriver("jdbc:sqlite:$path"))
+    }
+
+    /** Migrate [driver], closing the handle before rethrowing on ANY failure: a rejected boot must not leak the open connection. */
+    internal fun migrateOrClose(driver: SqlDriver): SqlDriver {
+        try {
+            migrate(driver)
+        } catch (e: Throwable) {
+            driver.close()
+            throw e
+        }
         return driver
     }
 
-    /** Builds the typed database. Id columns are 16-byte BLOBs; paths are NFC text (the two column adapters). */
+    /** Builds the typed database. Id columns are 16-byte BLOBs; paths are NFC text; roots validated slugs (the three column adapters). */
     fun createDatabase(driver: SqlDriver): PlainbaseDb = PlainbaseDb(
         driver = driver,
-        id_mapAdapter = Id_map.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
-        // identity_issue's other_path/page_id stay untyped: their UNIQUE-key sentinels ('' / x'')
-        // are not valid TreePath/PageId values, so the repository maps them (see IssueRow).
-        identity_issueAdapter = Identity_issue.Adapter(pathAdapter = TreePathColumnAdapter),
-        url_aliasAdapter = Url_alias.Adapter(pathAdapter = TreePathColumnAdapter, idAdapter = PageIdColumnAdapter),
-        page_checkpointAdapter = Page_checkpoint.Adapter(idAdapter = PageIdColumnAdapter, url_pathAdapter = TreePathColumnAdapter),
-        dirty_pageAdapter = Dirty_page.Adapter(idAdapter = PageIdColumnAdapter, pathAdapter = TreePathColumnAdapter),
+        id_mapAdapter = Id_map.Adapter(
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+            idAdapter = PageIdColumnAdapter,
+        ),
+        // identity_issue's other_root/other_path/page_id stay untyped: their UNIQUE-key sentinels
+        // ('' / x'') are not valid RootName/TreePath/PageId values, so the repository maps them
+        // (see IssueRow).
+        identity_issueAdapter = Identity_issue.Adapter(rootAdapter = RootNameColumnAdapter, pathAdapter = TreePathColumnAdapter),
+        url_aliasAdapter = Url_alias.Adapter(
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+            idAdapter = PageIdColumnAdapter,
+            target_rootAdapter = RootNameColumnAdapter,
+        ),
+        page_checkpointAdapter = Page_checkpoint.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            url_pathAdapter = TreePathColumnAdapter,
+        ),
+        dirty_pageAdapter = Dirty_page.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+        ),
+        retired_bindingAdapter = Retired_binding.Adapter(
+            idAdapter = PageIdColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
+            pathAdapter = TreePathColumnAdapter,
+        ),
+        root_observationAdapter = Root_observation.Adapter(rootAdapter = RootNameColumnAdapter),
+        root_topologyAdapter = Root_topology.Adapter(rootAdapter = RootNameColumnAdapter),
+        git_checkpointAdapter = Git_checkpoint.Adapter(rootAdapter = RootNameColumnAdapter),
         proposalsAdapter = Proposals.Adapter(
             idAdapter = ProposalIdColumnAdapter,
             page_idAdapter = PageIdColumnAdapter,
             target_pathAdapter = TreePathColumnAdapter,
+            rootAdapter = RootNameColumnAdapter,
         ),
     )
 
@@ -49,7 +85,11 @@ object DatabaseFactory {
      * the driver behind `adopt --dry-run`'s nothing-was-written promise. When no database exists
      * yet — or an existing one predates the current schema, so the tables a caller would read
      * aren't there — the persisted state it would expose is empty by definition, and an empty
-     * in-memory stand-in serves it without touching (or migrating) anything on disk.
+     * in-memory stand-in serves it without touching (or migrating) anything on disk. A database AT
+     * OR AHEAD of the current schema (including a NEWER one) is served file-backed: a read-only open
+     * cannot corrupt anything, and `adopt --dry-run`'s nothing-was-written promise is exactly what
+     * this method exists for. The forward-only refusal is [migrate]'s job (the WRITABLE path), not
+     * this one's.
      */
     fun createReadOnlyDriver(path: Path): SqlDriver {
         if (Files.notExists(path)) return createInMemoryDriver()
@@ -62,20 +102,34 @@ object DatabaseFactory {
     private fun migrate(driver: SqlDriver) {
         val current = driver.userVersion()
         val target = PlainbaseDb.Schema.version
-        when {
-            current == 0L -> {
+        if (current == target) return
+        // FORWARD-only refusal (C5): a C5-or-later binary will not silently open a DB written by a still-NEWER binary.
+        // Opening a schema this build does not understand would run its queries against a shape it cannot reason about
+        // and corrupt per-root identity. (It cannot stop an OLDER binary already running - that is the operational
+        // upgrade rule in docs/operating-plainbase.md, not something this code can enforce.)
+        if (current > target) throw newerSchemaError(current, target)
+        // ONE SQLite transaction around the whole chain plus its `user_version` bump, all-or-nothing
+        // (SQLite DDL is transactional; `user_version` lives in the DB header and rolls back too).
+        // The generated Schema.create/migrate issue bare per-statement executes with NO transaction
+        // of their own, so a crash mid-way through a multi-statement rebuild (10.sqm's
+        // CREATE/INSERT/DROP/RENAME chain) would otherwise strand a half-rebuilt DB still stamped
+        // with the OLD version - unable to retry, unable to boot. The DRIVER-managed transaction is
+        // load-bearing: it pins one connection for every statement inside the block, where a raw
+        // BEGIN would die with the per-statement connection the file-backed driver borrows.
+        createDatabase(driver).transaction {
+            if (current == 0L) {
                 PlainbaseDb.Schema.create(driver)
-                driver.execute(null, "PRAGMA user_version = $target;", 0)
-            }
-            current < target -> {
+            } else {
                 PlainbaseDb.Schema.migrate(driver, current, target)
-                driver.execute(null, "PRAGMA user_version = $target;", 0)
             }
-            // current > target: an older binary opening a newer DB. Intentionally a no-op for now —
-            // a downgrade guard (throwing) would be a behavior change; defer that hardening.
-            else -> Unit
+            driver.execute(null, "PRAGMA user_version = $target;", 0)
         }
     }
+
+    private fun newerSchemaError(current: Long, target: Long): IllegalStateException = IllegalStateException(
+        "database schema v$current is NEWER than this binary understands (v$target); a newer Plainbase wrote it. " +
+            "Upgrade the binary; this build will not open it (opening it would corrupt per-root identity).",
+    )
 
     private fun SqlDriver.userVersion(): Long = executeQuery(
         identifier = null,

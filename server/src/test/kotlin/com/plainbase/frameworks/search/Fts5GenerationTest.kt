@@ -142,7 +142,7 @@ class Fts5GenerationTest : FunSpec({
                 }
             }
 
-            // §B4's promise: the next rebuild repairs for free — no (generation, page_id) wedge.
+            // §B4's promise: the next rebuild repairs for free — no (generation, root, page_id) wedge.
             provider.rebuild(corpusB.asSequence())
             val healed = provider.search(query("genprobe", limit = 50))
             healed.total shouldBe 5L
@@ -167,17 +167,17 @@ class Fts5GenerationTest : FunSpec({
                         }
                     val orphan = active + 1
                     statement.executeUpdate(
-                        "INSERT INTO search_page(generation, page_id, content_hash, path) " +
-                            "SELECT $orphan, page_id, content_hash, path FROM search_page WHERE generation = $active",
+                        "INSERT INTO search_page(generation, page_id, content_hash, root, path) " +
+                            "SELECT $orphan, page_id, content_hash, root, path FROM search_page WHERE generation = $active",
                     )
                     statement.executeUpdate(
-                        "INSERT INTO section_doc(generation, page_id, heading_id, status) " +
-                            "SELECT $orphan, page_id, heading_id, status FROM section_doc WHERE generation = $active",
+                        "INSERT INTO section_doc(generation, page_id, root, heading_id, status) " +
+                            "SELECT $orphan, page_id, root, heading_id, status FROM section_doc WHERE generation = $active",
                     )
                 }
             }
 
-            provider.rebuild(corpusA.asSequence()) // would hit the (generation, page_id) PK without the sweep
+            provider.rebuild(corpusA.asSequence()) // would hit the (generation, root, page_id) PK without the sweep
             val results = provider.search(query("genprobe", limit = 50))
             results.total shouldBe 3L
             results.hits.map { it.pageId }.toSet() shouldBe corpusA.map { it.pageId }.toSet()

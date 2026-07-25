@@ -3,6 +3,9 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
@@ -47,8 +50,10 @@ class WritePipelineNativeTest {
                 val citations = CitationFactory()
                 val idMap = SqlDelightIdMapRepository(database)
                 val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val availability = com.plainbase.domain.root.RootAvailability(kotlin.time.Clock.System)
                 val builder = IndexBuilder(
-                    contentStore = store,
+                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
@@ -57,28 +62,34 @@ class WritePipelineNativeTest {
                     aliasRegistry = registry,
                     checkpoint = SqlDelightPageCheckpointRepository(database),
                     citations = citations,
-                    history = NoOpHistoryProvider,
+                    rootRank = rootRegistry::rank,
+                    registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
+                    availability = availability,
                 )
                 builder.rebuild()
                 val pipeline = WritePipeline(
-                    contentStore = store,
+                    stores = { store },
                     indexBuilder = builder,
                     citations = citations,
                     frontmatterParser = FrontmatterReader(),
                     dirtyPages = SqlDelightDirtyPageRepository(database),
                     idMap = idMap,
                     aliasRegistry = registry,
+                    availability = availability,
                 )
 
                 val page = builder.current.pages.single()
                 val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nnatively saved.\n".toByteArray()
-                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(
+                    grantForTests(),
+                    WriteIntent(page.id, rootRegistry.main.name, page.path, page.contentHash, saveBytes),
+                )
 
                 assertTrue(outcome is WriteOutcome.Written, "expected Written, got $outcome")
                 assertEquals(citations.contentHash(saveBytes), (outcome as WriteOutcome.Written).newHash)
                 assertContentEquals(saveBytes, Files.readAllBytes(content.resolve("doc.md")))
                 // The targeted reindex ran: the snapshot reflects the new bytes.
-                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.byId.getValue(page.id).markdown)
+                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.pageAt(RootedPageId(RootName.MAIN, page.id))!!.markdown)
                 // The write-ahead mark was cleared on success.
                 assertTrue(SqlDelightDirtyPageRepository(database).all().isEmpty(), "dirty mark not cleared")
                 // The CAS resolved the indexed path (sanity that the path round-trips).

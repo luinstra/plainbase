@@ -3,6 +3,7 @@ package com.plainbase.domain.repository
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.ProposalId
+import com.plainbase.domain.root.RootName
 import kotlin.time.Instant
 
 /**
@@ -123,6 +124,14 @@ class ProposalRow(
     val id: ProposalId,
     val operation: ProposalOperation,
     val pageId: PageId?,
+    /**
+     * The root [targetPath] lives under (ADR-0011 D18). AUTHORITATIVE for BOTH operations — it is the root apply
+     * writes into. A create has no page to resolve one from; an edit has one and still does not follow it, because
+     * the D17 cross-root contest re-awards an ID without MOVING a file, and an approved edit must land in the root
+     * it was proposed, reviewed and gated against (the id still picks the PATH, so an in-root move applies). It is
+     * IMMUTABLE for the row's life, which is what lets the pre-claim guards read it without a status TOCTOU.
+     */
+    val root: RootName,
     val baseHash: String?,
     val targetPath: TreePath,
     val proposedContent: ByteArray,
@@ -152,6 +161,7 @@ class ProposalSummaryRow(
     val operation: ProposalOperation,
     val pageId: PageId?,
     val targetPath: TreePath,
+    val root: RootName,
     val baseHash: String?,
     val status: ProposalStatus,
     val rationale: String,

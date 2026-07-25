@@ -1,0 +1,14 @@
+-- v13 -> v14: the git checkpoint (C4) - the last HEAD whose deletions this root has already accounted for.
+--
+-- Purely ADDITIVE. No backfill, and deliberately no rows: a root with no `git_checkpoint` row has never
+-- recorded a baseline, which is the no-oracle state, and the first complete pass over an eligible root
+-- writes the CURRENT head as a baseline that proves nothing (MIGRATION first-sight rule). A pre-upgrade
+-- offline delete therefore lands in limbo rather than being reaped from a range nobody recorded the start of.
+--
+-- Plain migration SQL: the `AS`/import banners live only in the .sq files. verifyMigrations cross-checks
+-- this against schema/14.db.
+
+CREATE TABLE git_checkpoint (
+  root TEXT NOT NULL PRIMARY KEY,
+  head TEXT NOT NULL
+);

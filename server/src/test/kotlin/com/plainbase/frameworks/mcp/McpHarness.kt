@@ -1,11 +1,18 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.IndexHarness
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
+import com.plainbase.domain.service.localRoot
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.AmbiguousIdMap
 import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.ktor.testRouteContext
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -45,9 +52,28 @@ import io.ktor.server.cio.CIO as ServerCIO
  * and a READ_ONLY (→ VIEWER) agent token, seeds ONE page (with a broken link, for validate_links), and syncs the
  * search engine so the read tools return real data.
  */
-class McpHarness : AutoCloseable {
+class McpHarness(
+    /** Whether the seeded root accepts page writes (ADR-0011 D6). `false` exercises the `root_not_editable` deny. */
+    editable: Boolean = true,
+    /**
+     * C4 window fixture: the roots a FAKE [AmbiguousIdMap] reports as holding the SEEDED page id. Non-empty wraps the
+     * real idMap for that one id, which is the only way to pose Ambiguity under `UNIQUE(id)`. Threaded into BOTH the
+     * resolver AND the classifier deliberately - a resolver-only fake leaves `requireVerifiedAbsence` reading the real
+     * list, and the two would answer from different facts (the REV14 FIX-1 defect).
+     */
+    ambiguousRoots: List<RootName> = emptyList(),
+    /**
+     * The roots the FAKE reports as holding a TOMBSTONE for the seeded id (alongside [ambiguousRoots]'s live
+     * claimants). A live root plus a foreign tombstone is the mixed fail-closed case (§6.0): the resolver answers
+     * Ambiguous with `hasRetiredCandidate = true`, so the ambiguous body carries the STATUS-NEUTRAL retired note.
+     */
+    retiredRoots: List<RootName> = emptyList(),
+) : AutoCloseable {
 
     private val root = Files.createTempDirectory("plainbase-mcp-test")
+
+    /** The (empty) directories backing any EXTRA roots [ambiguousRoots] names - see the registry note in `init`. */
+    private val extraDir = Files.createTempDirectory("plainbase-mcp-extra-roots")
     private val searchDir = Files.createTempDirectory("plainbase-mcp-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     private val index: IndexHarness
@@ -79,8 +105,20 @@ class McpHarness : AutoCloseable {
         index = IndexHarness(
             root,
             contentStore = store,
-            listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+            listeners = listOf(
+                IndexBuilder.PublicationListener { snap, retired ->
+                    searchIndexer.sync(snap, retired)
+                },
+            ),
             searchIndexer = searchIndexer,
+            // Every root [ambiguousRoots] names is REGISTERED over an empty directory, because the resolver filters
+            // its claimant list to registered roots: an unregistered candidate is dropped and the Ambiguous arm
+            // collapses back to One, so the fake alone cannot pose ambiguity.
+            rootRegistry = RootRegistry.of(
+                listOf(localRoot("main", root, editable = editable)) +
+                    (ambiguousRoots + retiredRoots).filter { it != RootName.MAIN }.distinct()
+                        .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
+            ),
         )
         index.builder.rebuild()
         val page = index.builder.current.pages.single()
@@ -90,7 +128,17 @@ class McpHarness : AutoCloseable {
         proposeBearer = propose.plaintext
         proposeTokenId = propose.id
         readOnlyBearer = index.apiTokens.mint(label = "ro", mode = AgentMode.READ_ONLY).plaintext
-        val ctx = index.testRouteContext(contentStore = store, searchProvider = searchProvider, enforced = true)
+        val idMap = if (ambiguousRoots.isEmpty() && retiredRoots.isEmpty()) {
+            index.idMap
+        } else {
+            AmbiguousIdMap(index.idMap, page.id, ambiguousRoots, retiredRoots)
+        }
+        val ctx = index.testRouteContext(
+            searchProvider = searchProvider,
+            enforced = true,
+            resolver = PageRootResolver(idMap, index.rootRegistry),
+            absence = AbsenceClassifier(idMap),
+        )
         server = onThread { embeddedServer(ServerCIO, host = "127.0.0.1", port = 0) { plainbaseModule(ctx) }.start(wait = false) }
         port = blocking { server.engine.resolvedConnectors().first().port }
     }
@@ -103,6 +151,20 @@ class McpHarness : AutoCloseable {
 
     /** The fully-typed stored proposal row (carrying the raw `proposedContent` bytes) for the round-trip assertion. */
     fun proposalContentBytes() = requireNotNull(index.proposalRepository.findById(proposalRows().single().id)).proposedContent
+
+    /** Drives the sticky runtime-outage state without depending on an OS-specific unmount in an MCP contract test. */
+    fun markMainUnavailable() = index.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+
+    /**
+     * Leaves the seeded page durably bound but absent from the next snapshot. A second live page keeps this from
+     * becoming the separate empty-corpus tripwire case, so the honest result is absence_unverified rather than
+     * root_unavailable.
+     */
+    fun moveSeedPageToLimbo() {
+        Files.writeString(root.resolve("keeper.md"), "---\ntitle: Keeper\n---\n\n# Keeper\n\nstill here\n")
+        Files.delete(root.resolve("doc.md"))
+        index.builder.rebuild()
+    }
 
     /** Opens an authed SSE MCP session with [bearer] and runs [block] against the connected client. */
     fun <T> session(bearer: String, block: suspend (Client) -> T): T = blocking {
@@ -153,8 +215,9 @@ class McpHarness : AutoCloseable {
         exec.shutdownNow()
         index.close()
         searchDb.close()
-        runCatching { Files.walk(searchDir).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
-        runCatching { Files.walk(root).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+        listOf(searchDir, root, extraDir).forEach { dir ->
+            runCatching { Files.walk(dir).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) } }
+        }
     }
 }
 

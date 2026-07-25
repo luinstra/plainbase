@@ -48,14 +48,37 @@ import kotlinx.serialization.json.Json
  * (pure-Kotlin coroutines, native-image friendly; Netty is banned, §3).
  */
 class KtorServer(
-    private val config: PlainbaseConfig,
-    private val routeContext: RouteContext,
+    config: PlainbaseConfig,
+    routeContext: RouteContext,
 ) {
 
+    // Held rather than discarded, so shutdown can STOP it: on SIGTERM the teardown must drain in-flight
+    // requests instead of severing them mid-write. Built here as a `val` (the engine binds at start(), not
+    // at construction), which also publishes it safely to the shutdown-hook thread with no mutable state.
+    private val engine = embeddedServer(CIO, host = config.host, port = config.port) {
+        plainbaseModule(routeContext, secureCookie = config.secureCookie())
+    }
+
     fun start(wait: Boolean) {
-        embeddedServer(CIO, host = config.host, port = config.port) {
-            plainbaseModule(routeContext, secureCookie = config.secureCookie())
-        }.start(wait = wait)
+        engine.start(wait = wait)
+    }
+
+    /**
+     * The bounded graceful stop: refuse new connections, let in-flight requests finish within
+     * [STOP_GRACE_MILLIS], then hard-stop at [STOP_TIMEOUT_MILLIS] - a shutdown step must never be the thing
+     * that hangs. Also what unblocks a `start(wait = true)`, so the caller's own cleanup can proceed.
+     */
+    fun stop() {
+        engine.stop(gracePeriodMillis = STOP_GRACE_MILLIS, timeoutMillis = STOP_TIMEOUT_MILLIS)
+    }
+
+    internal companion object {
+        private const val STOP_GRACE_MILLIS = 3_000L
+        private const val STOP_TIMEOUT_MILLIS = 5_000L
+
+        /** What [stop] can honestly take: the drain grace, then the hard stop behind it - the bound the
+         *  graceful-shutdown budget counts for the http-server step (see `serve()`). */
+        const val STOP_BOUND_MILLIS: Long = STOP_GRACE_MILLIS + STOP_TIMEOUT_MILLIS
     }
 }
 
@@ -130,7 +153,7 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         // static. Ktor resolves by specificity, and every surface below owns a distinct constant
         // prefix, so registration order and match order agree; the alias-before-shell ordering is
         // structural inside docsRoutes.
-        healthRoute()
+        healthRoute(ctx)
         // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
         // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
         // (404) — leaving them live would let a leftover builtin user/session authenticate as Principal.Human and

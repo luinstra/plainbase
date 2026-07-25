@@ -5,6 +5,9 @@ import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.render.HeadingSlugger
+import com.plainbase.domain.root.Permalink
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.frameworks.ktor.RouteContext
@@ -71,7 +74,9 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                     ?: return@guarded call.respondError(
                         HttpStatusCode.BadRequest,
                         ErrorCodes.INVALID_CREATE_REQUEST,
-                        "Request body must be JSON: {folder?, title, slug?, body?}",
+                        // `root` is inside the required set, not the optional tail: an omitted root is a decode
+                        // failure and lands here, which is the point - it must never be read as "main".
+                        "Request body must be JSON: {root, title, folder?, slug?, body?}",
                     )
 
                 if (request.title.isBlank()) {
@@ -105,6 +110,19 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                         "folder must not contain control characters (NUL, newline, CR, tab, …) or bidi overrides",
                     )
                 }
+
+                // The declared root, resolved against the registry BEFORE the gate - the same pre-gate shape the
+                // malformed-folder 400 below already uses, so anonymous behavior does not change class. This is the
+                // ONE surface that validates a declared root in its own route: the two PROPOSE surfaces (REST and
+                // MCP) share the transport-neutral parser instead, so they cannot drift into two answers. Without the
+                // check, an unknown-but-well-formed name would reach the facade, where `editableOf` fails closed and
+                // answers 403 `root_not_editable` - a lie, since the root does not exist at all.
+                val root = RootName.registered(request.root, ctx.roots)
+                    ?: return@guarded call.respondError(
+                        HttpStatusCode.BadRequest,
+                        ErrorCodes.INVALID_ROOT,
+                        "Unknown root: '${request.root}'",
+                    )
 
                 // The folder is the content-relative parent; "" (or omitted) is the content root. A folder
                 // that fails TreePath validation (traversal/absolute/empty segment) is the client's 400.
@@ -141,9 +159,11 @@ fun Route.pageCreateRoutes(ctx: RouteContext) {
                 // a create-proposal (202, the create twin of the PUT degrade); a refused blob is a 400. The clean-create
                 // 201 url is looked up from the now-published snapshot via the read facade (a creator is an EDITOR who
                 // may read).
-                when (val result = ctx.mutate.create(principal, CreateIntent(pageId = id, path = path, bytes = bytes))) {
+                when (val result = ctx.mutate.create(principal, CreateIntent(pageId = id, root = root, path = path, bytes = bytes))) {
                     is CreateOutcome.DirectCreated ->
-                        call.respondCreateOutcome(result.outcome, id) { ctx.read.currentSnapshot(principal, id.value) }
+                        call.respondCreateOutcome(result.outcome, RootedPath(root, path), id) {
+                            ctx.read.currentSnapshot(principal, id.value)
+                        }
                     is CreateOutcome.DegradedToProposal -> call.respondRest(
                         DegradedToProposalResponse.serializer(),
                         DegradedToProposalResponse(
@@ -192,15 +212,19 @@ private fun controlCharField(title: String, slug: String?): String? = when {
     else -> null
 }
 
-/** 409 `slug_conflict` — the create's canonical URL is already owned by a published page; nothing written. */
-private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
+/**
+ * 409 `slug_conflict` — the create's canonical URL is already owned by a published page; nothing written.
+ * The URL is qualified with the root the request ASKED for: URL space is per root (C3), so the contested
+ * URL only exists in [root], and naming main's would point the client at a page that isn't the conflict.
+ */
+private suspend fun ApplicationCall.respondSlugConflict(root: RootName, urlPath: String) {
     respondText(
         RestJson.encodeToString(
             PageExistsEnvelope.serializer(),
             PageExistsEnvelope(
                 PageExistsBody(
                     code = ErrorCodes.SLUG_CONFLICT,
-                    message = "Another page already owns the canonical URL /docs/$urlPath",
+                    message = "Another page already owns the canonical URL /docs/$root/$urlPath",
                     path = urlPath,
                 ),
             ),
@@ -215,24 +239,30 @@ private suspend fun ApplicationCall.respondSlugConflict(urlPath: String) {
  * outcomes are reachable from a create — a create has no `base_hash`/prior identity, so `Conflict`/
  * `UnsupportedEdit` are unreachable and `error(...)` if they ever appear.
  *
- * The clean-create 201 carries the minted [id] + the SERVER-AUTHORITATIVE canonical url: after a
- * clean `Written` the pipeline's rebuild has already published the page, so the url is the real
- * `IndexedPage.url` looked up by id ([createUrl]) — the slugified/collision-de-duped form, NEVER the raw
- * on-disk [path]. The `WrittenButUnindexed` twin returns a present-`null` url instead: the page is
- * unpublished, so no reliable canonical url exists until reconciliation and fabricating one from the raw
- * path would diverge (slug override / unicode / collision-de-dup) — the client doesn't navigate there.
+ * The clean-create 201 carries the SERVER-AUTHORITATIVE identity of the page now standing at [target]
+ * ([createdIdentity]) — after a clean `Written` the pipeline's rebuild has already published it, so the url is the
+ * real `IndexedPage.url`, the slugified/collision-de-duped form, NEVER the raw on-disk path. The
+ * `WrittenButUnindexed` twin returns the minted id with a present-`null` url instead: the page is unpublished, so
+ * no reliable canonical url exists until reconciliation and fabricating one from the raw path would diverge (slug
+ * override / unicode / collision-de-dup) — the client doesn't navigate there.
  */
-private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, id: PageId, snapshot: () -> PageIndex) {
+private suspend fun ApplicationCall.respondCreateOutcome(
+    outcome: WriteOutcome,
+    target: RootedPath,
+    id: PageId,
+    snapshot: () -> PageIndex,
+) {
     when (outcome) {
         is WriteOutcome.Written -> {
             setContentHashETag(outcome.newHash)
+            val created = createdIdentity(target, minted = id, snapshot = snapshot())
             respondWriteWire(
                 WriteWire.of(
                     HttpStatusCode.Created,
                     CreatedResponse.serializer(),
                     CreatedResponse(
-                        id = id.value,
-                        url = createUrl(id, snapshot()),
+                        id = created.id.value,
+                        url = created.url,
                         contentHash = outcome.newHash,
                         commit = outcome.commit,
                     ),
@@ -286,7 +316,7 @@ private suspend fun ApplicationCall.respondCreateOutcome(outcome: WriteOutcome, 
         is WriteOutcome.SlugConflict ->
             // P1/P2: the prospective canonical URL is owned by a different page/folder/live alias —
             // evaluated under the create monitor, so a concurrent URL-colliding create can't both win.
-            respondSlugConflict(outcome.urlPath)
+            respondSlugConflict(target.root, outcome.urlPath)
         is WriteOutcome.Unreadable ->
             respondError(
                 HttpStatusCode.ServiceUnavailable,
@@ -302,20 +332,34 @@ private suspend fun ApplicationCall.respondWriteWire(wire: WriteWire) {
     respondText(wire.encode(), ContentType.Application.Json, wire.status)
 }
 
+/** The 201's server-authoritative identity: WHICH page now stands at the written location, and its addressable url. */
+internal data class CreatedIdentity(val id: PageId, val url: String)
+
 /**
- * The clean-create page's SERVER-AUTHORITATIVE addressable url. The published `IndexedPage.url` (looked
- * up by the minted [id]) is the canonical path — the slugified, collision-de-duped form via
- * `PercentCoding.encodePath`, which DIVERGES from the raw on-disk path on slug-override, unicode, and
- * collision-de-dup. A page that LOST the path-space race carries a null canonical `url` (it's reachable
- * only via its permalink), so the fallback is the `/p/{id}` permalink — the one URL that ALWAYS resolves
- * for any published page (the server 302s a winner's permalink → canonical, and serves a loser's
- * permalink directly). We NEVER fabricate a `/docs/<raw path>` url: the raw path diverges from the
- * canonical and points at a route that may not exist (a 404 for a loser). This is called ONLY from the
- * clean `Written` branch, where the rebuild has already published the page; the unindexed branch returns
- * a `null` url instead (the client doesn't navigate there).
+ * The clean-create page's SERVER-AUTHORITATIVE identity, resolved by the LOCATION the bytes went to — [target] —
+ * and never by the [minted] id. Resolving by (root, path) is still the right rule under per-root identity (C5): a
+ * bare-id lookup answers per-root and the (root, path) we just wrote is the one fact about this create that no
+ * rebuild can move — so we ask the snapshot about that location and return the id the page actually carries there.
+ * (Pre-C5 this also guarded against the D17 cross-root rank contest re-awarding the id; that contest is now
+ * dissolved, but resolving by location remains the correct, race-free rule.)
+ *
+ * The published `IndexedPage.url` is the canonical path — the slugified, collision-de-duped `PercentCoding
+ * .encodePath` form, which DIVERGES from the raw on-disk path on slug-override, unicode, and collision-de-dup. A
+ * page that LOST the path-space race carries a null canonical `url` (it is reachable only via its permalink), so
+ * the fallback is the rooted `/p/{root}/{id}` permalink — the one URL that ALWAYS resolves for any published page (the server
+ * 302s a winner's permalink → canonical, and serves a loser's permalink directly). We NEVER fabricate a
+ * `/docs/<raw path>` url: the raw path diverges from the canonical and points at a route that may not exist (a
+ * 404 for a loser). A location the snapshot does not hold at all falls back to the minted id's permalink, which
+ * is the same answer the pre-multi-root code gave when the id was missing.
+ *
+ * Called ONLY from the clean `Written` branch, where the rebuild has already published the page; the unindexed
+ * branch returns a `null` url instead (the client doesn't navigate there).
  */
-internal fun createUrl(id: PageId, snapshot: PageIndex): String =
-    snapshot.byId[id]?.url ?: "/p/${id.value}"
+internal fun createdIdentity(target: RootedPath, minted: PageId, snapshot: PageIndex): CreatedIdentity {
+    val page = snapshot.byPath[target]
+    val id = page?.id ?: minted
+    return CreatedIdentity(id = id, url = page?.url ?: Permalink.of(target.root, id))
+}
 
 /** The W3a default warning message for a deferred reindex (R2) — shared text with `WriteDtos`. */
 private const val REINDEX_DEFERRED_MESSAGE =

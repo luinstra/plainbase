@@ -9,35 +9,39 @@
 
 import com.plainbase.domain.content.TreePath;
 import com.plainbase.domain.page.PageId;
+import com.plainbase.domain.root.RootName;
 
 CREATE TABLE dirty_page (
-  id BLOB AS PageId NOT NULL PRIMARY KEY,
+  id BLOB AS PageId NOT NULL,
+  root TEXT AS RootName NOT NULL,
   path TEXT AS TreePath NOT NULL,
   expected_hash TEXT NOT NULL,
-  stage TEXT NOT NULL
+  stage TEXT NOT NULL,
+  PRIMARY KEY (root, id)
 );
 
--- Indexed lookup by path for the object-mode poll's live dirty-ahead guard (MINOR-1): the guard runs
--- once PER poll candidate under applyLock, so a full `selectAll` per candidate is O(candidates * rows);
--- this index makes `isDirty` an indexed single-row EXISTS instead. Landed by 9.sqm (v9 -> v10).
-CREATE INDEX dirty_page_path ON dirty_page(path);
+-- Indexed lookup by (root, path) for the object-mode poll's live dirty-ahead guard (MINOR-1): the guard
+-- runs once PER poll candidate under applyLock, so a full `selectAll` per candidate is O(candidates * rows);
+-- this index makes `isDirty` an indexed single-row EXISTS instead. Composite since 10.sqm (v10 -> v11,
+-- multi-root C2); the single-column form landed by 9.sqm.
+CREATE INDEX dirty_page_root_path ON dirty_page(root, path);
 
 upsert:
-INSERT OR REPLACE INTO dirty_page(id, path, expected_hash, stage)
-VALUES (:id, :path, :expectedHash, :stage);
+INSERT OR REPLACE INTO dirty_page(id, root, path, expected_hash, stage)
+VALUES (:id, :root, :path, :expectedHash, :stage);
 
 selectAll:
 SELECT *
 FROM dirty_page;
 
-selectById:
+selectByRootId:
 SELECT *
 FROM dirty_page
-WHERE id = :id;
+WHERE root = :root AND id = :id;
 
 isDirty:
-SELECT EXISTS(SELECT 1 FROM dirty_page WHERE path = :path);
+SELECT EXISTS(SELECT 1 FROM dirty_page WHERE root = :root AND path = :path);
 
-deleteById:
+deleteByRootId:
 DELETE FROM dirty_page
-WHERE id = :id;
+WHERE root = :root AND id = :id;

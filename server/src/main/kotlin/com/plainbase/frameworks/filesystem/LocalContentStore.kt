@@ -14,8 +14,14 @@ import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
+import com.plainbase.domain.root.BreakCause
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.service.RootUnavailable
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.charset.MalformedInputException
@@ -24,6 +30,7 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileSystemException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
@@ -60,12 +67,54 @@ internal const val FOLDER_META_NAME = "_folder.yaml"
  * scan's enumeration loop. [write] still resolves new paths through the total [resolveOnDisk]
  * because creating a not-yet-indexed file is a legitimate operation. Defense-in-depth on the
  * actual read additionally re-checks no-follow root containment against a TOCTOU symlink swap.
+ *
+ * **Root loss is classified at the operation's EXIT, never at its outcomes** (ADR-0011 D5). Whatever a
+ * rooted operation lets a caller OBSERVE is a union of exactly two things - a returned value, or a thrown
+ * exception - and BOTH can be produced or REPLACED by anything that runs before the frame pops, a `finally`
+ * cleanup included. So the three mutation surfaces and [readClassified] each run their whole body inside
+ * [classifyingRootLoss], which re-probes [available] on the way out: root gone -> MARK, then the carrier
+ * (a `RootUnavailable` throw for a write; a `StoreRead.RootDown` value for a read); root live -> the
+ * outcome passes through byte-unchanged and a genuine fault stays a genuine fault. Closure is then
+ * structural - nothing can leave without being seen, and there is no list to keep complete.
+ *
+ * **The indexed-only read gate is NOT an absence oracle (C1).** It answers what this store can SEE; it says
+ * nothing about whether a page exists, because it is derived from the last SCAN - a snapshot from T, consulted at
+ * T+n, of exactly the tree that may have gone away. `readClassified` therefore reports [StoreRead.NoBytes] and
+ * stops. The durable index decides whether that absence is a 404 or a 503, one layer up.
  */
 class LocalContentStore(
     private val root: Path,
     private val ignoreRules: IgnoreRules = IgnoreRules(),
     exclusions: List<Path> = emptyList(),
     private val atomics: FileAtomics = FileAtomics.Real,
+    /** WHICH root this store serves - carried on every [RootUnavailable] it throws. */
+    private val rootName: RootName = RootName.MAIN,
+    /**
+     * Called the instant this store's own probe finds the root gone, immediately BEFORE it answers root-loss
+     * (the [FileWatcher] `onFailure` ctor-callback idiom). Marking is load-bearing, not bookkeeping: detection
+     * WITHOUT publication would 503 the write while every read, the tree and health kept serving the carried
+     * section as AVAILABLE until some later rebuild happened to probe - a contradictory 503-then-stale-success.
+     * The frameworks store never depends on the domain holder; the production wiring closes over it.
+     */
+    private val onRootUnavailable: () -> Unit = {},
+    /**
+     * Called when the probe REBINDS to a different tree at the same path - a deploy (`mv site.new site`), a symlink
+     * flip, a fresh clone. It is a healthy root and it keeps serving, which is exactly why it needs saying: every page
+     * an observation epoch witnessed here, it witnessed against the OLD inodes, and inodes are what the watches track.
+     * So the epoch must die with the tree it was watching (C2), or the first scan of the NEW tree would read as
+     * "the pages I was watching are gone" and reap a corpus that was merely replaced.
+     *
+     * The same ctor-callback idiom as [onRootUnavailable]: the frameworks store never depends on the domain holder.
+     */
+    private val onIdentityRebind: () -> Unit = {},
+    /**
+     * The liveness probe [available] runs, seamed for the ONE instant a test cannot otherwise observe: "the
+     * root was still there when we ENTERED". No FS state change can happen between two calls inside a single
+     * operation, so a test scripts THIS to pass once and every other thing in the row - the failing FS call,
+     * the failure arm, the exit classifier, the mark, the throw - stays production code. Production always
+     * runs the real check ([rootLivenessProbe]), bound at construction to the tree this store serves.
+     */
+    private val probeRoot: (Path) -> Boolean = rootLivenessProbe(root, onIdentityRebind),
 ) : ContentStore {
 
     // App-owned subtrees (DATA_DIR) excluded from BOTH the scan and the watch: a nested data dir
@@ -165,6 +214,15 @@ class LocalContentStore(
         val folders = mutableListOf<ContentFolder>()
         val issues = mutableListOf<ScanIssue>()
         val dirNames = mutableMapOf<TreePath, String>()
+
+        /**
+         * Did this walk see the WHOLE tree ([ScanResult.complete])? An unreadable DIRECTORY raises and takes the whole
+         * scan with it (fail-closed, and the rebuild carries the root), so what lands here is the quieter hole: a child
+         * this walk could LIST but could not STAT. That one is silent - the entry is simply skipped - and if it was a
+         * directory, its entire subtree leaves the scan with nothing said about it. A pass that then handed the epoch a
+         * `complete = true` scan would be claiming to have looked where it demonstrably could not.
+         */
+        var complete = true
     }
 
     /** A discovered child before collision resolution. */
@@ -175,10 +233,73 @@ class LocalContentStore(
         val isDirectory: Boolean,
     )
 
+    override fun available(): Boolean = probeRoot(root)
+
+    /**
+     * The ONE exit through which a rooted operation's observable outcome passes. Whatever the body minted -
+     * an AMBIGUOUS typed result, or ANY [IOException] escaping its arms or its `finally` cleanup (a temp
+     * delete on a root that just lost write permission) - is re-probed HERE, at the frame's exit, because a
+     * cleanup block runs after the result is computed and can REPLACE it. Root gone -> mark, then [onRootLoss].
+     * Root live -> the outcome passes through byte-unchanged, and a genuine fault is rethrown as the genuine
+     * fault it is.
+     *
+     * [onRootLoss] is the CARRIER, and it is the only thing that differs between the read and the write paths:
+     * the mutation surfaces THROW `RootUnavailable`, [readClassified] RETURNS `StoreRead.RootDown` (three of
+     * its consumers must SWALLOW the condition, so a throw would be laundered by catches already sitting on
+     * those paths). One rule, one probe, one marker, two carriers.
+     *
+     * It catches [IOException] and NOTHING ELSE, and that is PROVEN total rather than assumed: every errno the
+     * default provider can raise arrives as an `IOException` subtype (`UnixException.translateToIOException`
+     * maps every unmapped errno to `FileSystemException`), and the one genuine non-`IOException` carrier - the
+     * `DirectoryIteratorException` a mid-walk fault boxes - is normalized back at its source by
+     * [withDirectoryStream]. WIDENING the catch would be a BUG, not a belt: `UnsupportedOperationException` is
+     * this store's own live "this filesystem has no hardlinks" signal, and `OutOfMemoryError` is reachable from
+     * `readAllBytes` - laundering either as a downed root would hide the fault and lie to the operator.
+     *
+     * Note which faults the probe does NOT call root loss: a READ-ONLY remount passes all three predicates, so
+     * its `EROFS` is caught, re-probed, and passed through as the surface's own `Unreadable` - 503
+     * `content_unreadable` ("retryable, nothing written"), which is TRUE and prescribes the right remedy
+     * (remount rw, no restart), where `root_unavailable` would promise the operator a restart they do not need.
+     */
+    private inline fun <T> classifyingRootLoss(ambiguous: (T) -> Boolean, onRootLoss: () -> T, op: () -> T): T {
+        val outcome = try {
+            op()
+        } catch (e: IOException) {
+            if (available()) throw e
+            return rootGone(onRootLoss)
+        }
+        return if (ambiguous(outcome) && !available()) rootGone(onRootLoss) else outcome
+    }
+
+    /** Publish the loss, THEN answer it - never the other way round (see [onRootUnavailable]). */
+    private inline fun <T> rootGone(onRootLoss: () -> T): T {
+        onRootUnavailable()
+        return onRootLoss()
+    }
+
+    /**
+     * The mutation-surface ENTRY guard: fail fast before ANY partial work, and mark the common case (the root
+     * is already gone) without waiting for an FS call to fail. It is not sufficient on its own - the root can
+     * vanish AFTER it passes - which is what [classifyingRootLoss] closes at the other end.
+     */
+    private fun refuseIfRootGone() {
+        if (available()) return
+        onRootUnavailable()
+        throw RootUnavailable(rootName, UnavailableCause.VANISHED)
+    }
+
     override fun scan(): ScanResult {
         val acc = ScanAccumulator()
         scanDir(root, null, acc)
-        val result = ScanResult(files = acc.files.toList(), folders = acc.folders.toList(), issues = acc.issues.toList())
+        val result = ScanResult(
+            files = acc.files.toList(),
+            folders = acc.folders.toList(),
+            issues = acc.issues.toList(),
+            // HONEST, not defaulted (C2). This used to take the `true` default, so the one backend whose walk can come
+            // back short structurally could not say so - and a scan that claims completeness it does not have is what
+            // an observation epoch would cash for delete authority.
+            complete = acc.complete,
+        )
         // Retain the raw directory names too so resolveOnDisk reaches an NFD-named ancestor (P4);
         // ContentFolder carries no rawName, so the dir map is sourced from the scan accumulator.
         snapshot.store(IndexSnapshot.of(result, acc.dirNames.toMap()))
@@ -199,7 +320,7 @@ class LocalContentStore(
         dirPath: TreePath?,
         acc: ScanAccumulator,
     ) {
-        val candidates = collectCandidates(dir, dirPath)
+        val candidates = collectCandidates(dir, dirPath, acc)
 
         for ((treePath, group) in candidates.groupBy { it.treePath }) {
             val winner = if (group.size == 1) {
@@ -217,9 +338,18 @@ class LocalContentStore(
         }
     }
 
-    /** Lists [dir]'s non-ignored children as [Candidate]s (raw name + NFC [TreePath]). */
-    private fun collectCandidates(dir: Path, dirPath: TreePath?): List<Candidate> {
-        val children = Files.newDirectoryStream(dir).use { it.toList() }
+    /**
+     * Lists [dir]'s non-ignored children as [Candidate]s (raw name + NFC [TreePath]).
+     *
+     * ONE `readAttributes` decides both type questions (symlink, directory), where `isSymbolicLink` +
+     * `isDirectory` were two stats that each answered FALSE on an IO failure - so a child this walk could name but
+     * not stat was silently typed as a FILE, and if it was really a DIRECTORY its whole subtree left the scan with
+     * `complete = true` still claiming we had looked. That is the quiet half of the completeness lie (the loud half,
+     * an unreadable directory, raises out of [withDirectoryStream] and fails the scan). Now the stat failure is what
+     * it is: an entry we could not see, and a walk that must not pretend otherwise ([ScanAccumulator.complete]).
+     */
+    private fun collectCandidates(dir: Path, dirPath: TreePath?, acc: ScanAccumulator): List<Candidate> {
+        val children = withDirectoryStream(dir) { it.toList() }
         return children.mapNotNull { child ->
             val rawName = child.fileName.toString()
             if (rawName == FOLDER_META_NAME) return@mapNotNull null // metadata sidecar, not a content entry
@@ -229,14 +359,25 @@ class LocalContentStore(
                 logger.debug { "Skipping excluded app-owned subtree: $relativePath" }
                 return@mapNotNull null
             }
+            val attrs = try {
+                // NOFOLLOW_LINKS keeps the type checks honest about the link itself.
+                Files.readAttributes(child, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            } catch (e: IOException) {
+                acc.complete = false
+                logger.warn(e) {
+                    "could not stat $relativePath during the scan of $root: it is skipped, and this walk is INCOMPLETE - " +
+                        "the root keeps serving what it can read, and nothing may be deleted for what it cannot"
+                }
+                return@mapNotNull null
+            }
             // Skip symlinks: a symlink cycle is a startup stack overflow and an out-of-root target is
-            // a content-root escape. NOFOLLOW_LINKS keeps the type checks honest about the link itself.
-            if (Files.isSymbolicLink(child)) {
+            // a content-root escape.
+            if (attrs.isSymbolicLink) {
                 logger.warn { "Skipping symlink (policy: links are not content): $relativePath" }
                 return@mapNotNull null
             }
             val treePath = TreePath.childOf(dirPath, Nfc.normalize(rawName))
-            Candidate(rawName, child, treePath, Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS))
+            Candidate(rawName, child, treePath, attrs.isDirectory)
         }
     }
 
@@ -305,6 +446,27 @@ class LocalContentStore(
         }
         return Files.readAllBytes(osPath)
     }
+
+    override fun readClassified(path: TreePath): StoreRead =
+        // ONE exit. The read's ambiguous value is NoBytes; its root-loss carrier is RootDown - a VALUE, never a
+        // throw, which is the whole point of a classified read. read() itself is untouched.
+        //
+        // NoBytes is as far as this goes, and C1 is why: whether "no bytes here" MEANS the page was deleted is a
+        // question about the durable index, which this adapter has never heard of. It reports the observation;
+        // AbsenceClassifier decides what it is evidence OF.
+        classifyingRootLoss(ambiguous = { it == StoreRead.NoBytes }, onRootLoss = { StoreRead.RootDown }) {
+            try {
+                read(path)?.let(StoreRead::Bytes) ?: StoreRead.NoBytes
+            } catch (_: NoSuchFileException) {
+                // The FILE vanished between read()'s isRegularFile probe and its readAllBytes (which sits outside
+                // any catch). That means exactly what read()'s own null means, so say so and let the wrapper decide
+                // WHOSE absence it was: root gone -> RootDown; root live -> a plain deletion race, honestly NoBytes.
+                // The two races COMPOSE rather than needing separate arms. Any OTHER IOException (a chmod-ed page
+                // file, an EIO, a read-only remount) escapes to the wrapper's catch and is rethrown on a live root -
+                // a genuine fault stays a genuine fault, never a false 503.
+                StoreRead.NoBytes
+            }
+        }
 
     override fun stat(path: TreePath): ContentStat? {
         val snap = snapshot.load()
@@ -398,6 +560,13 @@ class LocalContentStore(
         // shadowed by a new NFC-named sibling. resolveOnDisk is total - a genuinely-new segment
         // falls back to its NFC name, which is the correct on-disk form for a fresh file.
         val target = resolveOnDisk(path, snapshot.load())
+        // The object MIRROR requires parent creation: it is derived DATA_DIR state whose own fresh-install
+        // contract says it may legitimately be ABSENT and re-materialized from the bucket, and this is the
+        // mechanism that honors it. NOTHING ELSE may use this method to touch a page (see the port doc): the
+        // reasoning that once let the offline `adopt` CLI in - that it serves no 503 and so has no D5 wire
+        // contract to lie to - was measuring the wrong thing. The lie a resurrection tells is not on the wire,
+        // it is ON DISK: a vanished root came back as a partial skeleton of the operator's tree, holding only
+        // the pages that run patched, at whatever the old path now resolves to. Adopt CASes instead.
         Files.createDirectories(target.parent)
         // Log the intended write BEFORE performing it so an interrupted run is detectable
         // (chunk 4b adopt durability). Intentionally logs the path only, never content.
@@ -419,6 +588,18 @@ class LocalContentStore(
     }
 
     override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
+        refuseIfRootGone()
+        return classifyingRootLoss(
+            CasResult::rootLossCandidate,
+            onRootLoss = { throw RootUnavailable(rootName, UnavailableCause.VANISHED) },
+        ) {
+            casWrite(path, baseHash, bytes, hasher)
+        }
+    }
+
+    /** The CAS body, verbatim. It is a separate frame so the exit wrapper actually WRAPS it - a `return` from an
+     *  inlined lambda would return from `compareAndSwapWrite` itself and walk straight past the classifier. */
+    private fun casWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
         val snap = snapshot.load()
         // Indexed-only gate (see read/the class header): a path the scan skipped is not a CAS target.
         if (!snap.isIndexedFile(path)) return CasResult.Deleted
@@ -478,6 +659,17 @@ class LocalContentStore(
     }
 
     override fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
+        refuseIfRootGone()
+        return classifyingRootLoss(
+            CreateResult::rootLossCandidate,
+            onRootLoss = { throw RootUnavailable(rootName, UnavailableCause.VANISHED) },
+        ) {
+            createIfAbsent(path, bytes, hasher)
+        }
+    }
+
+    /** The create body, verbatim (a separate frame - see [casWrite]). */
+    private fun createIfAbsent(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
         // resolveOnDisk is total - a genuinely-new segment falls back to its NFC name, the correct
         // on-disk form for a fresh file (the same resolution `write` uses, P4-aware).
         val target = resolveOnDisk(path, snapshot.load())
@@ -518,6 +710,17 @@ class LocalContentStore(
         hasher: (ByteArray) -> String,
     ): CreateResult {
         // [grant] is an unused compile-time witness that PolicyService.checkEdit() ran (A3). Body unchanged.
+        refuseIfRootGone()
+        return classifyingRootLoss(
+            CreateResult::rootLossCandidate,
+            onRootLoss = { throw RootUnavailable(rootName, UnavailableCause.VANISHED) },
+        ) {
+            writeAsset(path, bytes, hasher)
+        }
+    }
+
+    /** The asset-write body, verbatim (a separate frame - see [casWrite]). */
+    private fun writeAsset(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
         val target = resolveOnDisk(path, snapshot.load())
         // Asset difference (1): require the parent to ALREADY exist and be a directory - never create it
         // (an external rm of the page's folder must not be papered over by recreating it under the asset).
@@ -666,11 +869,35 @@ class LocalContentStore(
         return dir
     }
 
-    override fun watch(onChange: (TreePath) -> Unit): AutoCloseable =
+    override fun watch(
+        onChange: (TreePath) -> Unit,
+        onFailure: (Throwable) -> Unit,
+        onCoverage: (WatchCoverage) -> Unit,
+        onBreak: (BreakCause) -> Unit,
+    ): AutoCloseable =
         // The watcher shares the scan's IgnoreRules (one ignore policy, §B1) and skips the
         // configured exclusions - DATA_DIR when it is nested inside the content root, so the app's
         // own search-index/database writes can never re-trigger the watcher.
-        FileWatcher(root = root, ignoreRules = ignoreRules, excluded = excludedDirs, onChange = onChange)
+        FileWatcher(
+            root = root,
+            ignoreRules = ignoreRules,
+            excluded = excludedDirs,
+            onChange = onChange,
+            onFailure = onFailure,
+            onCoverage = onCoverage,
+            onBreak = onBreak,
+            // THIS store's probe, not a second one: the watcher's "is the root there" and the write path's must
+            // never fork, and a seamed probe (tests) has to reach the watcher too.
+            rootIsAlive = ::available,
+            // Root loss is PUBLISHED then CONVERGED, through the two mechanisms that already exist: the D5 marker
+            // this store's mutation surfaces call (VANISHED - the honest cause; the watcher merely NOTICED it), and
+            // the same full pass the OVERFLOW branch schedules, so the rebuild carries the root's section forward
+            // and the tree/health memo (keyed on the availability snapshot) drops its `available: true`.
+            onRootLost = {
+                onRootUnavailable()
+                onChange(ContentStore.OVERFLOW)
+            },
+        )
 
     /** The `/`-joined content-relative path of a child named [rawName] under [dirPath]. */
     private fun childRelativePath(dirPath: TreePath?, rawName: String): String =
@@ -682,4 +909,127 @@ class LocalContentStore(
     companion object {
         private val logger = KotlinLogging.logger {}
     }
+}
+
+/**
+ * The ONE traversability predicate: a directory at this path exists and can be walked right now. Kept textually
+ * PAIRED with `PlainbaseConfig.canonicalRootPathOrNull`'s one-probe rule, which defines a usable root as a
+ * readable, SEARCHABLE directory - the runtime probe and the config probe must never fork, which is a second
+ * reason not to add a write bit here (see [ContentStore.available]).
+ *
+ * It answers about the PATH, which is why it is only half of the runtime probe ([rootLivenessProbe]).
+ */
+internal fun rootIsTraversable(root: Path): Boolean =
+    Files.isDirectory(root) && Files.isReadable(root) && Files.isExecutable(root)
+
+/**
+ * The RUNTIME liveness probe: [rootIsTraversable] over the path, plus the ONE distinction three `stat`s cannot
+ * make - a tree that was REPLACED versus a tree that went AWAY. Both answer the path predicates identically, and
+ * they are opposite events.
+ *
+ * The tree's identity is what tells them apart, but only as a HINT: [BasicFileAttributes.fileKey] is
+ * `(st_dev, st_ino)` on Unix, so an unmount, a remount, a rename-in and a `git clone` into place ALL change it,
+ * and it says nothing about which of those happened. What decides is what is THERE afterwards:
+ *  - a DIFFERENT tree that is BLANK is a loss. Unmounting a volume at the root leaves the mount-point directory
+ *    behind - present, empty, readable, executable - so the root has not gone missing, it has gone blank, and
+ *    called available it would scan to zero files and hand a full-corpus DELETE to every pipeline keyed off the
+ *    pass's authority set. This is the case the identity half exists for.
+ *  - a DIFFERENT tree with CONTENT in it is a DEPLOY: an atomic-rename content release (`mv site.new site`), a
+ *    symlink flip, a fresh clone. The root is healthy and fully readable, and answering "vanished" for it would
+ *    503 a live root - stickily, until a restart nobody should need - on the strength of an inode number. So the
+ *    probe REBINDS to the new tree and answers live, and the watcher re-registers on the same signal.
+ * The blank-tree check runs only when the key actually CHANGED, so the hot path stays three `stat`s.
+ *
+ * What this probe deliberately does NOT do is decide whether a corpus was DELETED - a same-tree root that reads
+ * empty answers `true` here. That question needs state that outlives the process (the durable rows), which is
+ * where `IndexBuilder`'s corpus-loss tripwire asks it. Liveness is about the TREE; the corpus is the index's.
+ *
+ * And the identity half is a HINT for a second reason, which is why the tripwire has to exist: **an inode is a
+ * REUSABLE number.** On ext4, deleting a directory and immediately recreating it at the same path hands back the
+ * SAME `(st_dev, st_ino)` - so a tree that was replaced can be indistinguishable from one that never moved, and
+ * this probe will call it live. It is not a bug to fix here; no `stat` over the path can see that. It is the
+ * reason nothing downstream may treat `available()` as proof that a zero-page scan is a real delete.
+ *
+ * Where the filesystem cannot key a directory (Windows) the key is null and the probe is the three predicates
+ * alone: today's behavior, unchanged, on the platform that cannot do better. A root that is not there AT
+ * CONSTRUCTION keys null too, and binds to whatever tree turns up at the path.
+ */
+internal fun rootLivenessProbe(root: Path, onRebind: () -> Unit = {}): (Path) -> Boolean {
+    val bound = AtomicReference(rootFileKey(root))
+    return probe@{ path ->
+        if (!rootIsTraversable(path)) return@probe false
+        val now = rootFileKey(path) ?: return@probe true // no directory keys on this filesystem: predicates only
+        val captured = bound.load()
+        when {
+            captured == now -> true
+            captured == null -> {
+                bound.compareAndSet(expectedValue = null, newValue = now) // first tree to turn up at an absent root
+                true
+            }
+            isBlank(path) -> false // a different, EMPTY tree: the mount point an unmount left behind
+            else -> {
+                // A different, POPULATED tree: a deploy. Rebind and converge - and TELL SOMEONE (C2). The root is
+                // healthy and every byte of it serves, but this is a NEW universe: an observation epoch built on the
+                // old tree witnessed pages that no longer exist AS THOSE FILES, so believing it here would let a
+                // release reap the site it just replaced. Only the CAS winner announces it: the probe runs on every
+                // liveness tick and every failed FS call, and one rebind is one break.
+                if (bound.compareAndSet(expectedValue = captured, newValue = now)) onRebind()
+                true
+            }
+        }
+    }
+}
+
+/** The identity of the tree at [root] - null when it is not there, or when the filesystem does not key files. */
+internal fun rootFileKey(root: Path): Any? =
+    try {
+        // Links FOLLOWED: a symlinked content root is legal (see `writeAsset`), and what must stay put is the
+        // tree it points AT - which is also the thing an unmount takes away.
+        Files.readAttributes(root, BasicFileAttributes::class.java).fileKey()
+    } catch (_: IOException) {
+        null
+    }
+
+/**
+ * Does the directory at [path] hold NOTHING at all? Deliberately the crudest possible question - any entry,
+ * ignored or not, counts - because the tree it is asked about is one nobody has scanned: the point is to tell a
+ * bare mount point from a populated deploy, not to judge what is content.
+ *
+ * A directory that cannot be opened is NOT blank: it is unreadable, which the traversability predicates and the
+ * scan's own live-root failure arm already answer for, and calling it a lost root would be the mirror-image lie.
+ *
+ * Internal, not private: `ObjectContentStore` asks it too, because a blank tree means something STRONGER for a
+ * mirror than it does for a content root (see its `available`).
+ */
+internal fun isBlank(path: Path): Boolean =
+    try {
+        Files.newDirectoryStream(path).use { !it.iterator().hasNext() }
+    } catch (_: IOException) {
+        false
+    }
+
+/**
+ * Whether a [CasResult] is AMBIGUOUS - i.e. a live-root failure and a root-gone condition mint the SAME value,
+ * so the exit classifier must re-probe before letting it out. The `when` is EXHAUSTIVE over the sealed set on
+ * purpose: a future variant does not compile until it declares its ambiguity, which is what makes this list the
+ * compiler's rather than a plan's.
+ *
+ * Declared TOP-LEVEL, not as a member extension: Kotlin forbids a callable reference to a member-extension
+ * function, so the unbound `CasResult::rootLossCandidate` the exit wrapper takes would not compile.
+ */
+private fun CasResult.rootLossCandidate(): Boolean = when (this) {
+    is CasResult.Written -> false // bytes landed - the root was there
+    // Null bytes mean the read failed. On a live root that is a genuine concurrent-write race (409
+    // `content_changed`); on a gone root it would tell a client "someone else edited your page" while the
+    // truth is the disk is unmounted.
+    is CasResult.Mismatch -> currentBytes == null
+    CasResult.Deleted, is CasResult.Unreadable -> true
+}
+
+/** The [CreateResult] twin of [rootLossCandidate]. A gone root yields no `Rejected` (the gates' ancestor walk
+ *  finds nothing existing) and no `Exists` (that arm fires only on an occupied-by-file parent), so those - and
+ *  `Created`, whose bytes demonstrably landed - are unambiguous. */
+private fun CreateResult.rootLossCandidate(): Boolean = when (this) {
+    is CreateResult.Created, is CreateResult.Exists, is CreateResult.Rejected -> false
+    CreateResult.ParentMissing, is CreateResult.Unreadable -> true
 }

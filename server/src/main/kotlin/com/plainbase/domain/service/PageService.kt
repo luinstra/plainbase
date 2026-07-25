@@ -3,8 +3,10 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.Citation
 import com.plainbase.domain.page.IndexedPage
-import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 
 /**
  * The read service behind PB-REST-1's page endpoints (§A4) — and, unchanged, behind Phase 5's
@@ -15,8 +17,10 @@ import com.plainbase.domain.page.PageIndex
  * old-index/new-store mismatch mid-rescan. (Assets are the deliberate opposite — see `AssetRoute`.)
  *
  * Lookup semantics (frozen):
- *  - [byId] — index `byId`; a shape-valid unknown id is the caller's `page_not_found`.
- *  - [byUrlPath] — the *decoded, NFC* `/docs/`-relative slug path, matched case-sensitively
+ *  - [pageAt] — the exact (root, id) identity in the snapshot; a shape-valid unknown id is the
+ *    caller's `page_not_found`.
+ *  - [byUrlPath] - the *decoded, NFC* ROOT-relative slug path (the tail after `/docs/{root}/`,
+ *    C3; the route parses the root segment off first), matched case-sensitively
  *    against canonical paths first, then the alias registry; an alias hit returns the page whose
  *    payload carries the CURRENT canonical `url`, so clients self-correct (§A4).
  */
@@ -26,23 +30,35 @@ class PageService(
     private val citations: CitationFactory,
 ) {
 
-    /** The published index snapshot the routing layer reads from. */
+    /**
+     * The published index snapshot, freshly read. Kept for the callers that legitimately want CURRENT truth; the
+     * GATED read paths do NOT use it - they thread the ONE snapshot their facade already read (below).
+     */
     val index: PageIndex get() = indexBuilder.current
 
-    /** The full page payload for [id], or null when unknown. */
-    fun byId(id: PageId): PagePayload? = index.byId[id]?.let(::payload)
+    /**
+     * The full page payload at [rooted]'s exact ([root], [id]) identity in [snapshot], or null.
+     *
+     * [snapshot] is a PARAMETER, not a fresh `indexBuilder.current` read, and that is the one-snapshot rule the write
+     * side already holds itself to (ADR-0011 D17): the facade gates on the root it resolved from ITS snapshot, and a
+     * rebuild landing between the two reads can re-award a cross-root duplicate id to a DIFFERENT root - one whose
+     * section may be a carried-forward one from a root that is DOWN. The facade would then have gated root A and
+     * served root B's stale bytes with a 200. Keying on the exact rooted identity off one object makes gate-root and
+     * serve-root one answer by construction, even during a cross-root move window (C4).
+     */
+    fun pageAt(snapshot: PageIndex, rooted: RootedPageId): PagePayload? = snapshot.pageAt(rooted)?.let(::payload)
 
-    /** The full page payload at the canonical-or-alias URL [path], or null (§A4 by-path rules). */
-    fun byUrlPath(path: TreePath): PagePayload? {
-        val snapshot = index
-        val page = snapshot.byUrlPath[path]
-            ?: aliasRegistry.find(path)?.let { snapshot.byId[it] }
+    /** The full page payload at [root]'s canonical-or-alias URL [path] in [snapshot], or null (§A4 by-path rules). */
+    fun byUrlPath(snapshot: PageIndex, root: RootName, path: TreePath): PagePayload? {
+        val rooted = RootedPath(root, path)
+        val page = snapshot.byUrlPath[rooted]
+            ?: aliasRegistry.find(rooted)?.let { snapshot.pageAt(it) }
             ?: return null
         return payload(page)
     }
 
-    /** The rendered-HTML payload for [id], or null when unknown. */
-    fun htmlById(id: PageId): PageHtmlPayload? = index.byId[id]?.let { page ->
+    /** The rendered-HTML payload at [rooted]'s exact identity in [snapshot], or null (the [pageAt] twin). */
+    fun htmlAt(snapshot: PageIndex, rooted: RootedPageId): PageHtmlPayload? = snapshot.pageAt(rooted)?.let { page ->
         PageHtmlPayload(page = page, citation = citations.pageLevel(page, page.contentHash))
     }
 

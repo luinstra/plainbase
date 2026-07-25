@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/client";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { TreeResponse } from "../api/types";
 import { ErrorView } from "../components/ErrorView";
@@ -26,7 +27,7 @@ vi.mock("../components/PageView", async (importOriginal) => {
   };
 });
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const ANON_SESSION = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
 
 function renderAt(initialPath: string) {
@@ -58,11 +59,22 @@ describe("error boundary", () => {
     expect(createAppRouter(new QueryClient()).options.defaultErrorComponent).toBe(ErrorView);
   });
 
+  it("hands an outage to the SAME renderer every other surface uses, root name and all", () => {
+    // The boundary used to compose the outage vocabulary itself, and worded the headline WITHOUT the root
+    // name - so the one fact a reader needs (which docs are down) reached them only if they read the detail
+    // line. One outage, one renderer: this asserts the boundary DELEGATES rather than re-spelling it.
+    const view = render(<ErrorView error={new ApiError(503, "root_unavailable", 'the "handbook" root is not serving')} reset={() => {}} />);
+
+    expect(view.container.querySelector("[data-pb-root-unavailable]")).not.toBeNull();
+    expect(view.container.textContent).toContain("handbook");
+    expect(view.container.textContent).not.toContain("Something went wrong");
+  });
+
   it("keeps the Shell mounted when a route's render crashes", async () => {
     // React logs the caught render error; expected here, silenced for this test only.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const { view } = renderAt("/docs/guides/deploy-guide");
+      const { view } = renderAt("/docs/main/guides/deploy-guide");
 
       await waitFor(() => expect(view.container.querySelector("[data-pb-error-boundary]")).not.toBeNull());
       expect(view.container.querySelector("[data-pb-shell]")).not.toBeNull();

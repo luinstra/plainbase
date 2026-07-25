@@ -5,8 +5,6 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import org.junit.jupiter.api.Tag
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -31,7 +29,9 @@ class ReindexCommandNativeTest {
             Files.writeString(content.resolve("guide.md"), "---\ntitle: Guide\n---\n\n# Guide\n\nfind the flux capacitor here.\n")
             val config = PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0)
 
-            val out = captureStdout { assertEquals(0, ReindexCommand.run(emptyList(), config)) }
+            val out = captureStdout {
+                assertEquals(0, ReindexCommand.run(emptyList(), config, NativeCommandOutputCapture.current))
+            }
             assertContains(out, "reindex:")
 
             SearchDb(config.searchDatabasePath).use { db ->
@@ -48,14 +48,4 @@ class ReindexCommandNativeTest {
 }
 
 /** Captures System.out for the duration of [block] — reindex's stdout is its output contract. */
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = NativeCommandOutputCapture.captureStdout(block)

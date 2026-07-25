@@ -81,7 +81,8 @@ class ProposalDtoNativeTest {
 
         val detail = ChangeDetail(
             id = "01900000-0000-7000-9000-000000000001", operation = "edit", status = "PENDING",
-            targetPath = "a.md", pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a", baseHash = "sha256:${"0".repeat(64)}",
+            root = "main", targetPath = "a.md", pageId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a",
+            baseHash = "sha256:${"0".repeat(64)}",
             baseDrifted = false, authorLabel = "ci", authorIssuer = "agent", authorExternalId = "pb_a",
             createdAt = "2023-11-14T22:13:20Z", rationale = "r", unifiedDiff = "@@ -0,0 +1,1 @@\n+x\n",
             approverIssuer = null, approverExternalId = null, decisionComment = null, decidedAt = null, appliedCommit = null,
@@ -89,7 +90,8 @@ class ProposalDtoNativeTest {
         assertRoundTrips(ChangeDetail.serializer(), detail)
 
         val summary = ChangeSummary(
-            id = "01900000-0000-7000-9000-000000000001", operation = "edit", status = "PENDING", targetPath = "a.md",
+            id = "01900000-0000-7000-9000-000000000001", operation = "edit", status = "PENDING", root = "main",
+            targetPath = "a.md",
             pageId = null, baseDrifted = false, authorLabel = "ci", createdAt = "2023-11-14T22:13:20Z", rationale = "r",
         )
         val list = ListChangesResponse(proposals = listOf(summary))

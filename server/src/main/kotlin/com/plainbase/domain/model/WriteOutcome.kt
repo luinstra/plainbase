@@ -26,7 +26,8 @@ sealed interface WriteOutcome {
      * The atomic CAS found the on-disk file no longer matched the client's `base_hash` — NOTHING was
      * written. [reason] is `content_changed` (the bytes on disk drifted since the client read them) or
      * `page_deleted` (the indexed file is gone). [currentContent]/[currentHash] are null for
-     * `page_deleted`; [currentPath] is the id's path if it is still indexed.
+     * `page_deleted`, and so is [currentPath]: it is the location the CAS read the current bytes from
+     * (the save's own target), so with no current bytes there is no path to rebase against.
      */
     data class Conflict(
         val reason: String,

@@ -1,0 +1,67 @@
+-- v10 -> v11: multi-root C2 (ADR-0011) - composite (root, path) keys on every path-bearing table,
+-- every existing row stamped root = 'main' (safe forever: the name is reserved, ADR-0011 D1).
+--
+-- SQLite cannot alter a PRIMARY KEY, so the five typed tables rebuild (CREATE new + INSERT ... SELECT
+-- + DROP + ALTER RENAME); proposals takes the 8.sqm ADD COLUMN idiom (the DEFAULT backfills and
+-- stamps future inserts, ADR-0011 D18). Plain migration SQL: the `AS`/import banners live only in
+-- the .sq files. verifyMigrations cross-checks this against schema/11.db.
+
+CREATE TABLE id_map_v11 (
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  id BLOB NOT NULL UNIQUE,
+  materialized INTEGER NOT NULL,
+  PRIMARY KEY (root, path)
+);
+INSERT INTO id_map_v11 SELECT 'main', path, id, materialized FROM id_map;
+DROP TABLE id_map;
+ALTER TABLE id_map_v11 RENAME TO id_map;
+
+-- other_root stamps the '' sentinel: no cross-root issue kind can predate C2.
+CREATE TABLE identity_issue_v11 (
+  kind TEXT NOT NULL,
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  other_root TEXT NOT NULL,
+  other_path TEXT NOT NULL,
+  page_id BLOB NOT NULL,
+  message TEXT,
+  UNIQUE(kind, root, path, other_root, other_path, page_id)
+);
+INSERT INTO identity_issue_v11 SELECT kind, 'main', path, '', other_path, page_id, message FROM identity_issue;
+DROP TABLE identity_issue;
+ALTER TABLE identity_issue_v11 RENAME TO identity_issue;
+
+CREATE TABLE url_alias_v11 (
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  id BLOB NOT NULL,
+  PRIMARY KEY (root, path)
+);
+INSERT INTO url_alias_v11 SELECT 'main', path, id FROM url_alias;
+DROP TABLE url_alias;
+ALTER TABLE url_alias_v11 RENAME TO url_alias;
+
+CREATE TABLE page_checkpoint_v11 (
+  id BLOB NOT NULL PRIMARY KEY,
+  root TEXT NOT NULL,
+  url_path TEXT
+);
+INSERT INTO page_checkpoint_v11 SELECT id, 'main', url_path FROM page_checkpoint;
+DROP TABLE page_checkpoint;
+ALTER TABLE page_checkpoint_v11 RENAME TO page_checkpoint;
+
+CREATE TABLE dirty_page_v11 (
+  id BLOB NOT NULL PRIMARY KEY,
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  expected_hash TEXT NOT NULL,
+  stage TEXT NOT NULL
+);
+INSERT INTO dirty_page_v11 SELECT id, 'main', path, expected_hash, stage FROM dirty_page;
+DROP TABLE dirty_page;
+ALTER TABLE dirty_page_v11 RENAME TO dirty_page;
+-- The old dirty_page_path index died with the dropped table; the composite replaces it (MINOR-1).
+CREATE INDEX dirty_page_root_path ON dirty_page(root, path);
+
+ALTER TABLE proposals ADD COLUMN root TEXT NOT NULL DEFAULT 'main';

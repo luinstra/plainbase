@@ -12,7 +12,7 @@ import { expect, test } from "@playwright/test";
  * fast local iteration.
  */
 
-const PAGE = "/docs/guides/deploy-guide";
+const PAGE = "/docs/main/guides/deploy-guide";
 
 test("edit a fixture page: preview updates, save persists, the reading view reflects it", async ({ page }) => {
   const marker = `e2e edit ${Date.now()}`;

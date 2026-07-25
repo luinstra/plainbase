@@ -40,7 +40,7 @@ internal const val SEARCH_DESCRIPTION =
 internal const val READ_PAGE_DESCRIPTION =
     "Read a page's verbatim on-disk markdown source (frontmatter header + body), same as GET /api/v1/pages/{id}."
 internal const val GET_PAGE_METADATA_DESCRIPTION =
-    "A page's server-derived metadata projection (id/path/url/permalink/content_hash/commit/title/headings)."
+    "A page's server-derived metadata projection (id/root/path/url/permalink/content_hash/commit/title/headings)."
 internal const val VALIDATE_LINKS_DESCRIPTION =
     "The broken links + anchors on a page (same contract as GET /api/v1/pages/{id}/validate-links)."
 internal const val PROPOSE_CHANGE_DESCRIPTION =
@@ -73,6 +73,26 @@ private fun idSchema(description: String): ToolSchema = ToolSchema(
     required = listOf("id"),
 )
 
+/**
+ * A page-id input schema with the OPTIONAL C4 `root` disambiguator (`{ id: string, root?: string }`, only `id`
+ * required), shared by the three page-id READ tools. A bare id held by more than one root answers `ambiguous_page_id`
+ * with the candidate roots; the agent retries naming one here. A malformed root slug is `invalid_root` (a
+ * connect-authenticated MCP read exception - root names are public, reads mint no write-audit).
+ */
+private fun pageIdSchema(description: String): ToolSchema = ToolSchema(
+    properties = buildJsonObject {
+        put("id", stringProperty(description))
+        put(
+            "root",
+            stringProperty(
+                "Optional root name to disambiguate an id held by more than one root; omit unless a read returned " +
+                    "ambiguous_page_id, which lists the candidate roots. Use the names `list` shows on the tree.",
+            ),
+        )
+    },
+    required = listOf("id"),
+)
+
 internal val searchSchema = ToolSchema(
     properties = buildJsonObject {
         put("q", stringProperty("The search query (the PB-SEARCH-1 §A1 grammar)."))
@@ -82,11 +102,11 @@ internal val searchSchema = ToolSchema(
     required = listOf("q"),
 )
 
-internal val readPageSchema = idSchema("The canonical-shape page UUID.")
+internal val readPageSchema = pageIdSchema("The canonical-shape page UUID.")
 
-internal val getPageMetadataSchema = idSchema("The canonical-shape page UUID.")
+internal val getPageMetadataSchema = pageIdSchema("The canonical-shape page UUID.")
 
-internal val validateLinksSchema = idSchema("The canonical-shape page UUID.")
+internal val validateLinksSchema = pageIdSchema("The canonical-shape page UUID.")
 
 internal val getChangeSchema = idSchema("The canonical-shape proposal UUID.")
 
@@ -98,9 +118,22 @@ internal val listChangesSchema = ToolSchema(
 
 // propose_change: the property names + the lowercase operation enum MUST match ProposeChangeRequest's @SerialNames
 // verbatim (ProposalDtos.kt) so the shared decode validates identically to REST.
+//
+// `root` is REQUIRED for a create and an OPTIONAL disambiguation pin for an edit (C4), which a flat `required`
+// list cannot say (it would force every edit to name a root). The DESCRIPTION says it and the shared parser
+// ENFORCES it - a create without a root is `invalid_root`, exactly as on REST. It is never defaulted to `main`:
+// that would let an agent's omission choose which root's disk it writes to and whose globs authorize it.
 internal val proposeChangeSchema = ToolSchema(
     properties = buildJsonObject {
         put("operation", enumProperty(listOf("edit", "create"), "edit an existing page or create a new one."))
+        put(
+            "root",
+            stringProperty(
+                "Which document directory a CREATE lands in - REQUIRED for a create, there is no default. Optional " +
+                    "for an edit as a disambiguation pin: name it when the tool answers ambiguous_page_id, " +
+                    "otherwise omit it. Use the names `list` shows on the tree.",
+            ),
+        )
         put("page_id", stringProperty("The page to edit (an edit requires it; a create omits it)."))
         put("base_hash", stringProperty("The sha256:<64-hex> content hash you edited against (an edit requires it)."))
         put("target_path", stringProperty("A create's content-relative path (required for create); optional for an edit."))

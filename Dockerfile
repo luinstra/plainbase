@@ -39,7 +39,8 @@ COPY --from=build /src/server/build/install/plainbase /opt/plainbase
 
 ENV CONTENT_DIR=/content \
     DATA_DIR=/data \
-    PLAINBASE_PORT=8080
+    PLAINBASE_PORT=8080 \
+    PLAINBASE_OPTS="-Dlogback.configurationFile=logback-container.xml -Dplainbase.commandEvents=json"
 VOLUME ["/content", "/data"]
 EXPOSE 8080
 

@@ -54,7 +54,6 @@ class ProposalAuthzRouteTest : FunSpec({
                     else -> principal ?: Principal.Anonymous
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     searchProvider = harness.fts(root),
                     enforced = enforced,
                     extract = fixedPrincipal(resolved),
@@ -114,7 +113,11 @@ class ProposalAuthzRouteTest : FunSpec({
                     proposals = com.plainbase.domain.service.ProposalService(
                         repository = harness.proposalRepository,
                         citations = com.plainbase.domain.service.CitationFactory(),
-                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(harness.builder, store),
+                        baseReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(
+                            harness.builder,
+                            harness.stores,
+                            harness.absence,
+                        ),
                         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
                         clock = Clock.System,
                     ),
@@ -122,6 +125,10 @@ class ProposalAuthzRouteTest : FunSpec({
                     // This test only drives propose (a denied EDIT) — the apply seam is never consulted.
                     mutate = UnusedMutatingFacade,
                     idProvider = com.plainbase.domain.service.UuidV7IdProvider(),
+                    indexBuilder = harness.builder,
+                    resolver = com.plainbase.domain.service.PageRootResolver(harness.idMap, harness.rootRegistry),
+                    availability = harness.availability,
+                    absence = harness.absence,
                 )
                 val readOnly = Principal.Agent(harness.apiTokens.mint(label = "ci", mode = AgentMode.READ_ONLY).id)
                 val page = harness.builder.current.pages.single()
@@ -135,6 +142,7 @@ class ProposalAuthzRouteTest : FunSpec({
                             clientTargetPath = null,
                             proposedContent = "x".encodeToByteArray(),
                             rationale = "r",
+                            root = null,
                         ),
                     )
                 }
@@ -249,6 +257,7 @@ private object UnusedMutatingFacade : com.plainbase.domain.service.MutatingFacad
         filename: String,
         bytes: ByteArray,
         hasher: (ByteArray) -> String,
+        expectedRoot: com.plainbase.domain.root.RootName?,
     ) = error("unused")
     override fun rescan(principal: Principal) = error("unused")
     override fun reindex(principal: Principal) = error("unused")

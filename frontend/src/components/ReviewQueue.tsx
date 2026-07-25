@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { changesQuery } from "../api/queries";
 import type { ChangeSummary } from "../api/types";
 import { formatTime } from "../lib/datetime";
+import { QueryErrorView } from "./ErrorView";
 
 /**
  * P4 review queue (WI-4): the list of proposed changes. `GET /api/v1/changes` returns ALL statuses — the server
@@ -22,14 +23,7 @@ export function ReviewQueue() {
       </p>
     );
   }
-  if (changes.isError) {
-    return (
-      <div className="py-16 text-center" data-pb-error>
-        <h1 className="text-2xl font-bold text-ink">Something went wrong</h1>
-        <p className="mt-3 text-muted">{changes.error.message}</p>
-      </div>
-    );
-  }
+  if (changes.isError) return <QueryErrorView error={changes.error} />;
 
   // Stable sort (PENDING first), preserving the server's order within each group.
   const proposals = [...changes.data.proposals].sort((a, b) => rank(a) - rank(b));
@@ -71,6 +65,11 @@ function ReviewRow({ change }: { change: ChangeSummary }) {
         <span className="pb-review-row-head">
           <span className="pb-review-row-op" data-pb-review-row-op={change.operation}>
             {change.operation}
+          </span>
+          {/* The ROOT, not just the path: two roots can hold the same `target_path`, so an unqualified row makes
+              two changes against two different repositories look identical in the queue an approver acts from. */}
+          <span className="pb-review-root" data-pb-review-root={change.root}>
+            {change.root}
           </span>
           <span className="pb-review-row-path">{change.target_path}</span>
         </span>

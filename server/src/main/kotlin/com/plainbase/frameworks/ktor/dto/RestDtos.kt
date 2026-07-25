@@ -36,6 +36,14 @@ object ErrorCodes {
     /** 404: a canonical-shape-valid id (any version) absent from the index, or an unknown by-path. */
     const val PAGE_NOT_FOUND: String = "page_not_found"
 
+    /**
+     * 410: the page's binding was RETIRED (a C0 tombstone). The id was deleted from its root - an honest answer,
+     * distinct from [PAGE_NOT_FOUND], which says the id was never ours at all. It is NOT permanent: the same
+     * (root, path) may reclaim the id, so the route sends `Cache-Control: no-store`. An agent holding a citation
+     * can still tell "this document was deleted" from "you made this up".
+     */
+    const val PAGE_RETIRED: String = "page_retired"
+
     /** 400: an id failing the §A4 canonical-shape regex (the regex decides, never JDK leniency). */
     const val INVALID_PAGE_ID: String = "invalid_page_id"
 
@@ -106,6 +114,47 @@ object ErrorCodes {
 
     /** 400: a POST …/assets request is malformed — a missing/blank/invalid filename, or a control-char filename. */
     const val INVALID_ASSET_REQUEST: String = "invalid_asset_request"
+
+    // ---- multi-root C4: the per-root vocabulary (append-only) ----------------------------------------
+
+    /**
+     * 503 (+ `Retry-After`): the target root is not SERVING — its disk vanished, its watcher died, it was already
+     * gone at boot, or its name has been removed from `roots {}` while its rows remain.
+     *
+     * Deliberately NOT a 404: a 404 tells an agent the page is GONE and it should drop its citations, when the truth
+     * is that a disk is unmounted and the content is coming back. NOTHING was written on a write that answers this.
+     * Recovery is an operator action (restore the root, restart the server), which is why the retry window is long.
+     */
+    const val ROOT_UNAVAILABLE: String = "root_unavailable"
+
+    /**
+     * 503 (+ a SHORT `Retry-After`): the durable index still binds this page and the store cannot produce its bytes.
+     * The page is in LIMBO - neither present nor proven deleted (C1).
+     *
+     * **Deliberately NOT `root_unavailable`, and the difference is the operator's next hour.** The root may be
+     * perfectly healthy: its other pages are serving normally, the disk is mounted, and there is nothing to restart -
+     * what is in doubt is ONE page (a failed submount, a half-finished restore, a decoy tree at the mount point).
+     * Reporting it as a downed root would send an operator to remount a volume that is already there.
+     *
+     * **Deliberately NOT a 404**, for the reason the whole absence-authority redesign exists: a 404 tells an agent
+     * the page is GONE and it should drop its citations, and the page is not gone - we simply did not see it. It
+     * self-heals with no operator action the moment the page is witnessed again, which is why the retry window is
+     * short.
+     */
+    const val ABSENCE_UNVERIFIED: String = "absence_unverified"
+
+    /** 403: the target root is declared `editable = false` — page-mutation writes are refused there in EVERY auth mode. */
+    const val ROOT_NOT_EDITABLE: String = "root_not_editable"
+
+    /** 400: a request named a root that is not a legal slug, or names no configured root. */
+    const val INVALID_ROOT: String = "invalid_root"
+
+    /**
+     * 409 (REST) / 300 (permalink): a bare page id is held by more than one root and the caller named none, so the
+     * server cannot pick one. The body carries the candidate roots + their per-root URLs; the caller retries with a
+     * `root`. FAKE-only under `UNIQUE(id)` (no real row produces it until C5), but the contract ships in C4.
+     */
+    const val AMBIGUOUS_PAGE_ID: String = "ambiguous_page_id"
 
     // ---- A3: the authorization vocabulary (append-only) ----------------------------------------------
 
@@ -198,6 +247,8 @@ data class CitationDto(
 @Serializable
 data class PageResponse(
     val id: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the page's root-name slug. */
+    val root: String,
     val path: String,
     val slug: String,
     val url: String?,
@@ -214,6 +265,8 @@ data class PageResponse(
 @Serializable
 data class PageHtmlResponse(
     val id: String,
+    /** Additive amendment (ADR-0011 D3, multi-root C3): the page's root-name slug. */
+    val root: String,
     val path: String,
     val slug: String,
     val url: String?,
@@ -229,12 +282,34 @@ data class PageHtmlResponse(
 data class HeadingDto(val id: String, val level: Int, val text: String)
 
 /**
- * `GET /api/v1/tree` wire shape (frozen as SHAPE; child ordering is documented-not-frozen).
- * [root] is always a folder node, but it is DECLARED as the sealed interface so the polymorphic
- * serializer emits the `type` discriminator on the root exactly like on every child.
+ * `GET /api/v1/tree` wire shape (frozen as SHAPE; child ordering is documented-not-frozen): one
+ * entry per CONFIGURED root, in registry (D7) order. Reshaped from `{root: <node>}` under the same
+ * ADR-0011 D3 amendment as the url values (multi-root C3; the ForeverApiGoldenSuite ledger records
+ * it).
  */
 @Serializable
-data class TreeResponse(val root: TreeNodeDto)
+data class TreeResponse(val roots: List<RootTreeDto>)
+
+/**
+ * One root's tree entry: the validated root-name slug, whether it is currently SERVING, whether it accepts
+ * WRITES, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
+ * interface so the polymorphic serializer emits the `type` discriminator on the root exactly like on every child
+ * (the pre-C3 TreeResponse rule, unchanged).
+ *
+ * [available] `false` means the root is configured but not serving: its subtree is EMPTY here (never its stale
+ * carried-forward listing) and every read of it answers 503. It is listed rather than omitted so a client can tell
+ * "this root is down" from "this root does not exist" - and so the client's known-root set matches the server's,
+ * which is what lets it route `/docs/{root}/...` without guessing.
+ *
+ * [editable] is the root's CONFIGURED write disposition (ADR-0011 `roots.<name>.editable`), and it is on the wire
+ * for the same reason [available] is: without it the SPA cannot tell a writable root from a read-only one, so it
+ * offers Edit/New on every page of a root whose every write answers 403 `root_not_editable` - and `plainbase root
+ * add` defaults an extra root to `editable = false`, which makes that the DEFAULT experience of a CLI-added root,
+ * not an exotic one. Config, not authorization: it says what the TOPOLOGY allows, never what this principal may do
+ * (the 403 remains the authority, and the client's buffer-preserving 403 path remains the backstop).
+ */
+@Serializable
+data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable
@@ -286,6 +361,7 @@ data class ReindexResponse(val status: String, val pages: Int)
 
 fun PagePayload.toDto(): PageResponse = PageResponse(
     id = page.id.value,
+    root = page.root.value,
     path = page.path.value,
     slug = page.slug,
     url = page.url,
@@ -300,6 +376,7 @@ fun PagePayload.toDto(): PageResponse = PageResponse(
 
 fun PageHtmlPayload.toDto(): PageHtmlResponse = PageHtmlResponse(
     id = page.id.value,
+    root = page.root.value,
     path = page.path.value,
     slug = page.slug,
     url = page.url,

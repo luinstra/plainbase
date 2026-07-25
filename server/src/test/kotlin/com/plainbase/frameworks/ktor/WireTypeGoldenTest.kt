@@ -32,6 +32,7 @@ import com.plainbase.frameworks.ktor.dto.RejectChangeRequest
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.dto.RoleListResponse
 import com.plainbase.frameworks.ktor.dto.RoleResponse
+import com.plainbase.frameworks.ktor.dto.RootTreeDto
 import com.plainbase.frameworks.ktor.dto.SearchHitDto
 import com.plainbase.frameworks.ktor.dto.SearchResponse
 import com.plainbase.frameworks.ktor.dto.SessionResponse
@@ -48,9 +49,11 @@ import com.plainbase.frameworks.ktor.dto.WriteConflictEnvelope
 import com.plainbase.frameworks.ktor.dto.WriteWarning
 import com.plainbase.frameworks.ktor.dto.WrittenButUnindexedResponse
 import com.plainbase.frameworks.ktor.dto.WrittenResponse
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.add
@@ -78,50 +81,57 @@ class WireTypeGoldenTest : FunSpec({
         "treeResponse" to encoded(
             TreeResponse.serializer(),
             TreeResponse(
-                root = TreeNodeDto.Folder(
-                    name = "",
-                    title = null,
-                    description = null,
-                    path = "",
-                    url = "/docs",
-                    pageCount = 0,
-                    children = listOf(
-                        TreeNodeDto.Folder(
-                            name = "guides",
-                            title = "Guides",
-                            description = "How-to guides",
-                            path = "guides",
-                            url = "/docs/guides",
-                            pageCount = 1,
-                            children = listOf(
-                                TreeNodeDto.Page(
-                                    id = PAGE_1,
-                                    title = "Deploy Guide",
-                                    slug = "deploy-guide",
-                                    path = "guides/deploy-guide.md",
-                                    url = "/docs/guides/deploy-guide",
-                                    status = "published",
-                                    updated = "2026-06-01",
-                                ),
-                            ),
-                        ),
-                        TreeNodeDto.Folder(
-                            name = "attic",
+                roots = listOf(
+                    RootTreeDto(
+                        root = "main",
+                        available = true,
+                        editable = true,
+                        tree = TreeNodeDto.Folder(
+                            name = "",
                             title = null,
                             description = null,
-                            path = "attic",
-                            url = null,
+                            path = "",
+                            url = "/docs/main",
                             pageCount = 0,
-                            children = emptyList(),
-                        ),
-                        TreeNodeDto.Page(
-                            id = PAGE_2,
-                            title = "Shadowed",
-                            slug = "shadowed",
-                            path = "shadowed.md",
-                            url = null,
-                            status = "published",
-                            updated = null,
+                            children = listOf(
+                                TreeNodeDto.Folder(
+                                    name = "guides",
+                                    title = "Guides",
+                                    description = "How-to guides",
+                                    path = "guides",
+                                    url = "/docs/main/guides",
+                                    pageCount = 1,
+                                    children = listOf(
+                                        TreeNodeDto.Page(
+                                            id = PAGE_1,
+                                            title = "Deploy Guide",
+                                            slug = "deploy-guide",
+                                            path = "guides/deploy-guide.md",
+                                            url = "/docs/main/guides/deploy-guide",
+                                            status = "published",
+                                            updated = "2026-06-01",
+                                        ),
+                                    ),
+                                ),
+                                TreeNodeDto.Folder(
+                                    name = "attic",
+                                    title = null,
+                                    description = null,
+                                    path = "attic",
+                                    url = null,
+                                    pageCount = 0,
+                                    children = emptyList(),
+                                ),
+                                TreeNodeDto.Page(
+                                    id = PAGE_2,
+                                    title = "Shadowed",
+                                    slug = "shadowed",
+                                    path = "shadowed.md",
+                                    url = null,
+                                    status = "published",
+                                    updated = null,
+                                ),
+                            ),
                         ),
                     ),
                 ),
@@ -134,6 +144,7 @@ class WireTypeGoldenTest : FunSpec({
             PageResponse.serializer(),
             PageResponse(
                 id = PAGE_1,
+                root = "main",
                 path = "guides/deploy-guide.md",
                 slug = "deploy-guide",
                 url = null,
@@ -155,7 +166,7 @@ class WireTypeGoldenTest : FunSpec({
                     path = "guides/deploy-guide.md",
                     contentHash = HASH_A,
                     commit = null,
-                    uri = "plainbase://$PAGE_1@$HASH_A",
+                    uri = "plainbase://main/$PAGE_1@$HASH_A",
                 ),
             ),
         ),
@@ -163,6 +174,7 @@ class WireTypeGoldenTest : FunSpec({
             PageHtmlResponse.serializer(),
             PageHtmlResponse(
                 id = PAGE_2,
+                root = "main",
                 path = "shadowed.md",
                 slug = "shadowed",
                 url = null,
@@ -178,7 +190,7 @@ class WireTypeGoldenTest : FunSpec({
                     path = "shadowed.md",
                     contentHash = HASH_B,
                     commit = COMMIT_1,
-                    uri = "plainbase://$PAGE_2@$HASH_B",
+                    uri = "plainbase://main/$PAGE_2@$HASH_B",
                 ),
             ),
         ),
@@ -196,7 +208,7 @@ class WireTypeGoldenTest : FunSpec({
                 total = 1,
                 hits = listOf(
                     SearchHitDto(
-                        pageId = PAGE_2, path = "shadowed.md", url = null, title = "Shadowed",
+                        pageId = PAGE_2, root = "main", path = "shadowed.md", url = null, title = "Shadowed",
                         headingId = null, headingText = null, headingPath = emptyList(),
                         snippet = "Deploy targets are listed here.",
                         highlights = listOf(HighlightDto(start = 0, end = 6)),
@@ -207,7 +219,7 @@ class WireTypeGoldenTest : FunSpec({
                             path = "shadowed.md",
                             contentHash = HASH_B,
                             commit = null,
-                            uri = "plainbase://$PAGE_2@$HASH_B",
+                            uri = "plainbase://main/$PAGE_2@$HASH_B",
                         ),
                     ),
                 ),
@@ -287,7 +299,7 @@ class WireTypeGoldenTest : FunSpec({
         ),
         "createdResponse" to encoded(
             CreatedResponse.serializer(),
-            CreatedResponse(id = PAGE_1, url = "/docs/guides/deploy-guide", contentHash = HASH_A, commit = null),
+            CreatedResponse(id = PAGE_1, url = "/docs/main/guides/deploy-guide", contentHash = HASH_A, commit = null),
         ),
         "createdButUnindexedResponse" to encoded(
             CreatedButUnindexedResponse.serializer(),
@@ -391,7 +403,7 @@ class WireTypeGoldenTest : FunSpec({
                 proposals = listOf(
                     ChangeSummary(
                         id = "01970000-0000-7000-8000-0000000000a2", operation = "create", status = "PENDING",
-                        targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
+                        root = "main", targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
                         authorLabel = "ci-bot", createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",
                     ),
                 ),
@@ -401,7 +413,7 @@ class WireTypeGoldenTest : FunSpec({
             ChangeDetail.serializer(),
             ChangeDetail(
                 id = "01970000-0000-7000-8000-0000000000a3", operation = "create", status = "PENDING",
-                targetPath = "guides/rollback.md", pageId = null,
+                root = "main", targetPath = "guides/rollback.md", pageId = null,
                 baseHash = null, baseDrifted = false,
                 authorLabel = "ci-bot", authorIssuer = "plainbase", authorExternalId = TOKEN_ID,
                 createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",
@@ -433,9 +445,18 @@ class WireTypeGoldenTest : FunSpec({
         }
     }
 
-    test("createPageRequest decodes with the omitted optionals defaulted (folder -> \"\")") {
+    test("createPageRequest carries the client's declared root (multi-root C4) and defaults its other optionals") {
         RestJson.decodeFromString(CreatePageRequest.serializer(), fixture.getValue("createPageRequest").toString()) shouldBe
-            CreatePageRequest(folder = "", title = "Deploy Guide", slug = null, body = null)
+            CreatePageRequest(root = "extra", folder = "", title = "Deploy Guide", slug = null, body = null)
+    }
+
+    test("an omitted root does NOT decode - a create must SAY where the bytes land, and never be read as 'main'") {
+        // The field has no default, so an omitted root is a decode failure, which the route answers 400
+        // `invalid_create_request`. A default would have made forgetting it a silent relocation into main - and an
+        // authorization decision (main's editable bit, main's globs) reachable by leaving a field out.
+        shouldThrow<SerializationException> {
+            RestJson.decodeFromString(CreatePageRequest.serializer(), """{"title":"Deploy Guide"}""")
+        }
     }
 
     test("rejectChangeRequest decodes with the omitted comment null") {

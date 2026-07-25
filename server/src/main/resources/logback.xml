@@ -1,5 +1,6 @@
 <configuration>
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} %-5level %logger{24} - %msg%n</pattern>
         </encoder>
@@ -7,7 +8,7 @@
 
     <!-- Operator-tunable via PLAINBASE_LOG_LEVEL (matches the PLAINBASE_* env config family). -->
     <root level="${PLAINBASE_LOG_LEVEL:-INFO}">
-        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="STDERR"/>
     </root>
 
     <logger name="io.modelcontextprotocol" level="WARN"/>

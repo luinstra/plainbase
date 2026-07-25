@@ -46,7 +46,7 @@ class CheckpointModuleWiringTest : FunSpec({
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 2
                     val snapshot = app.koin.get<IndexBuilder>().rebuild()
                     app.koin.get<PageCheckpointRepository>().load() shouldContainExactly
-                        snapshot.pages.associate { it.id to it.urlPath }
+                        snapshot.pages.associate { it.rooted to it.urlPath }
                 } finally {
                     app.close()
                 }

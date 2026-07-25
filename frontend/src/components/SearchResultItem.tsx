@@ -1,20 +1,26 @@
 import type { SearchHit } from "../api/types";
 import { splitHighlights } from "../lib/highlightSplit";
+import { RootBadge } from "./RootBadge";
 
 /**
  * One Stage-2 full-text hit (PB-SEARCH-1). Title, the `heading_path` breadcrumb joined
  * verbatim, and the snippet rendered from `snippet` + `highlights` via `splitHighlights`:
  * each fragment is a bare text node or a `<mark>` through React interpolation — never
  * `innerHTML`, never client re-derivation (§A3/§A4).
+ *
+ * `showRoot` badges `hit.root`: a corpus-wide search is the one query that routinely returns two
+ * roots at once, so it is where an unqualified hit misleads most.
  */
 export function SearchResultItem({
   hit,
+  showRoot,
   id,
   active,
   onActivate,
   onHover,
 }: {
   hit: SearchHit;
+  showRoot?: boolean;
   id: string;
   active: boolean;
   onActivate: () => void;
@@ -38,6 +44,7 @@ export function SearchResultItem({
     >
       <div className="flex items-baseline gap-2">
         <span className="font-medium text-ink">{hit.title}</span>
+        {showRoot && <RootBadge root={hit.root} />}
         {breadcrumb && <span className="truncate font-mono text-xs text-muted">{breadcrumb}</span>}
       </div>
       <p className="mt-0.5 text-sm text-muted" data-pb-search-snippet>

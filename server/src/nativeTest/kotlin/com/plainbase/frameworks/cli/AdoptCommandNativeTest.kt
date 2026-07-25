@@ -5,8 +5,6 @@ import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import org.junit.jupiter.api.Tag
-import java.io.ByteArrayOutputStream
-import java.io.PrintStream
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -37,7 +35,9 @@ class AdoptCommandNativeTest {
             Files.writeString(content.resolve("nested.md"), "---\ntitle: Nested\n---\n# Nested\n")
             val config = PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0)
 
-            val first = captureStdout { assertEquals(0, AdoptCommand.run(listOf("--write-ids"), config)) }
+            val first = captureStdout {
+                assertEquals(0, AdoptCommand.run(listOf("--write-ids"), config, NativeCommandOutputCapture.current))
+            }
             assertContains(first, "intent: write id")
             pages.forEach { assertContains(Files.readString(content.resolve(it)), "id: ", message = "$it not materialized") }
 
@@ -49,7 +49,9 @@ class AdoptCommandNativeTest {
 
             // Idempotence: the second run announces no write intent and leaves every byte in place.
             val bytesAfterFirst = pages.map { Files.readAllBytes(content.resolve(it)) }
-            val second = captureStdout { assertEquals(0, AdoptCommand.run(listOf("--write-ids"), config)) }
+            val second = captureStdout {
+                assertEquals(0, AdoptCommand.run(listOf("--write-ids"), config, NativeCommandOutputCapture.current))
+            }
             assertFalse("intent:" in second, "second adopt run intended a write:\n$second")
             pages.zip(bytesAfterFirst).forEach { (page, before) ->
                 assertContentEquals(before, Files.readAllBytes(content.resolve(page)), "$page changed on the second run")
@@ -63,17 +65,7 @@ class AdoptCommandNativeTest {
 }
 
 /** Captures System.out for the duration of [block] — `adopt`'s stdout is its output contract. */
-private fun captureStdout(block: () -> Unit): String {
-    val buffer = ByteArrayOutputStream()
-    val previous = System.out
-    System.setOut(PrintStream(buffer, true, Charsets.UTF_8))
-    try {
-        block()
-    } finally {
-        System.setOut(previous)
-    }
-    return buffer.toString(Charsets.UTF_8)
-}
+private fun captureStdout(block: () -> Unit): String = NativeCommandOutputCapture.captureStdout(block)
 
 /** Single-value raw SQL against the driver (src/test's queryLong helper is Kotest-side, not here). */
 private fun SqlDriver.queryLong(sql: String): Long =

@@ -1,14 +1,25 @@
 package com.plainbase.domain.service
 
+import com.plainbase.domain.content.CasResult
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.Nfc
+import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.FrontmatterBlock
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.Supersession
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.ktor.livePathOf
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import com.plainbase.frameworks.sqldelight.queryLong
@@ -16,9 +27,11 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -27,6 +40,7 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import kotlin.time.Clock
 
 /**
  * AdoptionPass acceptance tests (the chunk 4b master criteria, component level): the zero-write
@@ -41,6 +55,16 @@ import java.security.MessageDigest
  */
 class AdoptionPassTest : FunSpec({
 
+    test("duplicate source roots are refused before rank can silently choose a winner") {
+        withHarness { h ->
+            val duplicate = AdoptionPass.Source(RootName.MAIN, LocalContentStore(h.root))
+
+            shouldThrow<IllegalArgumentException> {
+                h.pass(extras = listOf(duplicate))
+            }.message shouldContain "duplicate source root(s): main"
+        }
+    }
+
     test("zero-write proof: default adoption assigns ids to all pages and the directory checksum is identical") {
         withHarness { h ->
             val before = checksum(h.root)
@@ -50,7 +74,7 @@ class AdoptionPassTest : FunSpec({
             val pages = mdPages(h.root).map { Nfc.normalize(it) }
             report.pages shouldHaveSize pages.size
             h.idMap.bindings() shouldHaveSize pages.size
-            h.idMap.bindings().map { it.path.value }.shouldContainExactlyInAnyOrder(pages)
+            h.idMap.bindings().map { it.path.path.value }.shouldContainExactlyInAnyOrder(pages)
             // Read-only first index: nothing is materialized, every id is map-only.
             h.idMap.bindings().none { it.materialized }.shouldBeTrue()
             // Binary at rest over the adoption-seeded table (direct SQL, below the adapter).
@@ -64,7 +88,7 @@ class AdoptionPassTest : FunSpec({
             val before = checksum(h.root)
             val expected = patcherOutcomes(h.root)
 
-            val report = h.pass().run(AdoptionPass.Mode.PREVIEW)
+            val report = h.pass().run(AdoptionPass.Mode.PREVIEW).report(RootName.MAIN)
 
             // Writes NOTHING: neither tree bytes nor db rows.
             checksum(h.root) shouldBe before
@@ -94,7 +118,8 @@ class AdoptionPassTest : FunSpec({
             // intent-before-write pairing is asserted positionally.
             val events = mutableListOf<Pair<String, TreePath>>()
             val recording = RecordingStore(LocalContentStore(h.root)) { path -> events.add("write" to path) }
-            val report = h.pass(recording).run(AdoptionPass.Mode.MATERIALIZE) { path, _ -> events.add("intent" to path) }
+            val report = h.pass(recording).run(AdoptionPass.Mode.MATERIALIZE) { page, _ -> events.add("intent" to page.path) }
+                .report(RootName.MAIN)
 
             // Every write is immediately preceded by its own intent entry.
             events.size shouldBe 2 * expected.accepted.size
@@ -112,7 +137,7 @@ class AdoptionPassTest : FunSpec({
                 val original = originals.getValue(page.path.value)
                 val patched = Files.readAllBytes(resolveByNfc(h.root, page.path.value))
                 assertSingleIdInsertion(original, patched, page.id)
-                h.idMap.find(page.path).shouldNotBeNull().materialized shouldBe true
+                h.idMap.find(RootedPath(RootName.MAIN, page.path)).shouldNotBeNull().materialized shouldBe true
             }
 
             // Refused pages are untouched, keep their map identity unmaterialized, and the crafted
@@ -121,7 +146,7 @@ class AdoptionPassTest : FunSpec({
                 .shouldContainExactlyInAnyOrder(expected.refused)
             expected.refused.forEach { rel ->
                 Files.readAllBytes(resolveByNfc(h.root, rel)) shouldBe originals.getValue(rel)
-                h.idMap.find(TreePath.require(rel)).shouldNotBeNull().materialized shouldBe false
+                h.idMap.find(RootedPath(RootName.MAIN, TreePath.require(rel))).shouldNotBeNull().materialized shouldBe false
             }
             val refusal = h.idMap.issues().filterIsInstance<IdentityIssue.PatchRefused>()
                 .single { it.path.value == REFUSAL_PAGE }
@@ -131,7 +156,7 @@ class AdoptionPassTest : FunSpec({
             // the tree byte-identical; every previously patched page now reads back as FRONTMATTER.
             val afterFirst = checksum(h.root)
             val counting = RecordingStore(LocalContentStore(h.root)) {}
-            val second = h.pass(counting).run(AdoptionPass.Mode.MATERIALIZE)
+            val second = h.pass(counting).run(AdoptionPass.Mode.MATERIALIZE).report(RootName.MAIN)
             counting.writes shouldBe 0
             checksum(h.root) shouldBe afterFirst
             second.pages(AdoptionPass.Disposition.MATERIALIZED).shouldBeEmpty()
@@ -145,7 +170,7 @@ class AdoptionPassTest : FunSpec({
         withHarness { h ->
             h.pass().run(AdoptionPass.Mode.MATERIALIZE)
             val keptPath = TreePath.require("notes/no-frontmatter.md")
-            val keptId = h.idMap.find(keptPath).shouldNotBeNull().id
+            val keptId = h.idMap.find(RootedPath(RootName.MAIN, keptPath)).shouldNotBeNull().id
 
             // Copy the materialized page inside the temp tree — the §5.2 copied-file scenario.
             val copyPath = TreePath.require("notes/no-frontmatter-copy.md")
@@ -158,14 +183,14 @@ class AdoptionPassTest : FunSpec({
             // The copy's file still carries the OTHER page's id line -> AlreadyPresent -> never
             // overwritten, never marked materialized (§5.2: the fresh id is not materialized).
             copy.disposition shouldBe AdoptionPass.Disposition.MAPPED
-            h.idMap.find(copyPath).shouldNotBeNull().materialized shouldBe false
-            h.idMap.pathOf(keptId) shouldBe keptPath
+            h.idMap.find(RootedPath(RootName.MAIN, copyPath)).shouldNotBeNull().materialized shouldBe false
+            h.idMap.livePathOf(keptId) shouldBe RootedPath(RootName.MAIN, keptPath)
 
             val issue = h.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
-            issue shouldBe IdentityIssue.DuplicateId(id = keptId, keptPath = keptPath, reassignedPath = copyPath)
+            issue shouldBe IdentityIssue.DuplicateId(id = keptId, root = RootName.MAIN, keptPath = keptPath, reassignedPath = copyPath)
 
             // Rescan stability: the copy keeps its minted id on the next run (now from id_map), so
-            // its /p/{id} permalink is stable while the conflict persists.
+            // its /p/{root}/{id} permalink is stable while the conflict persists.
             val third = h.pass().run(AdoptionPass.Mode.MATERIALIZE)
             val copyAgain = third.pages.single { it.path == copyPath }
             copyAgain.id shouldBe copy.id
@@ -179,17 +204,20 @@ class AdoptionPassTest : FunSpec({
         withHarness { h ->
             val real = LocalContentStore(h.root)
             val aborting = AbortingStore(real, failOnWrite = 4)
-            val intents = mutableListOf<Pair<TreePath, PageId>>()
+            val intents = mutableListOf<Pair<RootedPath, PageId>>()
 
+            // A live root that fails a write is a genuine fault, NOT a disappearance: the classifier re-probes,
+            // finds the tree right where it left it, and rethrows the IOException unchanged rather than laundering
+            // a bug into "the disk is gone" (which would leave the operator restoring a path that never moved).
             shouldThrow<IOException> {
-                h.pass(aborting).run(AdoptionPass.Mode.MATERIALIZE) { path, id -> intents.add(path to id) }
+                h.pass(aborting).run(AdoptionPass.Mode.MATERIALIZE) { page, id -> intents.add(page to id) }
             }
 
             // 3 writes landed; the 4th was intent-logged and then aborted before the write — so the
             // completed/pending split falls out of the log plus the files' current bytes alone.
             intents shouldHaveSize 4
-            val (completed, pending) = intents.partition { (path, id) ->
-                String(Files.readAllBytes(resolveByNfc(h.root, path.value)), Charsets.UTF_8).contains("id: ${id.value}")
+            val (completed, pending) = intents.partition { (page, id) ->
+                String(Files.readAllBytes(resolveByNfc(h.root, page.path.value)), Charsets.UTF_8).contains("id: ${id.value}")
             }
             completed shouldHaveSize 3
             pending shouldHaveSize 1
@@ -197,8 +225,7 @@ class AdoptionPassTest : FunSpec({
 
             // Idempotence makes re-running the reconciliation: the pending page materializes now.
             h.pass().run(AdoptionPass.Mode.MATERIALIZE)
-            val (pendingPath, _) = pending.single()
-            h.idMap.find(pendingPath).shouldNotBeNull().materialized shouldBe true
+            h.idMap.find(pending.single().first).shouldNotBeNull().materialized shouldBe true
         }
     }
 
@@ -212,10 +239,361 @@ class AdoptionPassTest : FunSpec({
             page.id shouldBe PageId.require(v4)
             page.source shouldBe PageIdentityService.Source.FRONTMATTER
             page.disposition shouldBe AdoptionPass.Disposition.ALREADY_MATERIALIZED
-            h.idMap.find(page.path).shouldNotBeNull().materialized shouldBe true
+            h.idMap.find(RootedPath(RootName.MAIN, page.path)).shouldNotBeNull().materialized shouldBe true
+        }
+    }
+
+    // ---- ONE global plan over EVERY root, RE-DERIVED for per-root identity (C5) ----------------------
+    //
+    // A cross-root duplicate id is NO LONGER a contest. The pass still scans every root before it binds any
+    // of it - that ordering is what makes the WITHIN-root duplicate deterministic - but the same id in two
+    // DIFFERENT roots is legal now, so rank decides SOURCE precedence only and never takes an id from another
+    // root. Seating discipline as ever: no rank-0-main assumption - each case is driven from both seatings, to
+    // prove order never decides identity.
+
+    test("cross-root duplicate: the higher-ranked root keeps its own id AND the lower-ranked owner keeps theirs (no contest)") {
+        withTwoRoots { h, extra ->
+            // The lower-ranked root owns the id today, and its page is right there on disk.
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
+            h.idMap.bind(EXTRA_PAGE, CONTESTED, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra))) // main outranks
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            // main keeps the id it carries in its frontmatter; extra keeps its own binding. Nothing minted, nothing
+            // rewritten, no cross-root issue - the two ids are legal per-root.
+            val winner = plan.pages.single { it.path.value == "notes/claimant.md" }
+            winner.id shouldBe CONTESTED
+            winner.source shouldBe PageIdentityService.Source.FRONTMATTER
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, winner.path)
+
+            val other = plan.report(EXTRA).pages.single()
+            other.id shouldBe CONTESTED // extra keeps it, never reassigned
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+        }
+    }
+
+    test("cross-root duplicate: with an extra seated AHEAD of main, both roots STILL keep their own id (order never decides)") {
+        withTwoRoots { h, extra ->
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            plan.report(EXTRA).pages.single().id shouldBe CONTESTED
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+        }
+    }
+
+    test("a page's id_map-only claim in another root is honored - a cross-root duplicate is not a contest") {
+        withTwoRoots { h, extra ->
+            // extra's page carries NO frontmatter id: its only claim on the id is the id_map row. main's file carries
+            // the id in frontmatter. Per-root identity: main's claim is in another root and cannot reach across, so
+            // extra keeps the id via its own binding - both roots hold it, legally.
+            Files.writeString(extra.resolve("shared.md"), "---\ntitle: Shared\n---\nbody\n")
+            h.idMap.bind(EXTRA_PAGE, CONTESTED, materialized = false)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            val winner = plan.pages.single { it.path.value == "notes/claimant.md" }
+            winner.id shouldBe CONTESTED
+            val other = plan.report(EXTRA).pages.single()
+            other.id shouldBe CONTESTED // extra keeps its id_map-only claim
+            other.source shouldBe PageIdentityService.Source.ID_MAP
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            // BOTH roots hold the id under their own binding - the per-root byRootedId key keeps them distinct.
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, winner.path)
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
+        }
+    }
+
+    // ---- a loser's id_map binding names an id ANOTHER ROOT holds - and that is legal now ----------------
+    //
+    // Pre-flip a loser reaching for its own `id_map` row could collide with an id a HIGHER-ranked root won this
+    // pass - one id on two live pages, a byId crash, a swept permalink. Post-flip `bind` is root-scoped and the
+    // snapshot's byRootedId key is per-root, so a mapped id another ROOT holds is no collision at all: the loser
+    // reuses its own binding in its own root, and both roots keep the id.
+
+    test("within-root loser reuses its own id_map binding even when the named id lives in ANOTHER root - no crash") {
+        withTwoRoots { h, extra ->
+            // dup-a/dup-b are the §5.2 copied-file pair in main, so dup-b is the within-root loser; its own
+            // binding names MAPPED, which extra - seated ahead - also holds. Per-root, both keep MAPPED.
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/dup-a.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/dup-b.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val loser = RootedPath(RootName.MAIN, TreePath.require("notes/dup-b.md"))
+            h.idMap.bind(loser, MAPPED, materialized = false)
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root)))
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            // dup-b lost the WITHIN-root contest for CONTESTED (unchanged policy) and reassigns - but its reassignment
+            // reuses its own MAPPED binding, legal in main because extra's MAPPED is a different root.
+            val reassigned = plan.pages.single { it.path.value == "notes/dup-b.md" }
+            reassigned.id shouldBe MAPPED
+            reassigned.source shouldBe PageIdentityService.Source.ID_MAP
+            reassigned.issues.filterIsInstance<IdentityIssue.DuplicateId>().single().keptPath shouldBe
+                TreePath.require("notes/dup-a.md")
+            // MAPPED lives in BOTH roots, each at its own path - the per-root reuse the old contest forbade.
+            h.idMap.bindingInRoot(RootName.MAIN, MAPPED)?.path shouldBe loser
+            h.idMap.bindingInRoot(EXTRA, MAPPED)?.path shouldBe EXTRA_PAGE
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
+        }
+    }
+
+    test("a page keeps its frontmatter id even when its stale id_map row names an id another root just claimed") {
+        withTwoRoots { h, extra ->
+            // main's claimant carries CONTESTED in frontmatter and a stale id_map row naming MAPPED; extra holds both
+            // ids at their own pages. Frontmatter wins outright, and per-root identity keeps extra's claims out of main.
+            Files.writeString(extra.resolve("shared.md"), "---\nid: ${MAPPED.value}\n---\nbody\n")
+            Files.writeString(extra.resolve("winner.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val claimantPath = RootedPath(RootName.MAIN, TreePath.require("notes/claimant.md"))
+            h.idMap.bind(claimantPath, MAPPED, materialized = false)
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
+
+            val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
+
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED // frontmatter wins; the stale MAPPED row is displaced
+            claimant.source shouldBe PageIdentityService.Source.FRONTMATTER
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe claimantPath
+            h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_WINNER
+            h.idMap.bindingInRoot(EXTRA, MAPPED)?.path shouldBe EXTRA_PAGE
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
+        }
+    }
+
+    test("the dry run IS the write: PREVIEW's planned bytes are exactly the bytes MATERIALIZE puts on disk") {
+        withTwoRoots { h, extra ->
+            addRefusalPage(h.root)
+            Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            fun pass() = h.pass(registry = registry, extras = listOf(source(extra)))
+            // RECORD first, so both runs below resolve the SAME ids from the id_map: a freshly minted id
+            // differs per run by design, and it is the PATCH, not the mint, that this pins.
+            pass().run(AdoptionPass.Mode.RECORD)
+
+            val preview = pass().plan(AdoptionPass.Mode.PREVIEW)
+            val previewed = preview.pages
+                .filter { it.disposition == AdoptionPass.Disposition.WOULD_MATERIALIZE }
+                .associate { page ->
+                    val target = RootedPath(page.root, page.path)
+                    target to requireNotNull(preview.bytesFor(target))
+                }
+            previewed.keys shouldContain EXTRA_ONBOARDING // the preview covers the extra root too
+
+            val before = checksum(h.root) to checksum(extra)
+            pass().run(AdoptionPass.Mode.MATERIALIZE)
+
+            // EXACTLY the pages the preview named were touched - no others, in either root...
+            val changed = changed(RootName.MAIN, before.first, checksum(h.root)) + changed(EXTRA, before.second, checksum(extra))
+            changed shouldContainExactlyInAnyOrder previewed.keys.toList()
+            // ...and each one holds, byte for byte, the bytes the preview showed. Same plan object, same bytes:
+            // a preview that can disagree with its own write is worse than no preview at all.
+            previewed.forEach { (page, bytes) ->
+                val tree = if (page.root == RootName.MAIN) h.root else extra
+                Files.readAllBytes(resolveByNfc(tree, page.path.value)) shouldBe bytes
+            }
+        }
+    }
+
+    test("a root that vanishes BETWEEN the plan and the write aborts the run: no file mutated, no partial binding") {
+        withTwoRoots { h, extra ->
+            Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            val pass = h.pass(registry = registry, extras = listOf(source(extra)))
+            val before = checksum(h.root)
+
+            val plan = pass.plan(AdoptionPass.Mode.MATERIALIZE) // read-only: every root was there for this
+            extra.toFile().deleteRecursively() // ...and now one is not - the unmounted-disk shape, mid-run
+
+            shouldThrow<RootUnavailable> { pass.apply(plan) }
+
+            // apply() re-probes EVERY root before its FIRST write, so the abort costs nothing: main - which the
+            // old sequential loop would already have half-adopted by now - is byte-identical, and not one binding
+            // was recorded. Adopt deletes nothing and is idempotent, so restoring the path and re-running is free.
+            checksum(h.root) shouldBe before
+            h.idMap.bindings().shouldBeEmpty()
+            h.idMap.issues().shouldBeEmpty()
+        }
+    }
+
+    test("a root that vanishes DURING the write loop aborts - it is never RESURRECTED as a partial skeleton tree") {
+        withTwoRoots { h, extra ->
+            Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            // The window apply()'s pre-loop re-probe CANNOT close: every root was there when it looked, and one of
+            // them goes away while the writes are already running. [VanishingStore] takes the disk out from under
+            // the extra root at the instant its first page is written.
+            val vanishing = VanishingStore(LocalContentStore(extra, rootName = EXTRA), extra)
+            val pass = h.pass(registry = registry, extras = listOf(AdoptionPass.Source(EXTRA, vanishing)))
+
+            shouldThrow<RootUnavailable> { pass.run(AdoptionPass.Mode.MATERIALIZE) }
+
+            // THE assertion, and it is about the DISK, not the wire. A create-or-replace write makes missing parents,
+            // so it would have re-made the deleted directory in order to land the page it was holding - leaving a
+            // partial skeleton of the operator's tree (one file where a whole root used to be) at whatever that path
+            // now resolves to, quite possibly a different mount entirely, and then reported SUCCESS. The CAS cannot:
+            // it replaces a file it already resolved and creates nothing, so the root stays gone and the run stops.
+            extra.toFile().exists() shouldBe false
+        }
+    }
+
+    test("a page deleted after enumeration is skipped without minting or binding an identity") {
+        withHarness { h ->
+            val vanished = TreePath.require("notes/no-frontmatter.md")
+            val target = RootedPath(RootName.MAIN, vanished)
+            val real = LocalContentStore(h.root)
+            val disappearing = object : ContentStore by real {
+                override fun readClassified(path: TreePath): StoreRead =
+                    if (path == vanished) StoreRead.NoBytes else real.readClassified(path)
+            }
+
+            val plan = h.pass(store = disappearing).run(AdoptionPass.Mode.RECORD)
+
+            plan.pages.none { it.path == vanished } shouldBe true
+            h.idMap.find(target) shouldBe null
+        }
+    }
+
+    test("a bind refusal after identity resolution aborts instead of improvising a different owner") {
+        withHarness { h ->
+            val heldBy = RootedPath(RootName.require("other"), TreePath.require("held.md"))
+            val refusing = object : IdMapRepository by h.idMap {
+                override fun bind(
+                    path: RootedPath,
+                    id: PageId,
+                    materialized: Boolean,
+                    supersession: Supersession,
+                ): BindOutcome = BindOutcome.Refused(id, heldBy, retired = false)
+            }
+
+            val failure = shouldThrow<IllegalStateException> {
+                h.pass(idMap = refusing).run(AdoptionPass.Mode.RECORD)
+            }
+
+            failure.message shouldContain "the bind REFUSED it"
+            failure.message shouldContain "root=other"
+            failure.message shouldContain "path=held.md"
+            h.idMap.bindings().shouldBeEmpty()
+        }
+    }
+
+    test("a page EDITED under the plan is not clobbered with the bytes the plan derived from the stale read") {
+        withHarness { h ->
+            val page = TreePath.require("notes/no-frontmatter.md")
+            // ONE pass for both phases, as `run` (and so `AdoptCommand`) does: the plan's authority to replace a file
+            // is the scan that produced it, and apply() CASes against exactly that read.
+            val pass = h.pass()
+            val plan = pass.plan(AdoptionPass.Mode.MATERIALIZE) // planned against the bytes as they are NOW...
+            val edited = "---\ntitle: Edited underneath\n---\nsomeone else's work\n"
+            Files.writeString(h.root.resolve(page.value), edited) // ...and someone edits the page before the write
+
+            // The planned bytes are a patch of a file that no longer exists in that form. Writing them would silently
+            // revert the edit, so the CAS precondition fails and the run stops instead of improvising.
+            val stale = shouldThrow<PlanStale> { pass.apply(plan) }
+            stale.page.path shouldBe page
+
+            Files.readString(h.root.resolve(page.value)) shouldBe edited
+        }
+    }
+
+    // ---- per-root identity dissolves the cross-root steal a sourceless/detached root once risked -----
+    //
+    // A REGISTERED root with no source, or an UNREGISTERED detached one, once meant a rank winner might delete a
+    // durable binding it could not see. Post-flip the claimant simply keeps its own id in its own root - the
+    // foreign binding is a different root, so there is nothing to take and nothing to guess about.
+
+    test("a configured root this pass has no source for is untouched - the claimant keeps its own id, no contest") {
+        withHarness { h ->
+            val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(foreign, CONTESTED, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+
+            val plan = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD) // ...and no source for 'extra'
+
+            // main's claimant keeps CONTESTED (its frontmatter id, root-scoped), the foreign binding is untouched,
+            // and no cross-root issue is raised - a same id in two roots is legal.
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign // the foreign row survives
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+        }
+    }
+
+    test("PREVIEW over a same-id page in a sourceless root persists NOTHING - no bind, no row, no issue") {
+        withHarness { h ->
+            val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(foreign, CONTESTED, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+
+            val plan = h.pass(registry = registry).run(AdoptionPass.Mode.PREVIEW)
+
+            // The report shows main keeping its own id, no cross-root issue...
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED
+            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            // ...and preview binds nothing: main's claimant is NOT recorded, and the foreign row stands alone.
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED).shouldBeNull()
+            h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+        }
+    }
+
+    test("a binding under an UNREGISTERED root coexists with the live main claim - no supersede, no issue (detached, D2)") {
+        withHarness { h ->
+            val detached = RootedPath(RootName.require("gone"), TreePath.require("mirror/page.md"))
+            h.idMap.bind(detached, CONTESTED, materialized = true)
+            Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
+
+            val plan = h.pass().run(AdoptionPass.Mode.RECORD) // main-only registry: 'gone' is detached
+
+            val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
+            claimant.id shouldBe CONTESTED
+            h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
+            h.idMap.bindingInRoot(RootName.require("gone"), CONTESTED)?.path shouldBe detached // the detached row survives
+            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 })
+
+private val CONTESTED = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
+
+/** A SECOND contested id, the one a loser's own `id_map` row names while another claimant wins it. */
+private val MAPPED = PageId.require("0197b555-1111-7222-8333-444455556666")
+private val EXTRA = RootName.require("extra")
+private val EXTRA_PAGE = RootedPath(EXTRA, TreePath.require("shared.md"))
+private val EXTRA_WINNER = RootedPath(EXTRA, TreePath.require("winner.md"))
+private val EXTRA_ONBOARDING = RootedPath(EXTRA, TreePath.require("onboarding.md"))
+
+private fun source(tree: Path) = AdoptionPass.Source(EXTRA, LocalContentStore(tree, rootName = EXTRA))
+
+/** [withHarness] plus a REAL second root - a second tree the pass genuinely scans, not just a registry name. */
+private fun withTwoRoots(block: (Harness, Path) -> Unit) {
+    withHarness { h ->
+        val extra = Files.createTempDirectory("pb-adopt-extra")
+        try {
+            block(h, extra)
+        } finally {
+            extra.toFile().deleteRecursively()
+        }
+    }
+}
 
 /** The crafted would-refuse page (quoted key — the §A3 case-9 class) added to the temp tree. */
 private const val REFUSAL_PAGE = "notes/refuse-me.md"
@@ -247,11 +625,35 @@ private fun withHarness(block: (Harness) -> Unit) {
 private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriver) {
     val idMap = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
 
-    fun pass(store: ContentStore = LocalContentStore(root)): AdoptionPass =
-        AdoptionPass(store, idMap, PageIdentityService(UuidV7IdProvider()), FrontmatterPatcher())
+    /**
+     * [registry] seats the configured roots in D7 order; main's tree is always a source, [extras] adds the others.
+     * A registered root with NO source is the partial-visibility case the D16 rule protects — which `AdoptCommand`
+     * never constructs (it refuses to run unless it can see every root), so it is reachable only from here.
+     */
+    fun pass(
+        store: ContentStore = LocalContentStore(root),
+        registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
+        extras: List<AdoptionPass.Source> = emptyList(),
+        idMap: IdMapRepository = this.idMap,
+    ): AdoptionPass =
+        AdoptionPass(
+            sources = listOf(AdoptionPass.Source(RootName.MAIN, store)) + extras,
+            idMap = idMap,
+            identity = PageIdentityService(UuidV7IdProvider()),
+            patcher = FrontmatterPatcher(),
+            rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
+            citations = CitationFactory(),
+            rootRank = registry::rank,
+            registeredRoots = registry.roots.map { it.name }.toSet(),
+        )
 }
 
-/** Counts (and reports) delegated writes — the zero-writes-on-second-run and pairing probe. */
+/**
+ * Counts (and reports) delegated writes — the zero-writes-on-second-run and pairing probe.
+ *
+ * It intercepts [compareAndSwapWrite], not [write]: adopt materializes through the CAS precisely so it can never
+ * create a page (or a root) it did not scan, and a probe on the method adopt no longer calls would see nothing.
+ */
 private class RecordingStore(
     private val delegate: ContentStore,
     private val onWrite: (TreePath) -> Unit,
@@ -259,10 +661,37 @@ private class RecordingStore(
     var writes = 0
         private set
 
-    override fun write(path: TreePath, bytes: ByteArray) {
+    override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
         writes++
         onWrite(path)
+        return delegate.compareAndSwapWrite(path, baseHash, bytes, hasher)
+    }
+}
+
+/**
+ * Deletes [tree] the instant the pass attempts its first file write.
+ *
+ * It hooks BOTH write surfaces on purpose, so the test it drives is a real DIFFERENTIAL rather than a
+ * description of the current implementation: an adoption pass that went back to the create-or-replace [write]
+ * would lose the root at exactly the same instant, and would then be caught rebuilding it.
+ */
+private class VanishingStore(
+    private val delegate: ContentStore,
+    private val tree: Path,
+) : ContentStore by delegate {
+
+    override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
+        vanish()
+        return delegate.compareAndSwapWrite(path, baseHash, bytes, hasher)
+    }
+
+    override fun write(path: TreePath, bytes: ByteArray) {
+        vanish()
         delegate.write(path, bytes)
+    }
+
+    private fun vanish() {
+        tree.toFile().deleteRecursively()
     }
 }
 
@@ -273,9 +702,9 @@ private class AbortingStore(
 ) : ContentStore by delegate {
     private var writes = 0
 
-    override fun write(path: TreePath, bytes: ByteArray) {
+    override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
         if (++writes == failOnWrite) throw IOException("simulated mid-batch abort")
-        delegate.write(path, bytes)
+        return delegate.compareAndSwapWrite(path, baseHash, bytes, hasher)
     }
 }
 
@@ -307,6 +736,10 @@ private fun resolveByNfc(root: Path, nfcValue: String): Path {
     val match = mdPages(root).singleOrNull { Nfc.normalize(it) == nfcValue }
     return root.resolve(match ?: nfcValue)
 }
+
+/** The pages whose bytes actually moved between two [checksum]s of [root]'s tree. */
+private fun changed(root: RootName, before: Map<String, String>, after: Map<String, String>): List<RootedPath> =
+    after.filterNot { (path, digest) -> before[path] == digest }.keys.map { RootedPath(root, TreePath.require(it)) }
 
 /** NFC relative-path -> sha256 over every regular file: the directory-checksum primitive. */
 private fun checksum(dir: Path): Map<String, String> =

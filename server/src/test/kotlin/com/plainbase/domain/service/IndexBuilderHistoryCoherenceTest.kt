@@ -3,6 +3,7 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.providerOver
 import io.kotest.core.spec.style.FunSpec
@@ -39,21 +40,21 @@ class IndexBuilderHistoryCoherenceTest : FunSpec({
 
             IndexHarness(root, history = provider).use { h ->
                 h.builder.rebuild()
-                val before = h.builder.current.byId.values.single { it.path == tree }
+                val before = h.builder.current.pages.single { it.path == tree }
                 before.commit shouldBe firstSha // baseline: the page carries its first commit
 
                 // Drive a real save: the pipeline's history hook is the SAME provider, so the save makes a
                 // NEW commit, then its targeted reindex republishes the snapshot with the new commit.
-                val pipeline = h.writePipeline(historyHook = { p, bytes, author, committer ->
+                val pipeline = h.writePipeline(historyHook = { _, p, bytes, author, committer ->
                     provider.commit(p, bytes, author, committer)?.sha
                 })
                 val v2 = "---\ntitle: Page\n---\n\n# Page\n\nversion two.\n"
-                val baseHash = h.builder.current.byId.getValue(before.id).contentHash
-                val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, tree, baseHash, v2.toByteArray()))
+                val baseHash = h.builder.current.pageAt(before.rooted)!!.contentHash
+                val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, RootName.MAIN, tree, baseHash, v2.toByteArray()))
                 outcome.shouldBeWritten()
 
                 val newSha = exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim()
-                val after = h.builder.current.byId.getValue(before.id)
+                val after = h.builder.current.pageAt(before.rooted)!!
                 after.markdown shouldBe v2
                 after.commit shouldMatch sha
                 after.commit shouldBe newSha // the just-made commit, NOT firstSha and NOT null

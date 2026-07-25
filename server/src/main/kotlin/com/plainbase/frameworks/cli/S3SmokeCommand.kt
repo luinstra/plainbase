@@ -55,42 +55,49 @@ import kotlin.time.measureTime
  *   PLAINBASE_SMOKE_CAPTURE_DIR         optional: directory for raw LIST XML captures (goldens)
  *   PLAINBASE_SMOKE_SOAK_GETS           optional: soak-arm GET count (default 100; 0 skips; must be >= 0)
  *
- * stdout is a CLI output contract (`println` by design, like `adopt`/`spike`): one line per
+ * stdout is a CLI result contract: one line per
  * probe. Exit codes: 0 success / 1 probe or runtime failure / 2 usage. The soak arm is
  * NON-BLOCKING for v1 (plan C0): its result is printed and recorded but never changes the exit
  * code - unless the ops phase already failed.
  */
 object S3SmokeCommand {
 
-    fun runAsMain(args: List<String>): Int = run(args, System.getenv())
+    fun runAsMain(args: List<String>, output: CommandOutput = systemCommandOutput()): Int =
+        run(args, System.getenv(), output)
 
-    fun run(args: List<String>, env: Map<String, String>): Int {
+    fun run(
+        args: List<String>,
+        env: Map<String, String>,
+        output: CommandOutput = systemCommandOutput(),
+    ): Int {
         if (args.isNotEmpty()) {
-            System.err.println(USAGE)
+            output.error(USAGE)
             return 2
         }
-        val config = configFrom(env) ?: return 2
+        val config = configFrom(env, output) ?: return 2
         val captureDir = env["PLAINBASE_SMOKE_CAPTURE_DIR"]?.let(Path::of)
-        val soakGets = soakGetsFrom(env) ?: return 2
+        val soakGets = soakGetsFrom(env, output) ?: return 2
         val prefix = "smoke-${UUID.randomUUID()}/"
-        println("s3-smoke: endpoint=${config.endpoint} bucket=${config.bucket} region=${config.region}")
-        println("s3-smoke: addressing=${config.addressing.name.lowercase()} prefix=$prefix runtime=${System.getProperty("java.vm.name")}")
+        output.result("s3-smoke: endpoint=${config.endpoint} bucket=${config.bucket} region=${config.region}")
+        output.result(
+            "s3-smoke: addressing=${config.addressing.name.lowercase()} prefix=$prefix runtime=${System.getProperty("java.vm.name")}",
+        )
 
         return S3ObjectClient(config).use { client ->
             runBlocking {
-                val opsPassed = runCatching { probes(client, prefix, captureDir) }
-                    .onFailure { println("FAIL  ${it.chain()}") }
+                val opsPassed = runCatching { probes(client, prefix, captureDir, output) }
+                    .onFailure { output.result("FAIL  ${it.chain()}") }
                     .isSuccess
-                if (soakGets > 0) soak(client, prefix, soakGets)
+                if (soakGets > 0) soak(client, prefix, soakGets, output)
                 // Cleanup can FAIL the run: its re-LIST emptiness assert is a decode-independent survivor check
                 // (a wrong LIST-key decode leaves keys behind), so a non-empty prefix after the delete loop is a
                 // real gate failure, not a best-effort WARN. The lifecycle rule remains the backstop for LEAKED
                 // keys, but a survivor here means the delete path is broken and must be surfaced.
                 val cleanedUp = runCatching { cleanup(client, prefix) }
-                    .onFailure { println("FAIL  cleanup left keys under $prefix (${it.chain()})") }
+                    .onFailure { output.result("FAIL  cleanup left keys under $prefix (${it.chain()})") }
                     .isSuccess
                 if (opsPassed && cleanedUp) {
-                    println("s3-smoke OK - record the codes above in .crew/plans/sp1-conditional-write-findings.md")
+                    output.result("s3-smoke OK - record the codes above in .crew/plans/sp1-conditional-write-findings.md")
                     0
                 } else {
                     1
@@ -99,47 +106,47 @@ object S3SmokeCommand {
         }
     }
 
-    private suspend fun probes(client: S3ObjectClient, prefix: String, captureDir: Path?) {
+    private suspend fun probes(client: S3ObjectClient, prefix: String, captureDir: Path?, output: CommandOutput) {
         val key = "${prefix}page.md"
         val v1 = "# smoke v1\n".toByteArray()
         val v2 = "# smoke v2\n".toByteArray()
         val v3 = "# smoke v3\n".toByteArray()
 
         check(client.head(key) == null) { "HEAD of an absent key did not 404" }
-        pass("head-missing", "HEAD absent key -> 404 (null)")
+        pass("head-missing", "HEAD absent key -> 404 (null)", output)
 
         val created = client.put(key, v1, PutCondition.IfAbsent, contentType = "text/markdown").stored("If-None-Match:* create")
-        pass("create-if-absent", "PUT If-None-Match:* -> stored, etag=${created.etag}")
+        pass("create-if-absent", "PUT If-None-Match:* -> stored, etag=${created.etag}", output)
 
         val exists = client.put(key, v2, PutCondition.IfAbsent)
-        pass("create-exists", "PUT If-None-Match:* on an EXISTING key -> ${exists.describeRefusal("second exclusive create")}")
+        pass("create-exists", "PUT If-None-Match:* on an EXISTING key -> ${exists.describeRefusal("second exclusive create")}", output)
 
         val fetched = client.get(key).orFail("GET after create")
         check(fetched.bytes.contentEquals(v1)) { "GET returned different bytes than the create wrote" }
         check(fetched.etag == created.etag) { "GET etag ${fetched.etag} != PUT etag ${created.etag}" }
-        pass("get-roundtrip", "GET -> ${v1.size} bytes, etag matches the PUT response")
+        pass("get-roundtrip", "GET -> ${v1.size} bytes, etag matches the PUT response", output)
 
         val stat = client.head(key).orFail("HEAD after create")
         check(stat.etag == created.etag) { "HEAD etag ${stat.etag} != PUT etag ${created.etag}" }
-        pass("head-etag", "HEAD -> etag matches, size=${stat.size}")
+        pass("head-etag", "HEAD -> etag matches, size=${stat.size}", output)
 
         val replaced = client.put(key, v2, PutCondition.IfMatch(created.etag)).stored("CAS replace with the current etag")
-        pass("cas-replace", "PUT If-Match(current) -> stored, etag=${replaced.etag}")
+        pass("cas-replace", "PUT If-Match(current) -> stored, etag=${replaced.etag}", output)
 
         val stale = client.put(key, v3, PutCondition.IfMatch(created.etag))
-        pass("cas-stale", "PUT If-Match(STALE) -> ${stale.describeRefusal("stale CAS")}")
+        pass("cas-stale", "PUT If-Match(STALE) -> ${stale.describeRefusal("stale CAS")}", output)
         val afterStale = client.get(key).orFail("GET after refused CAS")
         check(afterStale.bytes.contentEquals(v2) && afterStale.etag == replaced.etag) { "a REFUSED CAS mutated the object" }
-        pass("cas-stale-intact", "the refused CAS left bytes + etag untouched")
+        pass("cas-stale-intact", "the refused CAS left bytes + etag untouched", output)
 
         val unconditional = client.put(key, v3).stored("unconditional PUT")
-        pass("put-unconditional", "PUT (no condition) -> stored, etag=${unconditional.etag}")
+        pass("put-unconditional", "PUT (no condition) -> stored, etag=${unconditional.etag}", output)
 
         // Hostile key: space, unicode, '&', '$', '+' - feeds the encoding-type=url goldens.
         val hostileKey = "${prefix}dir/ünicode & \$pecial+key.md"
         client.put(hostileKey, v1, PutCondition.IfAbsent).stored("hostile-key create")
         check(client.get(hostileKey).orFail("hostile-key GET").bytes.contentEquals(v1)) { "hostile-key GET bytes drifted" }
-        pass("hostile-key", "PUT+GET round-trip of a space/unicode/&/$/+ key")
+        pass("hostile-key", "PUT+GET round-trip of a space/unicode/&/$/+ key", output)
 
         client.put("${prefix}b.md", v1, PutCondition.IfAbsent).stored("pagination seed b")
         client.put("${prefix}c.md", v1, PutCondition.IfAbsent).stored("pagination seed c")
@@ -160,10 +167,10 @@ object S3SmokeCommand {
                 token = page.nextContinuationToken
             } while (page.isTruncated)
         }
-        captureDir?.let { pass("captures", "wrote ${pages.size} raw LIST bodies to $it (record as ListResponseParser goldens)") }
+        captureDir?.let { pass("captures", "wrote ${pages.size} raw LIST bodies to $it (record as ListResponseParser goldens)", output) }
         val listedKeys = pages.flatMap { ListResponseParser.parse(it).contents }.map { it.key }
         check(listedKeys.size == 4) { "LIST pagination saw ${listedKeys.size} keys, expected 4: $listedKeys" }
-        pass("list-paginated", "LIST v2 max-keys=2 paginated ${pages.size} pages, 4 keys (raw): $listedKeys")
+        pass("list-paginated", "LIST v2 max-keys=2 paginated ${pages.size} pages, 4 keys (raw): $listedKeys", output)
 
         // Close the LIST -> decode -> GET loop PER PROVIDER (C4 hydrates every listed key through S3WireKey,
         // so a wrong decode would hydrate wrong filenames or 404 follow-up GETs). This is the ONLY probe that
@@ -179,16 +186,16 @@ object S3SmokeCommand {
             val got = client.get(rawKey).orFail("GET of LIST-decoded key '$rawKey'")
             check(got.bytes.contentEquals(expected.getValue(rawKey))) { "GET of LIST-decoded key '$rawKey' returned drifted bytes" }
         }
-        pass("list-decode-get", "every LIST-decoded key GET round-tripped (closes LIST->decode->GET for this provider)")
+        pass("list-decode-get", "every LIST-decoded key GET round-tripped (closes LIST->decode->GET for this provider)", output)
 
         client.delete(key)
         check(client.head(key) == null) { "HEAD still finds the key after DELETE" }
         client.delete(key)
-        pass("delete", "DELETE -> gone; second DELETE of the same key succeeded (idempotent)")
+        pass("delete", "DELETE -> gone; second DELETE of the same key succeeded (idempotent)", output)
     }
 
     /** The NON-BLOCKING soak arm (plan C0): LIST + N sequential GETs on the ONE client instance. */
-    private suspend fun soak(client: S3ObjectClient, prefix: String, gets: Int) {
+    private suspend fun soak(client: S3ObjectClient, prefix: String, gets: Int, output: CommandOutput) {
         val key = "${prefix}soak.md"
         val body = "# soak\n".toByteArray()
         val result = runCatching {
@@ -203,8 +210,8 @@ object S3SmokeCommand {
             elapsed
         }
         result.fold(
-            onSuccess = { println("soak: OK - LIST + $gets sequential GETs on one client in $it") },
-            onFailure = { println("soak: FAILED (non-blocking for v1, record it: TLS instability = C0 FAIL) - ${it.chain()}") },
+            onSuccess = { output.result("soak: OK - LIST + $gets sequential GETs on one client in $it") },
+            onFailure = { output.result("soak: FAILED (non-blocking for v1, record it: TLS instability = C0 FAIL) - ${it.chain()}") },
         )
     }
 
@@ -224,7 +231,7 @@ object S3SmokeCommand {
         check(survivors.isEmpty()) { "keys survived delete (wrong LIST-key decode, or the provider ignored the delete): $survivors" }
     }
 
-    private fun configFrom(env: Map<String, String>): S3ClientConfig? {
+    private fun configFrom(env: Map<String, String>, output: CommandOutput): S3ClientConfig? {
         val required = listOf(
             "PLAINBASE_SMOKE_ENDPOINT",
             "PLAINBASE_SMOKE_REGION",
@@ -234,19 +241,19 @@ object S3SmokeCommand {
         )
         val missing = required.filter { env[it].isNullOrBlank() }
         if (missing.isNotEmpty()) {
-            System.err.println(USAGE)
-            System.err.println("missing env: ${missing.joinToString(", ")}")
+            output.error(USAGE)
+            output.error("missing env: ${missing.joinToString(", ")}")
             return null
         }
         // Same endpoint gate as the object-storage config: an absolute http(s) URL, and https UNLESS the
         // shared PLAINBASE_INSECURE_HTTP override is set - never send SigV4 credentials over cleartext on a typo.
         val endpoint = env.getValue("PLAINBASE_SMOKE_ENDPOINT")
         if (!PlainbaseConfig.isAbsoluteHttpUrl(endpoint)) {
-            System.err.println("PLAINBASE_SMOKE_ENDPOINT is not an absolute http(s) URL: '$endpoint'")
+            output.error("PLAINBASE_SMOKE_ENDPOINT is not an absolute http(s) URL: '$endpoint'")
             return null
         }
         if (!insecureHttpOverride(env) && !PlainbaseConfig.isHttpsUrl(endpoint)) {
-            System.err.println(
+            output.error(
                 "PLAINBASE_SMOKE_ENDPOINT must be https to protect S3 credentials in transit: '$endpoint' " +
                     "(set PLAINBASE_INSECURE_HTTP=1 to knowingly send credentials over plaintext)",
             )
@@ -256,7 +263,7 @@ object S3SmokeCommand {
             "path" -> S3Addressing.PATH_STYLE
             "virtual-host" -> S3Addressing.VIRTUAL_HOST
             else -> {
-                System.err.println("unknown PLAINBASE_SMOKE_ADDRESSING '$raw' - legal values: path | virtual-host")
+                output.error("unknown PLAINBASE_SMOKE_ADDRESSING '$raw' - legal values: path | virtual-host")
                 return null
             }
         }
@@ -275,10 +282,10 @@ object S3SmokeCommand {
      * soak) or it is a usage error - the same strict-parse stance as the endpoint/addressing validation
      * above, never a silent coerce-to-100 or a negative that quietly skips.
      */
-    private fun soakGetsFrom(env: Map<String, String>): Int? {
+    private fun soakGetsFrom(env: Map<String, String>, output: CommandOutput): Int? {
         val raw = env["PLAINBASE_SMOKE_SOAK_GETS"] ?: return 100
         return raw.toIntOrNull()?.takeIf { it >= 0 } ?: run {
-            System.err.println("PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer, got '$raw'")
+            output.error("PLAINBASE_SMOKE_SOAK_GETS must be a non-negative integer, got '$raw'")
             null
         }
     }
@@ -287,7 +294,8 @@ object S3SmokeCommand {
     private fun insecureHttpOverride(env: Map<String, String>): Boolean =
         env["PLAINBASE_INSECURE_HTTP"]?.trim()?.lowercase() in setOf("1", "true")
 
-    private fun pass(name: String, detail: String) = println("PASS  ${name.padEnd(22)} $detail")
+    private fun pass(name: String, detail: String, output: CommandOutput) =
+        output.result("PASS  ${name.padEnd(22)} $detail")
 
     private fun PutOutcome.stored(what: String): PutOutcome.Stored =
         this as? PutOutcome.Stored ?: throw IllegalStateException("$what was refused: $this")
@@ -305,5 +313,5 @@ object S3SmokeCommand {
         it.cause
     }.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
 
-    private val USAGE = "usage: plainbase s3-smoke  (config via PLAINBASE_SMOKE_* env - see S3SmokeCommand)"
+    private const val USAGE = "usage: plainbase s3-smoke  (config via PLAINBASE_SMOKE_* env - see S3SmokeCommand)"
 }

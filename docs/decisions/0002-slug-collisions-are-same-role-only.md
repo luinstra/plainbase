@@ -32,7 +32,7 @@ same-named sibling folder, because those are strictly longer.
 **Collision scope is same-role only.** Within one parent:
 
 - two sibling PAGES whose terminal slugs are equal collide — raw-unsigned-byte winner owns the
-  URL, every loser gets `url = null` plus a `path_slug_collision` issue (reachable via `/p/{id}`);
+  URL, every loser gets `url = null` plus a `path_slug_collision` issue (reachable via `/p/{root}/{id}`);
 - two sibling FOLDERS whose directory segments are equal collide — same tie-break; a losing
   folder drops its whole subtree from path space;
 - a PAGE and a FOLDER sharing a slug do **not** collide — both resolve normally
@@ -51,7 +51,7 @@ where the two diverge.
 
 - The overview-page-next-to-detail-folder layout — common in real docs trees — works: both the
   page and the folder's children keep their URLs, with no spurious `path_slug_collision`.
-- Fewer pages fall out of path space; `/p/{id}` permalinks remain a fallback, not a routine.
+- Fewer pages fall out of path space; `/p/{root}/{id}` permalinks remain a fallback, not a routine.
 
 **Reversibility (one safe direction only)**
 

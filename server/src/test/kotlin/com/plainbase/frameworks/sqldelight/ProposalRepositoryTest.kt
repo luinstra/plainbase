@@ -6,6 +6,7 @@ import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.repository.ProposalOperation
 import com.plainbase.domain.repository.ProposalRow
 import com.plainbase.domain.repository.ProposalStatus
+import com.plainbase.domain.root.RootName
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -21,7 +22,12 @@ import kotlin.time.Instant
  */
 class ProposalRepositoryTest : FunSpec({
 
-    fun pending(idCounter: Int, createdAt: Instant, op: ProposalOperation = ProposalOperation.EDIT): ProposalRow = ProposalRow(
+    fun pending(
+        idCounter: Int,
+        createdAt: Instant,
+        op: ProposalOperation = ProposalOperation.EDIT,
+        root: RootName = RootName.MAIN,
+    ): ProposalRow = ProposalRow(
         id = ProposalId.require("01900000-0000-7000-9000-%012d".format(idCounter)),
         operation = op,
         pageId = if (op == ProposalOperation.EDIT) PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a") else null,
@@ -41,11 +47,20 @@ class ProposalRepositoryTest : FunSpec({
         decidedAt = null,
         appliedCommit = null,
         statusReason = null,
+        root = root,
     )
 
     fun withRepo(block: (SqlDelightProposalRepository) -> Unit) {
         DatabaseFactory.createInMemoryDriver().use { driver ->
             block(SqlDelightProposalRepository(DatabaseFactory.createDatabase(driver)))
+        }
+    }
+
+    test("a fresh insert lands root='main' (the D18 schema DEFAULT stamp; the domain row stays root-blind until C4)") {
+        DatabaseFactory.createInMemoryDriver().use { driver ->
+            val repo = SqlDelightProposalRepository(DatabaseFactory.createDatabase(driver))
+            repo.insert(pending(1, Instant.fromEpochMilliseconds(1_700_000_000_000)))
+            driver.queryLong("SELECT count(*) FROM proposals WHERE root = 'main'") shouldBe 1L
         }
     }
 

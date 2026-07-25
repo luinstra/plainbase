@@ -1,0 +1,17 @@
+-- v16 -> v17: per-root identity C5, THE FLIP. Drop id_map's UNIQUE(id) for UNIQUE(id, root) so one page id may live
+-- in multiple roots (per-root identity, DECISION-per-root-identity.md). SQLite cannot ALTER a constraint, so id_map
+-- rebuilds (the 14.sqm pattern). UNIQUE(id, root) is id-LEADING so the one index still serves the bare resolver's
+-- WHERE id = ? (selectRootsHoldingId) AND the root-scoped incumbent's WHERE id = ? AND root = ?
+-- (selectBindingByRootId) - proved by EXPLAIN QUERY PLAN in IdMapIndexUsageTest (nativeTest). PK (root, path) is
+-- unchanged. verifyMigrations cross-checks the result against schema/17.db.
+CREATE TABLE id_map_v17 (
+  root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  id BLOB NOT NULL,
+  materialized INTEGER NOT NULL,
+  PRIMARY KEY (root, path),
+  UNIQUE (id, root)
+);
+INSERT INTO id_map_v17 (root, path, id, materialized) SELECT root, path, id, materialized FROM id_map;
+DROP TABLE id_map;
+ALTER TABLE id_map_v17 RENAME TO id_map;

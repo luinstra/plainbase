@@ -31,36 +31,36 @@ class GrantRoleCommandTest : FunSpec({
 
     test("grant-role upserts a builtin role") {
         withConfig { config ->
-            AdminCommand.run(listOf("grant-role", "builtin", "alice", "admin"), config) shouldBe 0
+            AdminCommand.run(listOf("grant-role", "builtin", "alice", "admin"), config, CommandOutputFixture().output) shouldBe 0
             roleOf(config, "builtin", "alice") shouldBe Role.ADMIN
         }
     }
 
     test("grant-role upserts a proxy-keyed role (the proxy first-admin seam)") {
         withConfig { config ->
-            AdminCommand.run(listOf("grant-role", "proxy", "bob@corp", "editor"), config) shouldBe 0
+            AdminCommand.run(listOf("grant-role", "proxy", "bob@corp", "editor"), config, CommandOutputFixture().output) shouldBe 0
             roleOf(config, "proxy", "bob@corp") shouldBe Role.EDITOR
         }
     }
 
     test("an unknown role arg → exit 2, no row written") {
         withConfig { config ->
-            AdminCommand.run(listOf("grant-role", "builtin", "alice", "wizard"), config) shouldBe 2
+            AdminCommand.run(listOf("grant-role", "builtin", "alice", "wizard"), config, CommandOutputFixture().output) shouldBe 2
             roleOf(config, "builtin", "alice") shouldBe null
         }
     }
 
     test("re-grant overwrites the role (idempotent upsert)") {
         withConfig { config ->
-            AdminCommand.run(listOf("grant-role", "builtin", "alice", "viewer"), config) shouldBe 0
-            AdminCommand.run(listOf("grant-role", "builtin", "alice", "admin"), config) shouldBe 0
+            AdminCommand.run(listOf("grant-role", "builtin", "alice", "viewer"), config, CommandOutputFixture().output) shouldBe 0
+            AdminCommand.run(listOf("grant-role", "builtin", "alice", "admin"), config, CommandOutputFixture().output) shouldBe 0
             roleOf(config, "builtin", "alice") shouldBe Role.ADMIN
         }
     }
 
     test("missing args → exit 2") {
         withConfig { config ->
-            AdminCommand.run(listOf("grant-role", "builtin"), config) shouldBe 2
+            AdminCommand.run(listOf("grant-role", "builtin"), config, CommandOutputFixture().output) shouldBe 2
         }
     }
 })

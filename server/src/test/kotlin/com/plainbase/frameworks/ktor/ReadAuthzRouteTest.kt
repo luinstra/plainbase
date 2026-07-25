@@ -2,6 +2,8 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.service.IndexHarness
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -66,7 +68,6 @@ class ReadAuthzRouteTest : FunSpec({
                     else -> principal ?: Principal.Anonymous
                 }
                 val ctx = harness.testRouteContext(
-                    contentStore = store,
                     searchProvider = harness.fts(searchRoot),
                     enforced = enforced,
                     extract = fixedPrincipal(resolved),
@@ -85,6 +86,19 @@ class ReadAuthzRouteTest : FunSpec({
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.docId(): String =
         Json.parseToJsonElement(client.get("/api/v1/pages/by-path/doc").bodyAsText())
             .jsonObject.getValue("id").jsonPrimitive.content
+
+    test("enforced permalink auth defers registered and unregistered root lookup until after checkRead") {
+        withApp(enforced = true, principal = Principal.Anonymous) { app, harness ->
+            val id = harness.builder.current.pages.single().id.value
+            val rooted = app.client.get("/p/main/$id")
+            val unregistered = app.client.get("/p/ghost/$id")
+            val bare = app.client.get("/p/$id")
+
+            rooted.status shouldBe HttpStatusCode.Unauthorized
+            unregistered.status shouldBe rooted.status
+            bare.status shouldBe HttpStatusCode.Unauthorized
+        }
+    }
 
     // ---- existence-non-leak: a denied caller gets the SAME status for a present AND an absent page ----
 
@@ -158,9 +172,9 @@ class ReadAuthzRouteTest : FunSpec({
             meta.getValue("id").jsonPrimitive.content shouldBe id
             meta.getValue("path").jsonPrimitive.content shouldBe "doc.md"
             // url + permalink track the REAL IndexedPage computation, not a brittle literal (PageIndex.url/permalink).
-            val page = harness.builder.current.byId.getValue(com.plainbase.domain.page.PageId.require(id))
+            val page = harness.builder.current.pageAt(RootedPageId(RootName.MAIN, com.plainbase.domain.page.PageId.require(id)))!!
             meta.getValue("url").jsonPrimitive.content shouldBe page.url
-            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/$id"
+            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/main/$id"
             meta.getValue("permalink").jsonPrimitive.content shouldBe page.permalink
             meta.getValue("title").jsonPrimitive.content shouldBe "Doc"
             meta.getValue("content_hash").jsonPrimitive.content shouldContain "sha256:"

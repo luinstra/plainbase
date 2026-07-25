@@ -3,6 +3,7 @@ package com.plainbase.frameworks.git
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.service.RebuildScheduler
+import com.plainbase.frameworks.filesystem.withDirectoryStream
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -634,7 +635,7 @@ class GitBundleDr(
     private fun reapPreRestoreHusks() {
         if (!Files.exists(mirrorRoot)) return
         val husks = try {
-            Files.newDirectoryStream(mirrorRoot, "$PRE_RESTORE_HUSK_PREFIX*").use { stream ->
+            withDirectoryStream(mirrorRoot, "$PRE_RESTORE_HUSK_PREFIX*") { stream ->
                 stream.mapNotNull { entry ->
                     val tail = entry.fileName.toString().removePrefix(PRE_RESTORE_HUSK_PREFIX)
                     // toLongOrNull: an over-long numeric name is SKIPPED, never reaped (fail-safe, no throw).
@@ -733,6 +734,17 @@ class GitBundleDr(
          *  close escalates to shutdownNow() (interrupting the running ship) then waits once more, so worst-case
          *  shutdown wait is 2x this - short enough never to hang a graceful close, long enough for a normal ship. */
         private const val SHIP_SHUTDOWN_GRACE_SECONDS = 30L
+
+        /**
+         * What [close] can honestly take, in full: the two drain awaits above, then the final flush's own `ship()`
+         * - a size-dependent `bundle create` plus the bucket PUT, each bounded by its own transfer timeout. The
+         * graceful-shutdown budget is the SUM of its steps' bounds, so this number is the one that stops a slow
+         * final bundle from being killed at a smaller, guessed-at deadline (the bug this class exists to fix).
+         */
+        internal const val CLOSE_BOUND_MILLIS: Long =
+            2 * SHIP_SHUTDOWN_GRACE_SECONDS * 1_000 +
+                BUNDLE_GIT_TIMEOUT_SECONDS * 1_000 +
+                ObjectContentStore.BUNDLE_TRANSFER_TIMEOUT_MILLIS
 
         /** `git count-objects -v` lines (G4): `count: <loose>` and `in-pack: <packed>`. */
         private val OBJECT_COUNT_LINE = Regex("(?m)^count: (\\d+)$")

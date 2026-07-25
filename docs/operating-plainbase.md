@@ -9,6 +9,83 @@ For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
 reference stack under `deploy/proxy/`.
 
+## Upgrading from v0.1.0: page URLs move, and one corpus shape refuses to boot
+
+**Read this before upgrading a running install, even if you never intend to configure a second root.**
+Multi-root ([ADR-0011](decisions/0011-multi-root-document-directories.md)) changed the URL grammar for
+every install: your `CONTENT_DIR` is now a root, its name is `main`, and page URLs carry it.
+
+```
+/docs/welcome            →  /docs/main/welcome            301 (permanent), query preserved
+/docs/guides/deploy      →  /docs/main/guides/deploy      301
+/assets/img/logo.png     →  /assets/main/img/logo.png     301
+```
+
+**1. Every circulating `/docs/...` link becomes a redirect, not a break.** The old shape keeps
+working: any first segment under `/docs/` that does not name a configured root is treated as a legacy
+main-relative path and **301**s to its canonical `/docs/main/...` form, preserving the query string.
+Bookmarks, wiki links, chat links and search-engine results all still land on the page. What changes
+is the URL your users end up on, what they copy out of the address bar, and what any link-checker or
+analytics you run now reports as moved. A legacy link that *also* hits a `redirect_from` alias chains
+two hops (legacy 301, then the alias 301) - accepted, and still lands.
+
+**No agent/API surface pays a legacy redirect hop**, deliberately: `GET /api/v1/pages/by-path/{path}`
+and `GET /browse/{path}` both resolve a legacy tail under `main` directly. `by-path` answers the page
+itself (200, never a 301), and its `url` field carries the new canonical form. `/browse` is a lookup
+that has always answered a redirect - it still does, and the **302 it issues already points at the
+canonical `/docs/main/...` URL**, so a legacy `/browse/...` costs one hop, not two. The canonical
+permalink is now the rooted `/p/{root}/{id}`; the bare `/p/{id}` still resolves (302 to the owning
+root, or 300 Multiple Choices when several roots hold the id).
+
+**2. A corpus with a top-level `main` entry will REFUSE to boot.** `main` is now a reserved URL
+segment, so a `content/main/` directory (or a top-level `main.md`, or a `slug: main`) makes an old
+`/docs/main/...` link indistinguishable from a root-qualified URL. `serve` exits 1 rather than
+silently re-resolve those links to the wrong page. **This is the one upgrade that can turn a working
+server into a failed start, so check for it first:**
+
+```
+# Top-level entries whose NAME mints the segment - any case, file or directory (an asset directory
+# counts; `Main/` and `MAIN.md` slugify to `main` exactly like `main/` does).
+find "$CONTENT_DIR" -maxdepth 1 \( -iname 'main' -o -iname 'main.md' \)
+
+# Any `slug:` override that mints it - quoted or bare, any case, frontmatter or _folder.yaml. A
+# folder whose `_folder.yaml` says `slug: main` is the shape a naive check misses: the override moves
+# it out of the URL space its directory name lives in, so the search above cannot see it at all.
+grep -rEil "^slug:[[:space:]]*['\"]?main['\"]?[[:space:]]*$" "$CONTENT_DIR" \
+  --include='*.md' --include='_folder.yaml'
+```
+
+Both over-report (only a TOP-LEVEL segment is reserved - a nested `guides/main/` is fine), and that is
+the right direction for a pre-check to err in. **But a clean result does not prove a clean upgrade**,
+because the rule is not about spelling: it is about what a name SLUGIFIES to, and that equivalence
+class has no regex. A `slug:` with a trailing comment, a directory whose punctuation falls away in
+slugification - a grep only ever finds the spellings you thought to write down.
+
+**So check the OUTCOME, not the precondition: boot the new binary and read what it says.** It costs
+one command, it answers the actual question, and it is the check to trust:
+
+```
+# A scratch DATA_DIR and a spare port. The new binary reads your real content, builds its index, and
+# either serves or refuses. It writes nothing into CONTENT_DIR (only `adopt --write-ids` ever does)
+# and nothing into your real DATA_DIR, so the install still running is undisturbed. A v0.1.0 install
+# has no `roots {}` block yet, so the scratch boot sees the very topology your upgrade will.
+CONTENT_DIR="$CONTENT_DIR" DATA_DIR="$(mktemp -d)" PLAINBASE_PORT=8099 plainbase serve
+```
+
+It either comes up - the corpus is clean, stop it and upgrade for real - or it exits 1 with
+`REFUSING TO SERVE: ... Colliding entries: ...`, which names every offending entry it found. **That
+list is the remedy list.** The greps above only tell you where to start looking.
+
+The remedy is to rename the offending entry; there is no config key to disable the reservation. The
+full rule (every shape that trips it, and the deep-link consequence of renaming) is in
+[Configuration: `main` is a reserved URL segment](configuration.md#main-is-a-reserved-url-segment---in-every-install).
+
+**Upgrading to per-root identity (schema v17): stop the old binary FIRST.** This release rewrites
+`id_map` to `UNIQUE(id, root)`. A pre-v17 binary does not understand the new constraint and runs its
+global cross-root `unbindStale`/`unretire` against it, silently wiping another root's rows. Shut the
+running server down BEFORE upgrading the binary. A v17-or-later binary REFUSES to open a still-NEWER
+DB, but it cannot stop an OLDER binary that is already running, and there is no downgrade.
+
 ## The content tree is plain Markdown on disk
 
 Plainbase's canonical content tree is **plain Markdown on disk** - the tree *is* the product. Because
@@ -27,9 +104,14 @@ have.
 
 ## Search freshness: editing files outside Plainbase
 
-Plainbase watches `CONTENT_DIR` and re-indexes when files change, so an edit made outside Plainbase
-(in your editor, via `git checkout`, etc.) becomes searchable automatically. The end-to-end latency
-is **debounce (0.5 s) + a full index rebuild + the search sync**.
+Plainbase watches **every root that is available at startup** (`CONTENT_DIR`, or each `roots.*.path`
+when a `roots {}` block is configured) and re-indexes when files change, so an edit made outside
+Plainbase (in your editor, via `git checkout`, etc.) becomes searchable automatically. The end-to-end
+latency is **debounce (0.5 s) + a full index rebuild + the search sync**.
+
+A root whose path is missing at startup gets no watcher (there is nothing to watch) and serves 503
+until you restore it and restart - see
+[Multiple roots: what happens when one is not there](#multiple-roots-what-happens-when-one-is-not-there).
 
 ### Platform note - the 5-second promise binds Linux
 
@@ -38,8 +120,8 @@ is **debounce (0.5 s) + a full index rebuild + the search sync**.
 - **macOS** dev boxes use the JDK's `PollingWatchService` (multi-second poll interval; the
   `com.sun.nio.file` sensitivity modifiers are not reliably effective on JDK 21+). So **the 5-second
   promise does not bind macOS.** The practical answer on a Mac is a manual **rescan**
-  (`POST /api/v1/admin/rescan`): it re-scans `CONTENT_DIR`, picks up the just-edited file, and
-  diff-syncs search. **Reindex (below) will NOT surface a fresh disk edit** - it rebuilds the search
+  (`POST /api/v1/admin/rescan`): it re-scans every available root (the index pass is one whole-corpus
+  pass, never a single tree), picks up the just-edited file, and diff-syncs search. **Reindex (below) will NOT surface a fresh disk edit** - it rebuilds the search
   engine from the *already-published* page snapshot, so a file the watcher hasn't picked up yet isn't
   in that snapshot. From Phase 3, Plainbase-initiated saves are immediate on every platform.
 
@@ -84,7 +166,8 @@ CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
 
 Like `serve`, the offline CLIs (`reindex`, `adopt`) read `DATA_DIR/plainbase.conf` (env still wins), so a
 file-configured `storage.backend=object` makes them operate on the bucket mirror - not the local
-`CONTENT_DIR` - matching the running server for the same `DATA_DIR`.
+content root - matching the running server for the same `DATA_DIR`. A file-configured `roots {}`
+block likewise makes them operate on `roots.main.path`, not an ignored `CONTENT_DIR`.
 
 **Do not run `plainbase reindex` against a live server** - use the endpoint instead. The CLI and a
 running server are separate processes with separate write monitors; while SQLite WAL +
@@ -112,6 +195,138 @@ running server unlinks it while the server's open connections keep reading and w
 copy, so the on-disk file only reappears on restart. On a *running* server, use
 `POST /api/v1/admin/reindex` for a rebuild-in-place instead - never a live delete.
 
+## Multiple roots: what happens when one is not there
+
+**First, the exception that is not in the table below: a `main` that is not there AT BOOT does not
+degrade - the server REFUSES TO START.**
+
+```
+serve: roots.main.path does not exist or is not a directory: /srv/docs
+serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
+```
+
+Main is the root the URL grammar, the SPA shell and every legacy redirect are anchored on, so `serve`
+fails closed rather than come up serving an empty corpus. The same refusal covers a main it cannot
+read and traverse (`... is not readable/searchable: /srv/docs`). **So unmounting the volume that
+holds `main` does not buy you a degraded server with 503s - it buys you no server.** Restore the path
+or the permissions, then start. (Main vanishing while the server is already *running* is different:
+that is the sticky 503 behavior below, and the *next* boot is what refuses.)
+
+Everything else in this section is about the **extra** roots.
+
+An extra root that is missing at boot, or whose directory vanishes while the server runs, is marked
+**unavailable**. Two things matter operationally.
+
+**1. It answers 503, never 404 - and that distinction is for your agents.**
+
+| answer | what it means to an agent |
+|---|---|
+| `404 page_not_found` | the page is GONE. Drop your citations to it. |
+| `503 root_unavailable` (+ `Retry-After`) | a disk is unmounted. The page still exists. **KEEP your citations** and retry after the operator has restored the root. |
+
+Nothing is ever written on a 503, so a retry is safe. A root that is not serving also never reports
+its pages as deleted, never reports a conflict against them, and never quietly succeeds a write into
+them.
+
+**2. Nothing is deleted for an unavailable root.** Its pages are carried forward in the index, and its
+`id_map`, `url_alias`, `page_checkpoint` and `dirty_page` rows are left untouched - a routine rebuild
+never prunes state for a root it cannot see. Its proposals stay decidable too: an APPLYING row stays
+APPLYING, a CONFLICTED row is never terminally failed, and an approve or rebase against it answers 503
+rather than rewriting the row.
+
+### Checking, and recovering
+
+`GET /healthz` reports every configured root:
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "roots": [
+    { "root": "main",    "available": true,  "reason": null },
+    { "root": "archive", "available": false, "reason": "vanished" }
+  ]
+}
+```
+
+The top-level `status` stays `"ok"`: this is a LIVENESS probe, and a vanished extra root must not flip
+a k8s probe into a restart loop - a restart cannot remount a disk, and killing a server that is still
+serving every other root only makes the outage worse. Alert on the `roots` array instead.
+
+`reason` is one of `missing_at_boot`, `vanished`, or `watcher_failed`. `GET /api/v1/tree` carries the
+same bit as `"available": false` on the root's entry (with an empty subtree - never a stale listing).
+
+**Recovery is: restore the directory, then RESTART the server.** Unavailability is sticky on purpose -
+a vanished root's scan and identity state cannot be trusted afterwards, so the server will not silently
+re-adopt a directory that reappeared.
+
+### How fast is it detected?
+
+**Within 5 seconds, whether or not anyone is using the root.** Each available root's watcher probes its own
+directory on a 5-second interval (and treats the death of the root's own watch key as the same signal), so a
+silent unmount, a dropped NFS/SMB share, or a `mv` of the directory is caught without anything having to
+touch it. That matters because a rename or an unmount raises no file event of its own: the pages inside were
+never modified, so there is nothing for an event-driven detector to see.
+
+The other detectors remain, and they are faster when the root is in use: any write, any rebuild, and an
+explicit `POST /api/v1/admin/rescan` all probe the root and mark it on the spot. There is no need to cron a
+rescan for this.
+
+Once marked, nothing serves that root's content - that is the invariant. The exposure is therefore bounded to
+reads issued in the seconds *before* detection, and even those touch no durable state: no write is
+mis-answered and no deletion runs, because every one of those paths probes the disk itself.
+
+### Reindexing while a root is unavailable
+
+`POST /api/v1/admin/reindex` rebuilds the search engine from the current snapshot. If a root has been
+unavailable **since boot**, it was never scanned, so it has no snapshot section - and a reindex during
+that episode DROPS its search rows. That is accepted and safe: `search.db` is derived state (above), the
+root's hits are filtered out during the episode anyway, and the first rebuild after you restore the root
+and restart re-indexes it completely. Its `page_checkpoint` rows - durable state - are never touched by a
+reindex. A root that vanished MID-RUN is unaffected either way (its carried section is still in the
+snapshot).
+
+### Adding or removing a root: a config edit plus a restart
+
+`plainbase root add`/`remove`
+(see [Configuration: the CLI and the two files](configuration.md#the-cli-and-the-two-files)) writes
+`DATA_DIR/roots.conf`; nothing changes for a running server until you restart it - the CLI has no
+runtime API to talk to a live process, and the server does not hot-reload topology.
+
+`root remove <name>` does not touch the root's content or its database rows. Its pages keep their
+`id_map`, `url_alias` and `page_checkpoint` rows exactly as they were; the rows just become
+**detached**, because the name no longer names a configured root. `root add` of the **same** name
+later revives them, and under per-root identity (C5) that revival is permalink-SAFE: each page keeps
+its own `id:` and answers the same rooted `/p/{name}/{id}` it did before. Two things are still worth
+naming:
+
+- **Re-adding under a DIFFERENT name is not a free rename.** Permalinks and agent citations are rooted
+  (`/p/{root}/{id}`), so the root's name is baked into every one of them. Bring the same directory back
+  under a new name and the pages answer at `/p/{newname}/{id}` while the old `/p/{oldname}/{id}` URLs
+  404 - the `id:` values are untouched; it is the ROOT segment that moved.
+- **Rank only reorders source precedence.** `root add` APPENDS to `roots.conf`, so a re-added root
+  ranks last - but rank decides SOURCE PRECEDENCE and the order a bare `/p/{id}` lists its candidate
+  roots (see
+  [Configuration: the order of the block](configuration.md#the-order-of-the-block-decides-source-precedence-not-permalinks)),
+  NOT who "keeps" a shared id. Two roots holding the same frontmatter `id:` BOTH keep it, each at its
+  own rooted permalink. `root remove` prints these consequences when you run it.
+
+A same-name remove/re-add leaves every page with the same id and the same rooted permalink. **Renaming
+a root, though, is a permalink-affecting operation** - prefer fixing the topology in one edit over a
+remove now and an add-under-a-new-name later.
+
+**If the removed root held every page binding in `DATA_DIR`, the next boot refuses to serve.** This is
+the 100%-detached guard (ADR-0011 D15): a nonempty `id_map` whose roots are entirely disjoint from the
+configured names looks like the wrong `DATA_DIR` or a wholesale-rewritten `roots.conf`, so `serve` fails
+closed rather than silently minting fresh identities for a corpus it can no longer place. Add the root
+back (or fix `roots.conf`), then restart.
+
+The rewrite of `roots.conf` is atomic (a temp file, then an atomic rename), so a `root add`/`remove`
+interrupted halfway leaves the previous file untouched. On a `DATA_DIR` whose filesystem has no atomic
+rename - an NFS/SMB mount - the CLI falls back to a copy, warns that it did, and copies the previous
+file to `roots.conf.bak` first. If you ever find that `.bak` sitting there, a write was interrupted
+mid-copy: it is the last config that booted, and `mv roots.conf.bak roots.conf` restores it.
+
 ## When to upgrade to Meilisearch
 
 Plainbase's default search is embedded SQLite FTS5 - zero containers, ranked and section-granular
@@ -134,20 +349,30 @@ which a corpus perf test enforces on every build.
 
 ## Backups
 
-**Back up whatever holds the authoritative content.** Which store that is depends on `storage.backend`:
-in the default **local** mode it is `CONTENT_DIR` (see
-[the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above); in
-**object** mode it is the S3-compatible **bucket**, and `CONTENT_DIR` is ignored entirely (the
-Object-storage subsection below covers that case). Back up `DATA_DIR/plainbase.db` too in EITHER mode
-if users, agent tokens, proposals, roles, or the audit log matter to you - it's the one piece of
-`DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db` needs no backup at all: it's fully
-[derived state](#searchdb-is-derived-state), rebuildable from the authoritative content at any time
-(and in object mode `DATA_DIR/mirror` / `DATA_DIR/mirror-state` are likewise derived and need none).
+**Back up every store that holds authoritative content - and on a multi-root install that is more than one
+directory.** Which stores those are depends on `storage.backend`:
+
+- **local** (the default): **every configured root's directory is authoritative content, and every one of
+  them needs backing up.** With no `roots {}` block that is the single `CONTENT_DIR` tree (see
+  [the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above). With a
+  `roots {}` block it is `roots.main.path` **plus each extra root's `path`** - `roots.handbook.path`,
+  `roots.runbooks.path`, and so on. Roots are disjoint directories with no shared storage and nothing else
+  in the deployment holds a copy of them, so backing up `main` alone silently leaves the rest of your corpus
+  unprotected.
+- **object**: the S3-compatible **bucket** is the authority - back *it* up, and `CONTENT_DIR` is ignored
+  entirely (the Object-storage subsection below covers that case). Object mode is single-root today: a
+  `roots {}` block cannot be combined with `storage.backend=object` (ADR-0011 D10).
+
+Back up `DATA_DIR/plainbase.db` too, in EITHER mode, if users, agent tokens, proposals, roles, or the audit
+log matter to you - it's the one piece of `DATA_DIR` holding *real*, non-derived state. `DATA_DIR/search.db`
+needs no backup at all: it's fully [derived state](#searchdb-is-derived-state), rebuildable from the
+authoritative content at any time with `plainbase reindex` (and in object mode `DATA_DIR/mirror` /
+`DATA_DIR/mirror-state` are likewise derived and need none).
 
 ### Object-storage backend (`storage.backend=object`)
 
 In object mode the S3-compatible **bucket** is the canonical content store - back IT up, the same way
-you'd back up `CONTENT_DIR` locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
+you'd back up the content root locally. `DATA_DIR/mirror` and `DATA_DIR/mirror-state` are derived, deletable
 cache (delete them and they self-heal from the bucket on the next boot), so they need no backup; `plainbase.db`
 still holds real state and still wants one.
 
@@ -244,8 +469,10 @@ carried in that bundle is lost.
 your store, sized to how much history you want:
 
 - **Local (`storage.backend=local`):** the existing guidance above -
-  [back up `CONTENT_DIR`](#the-content-tree-is-plain-markdown-on-disk) (and `DATA_DIR/plainbase.db` if
-  users/tokens/proposals matter). Unchanged.
+  [back up EVERY configured root's directory](#backups) (`CONTENT_DIR` with no `roots {}` block; otherwise
+  `roots.main.path` **and every extra root's `path`** - each root is an independent content authority and
+  nothing else in the deployment holds a copy of it; plus `DATA_DIR/plainbase.db` if users/tokens/proposals
+  matter). Unchanged otherwise.
 - **AWS S3 (or any versioning-capable store):** enable bucket
   [versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html) plus a
   **noncurrent-version lifecycle rule** for near-free point-in-time restore. **Same-bucket caveat:**
@@ -276,9 +503,10 @@ section.
 ## Losing `DATA_DIR`: what recovers and what doesn't
 
 `DATA_DIR` can vanish entirely - a lost volume, a wiped container - and Plainbase boots clean against
-the surviving authoritative content: in **local** mode that is `CONTENT_DIR`, and in **object** mode it
-is the bucket (`CONTENT_DIR` is ignored; `DATA_DIR/mirror` re-hydrates from the bucket on the next
-boot). The authoritative content is the source of truth, so most state re-derives; the app database
+the surviving authoritative content: in **local** mode that is **every configured root's directory**
+(`CONTENT_DIR` with no `roots {}` block; otherwise `roots.main.path` and each extra root's `path`), and
+in **object** mode it is the bucket (`CONTENT_DIR` is ignored; `DATA_DIR/mirror` re-hydrates from the
+bucket on the next boot). The authoritative content is the source of truth, so most state re-derives; the app database
 `DATA_DIR/plainbase.db` also holds *real* state that does not.
 
 **Recovers on the next boot, automatically:**
@@ -286,7 +514,7 @@ boot). The authoritative content is the source of truth, so most state re-derive
 - the directory itself (created on startup),
 - a fresh `plainbase.db`, created and migrated to the current schema,
 - a rebuilt, fully populated `search.db`,
-- the id of every page that carries `id:` in its frontmatter - those `/p/{id}` permalinks and
+- the id of every page that carries `id:` in its frontmatter - those `/p/{root}/{id}` permalinks and
   citations keep working,
 - `redirect_from` aliases (re-derived from frontmatter),
 - with `storage.backend=object` **and** `git.enabled=true`: commit-grained **history**, up to the last
@@ -303,15 +531,30 @@ boot). The authoritative content is the source of truth, so most state re-derive
 - sessions, roles, and the audit log,
 - pending proposals,
 - move-history URL aliases: old URLs from past renames 404 unless re-declared as `redirect_from`,
-- ids of pages that never carried a frontmatter id - fresh ids are minted, so old `/p/{id}`
+- ids of pages that never carried a frontmatter id - fresh ids are minted, so old `/p/{root}/{id}`
   permalinks and citations to *those* pages break.
 
 **Mitigation, before disaster:**
 
 - run `plainbase adopt --write-ids` so every page's identity lives in the tree itself and survives
-  any `DATA_DIR` loss,
-- back up `CONTENT_DIR` always; back up `DATA_DIR/plainbase.db` too if users, tokens, or proposals
-  matter.
+  any `DATA_DIR` loss. It covers **every configured root**, and it **refuses to run** (exit 1, nothing
+  written) if it cannot see one of them - a root it skipped would be a root whose ids stayed in
+  `DATA_DIR` alone, which is the exact loss this command exists to prevent. If it refuses, restore the
+  missing path and re-run: adopt is idempotent.
+- back up **every configured root's directory** (`CONTENT_DIR` with no `roots {}` block; otherwise
+  `roots.main.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too if users,
+  tokens, or proposals matter.
+- on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
+  reconstructable from the content trees: they're the only record of *which* directories are roots,
+  under what names, with what `editable`/`history` settings, and **in what ORDER** - and the order is
+  not cosmetic. The root NAMES are baked into every rooted `/p/{root}/{id}` permalink and citation, so
+  a restore that brings a root back under a different name rots every citation into it; and a root's
+  rank is its line in the `roots {}` block, which decides SOURCE PRECEDENCE - the order a bare `/p/{id}`
+  lists its candidate roots - not who keeps a shared id (two roots holding one `id:` both keep it, each
+  at its own rooted permalink; see
+  [Configuration: the order of the block](configuration.md#the-order-of-the-block-decides-source-precedence-not-permalinks)).
+  Lose these files without a backup and a restore has the pages back but not the topology that made
+  them a multi-root install.
 
 Two disaster-recovery drills run on every build: `IndexDestroyRebuildDrillTest` (stop → delete
 `search.db` → `plainbase reindex`, with `SearchEquivalenceTest` covering the engine level) and
@@ -345,6 +588,62 @@ There is no on-demand forced-hydrate admin action today. Restore recipes reflect
   restart or wait for the poll (same surfacing rule - not `rescan`). Versioned-S3 deployments only; R2
   has no versioning (see [Per-backend backup guidance](#backups) above).
 
+## Stopping Plainbase: SIGTERM and the shutdown budget
+
+`docker stop`, systemd and Kubernetes all stop the process with **SIGTERM**, and Plainbase shuts down
+gracefully on it. In order, it stops the HTTP server (in-flight requests get a 3-second grace to finish
+rather than being severed mid-write), closes the content watchers, drains any in-flight rebuild, and - in
+object mode with `git.enabled=true` - **ships the final DR bundle** before closing the object-store
+transport and releasing the `DATA_DIR` lock. SIGINT (Ctrl-C) takes the same path.
+
+You can see it in the log: a `shutting down: ...` line naming the steps, then `shutdown complete in Nms`.
+**If you do not see those two lines, the process did not shut down gracefully** - it was SIGKILLed, either
+directly (`kill -9`, a `docker kill`) or by your orchestrator's grace period expiring.
+
+### The budget is DERIVED, and it is bigger than your grace period
+
+There is no fixed teardown deadline. Plainbase waits for the **sum of what its steps can honestly take**, each
+step declaring the bound its own collaborator honors. A fixed number in front of those collaborators would not
+bound them, it would *truncate* them - and the step it truncates first is the slowest one, the final DR bundle
+ship, which is the loss the graceful shutdown exists to prevent.
+
+So the budget is not a promise that shutdown is quick. It is a promise that nothing is cut short. On the happy
+path a teardown is **sub-second**; the numbers below are worst cases, reached only when a step is genuinely
+stuck:
+
+| Step | Worst case | Where it comes from |
+|---|---|---|
+| HTTP server | 8s | 3s drain grace + 5s hard stop |
+| Content watchers | 10s **per root** | one watcher close each |
+| Rebuild scheduler | 60s | two 30s executor drain awaits |
+| Git bundle DR (object mode + `git.enabled`) | ~21min | 60s ship drain + a 10min `git bundle create` + a 10min upload |
+| Object-store transport | 5s | |
+| `DATA_DIR` lock | 5s | |
+
+A local single-root install is therefore bounded at **~83 seconds**; an object-mode install shipping DR bundles
+is bounded in the **tens of minutes**, because that is how long a large history can honestly take to go up a
+slow link.
+
+**Set your grace period against the deployment you actually run, not against the defaults.** `docker stop`
+defaults to **10 seconds** and Kubernetes' `terminationGracePeriodSeconds` to **30** - both are *tighter* than
+even the local worst case, so on defaults a stuck teardown is SIGKILLed partway through:
+
+- **Local mode:** `docker stop -t 120`, or `terminationGracePeriodSeconds: 120`.
+- **Object mode with DR bundles:** give it minutes, not seconds - `terminationGracePeriodSeconds: 1500` covers
+  the full bundle bound. Size it against how long *your* history takes to ship (watch the `bundle ship` log
+  lines); the table's number is the ceiling, not the expectation.
+
+If a teardown is still running after **8 seconds**, Plainbase logs a WARN naming the step it is waiting on. That
+threshold sits deliberately *under* `docker stop`'s 10-second default so the warning reaches you **before** the
+tightest common grace period kills the process - it is the line that tells you which knob to turn. If a step
+overruns its own declared bound, the process logs a WARN naming it and exits anyway: at that point the step is
+wedged rather than slow, and a shutdown that hangs is an outage of its own.
+
+**Restarts are not a data-loss event either way.** Content lives in the content tree (or the bucket); everything
+the teardown does is about *tightening* the recovery window, never about the durability of a write that already
+returned 200. Nothing is lost if the flush is cut - the next boot reconciles - but the DR window stays wider
+than it needs to be (see [Backups](#backups)).
+
 ## Operator signals (object mode)
 
 What the object-mode diagnostics mean and what you do about each:
@@ -375,6 +674,33 @@ What the object-mode diagnostics mean and what you do about each:
 `plainbase adopt` gives an existing Markdown tree Plainbase-native page identity - a stable `id:`
 in each page's frontmatter that survives moves, renames, and (per the section above) a lost
 `DATA_DIR`.
+
+**It adopts every configured root, or none.** With a `roots {}` block it reads them all first, works out
+every page's identity in one pass over the whole corpus, and only then writes (one section of output per
+root, named). If any configured root's path is not available it refuses outright - exit 1, nothing
+written - rather than half-adopt a corpus, and a root that disappears *while it is running* aborts the
+run for the same reason. The reason is the whole point of the command: the ids of a root it skipped would
+live in `DATA_DIR` alone, so that root would lose every permalink and citation in exactly the disaster
+`--write-ids` is meant to survive. Restore the path and re-run (adopt is idempotent), or drop the root
+from the block if it is gone for good.
+
+**If the tree moves under it, it aborts - it never improvises.** Adopt only ever *replaces* a page it has
+already read: it cannot create a file, and it cannot create a directory. So a root that is unmounted or
+deleted mid-run is never quietly re-created on disk holding just the pages that run had got to (a partial
+skeleton of your tree, possibly at a path that now points somewhere else entirely), and a page that is
+edited or deleted after the plan was made is never overwritten with content derived from the stale read.
+Any of these stops the run and names the page. **The remedy is always the same, and it is always safe:
+restore the root (or let the tree settle) and re-run.** What an abort can leave behind is a page whose
+`id_map` row exists while its file does not carry the `id:` line yet - which is exactly the state adopt
+exists to repair, so a re-run converges on it. Adoption deletes nothing and is idempotent.
+
+Reading everything before writing anything is also what lets it settle a page id that two files in ONE
+root both claim (a copy-paste within a tree, say): the same id cannot live twice in one root, so one page
+keeps it and the other is given a fresh one, reported as a `duplicate_id`. The SAME id in two DIFFERENT
+roots is not a contest at all under per-root identity (C5) - a file copied between trees keeps its id in
+BOTH, each root answering its own rooted `/p/{root}/{id}` - so adopt reassigns nothing there and reports
+nothing. `adopt --write-ids --dry-run` previews exactly these decisions - the same bytes - without
+touching a file.
 
 Start read-only, always:
 
@@ -473,6 +799,27 @@ creating the commit, updating the ref, and a couple more) - so a wedged repo (a 
 hung `git` hook shimmed in from outside Plainbase's pinned config, etc.) can stall a single save
 for **a small multiple of the per-invocation bound**, not one fixed number of seconds. There's no
 circuit breaker today - a trip-after-N-failures breaker is a v0.1.x candidate.
+
+## Operational logs and one-shot command output
+
+Local JVM and native launches write readable operational records to stderr. The container image selects
+the JSON profile before JVM initialization, so `docker logs` and Kubernetes collectors receive one JSON
+object per operational line:
+
+```sh
+./plainbase serve 2>plainbase.log
+docker logs -f plainbase
+kubectl logs -f deployment/plainbase
+```
+
+`PLAINBASE_LOG_LEVEL` filters operational telemetry in both profiles. To override an image's default,
+replace its launcher options, for example
+`PLAINBASE_OPTS=-Dlogback.configurationFile=logback.xml -Dplainbase.commandEvents=plain`.
+
+One-shot CLI commands retain a separate wire contract: results and reports are stdout; usage and expected
+refusals are stderr; exit codes remain 0/1/2 for success/runtime/usage. Token commands print plaintext only
+on stdout, so capture that stream separately. `adopt --write-ids` publishes its pre-write event as plain
+stdout locally and typed JSON stderr in the container, and refuses the write if that event cannot be flushed.
 
 ## Known limitations (v0.1)
 

@@ -7,6 +7,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.ProposalId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootName
 
 /**
  * The guarded MUTATING surface (A3, the choke point). Every method takes a [Principal], calls the matching
@@ -46,6 +47,15 @@ interface MutatingFacade {
      * post-write `IndexBuilder.rebuild()` that makes the asset reachable. Returns an [AssetWriteOutcome] the route
      * maps to status — all raw-mutator/snapshot access stays INSIDE the facade impl. [filename] is the
      * route-validated single segment (the facade composes the path); [hasher] is the frozen content hash.
+     *
+     * [expectedRoot] is the `?root=` pin (C4): null resolves the page's owning root id_map-first; a present pin is
+     * durable-validated (registered-and-live) AFTER `checkEdit`, so an unregistered/non-owner pin answers the audited
+     * 404 PageMissing rather than leaking registration pre-auth.
+     *
+     * It carries NO default, deliberately. It is a write-path SAFETY input, and the only value a default could take is
+     * the permissive one (unpinned, resolve-from-id) - so a future call site that forgot the pin would silently widen
+     * which root a write may touch instead of failing to compile. The rule belongs in the SIGNATURE: pass an explicit
+     * null where unpinned is genuinely right, so the choice is visible at the call site.
      */
     fun writeAsset(
         principal: Principal,
@@ -53,6 +63,7 @@ interface MutatingFacade {
         filename: String,
         bytes: ByteArray,
         hasher: (ByteArray) -> String,
+        expectedRoot: RootName?,
     ): AssetWriteOutcome
 
     /** MANAGE: `PolicyService.checkManage` then `IndexBuilder.rebuild(grant)` (the §A5 rescan). */
@@ -75,11 +86,28 @@ interface MutatingFacade {
  *
  * [author]/[committer] (P1b) carry the optional git attribution the apply coordinator supplies (the proposer +
  * approver); they DEFAULT to null so the existing PUT route constructs a [SaveRequest] unchanged (server identity).
+ *
+ * [expectedRoot] pins WHICH root's page this save is allowed to touch, and it is NEVER trusted blind: the facade
+ * durable-validates every pin through `PageRootResolver.resolvePinned` (registered-and-live) and fails CLOSED, so a
+ * pin that no longer binds the id reads as GONE from the pinned root rather than walking the write into whichever
+ * root now holds it (ADR-0011 D17 re-awards an id and moves no file; two checkouts of one repo hold byte-identical
+ * files, so `base_hash` would not have caught the difference).
+ *
+ * Both callers supply it. The PUT route sets it from `?root=` (absent → null, the bare form, where the id IS the
+ * address and the id_map-first resolve decides the owner). The proposal-APPLY path always names one: it decided its
+ * root at PROPOSE time, showed that root to the approving admin, and gated on it, so the apply must land in exactly
+ * that root or nowhere - which is why three other comments send the reader here for the reasoning.
  */
 class SaveRequest(
     val pageId: PageId,
     val baseHash: String,
     val bytes: ByteArray,
+    /**
+     * NO default, for [MutatingFacade.writeAsset]'s reason: the only value a pin could default to is the permissive
+     * unpinned one, so an omitted pin must be a compile error rather than a silent widening of which root a write may
+     * touch. Every construction site names it - `expectedRoot = null` where the bare id-is-the-address form is meant.
+     */
+    val expectedRoot: RootName?,
     val author: CommitIdentity? = null,
     val committer: CommitIdentity? = null,
     val origin: WriteOrigin = WriteOrigin.DIRECT_PUT,

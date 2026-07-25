@@ -116,7 +116,7 @@ class ObjectContentStoreConcurrencyTest : FunSpec({
                 inFlight.countDown()
                 held.await(10, TimeUnit.SECONDS) // simulate a slow GET/LIST in flight in the poll thread
             }
-            val watch = hybrid.store.watch { }
+            val watch = hybrid.store.watch(onChange = { })
             inFlight.await(5, TimeUnit.SECONDS) shouldBe true // a poll op is now blocked mid-network
 
             // close() must INTERRUPT the blocked op (breaking held.await) and JOIN - so it returns FAST,

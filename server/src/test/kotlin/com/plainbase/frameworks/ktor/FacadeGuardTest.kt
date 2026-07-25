@@ -37,7 +37,6 @@ class FacadeGuardTest : FunSpec({
                 harness.roleRepository.upsert("builtin", "editor", Role.EDITOR, Clock.System.now())
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )
@@ -46,7 +45,7 @@ class FacadeGuardTest : FunSpec({
 
                 // EDITOR: the write lands (the grant reached the pipeline). The facade resolves the page path
                 // INTERNALLY from the snapshot — the route hands only id + base_hash + bytes.
-                val result = ctx.mutate.save(editor(), SaveRequest(page.id, page.contentHash, newBytes))
+                val result = ctx.mutate.save(editor(), SaveRequest(page.id, page.contentHash, newBytes, expectedRoot = null))
                 result.shouldBeInstanceOf<SaveResult.Written>()
                 result.outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                 Files.readString(root.resolve("doc.md")) shouldBe String(newBytes)
@@ -55,7 +54,7 @@ class FacadeGuardTest : FunSpec({
                 val refreshed = harness.builder.current.pages.single()
                 val viewerBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nedited by viewer.\n".toByteArray()
                 shouldThrow<AccessDenied> {
-                    ctx.mutate.save(viewer(), SaveRequest(refreshed.id, refreshed.contentHash, viewerBytes))
+                    ctx.mutate.save(viewer(), SaveRequest(refreshed.id, refreshed.contentHash, viewerBytes, expectedRoot = null))
                 }
                 Files.readString(root.resolve("doc.md")) shouldBe String(newBytes) // unchanged: the mutator was never reached
             }
@@ -72,7 +71,6 @@ class FacadeGuardTest : FunSpec({
                 harness.builder.rebuild()
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )
@@ -80,13 +78,15 @@ class FacadeGuardTest : FunSpec({
                 // The VIEWER's PUT is denied. The denied decision MUST be the audited EDIT — not swallowed by an
                 // unaudited read-check that runs first. Exactly ONE audit row: action EDIT, decision denied.
                 shouldThrow<AccessDenied> {
-                    ctx.mutate.save(viewer(), SaveRequest(page.id, page.contentHash, "x".toByteArray()))
+                    ctx.mutate.save(viewer(), SaveRequest(page.id, page.contentHash, "x".toByteArray(), expectedRoot = null))
                 }
                 val rows = harness.auditRepository.recent(10)
                 rows shouldHaveSize 1
                 rows.single().action shouldBe "EDIT"
                 rows.single().decision shouldBe "denied"
-                rows.single().resource shouldBe page.id.value
+                // Rooted since C4: a write decision audits `{root}:{resource}` (the id alone would lose which
+                // tree the bytes were bound for, which is the one thing an auditor most needs from a write row).
+                rows.single().resource shouldBe "main:${page.id.value}"
             }
         } finally {
             root.toFile().deleteRecursively()
@@ -102,7 +102,6 @@ class FacadeGuardTest : FunSpec({
                 harness.roleRepository.upsert("builtin", "viewer", Role.VIEWER, Clock.System.now())
                 harness.roleRepository.upsert("builtin", "admin", Role.ADMIN, Clock.System.now())
                 val ctx = harness.testRouteContext(
-                    contentStore = LocalContentStore(root),
                     searchProvider = noopSearchProvider(),
                     enforced = true,
                 )
@@ -118,8 +117,11 @@ class FacadeGuardTest : FunSpec({
 /** A no-op SearchProvider so the facade harness needs no FTS engine for these gate assertions. */
 private fun noopSearchProvider() = object : com.plainbase.domain.search.SearchProvider {
     override fun index(pages: List<com.plainbase.domain.search.PageDocuments>) = Unit
-    override fun delete(ids: Collection<com.plainbase.domain.page.PageId>) = Unit
+    override fun delete(ids: Collection<com.plainbase.domain.root.RootedPageId>) = Unit
     override fun search(query: com.plainbase.domain.search.SearchQuery) = com.plainbase.domain.search.SearchResults(0, emptyList())
-    override fun rebuild(pages: Sequence<com.plainbase.domain.search.PageDocuments>) = Unit
-    override fun indexedState() = emptyMap<com.plainbase.domain.page.PageId, com.plainbase.domain.search.PageSearchState>()
+    override fun rebuild(
+        pages: Sequence<com.plainbase.domain.search.PageDocuments>,
+        retired: Set<com.plainbase.domain.root.RootedPageId>?,
+    ) = Unit
+    override fun indexedState() = emptyMap<com.plainbase.domain.root.RootedPageId, com.plainbase.domain.search.PageSearchState>()
 }

@@ -34,6 +34,12 @@
         {
           "name": "<init>",
           "parameterTypes": []
+        },
+        {
+          "name": "setTarget",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
         }
       ]
     },

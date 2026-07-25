@@ -48,13 +48,26 @@ class RestHarness(
         root,
         contentStore = store,
         history = history,
-        listeners = listOf(IndexBuilder.PublicationListener(searchIndexer::sync)),
+        listeners = listOf(
+            IndexBuilder.PublicationListener { snap, retired ->
+                searchIndexer.sync(snap, retired)
+            },
+        ),
         searchIndexer = searchIndexer,
     )
 
     val idMap: IdMapRepository get() = harness.idMap
+
+    /** The proof-apply transaction (C0): the ONE way a test can make an absence PROVEN rather than merely observed. */
+    val retirements get() = harness.retirements
     val builder get() = harness.builder
     val registry get() = harness.registry
+
+    /** The availability holder - so a test can drive the OTHER 503 and prove the two are not the same answer (C1). */
+    val availability get() = harness.availability
+
+    /** The DERIVED limbo set `/healthz` reports (C1). */
+    val limbo get() = harness.limbo
 
     /** The A3 route holder `plainbaseModule` serves from. Auth ON, loopback-dev (OFF) open behavior by default. */
     val services: RouteContext
@@ -63,16 +76,12 @@ class RestHarness(
      * A [TreeJsonCache] over the harness's builder for the §C4 memoization test. The route path's own memo lives
      * privately inside [GuardedReadFacade]; this exposes the SAME cache type for the per-snapshot-identity assertion.
      */
-    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder) }
+    val treeJson: TreeJsonCache by lazy { TreeJsonCache(harness.builder, harness.rootRegistry, harness.availability) }
 
     init {
         seed(harness.idMap)
         harness.builder.rebuild()
-        services = harness.testRouteContext(
-            contentStore = store,
-            searchProvider = searchProvider,
-            history = history,
-        )
+        services = harness.testRouteContext(searchProvider = searchProvider, history = history)
     }
 
     override fun close() {
@@ -111,10 +120,11 @@ fun ApplicationTestBuilder.restClient(): HttpClient = createClient { followRedir
  */
 @Suppress("LongParameterList")
 fun IndexHarness.testRouteContext(
-    contentStore: com.plainbase.domain.content.ContentStore,
     writePipeline: com.plainbase.domain.service.WritePipeline = writePipeline(),
     searchProvider: com.plainbase.domain.search.SearchProvider,
     history: HistoryProvider = NoOpHistoryProvider,
+    /** The PER-ROOT providers, when a test needs roots whose history differs (C4); defaults to main-only. */
+    historiesByRoot: ((com.plainbase.domain.root.RootName) -> HistoryProvider)? = null,
     idProvider: com.plainbase.domain.service.IdProvider = UuidV7IdProvider(),
     enforced: Boolean = false,
     trustedProxyCidrs: List<String> = emptyList(),
@@ -128,6 +138,19 @@ fun IndexHarness.testRouteContext(
     // config.agentDirectCommitGlobs()); forwarded into buildRouteContext so the harness can exercise the gate.
     agentDirectCommitGlobs: List<com.plainbase.domain.service.CommitGlob> = emptyList(),
     extract: (io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction)? = null,
+    /** The watch-coverage holder `/healthz` reads. Defaults to all-whole: a harness with no watcher degrades nothing. */
+    convergence: com.plainbase.domain.root.RootConvergence = com.plainbase.domain.root.RootConvergence(),
+    /**
+     * The id->root resolver (C4). Defaults to the real one over the harness idMap; a window test injects a
+     * PageRootResolver over an [AmbiguousIdMap] FAKE to pose the Ambiguous arm / a cross-root move it cannot make real.
+     */
+    resolver: com.plainbase.domain.service.PageRootResolver = com.plainbase.domain.service.PageRootResolver(idMap, rootRegistry),
+    /**
+     * The 404-vs-503 classifier (C4, FIX 1). Defaults to the harness's own over the REAL idMap; a window test injects
+     * an AbsenceClassifier over the SAME [AmbiguousIdMap] FAKE the resolver uses, so the limbo (503) path fires by
+     * construction rather than reading the real rootsHoldingId and answering 404.
+     */
+    absence: com.plainbase.domain.service.AbsenceClassifier = this.absence,
 ): RouteContext {
     val policy = PolicyService(
         roles = roleRepository,
@@ -136,24 +159,38 @@ fun IndexHarness.testRouteContext(
         idProvider = UuidV7IdProvider(),
         clock = Clock.System,
         enforced = enforced,
+        editableOf = { rootRegistry.byName(it)?.editable == true },
     )
-    val proposalReader = com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, contentStore = contentStore)
+    // Every root the harness registers resolves to its own store; history is main's provider for main, no-op
+    // elsewhere (an extra root with no declared history records nothing, exactly as production wires it) - unless
+    // the test declares the whole per-root map itself.
+    val histories: (com.plainbase.domain.root.RootName) -> HistoryProvider =
+        historiesByRoot ?: { if (it == rootRegistry.main.name) history else NoOpHistoryProvider }
+    val proposalReader =
+        com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
     val proposalService = com.plainbase.domain.service.ProposalService(
         repository = proposalRepository,
         citations = CitationFactory(),
         baseReader = proposalReader,
         proposalIdProvider = com.plainbase.domain.service.UuidV7ProposalIdProvider(),
         clock = Clock.System,
+        rootStatus = { root -> resolver.statusOf(root, availability.current()) },
     )
     return buildRouteContext(
         policy = policy,
         indexBuilder = builder,
         pageService = PageService(builder, registry, CitationFactory()),
-        searchService = SearchService(provider = searchProvider, indexBuilder = builder),
+        searchService = SearchService(provider = searchProvider, indexBuilder = builder, availability = availability),
         aliasRegistry = registry,
-        contentStore = contentStore,
         writePipeline = writePipeline,
-        history = history,
+        registry = rootRegistry,
+        availability = availability,
+        convergence = convergence,
+        limbo = limbo,
+        resolver = resolver,
+        absence = absence,
+        stores = stores,
+        histories = histories,
         idProvider = idProvider,
         proposalService = proposalService,
         proposalLabeler = com.plainbase.domain.service.ProposalAuthorLabeler(tokens = apiTokenRepository, users = userRepository),

@@ -1,6 +1,8 @@
 package com.plainbase.frameworks.filesystem
 
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.service.IndexHarness
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.withTempTree
@@ -34,7 +36,7 @@ class WatcherPipelineTest : FunSpec({
                     rebuilds.incrementAndGet()
                     harness.builder.rebuild()
                 }, alarm = ExecutorAlarm()).use { scheduler ->
-                    store.watch { scheduler.schedule() }.use {
+                    store.watch(onChange = { scheduler.schedule() }).use {
                         repeat(1_000) { writePage(root, "page-%04d.md".format(it), "# Page $it\n") }
                         awaitUntil(120_000, "burst never converged to 1,000 pages") {
                             harness.builder.current.pages.size == 1_000
@@ -55,13 +57,14 @@ class WatcherPipelineTest : FunSpec({
             val store = LocalContentStore(root)
             IndexHarness(root, contentStore = store).use { harness ->
                 RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm()).use { scheduler ->
-                    store.watch { scheduler.schedule() }.use {
+                    store.watch(onChange = { scheduler.schedule() }).use {
                         harness.builder.rebuild() // startup build AFTER watch registration (§B2 ordering)
 
                         val start = System.nanoTime()
                         writePage(root, "docs/note.md", "---\ntitle: New Title\n---\n\nbody\n")
                         awaitUntil(90_000, "the external edit never reached the published index") {
-                            harness.builder.current.byPath[TreePath.require("docs/note.md")]?.title == "New Title"
+                            harness.builder.current.byPath[RootedPath(RootName.MAIN, TreePath.require("docs/note.md"))]?.title ==
+                                "New Title"
                         }
                         val elapsedMillis = (System.nanoTime() - start) / 1_000_000
                         if (System.getProperty("os.name").lowercase().startsWith("linux")) {

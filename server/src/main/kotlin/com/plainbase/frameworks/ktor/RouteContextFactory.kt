@@ -3,11 +3,18 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootConvergence
+import com.plainbase.domain.root.RootLimbo
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.service.AbsenceClassifier
 import com.plainbase.domain.service.ApiTokenService
 import com.plainbase.domain.service.CommitGlob
 import com.plainbase.domain.service.IdProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.LinkChecker
+import com.plainbase.domain.service.PageRootResolver
 import com.plainbase.domain.service.PageService
 import com.plainbase.domain.service.PolicyService
 import com.plainbase.domain.service.ProposalAuthorLabeler
@@ -36,9 +43,32 @@ fun buildRouteContext(
     pageService: PageService,
     searchService: SearchService,
     aliasRegistry: UrlAliasRegistry,
-    contentStore: ContentStore,
     writePipeline: WritePipeline,
-    history: HistoryProvider,
+    /** The configured topology (D7 order). The known-root set the URL grammar and the propose parser use derives
+     *  from it, so client and server can never disagree about which names are roots. */
+    registry: RootRegistry,
+    /** Runtime per-root serving state — the facades gate on it; only `/healthz` reads it directly. */
+    availability: RootAvailability,
+    /**
+     * Runtime per-root watch coverage — `/healthz` alone reads it. Defaulted to a fresh (all-whole) holder because a
+     * harness wires no watcher, and a tree nobody is watching has no coverage to be degraded; production passes the
+     * SAME single `serve()` records each watcher's coverage into.
+     */
+    convergence: RootConvergence = RootConvergence(),
+    /**
+     * The DERIVED limbo set `/healthz` reports (C1). Defaulted to a fresh (empty) holder for the same reason
+     * [convergence] is: a harness that never ran a pass has nothing in limbo. Production passes the SAME single the
+     * IndexBuilder republishes into.
+     */
+    limbo: RootLimbo = RootLimbo(),
+    /** The ONE owner of the id→root and root→status questions, injected into all three guarded facades. */
+    resolver: PageRootResolver,
+    /** The ONE owner of the 404-vs-503 absence decision (C1), injected into the read + write facades. */
+    absence: AbsenceClassifier,
+    /** Per-root content trees. Registry-built, so an unregistered name is a PROGRAMMING error, not a runtime one. */
+    stores: (RootName) -> ContentStore,
+    /** Per-root history providers (a root may legitimately have none — the no-op adapter). */
+    histories: (RootName) -> HistoryProvider,
     idProvider: IdProvider,
     proposalService: ProposalService,
     proposalLabeler: ProposalAuthorLabeler,
@@ -68,11 +98,15 @@ fun buildRouteContext(
         policy = policy,
         pageService = pageService,
         searchService = searchService,
-        contentStore = contentStore,
         indexBuilder = indexBuilder,
-        history = history,
         aliasRegistry = aliasRegistry,
         linkChecker = LinkChecker(),
+        registry = registry,
+        availability = availability,
+        resolver = resolver,
+        absence = absence,
+        stores = stores,
+        histories = histories,
     )
     // P5: the mutate↔proposals construction cycle (the degrade path needs ProposalFacade; the apply path needs
     // MutatingFacade) is broken by a provider-lambda over a 2-phase `lateinit`. `mutate` only invokes the lambda at
@@ -81,8 +115,11 @@ fun buildRouteContext(
     val mutate = GuardedMutatingFacade(
         policy = policy,
         writePipeline = writePipeline,
-        contentStore = contentStore,
+        stores = stores,
         indexBuilder = indexBuilder,
+        availability = availability,
+        resolver = resolver,
+        absence = absence,
         proposals = { proposalsFacade },
         agentDirectCommitGlobs = agentDirectCommitGlobs,
         proposalLabeler = proposalLabeler,
@@ -96,12 +133,20 @@ fun buildRouteContext(
         labeler = proposalLabeler,
         mutate = mutate,
         idProvider = idProvider,
+        indexBuilder = indexBuilder,
+        resolver = resolver,
+        availability = availability,
+        absence = absence,
     )
     proposalsFacade = proposals
     return RouteContext(
         read = read,
         mutate = mutate,
         proposals = proposals,
+        registry = registry,
+        availability = availability,
+        convergence = convergence,
+        limbo = limbo,
         tokens = tokens,
         auth = auth,
         trustedProxyCidrs = trustedProxyCidrs,

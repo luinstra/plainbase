@@ -21,14 +21,17 @@ import { Shell } from "./components/Shell";
  * Route table (chunk 7 + the chunk-6 amendment):
  *
  *   /          → redirect to /docs
- *   /docs      → the ROOT folder landing (the root node's `url` is /docs): root
- *                index/readme child if present, else the top-level listing
+ *   /docs      → the home view: the MAIN root's folder landing, resolved explicitly (since C3
+ *                the root tree node's `url` is /docs/main, not /docs): root index/readme child
+ *                if present, else the top-level listing
  *   /docs/$    → canonical page route; the splat is the by-path key. `?mode=edit` mounts the
  *                editor, `?mode=history` is the W7 history seam; absent = the clean read view.
  *   /new       → new-page creation (no path exists pre-create — the server mints it)
- *   /p/$       → loser-permalink route. Winners never reach it (the server 302s
- *                /p/{id} → canonical), but a collision loser's permalink serves the
- *                shell (200), so the SPA fetches by id and renders in place.
+ *   /p/$       → permalink route, BOTH forms: the rooted `/p/{root}/{id}` the server emits
+ *                and the bare `/p/{id}` it still serves. Winners never reach it (the server
+ *                302s a permalink → canonical), but a collision loser's permalink serves the
+ *                shell (200), so the SPA parses the splat (lib/permalink.ts), fetches by
+ *                (root, id) and renders in place.
  *   anything else → 404 view (the server's static fallback returns the shell)
  */
 export interface RouterContext {
@@ -106,11 +109,27 @@ function DocsSplat() {
 // (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
 // dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
 
+/** The `/new` search: `?root=` names the document root the create lands in (absent → `NewPage` resolves `main`). */
+interface NewSearch {
+  root?: string;
+}
+
 const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
-  component: NewPage,
+  component: NewSplat,
+  // A non-string `root` coerces to undefined → `NewPage` sends the reserved `main` (the wire field is REQUIRED;
+  // an omitted root is a 400, not a default). An unknown NAME is not decided here: the server owns the registry
+  // and answers 400 `invalid_root`, so the client never guesses.
+  validateSearch: (search: Record<string, unknown>): NewSearch =>
+    typeof search.root === "string" && search.root !== "" ? { root: search.root } : {},
 });
+
+/** Threads the `?root=` search param into the form (the [DocsSplat] shape) — the root the bytes will land in. */
+function NewSplat() {
+  const { root } = newRoute.useSearch();
+  return <NewPage root={root} />;
+}
 
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,

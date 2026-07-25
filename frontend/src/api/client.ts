@@ -1,5 +1,6 @@
 import { withCsrf } from "./csrf";
 import type {
+  AmbiguousCandidate,
   BodyTooLargeEnvelope,
   CreatePageRequest,
   CreatedResponse,
@@ -19,6 +20,12 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /**
+     * The 409 `ambiguous_page_id` candidate roots, empty for every other error. Carried on the error
+     * because the MESSAGE promises them ("retry against one of the candidate roots below") and a view that
+     * only has the message renders a remedy pointing at nothing.
+     */
+    readonly candidates: AmbiguousCandidate[] = [],
   ) {
     super(message);
     this.name = "ApiError";
@@ -27,6 +34,20 @@ export class ApiError extends Error {
   get isNotFound(): boolean {
     return this.status === 404;
   }
+}
+
+/**
+ * The id-addressed endpoint prefix, and the ONE place a page id is spliced into a request URL
+ * (the sub-resources - `/html`, `/history`, `/diff` - append to it). The id is
+ * `encodeURIComponent`'d for the same transport reason `root` always was, and it is not theoretical:
+ * an id reaches these calls from AUTHORED markdown (a `/p/...` href the Shell intercepts, parsed by
+ * lib/permalink.ts), so a raw splice lets `..%5C..%5Capi%5Cv1%5Cadmin%5Ctokens` survive the parse whole
+ * and be normalized by WHATWG into a credentialed same-origin GET at a path the author chose. Every
+ * read here is pure and nothing renders the body, so the primitive has no victim today - encoding it
+ * costs one call and removes the primitive.
+ */
+export function pageEndpoint(id: string): string {
+  return `/api/v1/pages/${encodeURIComponent(id)}`;
 }
 
 export async function getJson<T>(url: string): Promise<T> {
@@ -53,14 +74,22 @@ async function parseJson<T>(response: Response): Promise<T | null> {
 async function apiError(response: Response): Promise<ApiError> {
   let code = "unknown_error";
   let message = `Request failed with status ${response.status}`;
+  let candidates: AmbiguousCandidate[] = [];
   try {
     const envelope = (await response.json()) as ErrorEnvelope;
     code = envelope.error.code;
     message = envelope.error.message;
+    candidates = asCandidates(envelope.error.candidates);
   } catch {
     // non-envelope body (proxy error page etc.) — keep the status-derived message
   }
-  return new ApiError(response.status, code, message);
+  return new ApiError(response.status, code, message, candidates);
+}
+
+/** Coerces the optional `candidates` array, dropping anything without a root name (a proxy's mangled body). */
+function asCandidates(value: unknown): AmbiguousCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is AmbiguousCandidate => typeof (entry as AmbiguousCandidate)?.root === "string");
 }
 
 /**
@@ -83,12 +112,18 @@ export type SaveResult =
  * never re-derived). The 200 carries the next CAS token; the typed conflict/refusal results drive the
  * editor's UX without losing the buffer. A logged-in (cookie/proxy-Human) save is CSRF-enforced server-side,
  * so the `X-CSRF-Token` rides along via [withCsrf] (refresh-and-retry-once on a stale-token 403).
+ *
+ * [root] is REQUIRED and has no default. A default would be the optimistic value, and the optimistic
+ * value on a WRITE is "whatever root the server picks", which is either the wrong disk or a 409. It
+ * sits second so the two identity arguments stay together - and be explicit about what the compiler
+ * will NOT catch: `root`, `body` and `baseHash` are all `string`, so any permutation type-checks.
+ * Asserting the request URL and the `if-match` header TOGETHER is the only thing that catches a swap.
  */
-export async function putPageRaw(id: string, body: string, baseHash: string): Promise<SaveResult> {
+export async function putPageRaw(id: string, root: string, body: string, baseHash: string): Promise<SaveResult> {
   let response: Response;
   try {
     response = await withCsrf((csrfHeaders) =>
-      fetch(`/api/v1/pages/${id}`, {
+      fetch(`${pageEndpoint(id)}?root=${encodeURIComponent(root)}`, {
         method: "PUT",
         headers: { "content-type": "text/markdown", "if-match": `"${baseHash}"`, ...csrfHeaders },
         body,
@@ -189,11 +224,17 @@ function networkError(): ApiError {
 
 /**
  * Renders a Markdown buffer to HTML server-side (`POST /api/v1/preview`, NON-CONTRACTUAL): the RAW
- * `text/markdown` body is the buffer; the optional `path` is the relative-link resolution base. The
- * `html` is best-effort presentation (rendered via `<Prose>`), never a byte-equal claim.
+ * `text/markdown` body is the buffer; the optional `path` is the relative-link resolution base and `root`
+ * is WHICH root's link space to resolve against (multi-root: `[[other page]]` in an extra root must resolve
+ * against that root's pages, not main's, or the preview quietly lies about where a link goes). The `html`
+ * is best-effort presentation (rendered via `<Prose>`), never a byte-equal claim.
  */
-export async function previewRaw(body: string, path?: string): Promise<PreviewResponse> {
-  const url = path ? `/api/v1/preview?path=${encodeURIComponent(path)}` : "/api/v1/preview";
+export async function previewRaw(body: string, path?: string, root?: string): Promise<PreviewResponse> {
+  const query = new URLSearchParams();
+  if (path) query.set("path", path);
+  if (root) query.set("root", root);
+  const suffix = query.toString();
+  const url = suffix ? `/api/v1/preview?${suffix}` : "/api/v1/preview";
   const response = await fetch(url, { method: "POST", headers: { "content-type": "text/markdown" }, body });
   if (!response.ok) throw await apiError(response);
   return response.json() as Promise<PreviewResponse>;

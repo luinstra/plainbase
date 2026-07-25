@@ -3,6 +3,8 @@ package com.plainbase.frameworks.ktor
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -64,8 +66,8 @@ class ReadGoldenTest : FunSpec({
             Files.writeString(root.resolve("broken.md"), brokenSource)
             Files.writeString(root.resolve("clean.md"), cleanSource)
             val seed: (IdMapRepository) -> Unit = { idMap ->
-                idMap.bind(TreePath.require("broken.md"), PageId.require(brokenId), materialized = false)
-                idMap.bind(TreePath.require("clean.md"), PageId.require(cleanId), materialized = false)
+                idMap.bind(RootedPath(RootName.MAIN, TreePath.require("broken.md")), PageId.require(brokenId), materialized = false)
+                idMap.bind(RootedPath(RootName.MAIN, TreePath.require("clean.md")), PageId.require(cleanId), materialized = false)
             }
             restTest(root, seed) { block() }
         } finally {

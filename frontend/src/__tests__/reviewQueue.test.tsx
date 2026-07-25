@@ -12,7 +12,7 @@ import { createAppRouter } from "../router";
  * per-test fetch stub. Each row links to `/review/$id`.
  */
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -24,6 +24,7 @@ function summary(over: Partial<ChangeSummary>): ChangeSummary {
     id: "id-1",
     operation: "edit",
     status: "PENDING",
+    root: "main",
     target_path: "guides/deploy-guide.md",
     page_id: "page-1",
     base_drifted: false,
@@ -94,6 +95,21 @@ describe("review queue", () => {
     await waitFor(() => expect(view.container.querySelectorAll("[data-pb-review-row]").length).toBe(2));
     const rows = view.container.querySelectorAll("[data-pb-review-row]");
     expect(rows[0].getAttribute("data-pb-review-row-status")).toBe("PENDING");
+  });
+
+  it("qualifies every row by ROOT - two roots can hold the same target_path", async () => {
+    const { view } = renderQueue({
+      proposals: [
+        summary({ id: "in-main", root: "main" }),
+        summary({ id: "in-handbook", root: "handbook" }),
+      ],
+    });
+
+    await waitFor(() => expect(view.container.querySelectorAll("[data-pb-review-row]").length).toBe(2));
+    const roots = [...view.container.querySelectorAll("[data-pb-review-root]")].map((el) => el.getAttribute("data-pb-review-root"));
+    // Both rows carry the SAME target_path: without the root they are indistinguishable, and an approver
+    // picking one of them is picking a repository blind.
+    expect(roots).toEqual(["main", "handbook"]);
   });
 
   it("renders the empty notice when there are no proposals", async () => {

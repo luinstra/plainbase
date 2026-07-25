@@ -7,11 +7,11 @@ import { pageByPathQuery, treeQuery } from "../api/queries";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { root: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 editor (D-1/D-4/D-5 acceptance #1, #1b, #5). The `?mode=edit` dispatch reaches `<EditorPage>`,
- * a debounced edit POSTs `/api/v1/preview`, a save PUTs `/api/v1/pages/{id}` with the buffer + the
+ * a debounced edit POSTs `/api/v1/preview`, a save PUTs `/api/v1/pages/{id}?root={root}` with the buffer + the
  * `If-Match` base_hash, and the editor surfaces its stable selectors. The buffer is seeded from the
  * primed `pageByPathQuery` cache; only the preview/PUT calls hit the (mocked) network.
  */
@@ -26,6 +26,7 @@ const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d234
 function pageResponse(url: string | null): PageResponse {
   return {
     id: ID,
+    root: "main",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -75,8 +76,8 @@ afterEach(() => vi.unstubAllGlobals());
 describe("W6 editor", () => {
   it("mounting /docs/<path>?mode=edit renders the editor seeded with the page markdown", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
@@ -85,8 +86,8 @@ describe("W6 editor", () => {
 
   it("renders the stable editor selectors", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
@@ -105,8 +106,8 @@ describe("W6 editor", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
@@ -118,15 +119,15 @@ describe("W6 editor", () => {
     expect((previewCall![1] as RequestInit).headers).toMatchObject({ "content-type": "text/markdown" });
   });
 
-  it("save PUTs /api/v1/pages/{id} with the buffer body and the If-Match base_hash", async () => {
+  it("save PUTs /api/v1/pages/{id}?root= with the buffer body and the If-Match base_hash", async () => {
     const nextHash = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") return jsonResponse({ content_hash: nextHash, commit: null });
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await appendToEditor(view, "more.\n");
@@ -143,7 +144,9 @@ describe("W6 editor", () => {
       expect(call).toBeDefined();
       return call!;
     });
-    expect(typeof putCall[0] === "string" ? putCall[0] : putCall[0].toString()).toContain(`/api/v1/pages/${ID}`);
+    // The WHOLE url, `?root=` included: a save is the one request that can put bytes in the wrong root,
+    // and a `toContain` of the path alone stays green while the pin silently goes missing.
+    expect(typeof putCall[0] === "string" ? putCall[0] : putCall[0].toString()).toBe(`/api/v1/pages/${ID}?root=main`);
     const headers = (putCall[1] as RequestInit).headers as Record<string, string>;
     expect(headers["if-match"]).toBe(`"${HASH}"`);
     expect(headers["content-type"]).toBe("text/markdown");
@@ -156,8 +159,8 @@ describe("W6 editor", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view, queryClient } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view, queryClient } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
@@ -172,8 +175,8 @@ describe("W6 editor", () => {
     await waitFor(() => {
       const keys = invalidateSpy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey: unknown }).queryKey));
       // The CORRECT key is the URL splat WITHOUT `.md` (matching pageByPathQuery), never the file path.
-      expect(keys).toContain(JSON.stringify(pageByPathQuery("guides/deploy-guide").queryKey));
-      expect(keys).not.toContain(JSON.stringify(pageByPathQuery("guides/deploy-guide.md").queryKey));
+      expect(keys).toContain(JSON.stringify(pageByPathQuery("main/guides/deploy-guide").queryKey));
+      expect(keys).not.toContain(JSON.stringify(pageByPathQuery("main/guides/deploy-guide.md").queryKey));
     });
   });
 
@@ -184,8 +187,8 @@ describe("W6 editor", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view, queryClient } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view, queryClient } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
@@ -212,12 +215,12 @@ describe("W6 editor", () => {
       // The save invalidates treeQuery + pageByPathQuery → both refetch; return valid bodies so the
       // re-render (Shell sidebar + the editor's own by-path query) doesn't crash on a garbage payload.
       if (url.includes("/api/v1/tree")) return jsonResponse(emptyTree);
-      if (url.includes("/api/v1/pages/by-path/")) return jsonResponse(pageResponse("/docs/guides/deploy-guide"));
+      if (url.includes("/api/v1/pages/by-path/")) return jsonResponse(pageResponse("/docs/main/guides/deploy-guide"));
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     const dom = await waitFor(() => {
@@ -260,8 +263,8 @@ describe("W6 editor", () => {
       return jsonResponse({ html: "", headings: [] });
     });
     vi.stubGlobal("fetch", fetchSpy);
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await appendToEditor(view, "more.\n");
@@ -280,14 +283,51 @@ describe("W6 editor", () => {
     expect(view.container.querySelector<HTMLButtonElement>("[data-pb-save]")?.disabled).toBe(false);
   });
 
+  it("a save that 503s tells the truth about WHICH 503: a transient fault says retry, a downed root does not", async () => {
+    // "Couldn't save (transient) — please retry." is right for a `content_unreadable` blip and a LIE for
+    // `root_unavailable`: that one lasts until an operator restores the path and restarts, so the retry advice would
+    // loop the author against a disk that is not coming back. The outage envelope's message names the remedy instead.
+    const save503 = async (envelope: unknown) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => (init?.method === "PUT" ? jsonResponse(envelope, 503) : jsonResponse({ html: "", headings: [] }))),
+      );
+      const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+        qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
+      });
+      await appendToEditor(view, "more.\n");
+      const button = await waitFor(() => {
+        const btn = view.container.querySelector<HTMLButtonElement>("[data-pb-save]")!;
+        expect(btn.disabled).toBe(false);
+        return btn;
+      });
+      fireEvent.click(button);
+      const notice = await waitFor(() => {
+        const found = view.container.querySelector("[data-pb-editor-notice]");
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      return { notice, view };
+    };
+
+    const outage = await save503({ error: { code: "root_unavailable", message: "the main root is not serving; an operator must restore it" } });
+    expect(outage.notice.textContent).toContain("an operator must restore it");
+    expect(outage.notice.textContent).not.toContain("retry");
+    outage.view.unmount();
+    vi.unstubAllGlobals();
+
+    const transient = await save503({ error: { code: "content_unreadable", message: "the file could not be read" } });
+    expect(transient.notice.textContent).toContain("please retry");
+  });
+
   it("a non-UTF-8 page (markdown is a lossy U+FFFD decode) disables Save and shows the byte-fidelity banner", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     // A page whose on-disk bytes weren't valid UTF-8: the read path decoded them lossily (the U+FFFD
     // replacement char) into `markdown`, so sha256(utf8(markdown)) can't match the bytes' content_hash.
-    const corrupt = pageResponse("/docs/guides/deploy-guide");
+    const corrupt = pageResponse("/docs/main/guides/deploy-guide");
     corrupt.markdown = "# Deploy Guide\n\nbad byte: � here.\n"; // content_hash still the BUFFER's → mismatch
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, corrupt);
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, corrupt);
     });
 
     // The page is still readable (editor mounts, buffer seeded) — only Save is blocked.
@@ -299,8 +339,8 @@ describe("W6 editor", () => {
   it("a valid UTF-8 page (hash matches the markdown) shows NO banner and leaves Save enabled once dirty (no false positive)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     // pageResponse carries content_hash === sha256(utf8(BUFFER)) — the guard must NOT trip on a normal page.
-    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse("/docs/guides/deploy-guide"));
+    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse("/docs/main/guides/deploy-guide"));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-editor]")).not.toBeNull());
@@ -313,11 +353,11 @@ describe("W6 editor", () => {
 
   it("an alias edit URL canonicalizes the path while preserving ?mode=edit", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
-    const canonical = "/docs/guides/deploy-guide";
-    const { history } = renderEditorAt("/docs/old/deployment?mode=edit", (qc) => {
+    const canonical = "/docs/main/guides/deploy-guide";
+    const { history } = renderEditorAt("/docs/main/old/deployment?mode=edit", (qc) => {
       // The alias by-path response IS the canonical page (its `url` differs from the address).
-      qc.setQueryData(pageByPathQuery("old/deployment").queryKey, pageResponse(canonical));
-      qc.setQueryData(pageByPathQuery("guides/deploy-guide").queryKey, pageResponse(canonical));
+      qc.setQueryData(pageByPathQuery("main/old/deployment").queryKey, pageResponse(canonical));
+      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(canonical));
     });
 
     // The read-side canonical redirect runs for ?mode=edit too (the editor lives under it); the
