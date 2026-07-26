@@ -18,6 +18,7 @@ coverage:
 
 ignore:
   - "server/build/generated/sqldelight/**"
+  - "server/src/main/kotlin/com/plainbase/Application.kt"
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
