@@ -970,9 +970,11 @@ data class PlainbaseConfig(
                     "the duplicate from plainbase.conf, or run `plainbase root remove <name>`."
             }
             // D-C5-4: FILE ORDER, each block whole and in its own D7 order. main sits WHERE IT WAS DECLARED and is
-            // NEVER hoisted. Rank decides the cross-root duplicate-id winner (lowest index wins -
-            // PageIdentityService), i.e. WHICH ROOT'S PAGE KEEPS A PERMALINK - so `listOf(main) + extras` would force
-            // main to rank 0 and silently reassign every shared id to main's page, with no error and no log line. An
+            // NEVER hoisted. Rank decides SOURCE precedence, lowest index first (read by IndexBuilder, AdoptionPass
+            // and PageRootResolver's candidate order); since
+            // per-root identity (ADR-0012) it no longer decides which root's page keeps a permalink, because both
+            // roots keep their own. It is still an operator-visible ordering contract: `listOf(main) + extras` would
+            // force main to rank 0 and silently re-order every other root, with no error and no log line. An
             // operator who deliberately declared `roots { zeta {…} main {…} }` would have had zeta demoted by a CLI
             // change that never touched zeta. When no block was written, the synthesized main is the SOLE file-1
             // entry and so ranks first by arithmetic, not by policy - which is byte-identical legacy behavior.
@@ -996,8 +998,8 @@ data class PlainbaseConfig(
          * file is sorted INDEPENDENTLY, which is what makes the per-file line-number reset a non-issue: the two
          * files' line numbers are never compared with each other, so there is no collision for a tiebreak to
          * resolve. (ADR-0011 D7's aside sketches a cross-file `(line, name)` sort. It is REJECTED: it would let a
-         * CLI-added root at `roots.conf` line 4 outrank a hand-declared incumbent at `plainbase.conf` line 8 and
-         * take its permalinks - and it is not even stable, since `root add aardvark` shifts the line numbers of
+         * CLI-added root at `roots.conf` line 4 outrank a hand-declared incumbent at `plainbase.conf` line 8,
+         * silently re-ordering it - and it is not even stable, since `root add aardvark` shifts the line numbers of
          * roots the operator never touched.)
          *
          * Duplicate `roots.x {}` blocks WITHIN one file never reach here: HOCON merges duplicate keys FIELD-WISE,
@@ -1419,7 +1421,7 @@ enum class RootsOrigin {
 
 /**
  * The root topology (multi-root C1): every configured root in origin-line-with-name-tiebreak order
- * (ADR-0011 D7 - the order `RootRegistry` preserves and C2's duplicate-id winner inherits).
+ * (ADR-0011 D7 - the order `RootRegistry` preserves and source precedence inherits).
  *
  * [of] takes a DEFENSIVE COPY, the same discipline `RootRegistry.of` has always had: [list], [main] and
  * [extras] are three views of ONE snapshot and can never disagree, whatever the caller does afterwards with
@@ -1448,8 +1450,8 @@ data class RootsConfig private constructor(
 
     /**
      * The reserved primary root; a construction-time guarantee from [of]. NOT necessarily `list.first()`:
-     * D7 order is preserved verbatim (`RootRegistry.rank` inherits it, and rank decides the cross-root
-     * duplicate-id winner). A typed ACCESSOR, never a promotion.
+     * D7 order is preserved verbatim (`RootRegistry.rank` inherits it, and rank is source precedence across
+     * roots). A typed ACCESSOR, never a promotion.
      */
     val main: Root = list.first { it.name == RootName.MAIN }
 

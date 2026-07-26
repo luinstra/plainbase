@@ -225,7 +225,8 @@ class GuardedMutatingFacade(
         val snapshot = indexBuilder.current
         // RESOLVE-then-checkEdit-then-branch (audit EXACTLY once). A PINNED root (the proposal-apply path) IS the
         // answer, but it is durable-VALIDATED (registered-and-live) rather than trusted blind: re-deriving it from the
-        // id would let a D17 cross-root reassignment walk an approved edit into an unreviewed repository, while a pin
+        // id would be picking among the roots that may each hold it (ADR-0012) and could walk an approved edit into
+        // an unreviewed repository, while a pin
         // that no longer binds the id reads as gone from the approved root (see [SaveRequest.expectedRoot]). A bare PUT
         // has no pin: the id is the address, so it resolves id_map-first.
         val expectedRoot = request.expectedRoot
@@ -250,7 +251,7 @@ class GuardedMutatingFacade(
                 // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route
                 // never invents a path. But 503 before 404: a live binding whose page is missing from the snapshot
                 // means the pass could not read it, not that it is gone (C1). pageAt keys on (res.root, id), so a page
-                // held under a DIFFERENT root (a D17 re-award between propose and apply) is already a miss here.
+                // held under a DIFFERENT root (its own page, legal since ADR-0012) is already a miss here.
                 // This arm and the None arm AGREE (they ask the same [goneOrNotFound]): a bare write that loses the
                 // unbind race answers the frozen 409 page_deleted, not a 404 claiming the page never existed.
                 val current = snapshot.pageAt(RootedPageId(res.root, request.pageId))
@@ -376,7 +377,7 @@ class GuardedMutatingFacade(
             ProposeCommand.Edit(
                 pageId = request.pageId,
                 // CLASS-D: the degrade PINS the root the decision matched, so the propose gate durable-validates the
-                // SAME root the write would have landed in, never a re-resolve that could drift across a D17 window.
+                // SAME root the write would have landed in, never a re-resolve that could pick a different holder.
                 root = root,
                 baseHash = request.baseHash,
                 clientTargetPath = null, // server-resolved; never a client-divergence path

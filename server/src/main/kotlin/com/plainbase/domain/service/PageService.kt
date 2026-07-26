@@ -39,12 +39,13 @@ class PageService(
     /**
      * The full page payload at [rooted]'s exact ([root], [id]) identity in [snapshot], or null.
      *
-     * [snapshot] is a PARAMETER, not a fresh `indexBuilder.current` read, and that is the one-snapshot rule the write
-     * side already holds itself to (ADR-0011 D17): the facade gates on the root it resolved from ITS snapshot, and a
-     * rebuild landing between the two reads can re-award a cross-root duplicate id to a DIFFERENT root - one whose
-     * section may be a carried-forward one from a root that is DOWN. The facade would then have gated root A and
-     * served root B's stale bytes with a 200. Keying on the exact rooted identity off one object makes gate-root and
-     * serve-root one answer by construction, even during a cross-root move window (C4).
+     * [snapshot] is a PARAMETER, not a fresh `indexBuilder.current` read, and that is the one-snapshot rule the
+     * write side already holds itself to. The facade resolved the root, gated on it and classified availability
+     * against ITS snapshot; a second read here could disagree with all three - the same rooted id may be gone, or
+     * carry different bytes, or now sit in a section carried forward from a root that went down since the gate.
+     * Taking the snapshot as a parameter makes the gate's answer and the served answer ONE object's answer by
+     * construction. Note this cannot switch ROOTS - [rooted] is already root-qualified, so a different root's page
+     * can never match. What it closes is presence-and-content divergence, which is the reachable one.
      */
     fun pageAt(snapshot: PageIndex, rooted: RootedPageId): PagePayload? = snapshot.pageAt(rooted)?.let(::payload)
 

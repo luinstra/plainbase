@@ -83,7 +83,8 @@ class SqlDelightIdMapRepository(
      *  3. **The displacement tombstone.** Whatever id this key held before is leaving the live key space with no
      *     one else to hold it, so it is retired here, in the same transaction as the bind that displaces it -
      *     `/p/{root}/{oldId}` answers 410, never 404. (Safe against a same-pass claimant of that id purely by the
-     *     rank-then-path bind order: a winner always binds before the page it beat. If that order ever breaks,
+     *     callers' shared deterministic bind order (rank, then frontmatter-first, then path - BOTH passes since
+     *     they share the owner gate): a winner always binds before the page it beat. If that order ever breaks,
      *     step 1 REFUSES the late claimant - a loud failure, never a silent steal.)
      *  4. **The binding-epoch advance (revoke-before-stamp, C5).** A successful bind is a binding change, so it
      *     increments `path.root`'s `binding_epoch` in this SAME transaction (NOT its observation - that would collapse
@@ -148,7 +149,7 @@ class SqlDelightIdMapRepository(
             kind = row.kind.name,
             root = row.root,
             path = row.path,
-            otherRoot = row.otherRoot?.value ?: NO_OTHER_ROOT,
+            otherRoot = NO_OTHER_ROOT,
             otherPath = row.otherPath ?: NO_OTHER_PATH,
             pageId = row.pageId?.let(PageIdColumnAdapter::encode) ?: NO_PAGE_ID,
             message = row.message,
@@ -165,24 +166,24 @@ class SqlDelightIdMapRepository(
 
     /**
      * One issue's flattened column values - THE per-kind mapping, in both directions ([toRow] /
-     * [toIssue]); `(kind, root, otherRoot, path, otherPath, pageId)` is the natural key behind the
-     * schema's UNIQUE constraint:
+     * [toIssue]); `(kind, root, path, other_root, other_path, page_id)` is the natural key behind the
+     * schema's UNIQUE constraint, in that column order:
      *
-     * | kind                       | root       | otherRoot       | path     | otherPath          | pageId | message      |
-     * |----------------------------|------------|-----------------|----------|--------------------|--------|--------------|
-     * | `DUPLICATE_ID`             | shared root| -               | keptPath | reassignedPath     | id     | -            |
-     * | `PATCH_REFUSED`            | issue root | -               | path     | -                  | -      | refusal text |
-     * | `REDIRECT_CONFLICT`        | issue root | -               | path     | -                  | -      | conflict text|
-     * | `PATH_COLLISION`           | issue root | -               | keptPath | loserRawName (raw) | -      | -            |
-     * | `PATH_SLUG_COLLISION`      | issue root | -               | keptPath | loserPath          | -      | -            |
-     * | `CROSS_ROOT_DUPLICATE_ID`  | kept.root  | reassigned.root | kept.path| reassigned.path    | id     | -            |
+     * | kind                       | root       | path     | other_root | other_path         | page_id | message      |
+     * |----------------------------|------------|----------|------------|--------------------|---------|--------------|
+     * | `DUPLICATE_ID`             | shared root| keptPath | -          | reassignedPath     | id      | -            |
+     * | `PATCH_REFUSED`            | issue root | path     | -          | -                  | -       | refusal text |
+     * | `REDIRECT_CONFLICT`        | issue root | path     | -          | -                  | -       | conflict text|
+     * | `PATH_COLLISION`           | issue root | keptPath | -          | loserRawName (raw) | -       | -            |
+     * | `PATH_SLUG_COLLISION`      | issue root | keptPath | -          | loserPath          | -       | -            |
      *
      * [otherPath] is a raw string (the schema's `other_path` is plain TEXT, not `AS TreePath`)
      * because `PATH_COLLISION` stores a raw on-disk filename that must NOT be normalized — for the
      * NFC/NFD siblings the issue exists to report, [TreePath.require] would collapse it into the
      * kept path. The other two-path kinds store a real [TreePath]'s canonical [TreePath.value].
-     * [otherRoot] is likewise plain TEXT in the schema: it is non-sentinel ONLY for the cross-root
-     * kind, and the sentinel is not a valid [RootName].
+     * `other_root` is likewise plain TEXT, and since C7 removed the one cross-root kind it is now
+     * ALWAYS the [NO_OTHER_ROOT] sentinel: no surviving kind names a second root. The column stays
+     * because it is part of the UNIQUE key, and the sentinel is not a valid [RootName].
      *
      * Absent key fields persist as the [NO_OTHER_ROOT]/[NO_OTHER_PATH]/[NO_PAGE_ID] sentinels,
      * never NULL - SQLite treats NULLs as distinct inside a UNIQUE index, which would defeat the
@@ -192,7 +193,6 @@ class SqlDelightIdMapRepository(
         val kind: IdentityIssue.Kind,
         val root: RootName,
         val path: TreePath,
-        val otherRoot: RootName? = null,
         val otherPath: String? = null,
         val pageId: PageId? = null,
         val message: String? = null,
@@ -204,12 +204,9 @@ class SqlDelightIdMapRepository(
         is IdentityIssue.RedirectConflict -> IssueRow(kind, root, path, message = message)
         is IdentityIssue.PathCollision -> IssueRow(kind, root, keptPath, otherPath = loserRawName)
         is IdentityIssue.PathSlugCollision -> IssueRow(kind, root, keptPath, otherPath = loserPath.value)
-        is IdentityIssue.CrossRootDuplicateId ->
-            IssueRow(kind, kept.root, kept.path, otherRoot = reassigned.root, otherPath = reassigned.path.value, pageId = id)
     }
 
     private fun Identity_issue.toIssue(): IdentityIssue {
-        val otherRoot = other_root.takeIf { it != NO_OTHER_ROOT }?.let(RootName::require)
         val otherPath = other_path.takeIf { it != NO_OTHER_PATH }
         val pageId = page_id.takeIf { it.isNotEmpty() }?.let(PageIdColumnAdapter::decode)
         return when (IdentityIssue.Kind.valueOf(kind)) {
@@ -223,12 +220,6 @@ class SqlDelightIdMapRepository(
                 IdentityIssue.PathCollision(root, path, requireNotNull(otherPath))
             IdentityIssue.Kind.PATH_SLUG_COLLISION ->
                 IdentityIssue.PathSlugCollision(root, path, TreePath.require(requireNotNull(otherPath)))
-            IdentityIssue.Kind.CROSS_ROOT_DUPLICATE_ID ->
-                IdentityIssue.CrossRootDuplicateId(
-                    id = requireNotNull(pageId),
-                    kept = RootedPath(root, path),
-                    reassigned = RootedPath(requireNotNull(otherRoot), TreePath.require(requireNotNull(otherPath))),
-                )
         }
     }
 

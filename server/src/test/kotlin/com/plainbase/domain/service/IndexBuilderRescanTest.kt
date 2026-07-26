@@ -1,5 +1,9 @@
 package com.plainbase.domain.service
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
@@ -8,11 +12,15 @@ import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.maps.shouldContainExactly
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
+import org.slf4j.Logger.ROOT_LOGGER_NAME
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 
 /**
@@ -118,6 +126,94 @@ class IndexBuilderRescanTest : FunSpec({
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
                     .single { it.path == TreePath.require("docs/start") }
                     .message shouldBe "move alias for page $pageId dropped: shadowed by a live canonical path"
+            }
+        }
+    }
+
+    // The sibling of the move test above, and the two are why the path-reuse gate cannot key on "the witnessed file
+    // carries no id". BOTH pages here carry no id in their file; only `materialized` tells them apart. Above, the
+    // incumbent PROMISED its id was in the file (materialized) and the file does not have it -> the path was reused.
+    // Here the incumbent never promised anything (pre-materialized identity is path-keyed, `suspectDrafts`' rule) ->
+    // it is simply witnessing itself, and a pasted copy must not take its permalink.
+    test("a pasted copy does NOT take an UNMATERIALIZED page's id: the previously-bound path keeps it (master plan 5.2)") {
+        withTempTree(seed = { root ->
+            writePage(root, "original.md", "---\ntitle: Original\n---\n\n# Original\n") // no `id:`: id_map-only identity
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val assigned = harness.idMap.find(rooted("original.md")).shouldNotBeNull().id
+                harness.idMap.find(rooted("original.md")).shouldNotBeNull().materialized shouldBe false
+
+                writePage(root, "copy.md", "---\nid: ${assigned.value}\ntitle: Pasted Copy\n---\n\n# Pasted Copy\n")
+
+                // The conflict never self-heals (the patcher refuses to overwrite copy.md's `id:` line), so the
+                // ONLY way the operator learns of it is this WARN - the issues table has no production reader.
+                val rootLogger = LoggerFactory.getLogger(ROOT_LOGGER_NAME) as Logger
+                val appender = ListAppender<ILoggingEvent>().apply { start() }
+                rootLogger.addAppender(appender)
+                val snapshot = try {
+                    harness.builder.rebuild()
+                } finally {
+                    rootLogger.detachAppender(appender)
+                }
+                // filter-then-size, not `single {}`: a miss here should read as "expected 1, got 0", not as a
+                // bare NoSuchElementException from the matcher itself.
+                val warns = appender.list.filter { it.level == Level.WARN && "duplicate_id" in it.formattedMessage }
+                warns shouldHaveSize 1
+                val warned = warns.single()
+                // The WARN must name BOTH paths: "there is an issue" is not actionable, "original.md keeps it,
+                // copy.md was reassigned" is. Asserting only the kind would pass on a message that named neither.
+                warned.formattedMessage shouldContain "original.md resolved first"
+                warned.formattedMessage shouldContain "copy.md reassigned"
+
+                // The incumbent keeps the id and its permalink; the paste reassigns and is reported.
+                snapshot.pageAt(RootedPageId(RootName.MAIN, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
+                val copyId = harness.idMap.find(rooted("copy.md")).shouldNotBeNull().id
+                copyId shouldNotBe assigned
+                val issue = harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
+                issue.keptPath shouldBe TreePath.require("original.md")
+                issue.reassignedPath shouldBe TreePath.require("copy.md")
+
+                // RESCAN STABILITY: the steady state is stable, not oscillating. copy.md keeps its reassigned id
+                // even though its file still asserts the other one, so the divergence is untidy, not harmful.
+                val again = harness.builder.rebuild()
+                again.pageAt(RootedPageId(RootName.MAIN, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
+                harness.idMap.find(rooted("copy.md")).shouldNotBeNull().id shouldBe copyId
+                harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>() shouldHaveSize 1
+            }
+        }
+    }
+
+    // The THIRD row of the path-reuse gate, and the one that pins its narrowing. `a.md` re-identifies itself to Y
+    // while `b.md` claims a.md's old id X. Treating "the file carries a DIFFERENT id" as freeing X made the
+    // resolver award X to b.md, and the bind then REFUSED it (a.md's re-identification tombstones X at a.md, and
+    // a tombstone is reclaimable only by the page returning to its own path) - resolver and bind gate disagreeing,
+    // which throws. X is not free: it is retired.
+    test("two files swapping ids: the claimant reassigns and the abandoned id is RETIRED, not handed over") {
+        withTempTree(seed = { root ->
+            writePage(root, "a.md", "---\nid: ${pageId.value}\ntitle: A\n---\n\n# A\n")
+        }) { root ->
+            IndexHarness(root).use { harness ->
+                harness.builder.rebuild()
+                val other = PageId.require("0197b555-1111-7222-8333-4444555566aa")
+                writePage(root, "a.md", "---\nid: ${other.value}\ntitle: A\n---\n\n# A\n")
+                writePage(root, "b.md", "---\nid: ${pageId.value}\ntitle: B\n---\n\n# B\n")
+
+                val snapshot = harness.builder.rebuild() // must not throw
+
+                snapshot.byPath.getValue(rooted("a.md")).id shouldBe other // a.md re-identified successfully
+                snapshot.byPath.getValue(rooted("b.md")).id shouldNotBe pageId // b.md did NOT get to take X
+                // X is retired at the path that abandoned it, so /p/{root}/{X} answers 410 rather than silently
+                // resolving to b.md - the same "a dead link announces itself" rule the tombstone reservation exists for.
+                harness.idMap.retiredAt(RootName.MAIN, pageId).shouldNotBeNull().path shouldBe rooted("a.md")
+                // The contest IS reported, naming both paths. Note the wording is imprecise in this one corpus:
+                // "kept by a.md" was true at resolve time, but a.md then re-identified to Y, so in the end NOBODY
+                // holds X. It is not backwards - b.md really did lose - and the operator still gets both paths and
+                // a 410, so this is recorded as known imprecision rather than fixed here.
+                val issue = harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
+                issue.id shouldBe pageId
+                issue.keptPath shouldBe TreePath.require("a.md")
+                issue.reassignedPath shouldBe TreePath.require("b.md")
             }
         }
     }

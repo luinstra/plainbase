@@ -462,8 +462,22 @@ describe("two-stage search palette", () => {
 
   it("status rows are non-selectable and skipped by Arrow nav (a11y)", async () => {
     // A pending fetch keeps a loading row present; arrow nav must never land on it.
-    let resolve: (v: Response) => void = () => {};
-    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((r) => (resolve = r))));
+    //
+    // The stub stays pending until `release()`, which then answers every request - the ones already
+    // parked AND any issued afterwards. It used to capture a single `resolve`, overwritten per call,
+    // which silently assumed the fetch in flight when the loading row appeared was the LAST one this
+    // test would provoke. Any later fetch was then parked forever and the hit row never arrived: a 5s
+    // `waitFor` timeout on a contended runner that never reproduced locally. Note the ceiling is
+    // already raised (test-setup.ts), so raising it again was not the fix; the single-shot resolve was.
+    const parked: Array<(v: Response) => void> = [];
+    let released = false;
+    const hitResponse = () =>
+      new Response(JSON.stringify(searchResponse("rollback")), { status: 200, headers: { "content-type": "application/json" } });
+    const release = () => {
+      released = true;
+      parked.splice(0).forEach((r) => r(hitResponse()));
+    };
+    vi.stubGlobal("fetch", vi.fn(() => (released ? Promise.resolve(hitResponse()) : new Promise<Response>((r) => parked.push(r)))));
     try {
       setup();
       await openPalette();
@@ -475,7 +489,7 @@ describe("two-stage search palette", () => {
       expect(loadingRow.getAttribute("role")).not.toBe("option");
       // No option exists yet, so activedescendant resolves to undefined (not the status row).
       expect(getInput().getAttribute("aria-activedescendant")).toBeNull();
-      resolve(new Response(JSON.stringify(searchResponse("rollback")), { status: 200, headers: { "content-type": "application/json" } }));
+      release();
       await waitFor(() => expect(document.querySelector('[data-pb-search-item="hit"]')).not.toBeNull());
     } finally {
       vi.unstubAllGlobals();

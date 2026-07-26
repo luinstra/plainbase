@@ -34,8 +34,9 @@ CREATE TABLE id_map (
 -- other_path, page_id) and the UNIQUE constraint makes record() idempotence schema-enforced, not
 -- application-level. Variants without a second root/path or an id store sentinels ('' /
 -- zero-length BLOB) instead of NULL: SQLite treats NULLs as DISTINCT inside a UNIQUE index, which
--- would silently defeat the dedup. other_root is non-sentinel ONLY for the cross-root duplicate-id
--- kind (D2); every same-root two-path kind keeps its second path under the row's root.
+-- would silently defeat the dedup. Since C7 removed the one cross-root kind (ADR-0012), other_root
+-- is ALWAYS the sentinel: every surviving kind is a within-root fact and keeps its second path under
+-- the row's own root. The column stays because it is part of the UNIQUE key above.
 CREATE TABLE identity_issue (
   kind TEXT NOT NULL,
   root TEXT AS RootName NOT NULL,

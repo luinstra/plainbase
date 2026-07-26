@@ -31,11 +31,11 @@ import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * The multi-root matrix over the real IndexBuilder, RE-DERIVED for per-root identity (C5, reversing
- * ADR-0011 D2/D17): a cross-root duplicate id is NO LONGER a contest. The same frontmatter id in two
- * different roots is LEGAL - both pages keep it and each answers its own `/p/{root}/{id}` - so rank
- * decides SOURCE precedence only, never takes an id from anyone, and no `CrossRootDuplicateId` is
- * ever emitted. What survives from the C2 matrix is the WITHIN-root duplicate policy (unchanged), the
+ * The multi-root matrix over the real IndexBuilder, RE-DERIVED for per-root identity (C5, ADR-0012,
+ * reversing ADR-0011 D2/D17): a cross-root duplicate id is NO LONGER a contest. The same frontmatter
+ * id in two different roots is LEGAL - both pages keep it and each answers its own `/p/{root}/{id}` -
+ * so rank decides SOURCE precedence only and never takes an id from anyone. What survives from the C2
+ * matrix is the WITHIN-root duplicate policy (unchanged), the
  * per-root URL space, the per-root lowercase rescue, the carry-forward of a down root (which now
  * never drops a page whose bare id a scanned root shares - R17), the per-root move aliasing (a
  * cross-root "move" is undecidable and records no alias - R19), and rooted link reports. Registries
@@ -91,13 +91,11 @@ class IndexBuilderMultiRootTest : FunSpec({
                 // No UNIQUE(id) crash; the id lives in BOTH roots, each at its own path, neither reassigned.
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
 
                 // Rescan stability: the next rebuild keeps each root's id, no churn.
                 val again = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
                 again.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
                 again.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -112,13 +110,11 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("a/main-copy.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("b/extra-copy.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
             World(extraFirst(mainDir, extraDir)).use { world ->
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("a/main-copy.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("b/extra-copy.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -136,7 +132,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
                     RootedPath(RootName.MAIN, TreePath.require("guides/doc.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe RootedPath(EXTRA, TreePath.require("notes/copy.md"))
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -157,7 +152,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
                     RootedPath(RootName.MAIN, TreePath.require("guides/doc.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe RootedPath(EXTRA, TreePath.require("guides/doc.md"))
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -179,7 +173,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/orphan.md")
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe orphan
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -195,7 +188,6 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -255,7 +247,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/winner.md")
                 snapshot.pageAt(RootedPageId(EXTRA, mapped)).shouldNotBeNull().path shouldBe TreePath.require("mirror/holder.md")
                 snapshot.pages.map { it.rooted }.toSet() shouldHaveSize snapshot.pages.size
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -274,7 +265,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe foreign // the unscanned binding SURVIVES
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -299,7 +289,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
                     RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe foreign
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }
@@ -341,9 +330,10 @@ class IndexBuilderMultiRootTest : FunSpec({
         }
     }
 
-    test("R17: a carried down-root page whose bare id a scanned root now holds SURVIVES the snapshot (rooted carry filter)") {
-        // The carry-forward filter is keyed by ROOTED id since the flip, so a down root's page is never dropped just
-        // because a scanned root shares its bare id. Both pages, in their own roots, sit in the same snapshot.
+    test("R17: a carried down-root page whose bare id a scanned root now holds SURVIVES the snapshot (nothing filters a carry)") {
+        // Nothing filters a carried section any more (C7 deleted the rooted-id filter as a provable no-op), so a
+        // down root's page is never dropped because a scanned root shares its bare id. Both pages, in their own
+        // roots, sit in the same snapshot. This row is the regression guard on that, not a proof of the deletion.
         withTrees { mainDir, extraDir ->
             writePage(extraDir, "mirror/page.md", identified(contested))
             writePage(extraDir, "mirror/keep.md", "# Keep\n")
@@ -384,7 +374,7 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
                     RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
                 world.idMap.bindingInRoot(RootName.require("ghost"), contested)?.path shouldBe ghost // the foreign row SURVIVES
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+                world.idMap.issues().shouldBeEmpty() // "no issue" in the name, pinned over EVERY kind rather than one
             }
         }
     }
@@ -406,7 +396,6 @@ class IndexBuilderMultiRootTest : FunSpec({
                 snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }

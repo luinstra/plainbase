@@ -90,8 +90,8 @@ interface MutatingFacade {
  * [expectedRoot] pins WHICH root's page this save is allowed to touch, and it is NEVER trusted blind: the facade
  * durable-validates every pin through `PageRootResolver.resolvePinned` (registered-and-live) and fails CLOSED, so a
  * pin that no longer binds the id reads as GONE from the pinned root rather than walking the write into whichever
- * root now holds it (ADR-0011 D17 re-awards an id and moves no file; two checkouts of one repo hold byte-identical
- * files, so `base_hash` would not have caught the difference).
+ * root now holds it (ADR-0012: the same id may be live under SEVERAL roots at once, so an id alone does not name a
+ * file; two checkouts of one repo hold byte-identical files, so `base_hash` would not have caught the difference).
  *
  * Both callers supply it. The PUT route sets it from `?root=` (absent → null, the bare form, where the id IS the
  * address and the id_map-first resolve decides the owner). The proposal-APPLY path always names one: it decided its

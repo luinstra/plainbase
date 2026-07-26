@@ -74,8 +74,9 @@ class SearchService(
                 offset = offsetValue,
                 total = results.total,
                 hits = results.hits.mapNotNull { hit ->
-                    // pageAt keys on (root, id) - the page id is not enough (see [assemble]'s root rule): a
-                    // cross-root re-award must not pair one root's hit with another's page.
+                    // pageAt keys on (root, id) - the page id is not enough (see [assemble]'s root rule):
+                    // the same id may be live under several roots, so one root's hit must never be
+                    // paired with another root's page.
                     snapshot.pageAt(RootedPageId(hit.root, hit.pageId))
                         ?.takeIf { available.isAvailable(it.root) }
                         ?.let { page -> assemble(hit, page) }
@@ -95,9 +96,9 @@ class SearchService(
      * visibility is always absent-or-old-or-new, never torn (the Appendix G rule).
      *
      * **The one lag that is NOT adjudicated is a CROSS-ROOT one, and the caller drops it before we get here.**
-     * A page id is global across roots and a rebuild can re-award it (the D17 rank contest); the snapshot
+     * Since per-root identity (ADR-0012) the same id may be live under several roots at once; the snapshot
      * publishes BEFORE the search sync that follows it, so a query landing in that window can return a hit the
-     * engine still holds under root A for an id the snapshot has just moved to root B. Joining on the id alone
+     * engine still holds under root A for an id root A no longer has. Joining on the id alone
      * would then pair root A's snippet with root B's url, root B's citation and root B's availability check -
      * serving one root's content under another's name, and slipping past the stale-content filter entirely when
      * A is the root that is unavailable. Same id, different root = a different page, and the hit is dropped

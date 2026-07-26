@@ -36,8 +36,8 @@ import kotlin.time.Clock
  * page's identity OUT of `DATA_DIR` and into the page itself, so a root it skips is a root whose permalinks and
  * citations do not survive a lost `DATA_DIR` - the precise disaster `--write-ids` exists to prevent, silently
  * unaddressed for every root but main. Every root is scanned into ONE global, READ-ONLY plan before a single byte
- * is written ([AdoptionPass]), so the D17 rank contest is settled with the complete picture and no root can be
- * mistaken for one this pass could not see.
+ * is written ([AdoptionPass]), so every within-root duplicate is resolved against the complete picture and no
+ * root can be mistaken for one this pass could not see.
  *
  * **Its mutating modes refuse to run while a server is up.** RECORD/MATERIALIZE write the app db
  * (MATERIALIZE the tree too) from a second process, so they acquire the DATA_DIR advisory lock
@@ -163,10 +163,13 @@ object AdoptCommand {
             val qualified = stores.size > 1
             var wrote = false
 
-            // ONE global read-only plan across ALL roots, THEN the write (D19). Resolving root-by-root (as this
-            // used to) made every not-yet-reached root look unscanned, hence untouchable: a rank winner could not
-            // take the id it outranks, so --write-ids went on to materialize ids into files that rank says belong
-            // to another page - durably, in the operator's own tree, by the very command that promises the opposite.
+            // ONE global read-only plan across ALL roots, THEN the write (D19). The identity motivation was a
+            // cross-root rank contest, which per-root identity dissolved (ADR-0012), but a WITHIN-root one took
+            // its place with the shared owner gate: a materialized binding whose file lost its `id:` is
+            // displaceable, so the winner's bind sweeps its row and only resolve-before-bind keeps the beaten
+            // owner visible enough to record its issue instead of silently minting it a fresh id - which
+            // `--write-ids` would then put in the FILE. Plus whole-command ATOMICITY (the plan writes nothing,
+            // so a root vanishing mid-scan costs nothing) and preview/write equivalence.
             val plan = try {
                 pass.run(mode) { page, id ->
                     try {
@@ -361,12 +364,6 @@ object AdoptCommand {
             "path_collision: ${issue.keptPath.value} kept; on-disk sibling '${issue.loserRawName}' excluded"
         is IdentityIssue.PathSlugCollision ->
             "path_slug_collision: ${issue.keptPath.value} owns the URL; ${issue.loserPath.value} reachable by id only"
-        // Both sides are reachable now that ONE plan sees every root: registry rank (D17) decides which path
-        // keeps the id, so `kept` is whichever root is declared first - not, as under the old per-root loop,
-        // always the foreign one. Root-qualified because the two paths live in different roots.
-        is IdentityIssue.CrossRootDuplicateId ->
-            "cross_root_duplicate_id ${issue.id}: kept by ${issue.kept.root}:${issue.kept.path.value}; " +
-                "${issue.reassigned.root}:${issue.reassigned.path.value} reassigned a fresh id"
     }
 
     private const val USAGE = "usage: plainbase adopt [--write-ids [--dry-run]]"

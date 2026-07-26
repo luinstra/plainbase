@@ -29,7 +29,7 @@ import java.nio.file.Path
 
 /**
  * Every step of a save must address the page by its PINNED TARGET — the (root, path) the intent carries — and
- * never by the bare page id (ADR-0011 D17; per-root identity, C5).
+ * never by the bare page id (per-root identity, ADR-0012).
  *
  * A page id does not durably name a location, and under per-root identity it does not even name ONE root: the
  * same frontmatter `id:` may live in several roots at once (a legal cross-root duplicate). A watcher `rebuild()`
@@ -59,7 +59,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
     fun slugged(slug: String, text: String) =
         "---\nid: ${pageId.value}\nslug: $slug\ntitle: Rollback\n---\n\n# Rollback\n\n$text\n"
 
-    test("a rebuild that re-awards the page id mid-save must NOT send the reindex at the other root's file") {
+    test("a second root starting to hold the id mid-save must NOT send the reindex at the other root's file") {
         withTwoRoots { mainDir, extraDir ->
             // The id lives in `extra` alone, so `extra` owns it — and the save below is gated and CAS-written there.
             Files.createDirectories(extraDir.resolve("notes"))
@@ -143,11 +143,11 @@ class WritePipelineCrossRootReindexTest : FunSpec({
         }
     }
 
-    test("a rebuild that re-awards the page id mid-save must NOT let a rename slip past the edit-classification guard") {
+    test("a second root starting to hold the id mid-save must NOT let a rename slip past the edit-classification guard") {
         withTwoRoots { mainDir, extraDir ->
-            // The SAME contest, one step earlier in the pipeline. The gate resolved this id to extra's page and
-            // minted the intent; by the time write() runs, `main` has claimed the id (rank 0) and the snapshot's
-            // byId entry is MAIN's file - which happens to carry the very slug this edit is trying to introduce.
+            // The SAME ambiguity, one step earlier in the pipeline. The gate resolved this id to extra's page and
+            // minted the intent; by the time write() runs, `main` holds that id under its OWN root too, and a
+            // bare-id lookup could reach MAIN's file - which carries the very slug this edit is trying to introduce.
             Files.createDirectories(extraDir.resolve("notes"))
             Files.createDirectories(mainDir.resolve("notes"))
             Files.writeString(extraDir.resolve("notes/rollback.md"), slugged("extra-rollback", "original."))

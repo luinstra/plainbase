@@ -13,8 +13,9 @@
 -- same way); verifyMigrations cross-checks it against schema/9.db (P1b's 8.sqm added the status_reason column).
 -- root is THREADED as of multi-root C4 (ADR-0011 D18): a proposal names the root it targets, AUTHORITATIVELY for both
 -- operations - it is the root apply writes into, and the root the pre-claim availability guard checks. An edit does
--- NOT follow its page across roots: the D17 contest re-awards an id without moving a file, and an approved edit must
--- land where it was proposed and reviewed. The DEFAULT 'main' is what migrates every pre-C4 row, and the schema is
+-- NOT follow its page across roots: since per-root identity (ADR-0012) the same id may be live under SEVERAL roots at
+-- once, so following the id would be picking a root rather than reading one, and an approved edit must land where it
+-- was proposed and reviewed. The DEFAULT 'main' is what migrates every pre-C4 row, and the schema is
 -- unchanged; what changed is that the insert binds a real value and the read side selects it.
 
 import com.plainbase.domain.content.TreePath;

@@ -35,10 +35,10 @@ data class SearchHit(
     val pageId: PageId,
     /**
      * The root the engine INDEXED this document under - part of the hit's IDENTITY, not a display field, and the
-     * one thing a page id cannot carry: ids are global across roots and a rebuild can re-award one (the D17
-     * cross-root rank contest). Assembly compares it against the root the page has in the CURRENT snapshot and
-     * DROPS the hit if they differ, so one root's snippet can never be served under another root's name, url and
-     * availability check (ADR-0011 D5/D17).
+     * one thing a page id cannot carry: since per-root identity (ADR-0012) the SAME id may be live under SEVERAL
+     * roots at once, so an id names a page only together with its root. Assembly compares this against the root the
+     * page has in the CURRENT snapshot and DROPS the hit if they differ, so one root's snippet can never be served
+     * under another root's name, url and availability check (ADR-0011 D5, ADR-0012).
      */
     val root: RootName,
     /** The matched section's PB-SLUG-1 anchor; null for a page-level hit. */

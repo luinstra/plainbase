@@ -121,13 +121,13 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * **Per-root identity (C5, the flip):** an id is scoped to its ROOT. The SAME frontmatter id may live in several
  * roots at once, each answering its own rooted permalink `/p/{root}/{id}` - a cross-root duplicate is no longer a
  * contest, and rank (which compares ROOTS) decides SOURCE precedence only, never an id transfer between roots. A
- * genuine duplicate is WITHIN one root, resolved in the pass's rank-then-path order (the previously-bound path keeps
+ * genuine duplicate is WITHIN one root, resolved in the pass's rank-then-frontmatter-then-path order (the previously-bound path keeps
  * the id; the loser reassigns). All sources still resolve together before any bind so that in-pass order is
  * well-defined. A binding's liveness and supersedability are classified by the shared [BindingVisibility] rule over
  * the scanned/registered root sets (D16): a pass NEVER supersedes a binding under a root it did not scan, the same
  * no-delete rule the carried-forward section implements - a skipped root's page stays IN the snapshot, so taking its
  * id would destroy a durable binding an outage gave no authority to touch (D-C4-10) and put a duplicate `(root, id)`
- * in the snapshot (a rebuild crash). The broader ADR-0011/essay rewrite is C7.
+ * in the snapshot (a rebuild crash).
  *
  * **Safe publication, no `@Volatile`:** the new snapshot is built entirely off to the side and
  * published with a single [AtomicReference.store]; [current] readers always observe a complete,
@@ -146,8 +146,8 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * live canonical path always shadows an alias (dropped, with a recorded `redirect_conflict` issue).
  *
  * Identity binding mirrors `AdoptionPass` RECORD semantics over the in-hand bytes (zero content
- * writes): id_map rows plus issues, sources in rank order and pages in path order so duplicate
- * resolution is deterministic.
+ * writes): id_map rows plus issues, sources in rank order and, within each root, frontmatter-carrying
+ * pages before the rest and then by path, so duplicate resolution is deterministic.
  *
  * **Publication listeners (§B4, the Phase-2/3 seam):** after the snapshot publishes, [rebuild] —
  * still inside its serialized section — synchronously invokes every registered
@@ -243,9 +243,10 @@ class IndexBuilder(
         }
     }
 
-    // Sorted by the shared D7 rank (the SAME lambda PageIdentityService receives, wired once):
-    // scan-and-resolve order is correctness-critical - the registry-order winner must always be
-    // claimed and bound first - so it is enforced by construction, never trusted from the caller.
+    // Sorted by the shared D7 rank, enforced by construction rather than trusted from the caller, so the pass has
+    // ONE deterministic source order (and with it a deterministic section order). Per-root identity (ADR-0012)
+    // dissolved the cross-root contest this sort used to decide, so rank no longer picks an id winner and plays no
+    // part inside a root at all. Within-root resolution order is established separately, by `precedenceOrdered`.
     private val sources: List<Source> = sources.sortedBy { rootRank(it.root.name) }
 
     private val sourcesByRoot: Map<RootName, Source> = this.sources.associateBy { it.root.name }
@@ -331,9 +332,11 @@ class IndexBuilder(
                 previous.pages.associate { it.rooted to it.urlPath }
             }
 
-        // D17 execution invariant (b): scan ALL sources before the FIRST resolve. Only then is the WITNESS map
-        // complete - under interleaved scan+resolve a binding in a not-yet-scanned later root would be
-        // misclassified by the D16 visibility rule.
+        // Execution invariant (b): scan ALL sources before the FIRST resolve. The original reason is vestigial -
+        // `ownerOf` is root-scoped, so no other root's binding is ever handed to the visibility rule during this
+        // root's resolve, and a registered-but-unscanned root reads untouchable-LIVE rather than detached. What
+        // still needs the whole corpus up front is the WITNESS map every absence proof is minted against, and a
+        // deterministic pass shape.
         //
         // D5: probe first, and skip what is not there. `scans` holds only the roots this pass actually walked.
         // Nothing here is an ADMISSION any more - there is no tripwire to pass and no authority to be granted,
@@ -458,9 +461,10 @@ class IndexBuilder(
         // them as they were found would leave rows behind from a pass that never happened: a scan that dies
         // half-way is SKIPPED and its last-good section carried, so its half-walked path/URL collisions describe
         // a tree nobody indexed. The identity issues below ride the resolve, which only ever sees full scans.
-        scans.forEach { scan -> scan.issues.forEach(idMap::record) }
+        val raisedIssues = mutableListOf<IdentityIssue>()
+        scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
 
-        val identities = resolveIdentities(scans, witnessed, scannedRoots)
+        val identities = resolveIdentities(scans, witnessed, scannedRoots, raisedIssues)
 
         // Build ALL provisional sections, then render each root's pages against ITS view of the
         // ONE URL-complete skeleton (identity and URLs final; render fields filled below).
@@ -498,15 +502,27 @@ class IndexBuilder(
         // Carry each SKIPPED root's last-good section forward, so no listener sees a deletion (a never-scanned
         // root has no previous section and simply contributes none - `section` is total). In registry rank
         // order, like the sources themselves, so the snapshot is deterministic either way.
-        val scannedIds = scanned.flatMap { section -> section.pages.map { it.rooted } }.toSet()
+        //
+        // Nothing is filtered out of a carried section. C7 deleted a filter that dropped any carried page whose
+        // ROOTED id a scanned root also held; per-root identity had already made it a provable no-op, and the
+        // load-bearing reason is PROVENANCE, not that the roots happen to differ: every page in a section carries
+        // that section's own root (true at each producer, and asserted by PageIndex's init), the elvis below fires
+        // only for a root with NO scanned section, and RootedPageId equality includes the root - so a carried
+        // page's rooted id cannot appear among the scanned ones. That proof depends on the elvis meaning exactly
+        // "no scanned section for this root". Re-key the carry on scan COMPLETENESS and a carried root could
+        // coexist with a scanned section of its own root, at which point the deadness needs re-proving. If that
+        // ever happens it now fails LOUDLY in PageIndex's init - on the duplicate-root-section `require` if the
+        // carry adds a second section for the root, or on the duplicate-(root, id) `check` if the pages were merged
+        // into the scanned one - rather than silently dropping the page and logging a warning, which is the
+        // better of the two failures.
         val sections = sources.mapNotNull { source ->
             val root = source.root.name
             scanned.firstOrNull { it.root == root }
-                ?: previous.sections.firstOrNull { it.root == root }?.let { carryForward(it, scannedIds) }
+                ?: previous.sections.firstOrNull { it.root == root }
         }
 
         val snapshot = PageIndex(sections)
-        recordAliases(previousUrlPaths, snapshot)
+        recordAliases(previousUrlPaths, snapshot, raisedIssues)
         holder.store(
             Published(
                 snapshot = snapshot,
@@ -526,6 +542,17 @@ class IndexBuilder(
             "indexed ${snapshot.pages.size} page(s), ${snapshot.sections.sumOf { it.assets.size }} asset(s), " +
                 "${snapshot.sections.sumOf { it.folders.size }} folder(s); " +
                 "${snapshot.pages.count { it.urlPath == null }} excluded from path space" + breakdown
+        }
+        // An identity issue used to land in the `identity_issue` table and NOWHERE else, so a corpus that raises
+        // one on every pass - a pasted duplicate is the common case, and it never self-heals - was invisible
+        // unless an operator opened the admin list. The §5.2 policy is defensible only if the person who can fix
+        // it can find out, so say it once per rebuild, at WARN, naming the paths.
+        if (raisedIssues.isNotEmpty()) {
+            logger.warn {
+                val shown = raisedIssues.take(MAX_LOGGED_ISSUES).joinToString("; ") { it.summary() }
+                val more = (raisedIssues.size - MAX_LOGGED_ISSUES).takeIf { it > 0 }?.let { " (+$it more)" } ?: ""
+                "${raisedIssues.size} identity issue(s) this pass, unresolved until the tree changes: $shown$more"
+            }
         }
         notifyPublished(snapshot, retired)
         return snapshot
@@ -886,9 +913,9 @@ class IndexBuilder(
      * stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher rebuild never
      * interleaves. Bytes and history come from the target root's source.
      *
-     * **The target is a [RootedPath], NOT a page id, and that is the whole point (ADR-0011 D17).** A page id
-     * does not durably name a location: a rebuild can re-award it to another root the moment that root claims
-     * the same frontmatter id (the cross-root duplicate-id rank contest). This method runs DOWNSTREAM of a CAS
+     * **The target is a [RootedPath], NOT a page id, and that is the whole point (ADR-0012).** A page id does
+     * not name a location on its own: under per-root identity the SAME id may be live in several roots at once,
+     * so resolving one here would be picking a root, not reading one. This method runs DOWNSTREAM of a CAS
      * that has already put bytes on ONE root's disk, and it takes a FRESH snapshot — so resolving the id here
      * would let a rebuild landing in that window send the reindex at a DIFFERENT root's file, splitting disk
      * truth from index truth. Taking the location the bytes actually went to makes that unreachable rather than
@@ -1003,27 +1030,6 @@ class IndexBuilder(
      */
     fun renderPreview(root: RootName, sourcePath: TreePath, bytes: ByteArray): RenderedPage =
         rendererFactory(current.view(root)).render(sourcePath, bytes)
-
-    /**
-     * A skipped root's last-good section, minus any page whose ROOTED id a SCANNED root now holds.
-     *
-     * **Per-root identity (C5) makes this filter a PROVABLE PERMANENT NO-OP, flagged for C7 deletion (not removed
-     * mid-flip, per the STOP-4 discipline for dead-looking safety code).** [scannedIds] is built only from SCANNED
-     * sections, and a carried section belongs to a root NO scanned section has, so `it.rooted in scannedIds` is
-     * always false for a carried page (the roots differ). `kept.size == section.pages.size` therefore always holds,
-     * the early return always fires, and the [logger] warn below is unreachable. Before the flip the filter was
-     * keyed by BARE id and could drop a down root's page when a scanned root shared that id; per-root identity makes
-     * a same id in two roots legal, so no carried page is ever dropped. The deletion and the KDoc rewrite are C7.
-     */
-    private fun carryForward(section: RootSection, scannedIds: Set<RootedPageId>): RootSection {
-        val kept = section.pages.filterNot { it.rooted in scannedIds }
-        if (kept.size == section.pages.size) return section
-        logger.warn {
-            "carrying unavailable root '${section.root}' forward WITHOUT ${section.pages.size - kept.size} page(s) whose id a " +
-                "scanned root now holds - its durable rows are untouched, and the pages return when the root does"
-        }
-        return section.copy(pages = kept)
-    }
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex, retired: Set<RootedPageId>) {
@@ -1281,29 +1287,46 @@ class IndexBuilder(
 
     /**
      * §5.2 identity over the in-hand bytes — the same precedence/duplicate seam as `AdoptionPass`
-     * RECORD, run ONCE globally across all sources in rank-then-path order so the registry-order
-     * winner is always claimed first.
+     * RECORD, run ONCE globally across all sources in a deterministic order: roots by rank, then within
+     * each root frontmatter-carrying drafts first (`precedenceOrdered`), then by path. Rank orders the
+     * roots and nothing else - it picks no id winner (ADR-0012).
      *
      * **RESOLVE THE WHOLE CORPUS, THEN BIND IT** - the `AdoptionPass` two-phase split (D19), for the same
-     * reason and now literally the same seam. Binding INLINE, as this used to, made the D16/D17 loser issue
-     * UNRECORDABLE for one specific loser: a page whose identity lives in `id_map` ONLY (no frontmatter id of
-     * its own). The winner's key-complete bind DELETES that row on its way through, so when the loser's own
-     * draft came up for resolution its `mappedId` read back null - and a page with no frontmatter id and no
-     * mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, so the `/p/{root}/{id}`
-     * permalink its readers held stopped naming it, with no `CrossRootDuplicateId` issue recorded anywhere.
-     * A durable permalink reassignment with no record is precisely the outcome D16/D17's loser-behalf issue
-     * recording exists to make impossible.
+     * reason and now literally the same seam. Binding INLINE, as this used to, made the loser issue
+     * UNRECORDABLE for one specific WITHIN-root loser: a page that ends up with NO frontmatter id of its own and
+     * whose `id_map` row is swept out from under it mid-pass. The winner's key-complete bind DELETES that row on
+     * its way through, so when the loser's own draft came up for resolution its `mappedId` read back null - and a
+     * page with no frontmatter id and no mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id,
+     * silently, so the `/p/{root}/{id}` permalink its readers held stopped naming it, with no `DuplicateId` issue
+     * recorded anywhere. A durable permalink reassignment with no record is precisely the outcome the
+     * loser-behalf issue recording exists to make impossible.
+     *
+     * **The reachable shape of that loser is narrower than it used to be, and naming it precisely matters** -
+     * this paragraph is the most-cited justification for the split, and a justification that has quietly become
+     * unreachable is how a defence gets refactored away. Since [BindingVisibility.isOwner] gained the
+     * materialized-aware path-reuse gate, an UNMATERIALIZED owner is never displaced at all (its file was never
+     * expected to carry the id, so witnessing it carry none confirms nothing), which used to be the headline
+     * example here and no longer occurs. What remains reachable is the MATERIALIZED page whose `id:` line was
+     * STRIPPED externally: the gate correctly stops treating it as the owner, a claimant takes the id, its row is
+     * swept, and it then has neither frontmatter id nor mapping - a virgin page, silently minted. (A file whose
+     * `id:` was REWRITTEN to some other valid id is not this case: it resolves on the frontmatter arm under its
+     * new id and is never a virgin page.)
      *
      * Resolving first fixes it at the root: every draft's `mappedId` is read against the id_map as it stood
      * BEFORE this pass touched it, so the beaten owner still sees the contested id, `PageIdentityService`
      * reaches its owner check on the id_map arm (the arm its doc says an inline-binding pass can never reach),
-     * and the loser reassigns WITH its issue. The binds then replay the resolved plan in the same rank-then-path
+     * and the loser reassigns WITH its issue. The binds then replay the resolved plan in the same rank-then-frontmatter-then-path
      * order, so the winner's key-complete bind still lands before the loser's row is rewritten.
      */
     private fun resolveIdentities(
         scans: List<SourceScan>,
         witnessed: Map<RootedPath, Witness>,
         scannedRoots: Set<RootName>,
+        // Collects what this pass RAISED, so [rebuild] can warn about it. Deliberately not re-read from
+        // `idMap.issues()`: that decode path has no production caller by design (removing an unconstructible
+        // `Kind` in C7 was safe precisely because nothing in production decodes a row), and giving it one would
+        // turn a stale mid-branch row into a crash on every rebuild.
+        raised: MutableList<IdentityIssue>,
     ): Map<RootedPath, Identity> {
         // The ONE supersession rule, built once and handed to BOTH the resolver below and every bind it
         // produces - so the plan the pass makes and the writes the repository will accept cannot disagree.
@@ -1319,7 +1342,7 @@ class IndexBuilder(
         // than handed a dead page's permalink.)
         val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
         val claimed = HashMap<RootedPageId, RootedPath>()
-        val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-path = the bind order
+        val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-frontmatter-then-path = the bind order
         for (scan in scans) {
             // Within one root, a valid frontmatter id travels with its page before an unmaterialized
             // newcomer at the vacated path can reuse the stale id_map row. The sort is stable, so
@@ -1344,17 +1367,9 @@ class IndexBuilder(
                         claimed[RootedPageId(path.root, id)]
                             ?: idMap.bindingInRoot(path.root, id)
                                 ?.takeIf { binding ->
-                                    BindingVisibility.isLive(
-                                        binding,
-                                        witnessed.keys,
-                                        scannedRoots,
-                                        registeredRoots,
-                                        supersession,
-                                    ) &&
-                                        // A witnessed path that no longer carries this id is path reuse, not
-                                        // the old page still owning the id. An unwitnessed owner remains live
-                                        // and non-supersedable under D16, so absence here must stay fail-closed.
-                                        (witnessed[binding.path]?.let { it.observedId == id } ?: true)
+                                    // isLive + the path-reuse gate, as ONE shared question - see [BindingVisibility.isOwner]
+                                    // for why an unmaterialized owner carrying no `id:` is witnessing itself, not reused.
+                                    BindingVisibility.isOwner(binding, witnessed, scannedRoots, registeredRoots, supersession)
                                 }
                                 ?.path
                             ?: idMap.retiredAt(path.root, id)?.path
@@ -1375,9 +1390,9 @@ class IndexBuilder(
         val identities = HashMap<RootedPath, Identity>()
         for ((path, assignment) in resolved) {
             val materialized = assignment.source == PageIdentityService.Source.FRONTMATTER
-            // Rank-then-path order (the map's insertion order): the winner's key-complete bind sweeps the loser's
+            // Rank-then-frontmatter-then-path order (the map's insertion order): the winner's key-complete bind sweeps the loser's
             // stale row BEFORE the loser rebinds itself, so no page ever reads back an identity this pass has
-            // already re-awarded. The ISSUE lands with the bind that supersedes it, never after it or not at all.
+            // already reassigned. The ISSUE lands with the bind that supersedes it, never after it or not at all.
             //
             // The bind is handed the SAME [Supersession] the resolve above ran under, so a REFUSAL means the two
             // disagreed - a rule-drift bug, not a data condition. It is checked rather than ignored for the same
@@ -1392,14 +1407,32 @@ class IndexBuilder(
                     }}. " +
                     "The resolver and the bind gate disagree about who owns that id - no supersession is safe under that."
             }
-            assignment.issue?.let(idMap::record)
+            assignment.issue?.let { record(raised, it) }
             identities[path] = Identity(assignment.id, materialized)
         }
         return identities
     }
 
+    /**
+     * Records an identity issue AND remembers it for the rebuild WARN. Every `idMap.record` on the rebuild path
+     * goes through here: the first version of the WARN threaded only the resolver's issues and silently omitted
+     * every alias conflict, so a corpus whose only permanent problem was a shadowed redirect stayed as invisible
+     * as before.
+     */
+    private fun record(into: MutableList<IdentityIssue>, issue: IdentityIssue) {
+        idMap.record(issue)
+        into += issue
+    }
+
     /** §A4 alias semantics for one rebuild: move detection, `redirect_from`, then the shadow sweep. */
-    private fun recordAliases(previousUrlPaths: Map<RootedPageId, TreePath?>, snapshot: PageIndex) {
+    private fun recordAliases(
+        previousUrlPaths: Map<RootedPageId, TreePath?>,
+        snapshot: PageIndex,
+        // Alias conflicts are identity issues too, and just as invisible: they were recorded straight to the
+        // table, so the rebuild WARN would have claimed to report "identity issues this pass" while silently
+        // omitting every dropped move alias and shadowed redirect.
+        raised: MutableList<IdentityIssue>,
+    ) {
         val liveCanonicals = snapshot.byUrlPath.keys
 
         // Move/rename/slug-change detection: a known id whose canonical (root, URL path) changed
@@ -1422,7 +1455,8 @@ class IndexBuilder(
             val old = RootedPath(priorKey.root, oldUrlPath) // OLD root = the prior entry's KEY root
             if (old == page.urlPath?.let { RootedPath(page.root, it) }) continue
             if (old in liveCanonicals) {
-                idMap.record(
+                record(
+                    raised,
                     IdentityIssue.RedirectConflict(
                         root = old.root,
                         path = old.path,
@@ -1443,14 +1477,15 @@ class IndexBuilder(
                     logger.warn { "ignoring unusable redirect_from '$raw' on ${page.path.value}" }
                     continue
                 }
-                registerRedirect(RootedPath(page.root, target), page, liveCanonicals)
+                registerRedirect(RootedPath(page.root, target), page, liveCanonicals, raised)
             }
         }
 
         // Shadow sweep: an alias persisted earlier that a live canonical path claims now is dropped.
         for (canonical in liveCanonicals) {
             aliasRegistry.dropShadowed(canonical)?.let { dropped ->
-                idMap.record(
+                record(
+                    raised,
                     IdentityIssue.RedirectConflict(
                         root = canonical.root,
                         path = canonical.path,
@@ -1462,17 +1497,24 @@ class IndexBuilder(
     }
 
     /** Registers one `redirect_from` alias unless a live canonical or another page's alias claims it. */
-    private fun registerRedirect(target: RootedPath, page: IndexedPage, liveCanonicals: Set<RootedPath>) {
+    private fun registerRedirect(
+        target: RootedPath,
+        page: IndexedPage,
+        liveCanonicals: Set<RootedPath>,
+        raised: MutableList<IdentityIssue>,
+    ) {
         val existing = aliasRegistry.find(target)
         when {
-            target in liveCanonicals -> idMap.record(
+            target in liveCanonicals -> record(
+                raised,
                 IdentityIssue.RedirectConflict(
                     root = target.root,
                     path = target.path,
                     message = "redirect_from of ${page.path.value} ignored: a live canonical path claims it",
                 ),
             )
-            existing != null && existing != page.rooted -> idMap.record(
+            existing != null && existing != page.rooted -> record(
+                raised,
                 IdentityIssue.RedirectConflict(
                     root = target.root,
                     path = target.path,
@@ -1492,7 +1534,29 @@ class IndexBuilder(
 
     private val TreePath.stem: String get() = name.removeSuffix(".md")
 
+    /**
+     * A one-line rendering for the rebuild WARN. Deliberately NOT `AdoptCommand.describe`: that is operator CLI
+     * output with its own wording contract (a smoke test greps it), this is a log line, and coupling them would
+     * make a log tweak a CLI change.
+     */
+    private fun IdentityIssue.summary(): String = when (this) {
+        // "resolved first", NOT "keeps it": the two are the same in the ordinary copied-file case, but when the
+        // winner goes on to RE-IDENTIFY itself the id ends up retired and nobody holds it. On a console line
+        // whose whole purpose is telling an operator where to look, "keeps it" would send them to the wrong file.
+        is IdentityIssue.DuplicateId ->
+            "duplicate_id $id: $root:${keptPath.value} resolved first, ${reassignedPath.value} reassigned"
+        // These two carry their reason in `message`, and it is the only part that says what to DO about them.
+        is IdentityIssue.PatchRefused -> "patch_refused $root:${path.value}: $message"
+        is IdentityIssue.RedirectConflict -> "redirect_conflict $root:${path.value}: $message"
+        is IdentityIssue.PathCollision -> "path_collision $root:${keptPath.value} (excluded sibling '$loserRawName')"
+        is IdentityIssue.PathSlugCollision ->
+            "path_slug_collision $root:${keptPath.value} owns the URL, ${loserPath.value} is id-only"
+    }
+
     companion object {
         private val logger = KotlinLogging.logger {}
+
+        /** Enough to act on without turning a pathological corpus into a wall of log. The count is always exact. */
+        private const val MAX_LOGGED_ISSUES = 5
     }
 }

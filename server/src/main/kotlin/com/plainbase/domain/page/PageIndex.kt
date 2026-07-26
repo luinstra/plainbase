@@ -20,7 +20,7 @@ data class RootSection(
 /**
  * The immutable page-index snapshot (chunk 5, caching decision §C4; keyed (root, path) since
  * multi-root C2, ADR-0011): every page with its stable identity, canonical URL (§A4), and render
- * metadata, plus the lookup maps the read path serves from — [byId], [byPath], and [byUrlPath].
+ * metadata, plus the lookup maps the read path serves from — [byRootedId], [byPath], and [byUrlPath].
  *
  * **Deeply immutable, by construction:** every collection is copied once here and never mutated;
  * there is no post-publication mutation path. That is what makes the `IndexBuilder`'s

@@ -38,8 +38,9 @@ object ManagedRootsFile {
 
     /**
      * [roots] as the HOCON `roots {}` block, in the given order - which is D-C5-4 order: parsed order
-     * preserved, new roots appended at the end, so a newcomer always ranks LAST and therefore LOSES a
-     * cross-root duplicate-id contest against every incumbent (Invariant R).
+     * preserved, new roots appended at the end, so a newcomer always ranks LAST and can never outrank an
+     * incumbent for SOURCE precedence (Invariant R). Since per-root identity (ADR-0012) it could not take
+     * an incumbent's id in any case: the same id under two roots is two pages, not a contest.
      *
      * We own every byte, so the output is deterministic and diffable. `main` never appears here and the writer
      * does not check for it: the invariant has ONE home in the loader's refusal plus the CLI's argv refusal,

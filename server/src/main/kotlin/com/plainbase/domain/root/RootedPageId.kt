@@ -3,11 +3,14 @@ package com.plainbase.domain.root
 import com.plainbase.domain.page.PageId
 
 /**
- * A page's real identity under multi-root: the [PageId] qualified by the [root] that holds it. The seam
- * type every id-bearing surface funnels through, sibling of [RootedPath]/[BindingRef] (pure domain).
+ * A page's real identity under multi-root: the [PageId] qualified by the [root] that holds it (ADR-0012),
+ * sibling of [RootedPath]/[BindingRef] (pure domain).
  *
- * Introduced ahead of its consumers so there is ONE type to key on rather than scattered `(root, id)`
- * parameter pairs. The single funnel is [com.plainbase.domain.page.IndexedPage.rooted].
+ * Used wherever the pair travels as a VALUE - snapshot keys, retirement sets, permalink targets - so there is
+ * ONE type to key on. It is deliberately NOT universal at the seams: several signatures still take `root` and
+ * `id` separately, and the bare-ID read entrypoints (`ReadFacade.pageById`/`pageHtml`/`validateLinks`/
+ * `pageMetadata`, whose `?root=` is optional) take a NULLABLE root this type cannot express. A page's own
+ * identity value is [com.plainbase.domain.page.IndexedPage.rooted].
  */
 data class RootedPageId(val root: RootName, val id: PageId) {
 

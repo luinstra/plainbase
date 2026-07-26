@@ -24,25 +24,24 @@ import com.plainbase.domain.root.RootedPath
  * conflict reuses this path's existing `id_map` binding rather than minting anew, so the copy's
  * `/p/{root}/{id}` permalink stays stable across rescans (the still-conflicting file keeps raising the issue).
  *
- * **Cross-root duplicate policy (per-root identity, C5):** a cross-root duplicate is NO LONGER a contest. The same
- * frontmatter `id:` in two DIFFERENT roots is legal - both pages keep it and each answers its own `/p/{root}/{id}`.
- * The `ownerOf` seam is root-scoped, so it never returns an owner in another root: rank no longer takes an id from
- * anyone; it decides SOURCE precedence only. (The ADR-0011 D2/D17 cross-root rank-transfer this paragraph used to
- * describe is dissolved; the broader ADR/essay rewrite is C7.)
+ * **Cross-root duplicates are legal (per-root identity, ADR-0012):** the same frontmatter `id:` in two DIFFERENT
+ * roots is not a contest, and both pages keep it, each answering its own `/p/{root}/{id}`. The [ownerOf] seam is
+ * root-scoped, so a returned owner always lives in the page's OWN root and rank decides SOURCE precedence only.
  *
- * The loser reassigns like the within-root loser, and BOTH reassign through ONE gate: a loser keeps its own
- * `mappedId` only when [ownerOf] says that binding is still ITS to keep (nobody else holds the id), else it
- * MINTS FRESH. The gate closes two cases, and the second is why it is a gate and not an id comparison:
- *  - the prior-owner case (two checkouts of one repo), where the loser's own binding IS the contested id:
- *    reusing it would either key-complete the winner's fresh row away (a silent within-root steal) or trip the
- *    snapshot's byRootedId (root, id) uniqueness check (a rebuild crash);
+ * A reassigning loser keeps its own `mappedId` only when [ownerOf] says that binding is still ITS to keep
+ * (nobody else holds the id), else it MINTS FRESH. The gate closes two cases, and the second is why it is a
+ * gate and not an id comparison:
+ *  - the prior-owner case, where the loser's own binding IS the contested id because it held that id under this
+ *    root before a same-root claimant won it this pass: reusing it would either key-complete the winner's fresh
+ *    row away (a silent within-root steal) or trip the snapshot's byRootedId (root, id) uniqueness check (a
+ *    rebuild crash);
  *  - and the case a `mappedId != contested id` check cannot see at all: the loser's binding names a DIFFERENT
  *    id, which another claimant of this same pass has already won. Reusing it hands one id to two live pages -
  *    the same crash, reached by a page that never contested that id.
  * Either way the mint is rescan-stable from the next pass on, since the fresh id becomes this path's binding.
  *
- * **A mapped id is contestable too, and for the same reason.** The cross-root loser above needed a
- * frontmatter id to lose the contest with; a page that carries NONE, but whose `id_map` row holds the
+ * **A mapped id is contestable too, and for the same reason.** The within-root duplicate loser above needed
+ * a frontmatter id to lose the contest with; a page that carries NONE, but whose `id_map` row holds the
  * id an earlier claimant just won, loses it exactly as hard - so [ownerOf] gates EVERY reuse of a
  * `mappedId`, the no-frontmatter arm and both duplicate arms alike, and a taken id is reassigned (fresh
  * mint) with the issue recorded.
@@ -50,8 +49,8 @@ import com.plainbase.domain.root.RootedPath
  * **This arm is why BOTH passes now resolve the whole corpus before they bind ANY of it.** A pass that
  * bound INLINE could never reach the check: the winner's key-complete bind had already swept the loser's
  * row, so [mappedId] arrived null and the loser looked like a page that had never been seen before - a
- * silent fresh MINT, no duplicate detected, no issue recorded, and a durable permalink quietly moved to
- * another root. Reading the id_map as it stood BEFORE the pass touched it is what makes the beaten owner
+ * silent fresh MINT, no duplicate detected, no issue recorded, and a durable permalink quietly moved off the
+ * page that owned it. Reading the id_map as it stood BEFORE the pass touched it is what makes the beaten owner
  * visible as a beaten owner. Resolution therefore never depends on a side effect of the previous page's
  * bind - which is also what lets `AdoptionPass`'s read-only plan abort without a trace.
  *
@@ -90,8 +89,9 @@ class PageIdentityService(
      * @param ownerOf the previously-bound owner of a given id WITHIN this page's root (root-scoped since C5), or
      *   null if that id is not yet bound to another live path under this root — the duplicate-detection seam. The
      *   caller threads its already-assigned ids through this lookup so a within-run duplicate is caught
-     *   deterministically, and applies the D16 [BindingVisibility.isLive] rule to id_map rows so a detached binding
-     *   is never treated as an owner. Because it is root-scoped, a returned owner is always in [path]'s own root: a
+     *   deterministically, and applies the shared [BindingVisibility.isOwner] rule to id_map rows - D16 liveness
+     *   PLUS the path-reuse gate - so neither a detached binding nor a row whose file broke its materialized
+     *   promise is treated as an owner. Because it is root-scoped, a returned owner is always in [path]'s own root: a
      *   cross-root duplicate is no longer a contest (per-root identity), so both roots keep the id.
      */
     fun resolve(

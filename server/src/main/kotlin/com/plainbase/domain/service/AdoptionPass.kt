@@ -13,6 +13,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.root.Witness
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
@@ -24,11 +25,17 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * **TWO PHASES, and the split is the whole design (D19).** [plan] resolves the WHOLE corpus - every
  * configured root - and writes NOTHING: no file, no row. [apply] then materializes exactly that plan.
  * Both of the bugs the split closes were faces of one sequential per-root loop:
- *  - **Identity.** Resolving root-by-root made every root the loop had not REACHED yet look
- *    *unscanned* to the D16 rule, hence untouchable - so a rank winner could not take the id it
- *    outranks, and `--write-ids` went on to materialize ids into files that rank says belong to
- *    another page, DURABLY. One global contest over ALL roots is what lets rank decide at all,
- *    because now both sides have turned up to it.
+ *  - **Identity.** The split's ORIGINAL motivation was a cross-root rank contest, which per-root identity
+ *    (ADR-0012) dissolved. A within-root one replaced it the moment this pass adopted the shared
+ *    [BindingVisibility.isOwner] gate: a witnessed MATERIALIZED binding whose file carries NO parseable `id:`
+ *    at all stops being an owner (it broke the promise materialization made), so the winner's key-complete
+ *    bind SWEEPS its row. A file carrying a DIFFERENT id keeps owning the old one - that is re-identification,
+ *    which tombstones rather than frees, and saying otherwise here is what would reintroduce the swap crash.
+ *    Bind inline and that loser's own draft then reads `mappedId` back as null with no frontmatter id of its
+ *    own - a VIRGIN page - silently minted a fresh id, moving a durable permalink with no `DuplicateId` recorded.
+ *    Resolving the whole corpus first is what keeps the beaten owner visible AS beaten, so the issue lands.
+ *    (Before the gate this was genuinely unreachable here, because every on-disk binding was a live owner.
+ *    It is reachable now. Do not weaken the split on the strength of the older note.)
  *  - **Atomicity.** A root vanishing mid-loop escaped AFTER earlier roots had already been mutated,
  *    leaving a half-adopted corpus. The plan is read-only, so an abort in phase 1 costs nothing, and
  *    [apply] RE-PROBES every root before its first write, so a root lost between the phases aborts
@@ -38,12 +45,13 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * to the patched BYTES - that a [Mode.MATERIALIZE] run would put on disk, so a preview that disagrees
  * with the write it previews is not merely unlikely, it is unconstructible.
  *
- * **Rooted keys, global identity (C2/D16):** adopt covers every configured root or refuses to run at
- * all (the caller's precondition), so its scanned set IS the registry and the D16 middle arm -
+ * **Rooted keys, per-root identity (D16, ADR-0012):** adopt covers every configured root or refuses to
+ * run at all (the caller's precondition), so its scanned set IS the registry and the D16 middle arm -
  * configured-but-unscanned, hence non-supersedable - is structurally empty. What remains is the rule's
  * other two arms: a scanned root's binding is live iff its path is on disk, and a DETACHED root's
- * binding (a root absent from the registry, D2) is not an owner at all and is swept by the winner's
- * key-complete bind. Rank (D17) settles every genuine cross-root contest right here.
+ * binding (a root absent from the registry) is not an owner for any OTHER root's resolution. It is not
+ * swept either: the bind is root-scoped, so the detached row SURVIVES untouched and its `/p/{root}/{id}`
+ * keeps its meaning if that root is ever re-added. Every contest adopt settles is within ONE root.
  *
  * **Read-only first index (frozen policy):** [Mode.RECORD] performs ZERO ContentStore writes —
  * unidentified pages get id_map rows only. [Mode.PREVIEW] writes nothing at all, file or row: it
@@ -94,8 +102,9 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * Git-mode single batched commit for `adopt --write-ids` is Phase 3 (no Git layer exists yet) — a
  * deferred hook, not a dropped requirement.
  *
- * Pure domain orchestration over ports; roots are resolved in registry (D7) rank order and pages in
- * path order, so duplicate resolution and the intent log are deterministic.
+ * Pure domain orchestration over ports; roots are resolved in registry (D7) rank order and, within each
+ * root, frontmatter-carrying pages before the rest and then by path, so duplicate resolution and the
+ * intent log are deterministic.
  */
 class AdoptionPass(
     sources: List<Source>,
@@ -126,8 +135,8 @@ class AdoptionPass(
         }
     }
 
-    // Sorted by the shared D7 rank, never trusted from the caller: the rank contest is only decided
-    // correctly if the registry-order winner resolves (and claims) first.
+    // Sorted by the shared D7 rank, never trusted from the caller: the plan must be DETERMINISTIC, and the
+    // same corpus must produce the same report and the same patched bytes on every run.
     private val sources: List<Source> = sources.sortedBy { rootRank(it.root) }
 
     private val storeOf: Map<RootName, ContentStore> = this.sources.associate { it.root to it.store }
@@ -200,7 +209,7 @@ class AdoptionPass(
      */
     class Plan(
         val mode: Mode,
-        /** Every page, in rank-then-path order (the bind order [apply] must keep). */
+        /** Every page, in rank-then-frontmatter-then-path order (the bind order [apply] must keep). */
         val pages: List<PageReport>,
         private val patched: Map<RootedPath, PlannedWrite>,
         /**
@@ -230,26 +239,53 @@ class AdoptionPass(
         plan(mode).also { if (mode != Mode.PREVIEW) apply(it, logIntent) }
 
     /**
-     * PHASE 1, READ-ONLY: scans every configured root, resolves the whole corpus's identity in ONE
-     * global duplicate contest, and computes each accepted page's patched bytes. Writes nothing —
+     * PHASE 1, READ-ONLY: scans every configured root, resolves the whole corpus's identity in ONE pass
+     * (every duplicate contest within its own root), and computes each accepted page's patched bytes. Writes nothing —
      * not a file, not a row — so an abort here (a root that vanishes mid-scan) costs nothing.
      *
-     * ALL roots are scanned before the FIRST resolve (the D17 execution invariant): under interleaved
-     * scan-and-resolve, a binding in a not-yet-scanned root would be misclassified as detached.
+     * ALL roots are scanned before the FIRST resolve. The original reason - a not-yet-scanned root's binding
+     * reading as DETACHED - cannot arise here: [scannedRoots] is fixed to every source root up front. What
+     * genuinely depends on scanning first is WITHIN-root witness completeness, and note the strictly required
+     * rule is weaker than the one enforced: a root must be scanned FULLY before any of ITS OWN pages resolve
+     * (`ownerOf` is root-scoped, so other roots cannot matter). Scanning everything up front is simply the
+     * cheapest way to guarantee that. Break it and, for an owner whose binding is MATERIALIZED, the unwitnessed
+     * owner sits under a root that IS in [scannedRoots], the visibility gate falls through to `materialized`,
+     * it stops counting as an owner, and a claimant resolved first takes its id - inverting §5.2. The damage is
+     * the BINDING: `/p/{root}/{id}` moves to the claimant, the beaten owner is minted a fresh id, and the
+     * `DuplicateId` is recorded the wrong way round. Its FILE survives, and not by luck - a materialized owner's
+     * `id:` is already in the file, so the patcher answers `AlreadyPresent` and the page plans as MAPPED. An
+     * UNMATERIALIZED owner is undisplaceable and never inverts at all.
      */
     fun plan(mode: Mode): Plan {
-        val drafts = sources.flatMap { source -> scan(source) }
-        val witnessed = drafts.mapTo(mutableSetOf()) { it.page }
+        val scanned = sources.flatMap { source -> scan(source) }
+        // ONE frontmatter read per draft, feeding all THREE consumers below: the resolve's raw value, the
+        // ordering, and the witness. (Reading inside a `sortedBy` selector re-reads on every comparison, and
+        // reading again at the resolve made "one parse" untrue the moment it was written.)
+        val observedRaw: Map<RootedPath, String?> = scanned.associate { it.page to patcher.readIdValue(it.bytes) }
+        val observed: Map<RootedPath, PageId?> = observedRaw.mapValues { (_, raw) -> raw?.let(PageId::of) }
+        // Within each root, frontmatter-carrying drafts resolve FIRST, then by path - `IndexBuilder`'s
+        // `precedenceOrdered`, ported here because it is load-bearing for the SAME reason: with the path-reuse
+        // gate below, an id-less newcomer at a VACATED path can otherwise resolve first, claim the id off the
+        // stale binding at its own path, and leave the page whose file still carries that id reassigned. The
+        // primary key keeps roots in rank order; the sort is stable, so path order survives inside each tier.
+        val rootOrder: Map<RootName, Int> = sources.withIndex().associate { (index, source) -> source.root to index }
+        val drafts = scanned.sortedWith(
+            compareBy({ rootOrder.getValue(it.page.root) }, { observed.getValue(it.page) == null }),
+        )
+        // The witness records what each walked path was OBSERVED to carry, not merely that it was walked - the same
+        // shape `IndexBuilder` keeps, and what [BindingVisibility.isOwner] needs to tell a reused path apart from an
+        // unmaterialized page witnessing itself.
+        val witnessed: Map<RootedPath, Witness> = observed.mapValues { (_, id) -> Witness(id) }
         val claimed = HashMap<RootedPageId, RootedPath>()
         val patched = HashMap<RootedPath, PlannedWrite>()
         // The SAME supersession rule `IndexBuilder` resolves and binds under (C0) - one object, so the two passes
         // cannot drift into disagreeing about whose id is whose. This pass mints no proofs either.
-        val supersession = Supersession(witnessed = witnessed, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
+        val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
 
         val pages = drafts.map { draft ->
             val assignment = identity.resolve(
                 path = draft.page,
-                rawFrontmatterId = patcher.readIdValue(draft.bytes),
+                rawFrontmatterId = observedRaw.getValue(draft.page),
                 mappedId = idMap.find(draft.page)?.id,
                 // Duplicate-detection seam, ROOT-SCOPED to this draft's own root (per-root identity, C5): within-run
                 // claims first, then id_map bindings classified by the shared D16 rule, then the TOMBSTONES - a
@@ -258,7 +294,9 @@ class AdoptionPass(
                 ownerOf = { id ->
                     claimed[RootedPageId(draft.page.root, id)]
                         ?: idMap.bindingInRoot(draft.page.root, id)
-                            ?.takeIf { BindingVisibility.isLive(it, witnessed, scannedRoots, registeredRoots, supersession) }
+                            ?.takeIf {
+                                BindingVisibility.isOwner(it, witnessed, scannedRoots, registeredRoots, supersession)
+                            }
                             ?.path
                         ?: idMap.retiredAt(draft.page.root, id)?.path
                 },

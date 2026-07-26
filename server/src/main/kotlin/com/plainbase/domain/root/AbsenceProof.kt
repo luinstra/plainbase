@@ -21,10 +21,11 @@ import com.plainbase.domain.page.PageId
  *    becoming a 404.
  *  - **CONTEST** - WITHIN one root, two pages resolve to the same id and BOTH are witnessed (the same id in two
  *    DIFFERENT roots is legal post-flip and contests nothing, C5). The PREVIOUSLY-BOUND path keeps the id (on first
- *    detection, the earlier of the two in the pass's rank-then-path resolve order); the loser reassigns to a fresh id
- *    and records a `DuplicateId` (`PageIdentityService`). Registry rank compares ROOTS, so it decides nothing here -
- *    within one root there is only path/scan order. Nothing is tombstoned, because nothing DIED: the contested id is
- *    still live, at its keeper, and the permalink follows the id.
+ *    detection, whichever the pass resolves first); the loser reassigns to a fresh id and records a `DuplicateId`
+ *    (`PageIdentityService`). Registry rank compares ROOTS, so it decides nothing here - within one root the
+ *    order is the caller's: `IndexBuilder` takes frontmatter-carrying pages first and then path, while
+ *    `AdoptionPass` does the same, sharing the gate. Nothing is tombstoned, because nothing DIED: the contested
+ *    id is still live, at its keeper, and the permalink follows the id.
  *  - **ABSENCE** - we did NOT see it. *This is the only one that needs a proof, and it is the only one that
  *    has ever destroyed a corpus.*
  *
@@ -193,7 +194,13 @@ data class GitCheckpointAdvance(
 
 /**
  * What a pass actually SAW at one rooted path: the page was READ, and [observedId] is the id its frontmatter
- * carried (null = it carries none, i.e. an unmaterialized page).
+ * carried, or null when the file carries no PARSEABLE `id:`.
+ *
+ * **null does NOT mean "unmaterialized".** It means the file has no usable id right now, and that covers three
+ * different situations: a page that never had one (pre-materialized identity is path-keyed), a MATERIALIZED page
+ * whose `id:` line was stripped or corrupted externally, and a value too malformed for `PageId.of`. Telling the
+ * first apart from the second is precisely what `BindingVisibility.isOwner` needs the binding's `materialized`
+ * flag for - conflate them in either direction and a durable permalink moves to the wrong page.
  *
  * **The witness must carry IDENTITY, not just presence.** A bare path-witness cannot decide anything: the
  * supersession gate needs to know that the incumbent NO LONGER CARRIES the id, and reading a *path* does not

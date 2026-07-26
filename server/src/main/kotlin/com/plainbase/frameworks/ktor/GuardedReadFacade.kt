@@ -61,9 +61,10 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  *
  * **One snapshot per request.** Each id-addressed read takes `indexBuilder.current` exactly ONCE into a local and
  * threads that immutable object through the root resolution, the availability check and the page resolve. A rebuild
- * landing between two reads can re-award a cross-root duplicate id to another root - possibly one whose section is
- * a carried-forward one from a root that is DOWN - so a facade that gated on read #1 and served from read #2 could
- * answer 200 with a downed root's stale bytes. Threading one object makes that unreachable rather than unlikely.
+ * landing between two reads can change what that SAME rooted id answers - the page may be gone, or its section may
+ * now be one carried forward from a root that went DOWN since the gate ran - so a facade that gated on read #1 and
+ * served from read #2 could answer 200 with a downed root's stale bytes, or 404 a page it had just authorized.
+ * Threading one object makes that unreachable rather than unlikely.
  */
 class GuardedReadFacade(
     private val policy: PolicyService,

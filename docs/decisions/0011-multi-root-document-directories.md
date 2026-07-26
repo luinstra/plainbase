@@ -1,7 +1,8 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted, SUPERSEDED IN PART by per-root page identity (see the superseding note
-  directly below). D1-D18 were frozen at C4 merge; the later C5 chunk did re-open D2 and D17.
+- **Status:** Accepted, SUPERSEDED IN PART by
+  [ADR-0012](0012-per-root-page-identity.md) (see the superseding note directly below). D1-D18 were
+  frozen at C4 merge; the later C5 chunk did re-open D2 and D17.
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -31,8 +32,9 @@ the original reasoning stays legible; where the frozen text and this note disagr
   list (`PermalinkRoute.kt:156`), while an id-addressed REST read answers **409 `ambiguous_page_id`**
   (`RouteSupport.kt:412`).
 
-Authority: the C5 commits on `multi-root` (`d934220` plus its four follow-ups, PR #14). A
-replacement identity ADR is C7's job; until that lands, this note is the pointer.
+Authority: the C5 commits on `multi-root` (`d934220` plus its four follow-ups, PR #14). The
+replacement decision record is [ADR-0012](0012-per-root-page-identity.md); read it for current
+behavior, and this note only as the in-place warning on D2 and D17.
 
 ## Context
 

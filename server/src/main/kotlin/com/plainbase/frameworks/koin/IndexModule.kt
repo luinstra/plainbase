@@ -28,8 +28,6 @@ val indexModule = module {
     single<IdProvider> { UuidV7IdProvider() }
     // The proposal-id mint — a SEPARATE port (IdProvider is typed to PageId, can't mint a ProposalId).
     single<ProposalIdProvider> { UuidV7ProposalIdProvider() }
-    // The D17 rank source is the registry's ONE rank definition, wired to the identity service and
-    // the builder alike - never two lambdas.
     single { PageIdentityService(get()) }
     single { FrontmatterPatcher() }
     single { UrlAliasRegistry(get()) }

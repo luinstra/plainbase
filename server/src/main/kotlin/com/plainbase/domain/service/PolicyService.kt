@@ -37,8 +37,9 @@ import kotlin.time.Clock
  * ONE formatting rule (`{root}:{resource}`, or the bare resource when no registered root owns the target).
  * `checkRead`/`checkApprove`/`checkManage` keep their plain-`String` resource: a rooted CALL SITE formats it
  * via `RootedResource.audit` (URL-space and path resources gain the root prefix), while an ID-addressed
- * resource stays the bare global id - a page id is unique across roots, and the row's rooted context arrives
- * through the write gates.
+ * resource stays the bare id. That is NOT because an id is unique across roots - since ADR-0012 it may name a
+ * page in several roots at once - but because read policy is global and does not audit; the rooted context
+ * that a decision has to be recorded against arrives through the WRITE gates.
  *
  * Mode-aware ([enforced]): under `auth.mode = off` (loopback-dev — the phase-4 plan's "open behavior") the
  * matrix is NOT consulted — every principal is authorized (a grant is minted, reads pass) AND a mutating

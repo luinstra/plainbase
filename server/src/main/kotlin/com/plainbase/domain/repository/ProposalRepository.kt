@@ -127,8 +127,9 @@ class ProposalRow(
     /**
      * The root [targetPath] lives under (ADR-0011 D18). AUTHORITATIVE for BOTH operations — it is the root apply
      * writes into. A create has no page to resolve one from; an edit has one and still does not follow it, because
-     * the D17 cross-root contest re-awards an ID without MOVING a file, and an approved edit must land in the root
-     * it was proposed, reviewed and gated against (the id still picks the PATH, so an in-root move applies). It is
+     * the same id may be live under SEVERAL roots at once (ADR-0012), so following it would be picking a root
+     * rather than reading one, and an approved edit must land in the root it was proposed, reviewed and gated
+     * against (the id still picks the PATH, so an in-root move applies). It is
      * IMMUTABLE for the row's life, which is what lets the pre-claim guards read it without a status TOCTOU.
      */
     val root: RootName,
