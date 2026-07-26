@@ -5,6 +5,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BootRefusal
 import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
@@ -1066,8 +1067,17 @@ data class PlainbaseConfig(
                 )
             }
             val name = RootName.of(key) ?: throw IllegalArgumentException(
-                "roots.$key is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                "roots.$key is not a valid root name (a lowercase slug [a-z][a-z0-9]*(-[a-z0-9]+)*, 2-32 chars)",
             )
+            // This one REFUSES where the shadow check could only warn, and the difference is who caused it: a
+            // reserved-name collision comes from operator CONFIG, so refusing cannot let an author brick a restart
+            // by creating a top-level folder. Both HOCON files funnel through here, so there is no second check.
+            if (ReservedSegments.isReserved(name)) {
+                throw IllegalArgumentException(
+                    "roots.$key: '$key' is a reserved segment - Plainbase owns that top-level URL, or expects to. " +
+                        "Rename this root.",
+                )
+            }
             val entry = (value as? ConfigObject)?.toConfig()
                 ?: throw IllegalArgumentException("roots.$key must be a block: roots.$key { path = ... }")
             val backend = entry.stringOrNull("backend")?.trim() ?: "local"
@@ -1308,7 +1318,7 @@ data class PlainbaseConfig(
                 .mapNotNull { key ->
                     val name = RootName.of(key) ?: throw IllegalArgumentException(
                         "auth.agentDirectCommit.roots.$key is not a valid root name " +
-                            "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                            "(a lowercase slug [a-z][a-z0-9]*(-[a-z0-9]+)*, 2-32 chars)",
                     )
                     require(name in registered) {
                         "auth.agentDirectCommit.roots.$key names no configured root (declared roots: " +
@@ -1517,6 +1527,8 @@ data class RootsConfig private constructor(
             // to produce one, and buildRoots' operator-facing overlap refusal is the message that should fire first.
             val duplicates = snapshot.groupBy { it.name }.filterValues { it.size > 1 }.keys
             require(duplicates.isEmpty()) { "duplicate root name(s): ${duplicates.joinToString(", ") { it.value }}" }
+            val reserved = snapshot.map { it.name }.filter(ReservedSegments::isReserved)
+            require(reserved.isEmpty()) { "reserved root name(s): ${reserved.joinToString(", ") { it.value }}" }
             return RootsConfig(snapshot, origin, mainDeclared, managed)
         }
 

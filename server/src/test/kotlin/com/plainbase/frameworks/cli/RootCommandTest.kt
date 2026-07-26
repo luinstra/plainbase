@@ -129,6 +129,26 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("root add rejects a reserved segment with exit 2 - a bad ARGUMENT, refused before the lock") {
+        world { w ->
+            val err = captureStderr {
+                w.root("add", "api", "/tmp/x") shouldBe 2
+                w.root("add", "pb-internal", "/tmp/x") shouldBe 2
+            }
+            err shouldContain "'api' is a reserved segment"
+            err shouldContain "'pb-internal' is a reserved segment"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
+    test("root add's invalid-name refusal quotes the grammar the loader enforces") {
+        // The one gate on this copy of the regex text. Three other copies of it are hand-maintained and
+        // unasserted; this is the operator's first encounter with the rule, so it is the one worth pinning.
+        world { w ->
+            captureStderr { w.root("add", "Bad_Name", "/tmp/x") shouldBe 2 } shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
+        }
+    }
+
     test("root add rejects a page-id-shaped name with the permalink ambiguity message") {
         world { w ->
             val err = captureStderr {
@@ -591,15 +611,18 @@ class RootCommandTest : FunSpec({
     }
 
     test("every legal root name ROUND-TRIPS through the real loader - including the HOCON directives among them") {
-        // `include` is a legal RootName ([a-z0-9][a-z0-9-]*) AND a HOCON keyword. Written as a bare key,
+        // `include` is a legal RootName ([a-z][a-z0-9]*(-[a-z0-9]+)*) AND a HOCON keyword. Written as a bare key,
         // `include {` is read as an include DIRECTIVE, not a key, and the file `plainbase root` had just
         // certified bootable does not parse - the one thing this command exists to make impossible.
         //
         // The assertion is the ROUND TRIP, deliberately: a test that asserted on serialize()'s STRING would have
         // watched this go past, because the string looked fine. What HOCON DOES with those bytes is the bug, so
         // the real loader has to be the one to answer.
+        //
+        // A digit-leading key (`9lives`) used to be in this list. The grammar no longer admits one, so that
+        // hazard is unreachable rather than untested; `RootNameTest` pins the rejection.
         world { w ->
-            val names = listOf("include", "9lives", "a-b-c", "true")
+            val names = listOf("include", "a-b-c", "true")
             names.forEach { name ->
                 captureStdout { w.root("add", name, Files.createDirectory(w.tmp(name)).toString()) shouldBe 0 }
             }

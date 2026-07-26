@@ -105,9 +105,11 @@ class RestRoutingTest : FunSpec({
                 response.errorCode() shouldBe "invalid_page_id"
             }
 
+            // The deleted `/p/r/{root}/{id}` form. `r` is a single character, which the root-name grammar does
+            // not admit, so the dispatcher names the segment it could not read rather than blaming the id.
             val deleted = client.get("/p/" + "r/main/$deployGuideId")
             deleted.status shouldBe HttpStatusCode.BadRequest
-            deleted.errorCode() shouldBe "invalid_page_id"
+            deleted.errorCode() shouldBe "invalid_root"
 
             val encodedSlash = client.get("/p/main%2F$deployGuideId")
             encodedSlash.status shouldBe HttpStatusCode.BadRequest

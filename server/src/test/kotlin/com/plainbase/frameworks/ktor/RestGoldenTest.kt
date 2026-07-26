@@ -48,7 +48,9 @@ class RestGoldenTest : FunSpec({
     val welcomeHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("index.md"))
 
     // The §A4 citation-uri grammar: plainbase://{root}/{lowercase-uuid}["#"heading]"@"(git-sha | sha256:hex),
-    // root-qualified (per-root identity, C5); {root} is the [a-z0-9][a-z0-9-]* slug.
+    // root-qualified (per-root identity, C5). The {root} alternation is deliberately LOOSER than the root-name
+    // grammar: it only has to recognize the segment, and a matcher that tracked every tightening would go red
+    // on the tightening rather than on a broken citation.
     val uriGrammar = Regex(
         "^plainbase://[a-z0-9][a-z0-9-]*/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" +
             "(#[^@]+)?@([0-9a-f]{7,40}|sha256:[0-9a-f]{64})$",

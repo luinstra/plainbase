@@ -98,7 +98,18 @@ class RootsConfigTest : FunSpec({
         withDataDir("""roots { main { path = "/roots/m" }, "Bad_Name" { path = "/roots/b" } }""") { env ->
             val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
             failure.message shouldContain "roots.Bad_Name"
-            failure.message shouldContain "[a-z0-9][a-z0-9-]*"
+            failure.message shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
+        }
+    }
+
+    test("a reserved segment fails naming the key, even though it is a legal slug") {
+        // `api` parses fine; what refuses it is the reserved list, so the message has to say that rather than
+        // repeat the grammar. The fixture declares `main` because a block that omits the primary is refused
+        // FIRST, and this row would then pass without ever reaching the reserved check.
+        withDataDir("""roots { main { path = "/roots/m" }, api { path = "/roots/a" } }""") { env ->
+            val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
+            failure.message shouldContain "roots.api"
+            failure.message shouldContain "reserved"
         }
     }
 
@@ -342,5 +353,15 @@ class RootsConfigTest : FunSpec({
         shouldThrow<IllegalArgumentException> {
             RootsConfig.of(list = listOf(root("zeta")), origin = RootsOrigin.EXPLICIT)
         }.message shouldContain "no 'main' root"
+    }
+
+    test("a directly-constructed RootsConfig with a reserved name is refused too - the parser is not the only door") {
+        // main is present and there is no duplicate, so the two requires above this one both pass and the
+        // reserved check is the sole possible cause.
+        val failure = shouldThrow<IllegalArgumentException> {
+            RootsConfig.of(list = listOf(root("main"), root("assets")), origin = RootsOrigin.EXPLICIT)
+        }
+        failure.message shouldContain "assets"
+        failure.message shouldContain "reserved"
     }
 })

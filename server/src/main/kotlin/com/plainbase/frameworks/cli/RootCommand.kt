@@ -5,6 +5,7 @@ import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
@@ -592,9 +593,15 @@ object RootCommand {
                     else ->
                         output.error(
                             "root add: '$rawName' is not a valid root name " +
-                                "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                                "(a lowercase slug [a-z][a-z0-9]*(-[a-z0-9]+)*, 2-32 chars)",
                         )
                 }
+                null
+            }
+
+            // The `name != null` guard is what lets this sit anywhere after the arm above without a smart cast.
+            name != null && ReservedSegments.isReserved(name) -> {
+                output.error("root add: '${name.value}' is a reserved segment - Plainbase owns that top-level URL, or expects to")
                 null
             }
 
@@ -615,7 +622,7 @@ object RootCommand {
     private fun parseRemove(argv: List<String>, output: CommandOutput): RootArgs? {
         if (argv.size != 1) return usage(output)
         val name = RootName.of(argv[0]) ?: run {
-            output.error("root remove: '${argv[0]}' is not a valid root name (a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)")
+            output.error("root remove: '${argv[0]}' is not a valid root name (a lowercase slug [a-z][a-z0-9]*(-[a-z0-9]+)*, 2-32 chars)")
             return null
         }
         return RootArgs.Remove(name)
