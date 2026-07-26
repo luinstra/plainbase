@@ -501,11 +501,23 @@ class IndexBuilder(
         // Carry each SKIPPED root's last-good section forward, so no listener sees a deletion (a never-scanned
         // root has no previous section and simply contributes none - `section` is total). In registry rank
         // order, like the sources themselves, so the snapshot is deterministic either way.
-        val scannedIds = scanned.flatMap { section -> section.pages.map { it.rooted } }.toSet()
+        //
+        // Nothing is filtered out of a carried section. C7 deleted a filter that dropped any carried page whose
+        // ROOTED id a scanned root also held; per-root identity had already made it a provable no-op, and the
+        // load-bearing reason is PROVENANCE, not that the roots happen to differ: every page in a section carries
+        // that section's own root (true at each producer, and asserted by PageIndex's init), the elvis below fires
+        // only for a root with NO scanned section, and RootedPageId equality includes the root - so a carried
+        // page's rooted id cannot appear among the scanned ones. That proof depends on the elvis meaning exactly
+        // "no scanned section for this root". Re-key the carry on scan COMPLETENESS and a carried root could
+        // coexist with a scanned section of its own root, at which point the deadness needs re-proving. If that
+        // ever happens it now fails LOUDLY in PageIndex's init - on the duplicate-root-section `require` if the
+        // carry adds a second section for the root, or on the duplicate-(root, id) `check` if the pages were merged
+        // into the scanned one - rather than silently dropping the page and logging a warning, which is the
+        // better of the two failures.
         val sections = sources.mapNotNull { source ->
             val root = source.root.name
             scanned.firstOrNull { it.root == root }
-                ?: previous.sections.firstOrNull { it.root == root }?.let { carryForward(it, scannedIds) }
+                ?: previous.sections.firstOrNull { it.root == root }
         }
 
         val snapshot = PageIndex(sections)
@@ -1006,27 +1018,6 @@ class IndexBuilder(
      */
     fun renderPreview(root: RootName, sourcePath: TreePath, bytes: ByteArray): RenderedPage =
         rendererFactory(current.view(root)).render(sourcePath, bytes)
-
-    /**
-     * A skipped root's last-good section, minus any page whose ROOTED id a SCANNED root now holds.
-     *
-     * **Per-root identity (C5) makes this filter a PROVABLE PERMANENT NO-OP, flagged for C7 deletion (not removed
-     * mid-flip, per the STOP-4 discipline for dead-looking safety code).** [scannedIds] is built only from SCANNED
-     * sections, and a carried section belongs to a root NO scanned section has, so `it.rooted in scannedIds` is
-     * always false for a carried page (the roots differ). `kept.size == section.pages.size` therefore always holds,
-     * the early return always fires, and the [logger] warn below is unreachable. Before the flip the filter was
-     * keyed by BARE id and could drop a down root's page when a scanned root shared that id; per-root identity makes
-     * a same id in two roots legal, so no carried page is ever dropped. The deletion and the KDoc rewrite are C7.
-     */
-    private fun carryForward(section: RootSection, scannedIds: Set<RootedPageId>): RootSection {
-        val kept = section.pages.filterNot { it.rooted in scannedIds }
-        if (kept.size == section.pages.size) return section
-        logger.warn {
-            "carrying unavailable root '${section.root}' forward WITHOUT ${section.pages.size - kept.size} page(s) whose id a " +
-                "scanned root now holds - its durable rows are untouched, and the pages return when the root does"
-        }
-        return section.copy(pages = kept)
-    }
 
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex, retired: Set<RootedPageId>) {

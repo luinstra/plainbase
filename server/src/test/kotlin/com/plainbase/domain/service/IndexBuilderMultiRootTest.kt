@@ -330,9 +330,10 @@ class IndexBuilderMultiRootTest : FunSpec({
         }
     }
 
-    test("R17: a carried down-root page whose bare id a scanned root now holds SURVIVES the snapshot (rooted carry filter)") {
-        // The carry-forward filter is keyed by ROOTED id since the flip, so a down root's page is never dropped just
-        // because a scanned root shares its bare id. Both pages, in their own roots, sit in the same snapshot.
+    test("R17: a carried down-root page whose bare id a scanned root now holds SURVIVES the snapshot (nothing filters a carry)") {
+        // Nothing filters a carried section any more (C7 deleted the rooted-id filter as a provable no-op), so a
+        // down root's page is never dropped because a scanned root shares its bare id. Both pages, in their own
+        // roots, sit in the same snapshot. This row is the regression guard on that, not a proof of the deletion.
         withTrees { mainDir, extraDir ->
             writePage(extraDir, "mirror/page.md", identified(contested))
             writePage(extraDir, "mirror/keep.md", "# Keep\n")
