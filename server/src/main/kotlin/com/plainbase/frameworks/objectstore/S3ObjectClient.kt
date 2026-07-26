@@ -98,7 +98,7 @@ class S3ObjectClient(
                 // Stream the body straight to disk - never a whole-body in-heap array (B-C3). READ_CHUNK at a time.
                 val channel = response.bodyAsChannel()
                 var written = 0L
-                try {
+                runCatching {
                     Files.newOutputStream(target).use { out ->
                         val chunk = ByteArray(READ_CHUNK)
                         while (true) {
@@ -108,9 +108,9 @@ class S3ObjectClient(
                             written += read
                         }
                     }
-                } catch (t: Throwable) {
+                }.onFailure { failure ->
                     channel.cancel(null) // release the connection on an abnormal mid-stream exit (mirrors readBody)
-                    throw t
+                    throw failure
                 }
                 // Truncation guard: if a Content-Length was declared, a short body (Ktor may surface a cut
                 // transfer as a clean EOF) is a corrupt download - refuse so the caller's bootRefusal fires,
@@ -362,22 +362,42 @@ class S3ObjectClient(
     /** The length of [bytes] with any incomplete trailing UTF-8 multi-byte sequence trimmed. */
     private fun completeUtf8End(bytes: ByteArray): Int {
         val end = bytes.size
-        if (end == 0 || bytes[end - 1].toInt() and 0x80 == 0) return end // empty or ends on an ASCII byte
+        if (end == 0 || bytes[end - 1].toInt() and UTF8_CONTINUATION_PREFIX == 0) return end // empty or ends on an ASCII byte
         var k = 0
-        while (k < 3 && end - 1 - k >= 0 && bytes[end - 1 - k].toInt() and 0xC0 == 0x80) k++ // trailing continuation bytes
+        while (
+            k < MAX_UTF8_CONTINUATION_BYTES &&
+            end - 1 - k >= 0 &&
+            bytes[end - 1 - k].toInt() and UTF8_LEAD_MASK == UTF8_CONTINUATION_PREFIX
+        ) {
+            k++
+        }
         val leadIdx = end - 1 - k
         if (leadIdx < 0) return end
-        val lead = bytes[leadIdx].toInt() and 0xFF
+        val lead = bytes[leadIdx].toInt() and UNSIGNED_BYTE_MASK
         val need = when {
-            lead and 0xE0 == 0xC0 -> 2
-            lead and 0xF0 == 0xE0 -> 3
-            lead and 0xF8 == 0xF0 -> 4
+            lead and UTF8_TWO_BYTE_MASK == UTF8_TWO_BYTE_PREFIX -> UTF8_TWO_BYTE_LENGTH
+            lead and UTF8_THREE_BYTE_MASK == UTF8_THREE_BYTE_PREFIX -> UTF8_THREE_BYTE_LENGTH
+            lead and UTF8_FOUR_BYTE_MASK == UTF8_FOUR_BYTE_PREFIX -> UTF8_FOUR_BYTE_LENGTH
             else -> return end // a stray continuation byte with no lead - leave it, String() handles it
         }
         return if (k + 1 < need) leadIdx else end // incomplete sequence: trim it; complete: keep
     }
 
     companion object {
+        private const val MAX_UTF8_CONTINUATION_BYTES = 3
+        private const val UTF8_LEAD_MASK = 0xC0
+        private const val UTF8_CONTINUATION_PREFIX = 0x80
+        private const val UTF8_TWO_BYTE_MASK = 0xE0
+        private const val UTF8_TWO_BYTE_PREFIX = 0xC0
+        private const val UTF8_THREE_BYTE_MASK = 0xF0
+        private const val UTF8_THREE_BYTE_PREFIX = 0xE0
+        private const val UTF8_FOUR_BYTE_MASK = 0xF8
+        private const val UTF8_FOUR_BYTE_PREFIX = 0xF0
+        private const val UTF8_TWO_BYTE_LENGTH = 2
+        private const val UTF8_THREE_BYTE_LENGTH = 3
+        private const val UTF8_FOUR_BYTE_LENGTH = 4
+        private const val UNSIGNED_BYTE_MASK = 0xFF
+
         /** R9 test hook (counter-proven boot laziness, never reasoned from `single {}` laziness). */
         internal val constructions = java.util.concurrent.atomic.AtomicInteger()
 

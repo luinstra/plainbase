@@ -85,6 +85,13 @@ internal class CreateGates(
      *     the lexical [TreePath] looks contained.
      */
     fun rejectionReason(path: TreePath, target: Path): String? {
+        val onDiskParent = target.parent
+        return scanSkippedSegmentReason(path)
+            ?: excludedSubtreeReason(onDiskParent)
+            ?: existingAncestorReason(onDiskParent)
+    }
+
+    private fun scanSkippedSegmentReason(path: TreePath): String? {
         // (1) Scan-skipped name: check each content-relative segment along the path against the SAME
         // name-skip predicate scan uses, so no scan-skipped name (incl. `_folder.yaml`) can be created.
         var relative: TreePath? = null
@@ -94,6 +101,10 @@ internal class CreateGates(
                 return "segment '$segment' is one the scan skips (_folder.yaml / dotfile / ignore glob — not content)"
             }
         }
+        return null
+    }
+
+    private fun excludedSubtreeReason(onDiskParent: Path?): String? =
         // (2)+(3) Walk the existing ancestor directories, root-exclusive: none may be a symlink, and the
         // nearest existing one must resolve inside root. The store resolves [target] with the same
         // P4-aware resolution the create itself uses, so the check sees exactly the dirs the create
@@ -101,10 +112,14 @@ internal class CreateGates(
         // excludedDirs is the EFFECTIVE set (strictly inside root), shared with scan — so an ancestor
         // DATA_DIR (a legal layout) is absent here and can't make every create reject; only a DATA_DIR
         // genuinely nested under root matches and rejects a target beneath it.
-        val onDiskParent = target.parent
-        if (onDiskParent != null && excludedDirs.any { onDiskParent.toAbsolutePath().normalize().startsWith(it) }) {
-            return "target lies under an excluded subtree (DATA_DIR)"
+        when {
+            onDiskParent != null && excludedDirs.any { onDiskParent.toAbsolutePath().normalize().startsWith(it) } ->
+                "target lies under an excluded subtree (DATA_DIR)"
+
+            else -> null
         }
+
+    private fun existingAncestorReason(onDiskParent: Path?): String? {
         // Walk the on-disk ancestor dirs from the target's parent up to (and including) root. Stop once
         // we reach root; never inspect a dir outside it. The FIRST existing one is the nearest existing
         // ancestor whose real path must stay inside root.
@@ -128,8 +143,12 @@ internal class CreateGates(
             if (ancestor == root) break
             ancestor = ancestor.parent
         }
-        if (nearestExisting != null && !isWithinRoot(root, nearestExisting)) return "the target resolves outside the content root"
-        return null
+        return when {
+            nearestExisting != null && !isWithinRoot(root, nearestExisting) ->
+                "the target resolves outside the content root"
+
+            else -> null
+        }
     }
 
     /**
@@ -231,16 +250,28 @@ internal fun isWithinRoot(root: Path, target: Path): Boolean =
  * NON-NULL `IOException` by contract, so [checkNotNull] asserts a true invariant - the house idiom.
  */
 internal fun <T> withDirectoryStream(dir: Path, body: (DirectoryStream<Path>) -> T): T =
-    try {
+    runCatching {
         Files.newDirectoryStream(dir).use(body)
-    } catch (e: DirectoryIteratorException) {
-        throw checkNotNull(e.cause) { "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)" }
+    }.getOrElse { failure ->
+        when (failure) {
+            is DirectoryIteratorException ->
+                throw checkNotNull(failure.cause) {
+                    "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)"
+                }
+            else -> throw failure
+        }
     }
 
 /** The glob-filtered twin of [withDirectoryStream], for the DR husk reap. */
 internal fun <T> withDirectoryStream(dir: Path, glob: String, body: (DirectoryStream<Path>) -> T): T =
-    try {
+    runCatching {
         Files.newDirectoryStream(dir, glob).use(body)
-    } catch (e: DirectoryIteratorException) {
-        throw checkNotNull(e.cause) { "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)" }
+    }.getOrElse { failure ->
+        when (failure) {
+            is DirectoryIteratorException ->
+                throw checkNotNull(failure.cause) {
+                    "DirectoryIteratorException always wraps an IOException (UnixDirectoryStream:169,189)"
+                }
+            else -> throw failure
+        }
     }

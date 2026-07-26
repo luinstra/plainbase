@@ -164,10 +164,11 @@ object ManagedRootsFile {
     private fun copyPreservingPrevious(temp: Path, path: Path, hocon: String, atomics: FileAtomics) {
         val backup = if (Files.isRegularFile(path)) path.resolveSibling("${path.fileName}$BACKUP_SUFFIX") else null
         backup?.let { Files.copy(path, it, StandardCopyOption.REPLACE_EXISTING) }
-        try {
+        runCatching {
             atomics.copyReplace(temp, path)
             verifyLanded(path, hocon)
-        } catch (e: Exception) {
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
             if (backup == null) {
                 Files.deleteIfExists(path) // a partial FIRST write is not a config, and absence is what preceded it
             } else {
@@ -175,7 +176,7 @@ object ManagedRootsFile {
                     .onSuccess { Files.deleteIfExists(backup) }
                     .onFailure { logger.error(it) { "could not restore $path after a failed write: the previous config is in $backup" } }
             }
-            throw e
+            throw failure
         }
         backup?.let { Files.deleteIfExists(it) }
     }

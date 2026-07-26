@@ -471,7 +471,6 @@ class LocalContentStore(
     override fun stat(path: TreePath): ContentStat? {
         val snap = snapshot.load()
         // Indexed-only gate (see class header), file OR directory; unindexed -> null per the contract.
-        if (!snap.isIndexedEntry(path)) return null
         val osPath = resolveOnDisk(path, snap)
         // Mirror read()'s structure: existence probe (no-follow, exists not isRegularFile - stat serves
         // files AND directories) first, then containment proven BEFORE reading the returned attributes.
@@ -480,22 +479,36 @@ class LocalContentStore(
         // attributes of an unproven path. The one still-warning case - a dangling/escaping symlink
         // swapped in post-scan - warns and returns null, unchanged (safe). Two filesystem hits where
         // one sufficed - stat is not a hot path, and the ordering discipline is worth it.
-        if (!Files.exists(osPath, LinkOption.NOFOLLOW_LINKS)) return null
-        if (!isWithinRoot(root, osPath)) {
-            logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
-            return null
+        return when {
+            !snap.isIndexedEntry(path) -> null
+            !Files.exists(osPath, LinkOption.NOFOLLOW_LINKS) -> null
+            !isWithinRoot(root, osPath) -> {
+                logger.warn { "Refusing stat of '${path.value}': resolved path escapes content root (links are not content)" }
+                null
+            }
+
+            else -> readContentStat(path, osPath)
         }
-        val attrs = try {
-            Files.readAttributes(osPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-        } catch (_: IOException) {
-            return null
-        }
-        return ContentStat(
-            path = path,
-            isDirectory = attrs.isDirectory,
-            sizeBytes = if (attrs.isRegularFile) attrs.size() else 0L, // non-regular -> 0L (preserved)
-        )
     }
+
+    private fun readContentStat(path: TreePath, osPath: Path): ContentStat? =
+        runCatching {
+            Files.readAttributes(osPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        }.fold(
+            onSuccess = { attrs ->
+                ContentStat(
+                    path = path,
+                    isDirectory = attrs.isDirectory,
+                    sizeBytes = if (attrs.isRegularFile) attrs.size() else 0L, // non-regular -> 0L (preserved)
+                )
+            },
+            onFailure = { failure ->
+                when (failure) {
+                    is IOException -> null
+                    else -> throw failure
+                }
+            },
+        )
 
     override fun list(dir: TreePath?): List<ContentEntry> {
         val snap = snapshot.load()
@@ -599,23 +612,65 @@ class LocalContentStore(
 
     /** The CAS body, verbatim. It is a separate frame so the exit wrapper actually WRAPS it - a `return` from an
      *  inlined lambda would return from `compareAndSwapWrite` itself and walk straight past the classifier. */
-    private fun casWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
-        val snap = snapshot.load()
-        // Indexed-only gate (see read/the class header): a path the scan skipped is not a CAS target.
-        if (!snap.isIndexedFile(path)) return CasResult.Deleted
-        val target = resolveOnDisk(path, snap)
-        // One identity capture: read the current bytes AND the file key + mtime in the same breath, so
-        // the recheck before the rename compares against exactly what the hash was computed over.
-        val before = try {
-            if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(root, target)) return CasResult.Deleted
-            val attrs = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-            FileIdentity(bytes = Files.readAllBytes(target), fileKey = attrs.fileKey(), modified = attrs.lastModifiedTime())
-        } catch (e: IOException) {
-            return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+    private fun casWrite(
+        path: TreePath,
+        baseHash: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): CasResult = when (val target = readCasTarget(path)) {
+            CasTarget.Missing -> CasResult.Deleted
+            is CasTarget.Unreadable -> CasResult.Unreadable(target.reason)
+            is CasTarget.Readable -> compareAndReplace(path, target, baseHash, bytes, hasher)
         }
-        val beforeHash = hasher(before.bytes)
-        if (beforeHash != baseHash) return CasResult.Mismatch(currentBytes = before.bytes, currentHash = beforeHash)
 
+    private fun readCasTarget(path: TreePath): CasTarget {
+        val snap = snapshot.load()
+        val target = resolveOnDisk(path, snap)
+        return when {
+            // Indexed-only gate (see read/the class header): a path the scan skipped is not a CAS target.
+            !snap.isIndexedFile(path) -> CasTarget.Missing
+            !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || !isWithinRoot(root, target) -> CasTarget.Missing
+            else ->
+                runCatching {
+                    // One identity capture: read the current bytes AND the file key + mtime in the same breath, so
+                    // the recheck before the rename compares against exactly what the hash was computed over.
+                    val attrs = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                    FileIdentity(bytes = Files.readAllBytes(target), fileKey = attrs.fileKey(), modified = attrs.lastModifiedTime())
+                }.fold(
+                    onSuccess = { CasTarget.Readable(target, it) },
+                    onFailure = { failure ->
+                        when (failure) {
+                            is IOException -> CasTarget.Unreadable(failure.message ?: failure::class.simpleName ?: "io error")
+                            else -> throw failure
+                        }
+                    },
+                )
+        }
+    }
+
+    private fun compareAndReplace(
+        path: TreePath,
+        target: CasTarget.Readable,
+        baseHash: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): CasResult {
+        val currentHash = hasher(target.identity.bytes)
+        return when {
+            currentHash != baseHash ->
+                CasResult.Mismatch(currentBytes = target.identity.bytes, currentHash = currentHash)
+
+            else -> replaceCasTarget(path, target.path, target.identity, bytes, hasher)
+        }
+    }
+
+    private fun replaceCasTarget(
+        path: TreePath,
+        target: Path,
+        before: FileIdentity,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): CasResult {
         logger.info { "CAS-writing content file: ${path.value} (${bytes.size} bytes)" }
         // A pre-rename I/O failure (temp create/write, the re-stat, or the move) must NOT escape as an
         // exception: WritePipeline has already marked the page dirty, so an uncaught throw would orphan
@@ -623,40 +678,78 @@ class LocalContentStore(
         // same typed outcome as the read/stat section - so the pipeline restores-or-clears the mark.
         var tmp: Path? = null
         try {
-            tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
-            Files.write(tmp, bytes)
-            // Re-stat the target immediately before the rename: a non-cooperating external write since
-            // the read changes the file key or mtime - detect it rather than clobber it.
-            val now = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
-            if (now.fileKey() != before.fileKey || now.lastModifiedTime() != before.modified) {
-                val current = try {
-                    Files.readAllBytes(target)
-                } catch (_: IOException) {
-                    null
+            return runCatching {
+                tmp = Files.createTempFile(target.parent, ".${target.fileName}.", ".tmp")
+                Files.write(tmp, bytes)
+                // Re-stat the target immediately before the rename: a non-cooperating external write since
+                // the read changes the file key or mtime - detect it rather than clobber it.
+                val now = Files.readAttributes(target, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                when {
+                    now.fileKey() != before.fileKey || now.lastModifiedTime() != before.modified -> {
+                        val current = readBytesOrNull(target)
+                        CasResult.Mismatch(currentBytes = current, currentHash = current?.let(hasher))
+                    }
+
+                    else -> moveCasTemp(path, checkNotNull(tmp), target)
+                        ?: CasResult.Written(newHash = hasher(bytes))
                 }
-                return CasResult.Mismatch(currentBytes = current, currentHash = current?.let(hasher))
-            }
-            try {
-                atomics.atomicMove(tmp, target)
-            } catch (_: AtomicMoveNotSupportedException) {
-                logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
-                try {
-                    atomics.copyReplace(tmp, target)
-                } catch (e: IOException) {
-                    // The non-atomic copy may have TRUNCATED/partially replaced the target: report mutated
-                    // so the pipeline keeps the write-ahead mark (reconcile then commits a fully-landed copy
-                    // or drift-skips a partial - operator-visible, never silent corruption). An atomicMove
-                    // or pre-move failure stays targetMutated=false (atomicity → nothing landed).
-                    return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error", targetMutated = true)
-                }
-            }
-            return CasResult.Written(newHash = hasher(bytes))
-        } catch (e: IOException) {
-            return CasResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+            }.fold(
+                onSuccess = { it },
+                onFailure = { failure ->
+                    when (failure) {
+                        is IOException -> CasResult.Unreadable(failure.message ?: failure::class.simpleName ?: "io error")
+                        else -> throw failure
+                    }
+                },
+            )
         } finally {
             tmp?.let { Files.deleteIfExists(it) }
         }
     }
+
+    private fun readBytesOrNull(target: Path): ByteArray? =
+        runCatching { Files.readAllBytes(target) }.fold(
+            onSuccess = { it },
+            onFailure = { failure ->
+                when (failure) {
+                    is IOException -> null
+                    else -> throw failure
+                }
+            },
+        )
+
+    private fun moveCasTemp(path: TreePath, tmp: Path, target: Path): CasResult.Unreadable? =
+        runCatching {
+            atomics.atomicMove(tmp, target)
+        }.fold(
+            onSuccess = { null },
+            onFailure = { failure ->
+                when (failure) {
+                    is AtomicMoveNotSupportedException -> {
+                        logger.warn { "ATOMIC_MOVE unsupported for ${path.value}; falling back to copy+delete (non-atomic)" }
+                        runCatching { atomics.copyReplace(tmp, target) }.fold(
+                            onSuccess = { null },
+                            onFailure = { copyFailure ->
+                                when (copyFailure) {
+                                    // The non-atomic copy may have TRUNCATED/partially replaced the target: report mutated
+                                    // so the pipeline keeps the write-ahead mark (reconcile then commits a fully-landed copy
+                                    // or drift-skips a partial - operator-visible, never silent corruption).
+                                    is IOException ->
+                                        CasResult.Unreadable(
+                                            copyFailure.message ?: copyFailure::class.simpleName ?: "io error",
+                                            targetMutated = true,
+                                        )
+                                    else -> throw copyFailure
+                                }
+                            },
+                        )
+                    }
+                    is IOException ->
+                        CasResult.Unreadable(failure.message ?: failure::class.simpleName ?: "io error")
+                    else -> throw failure
+                }
+            },
+        )
 
     override fun createExclusive(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String): CreateResult {
         refuseIfRootGone()
@@ -678,13 +771,44 @@ class LocalContentStore(
         // the read path re-checks - BEFORE creating any parent dirs or reserving the target. An ignored
         // or excluded segment, a symlinked existing ancestor, or an ancestor that resolves outside the
         // content root can never name content; refuse rather than write through it.
-        gates.rejectionReason(path, target)?.let { reason ->
-            logger.warn { "Refusing create of '${path.value}': $reason" }
-            return CreateResult.Rejected(reason)
+        val rejection = gates.rejectionReason(path, target)
+        return when {
+            rejection != null -> {
+                logger.warn { "Refusing create of '${path.value}': $rejection" }
+                CreateResult.Rejected(rejection)
+            }
+
+            else -> createAfterGates(path, target, bytes, hasher)
         }
+    }
+
+    private fun createAfterGates(
+        path: TreePath,
+        target: Path,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): CreateResult {
         // Log the intended create BEFORE performing it, path only (the write/CAS idiom).
         logger.info { "Creating content file: ${path.value} (${bytes.size} bytes)" }
-        val resolvedTarget = try {
+        return resolveCreateTarget(path, target).fold(
+            onSuccess = { resolvedTarget ->
+                when {
+                    resolvedTarget == null -> CreateResult.Exists(path)
+                    gates.nfcEquivalentSiblingExists(resolvedTarget) -> CreateResult.Exists(path)
+                    else -> writeIfAbsent(path, resolvedTarget, bytes, hasher)
+                }
+            },
+            onFailure = { failure ->
+                when (failure) {
+                    is IOException -> CreateResult.Unreadable(failure.message ?: failure::class.simpleName ?: "io error")
+                    else -> throw failure
+                }
+            },
+        )
+    }
+
+    private fun resolveCreateTarget(path: TreePath, target: Path): Result<Path?> =
+        runCatching {
             // Resolve+create each PARENT segment reusing an existing NFC-equivalent on-disk dir rather
             // than minting a duplicate (P2 NFC-parent guard): an external process may have added a raw
             // non-NFC parent (e.g. NFD `café/`) after the last scan, so the snapshot has no raw-name
@@ -692,16 +816,8 @@ class LocalContentStore(
             // a SECOND `café/` dir, splitting the subtree and getting the new page excluded on the next
             // rebuild. So we descend segment-by-segment, reusing the existing raw-named dir on an NFC
             // match. The leaf is then taken under the resolved parent (same NFC-aware logic).
-            val parent = resolveOrCreateParent(path) ?: return CreateResult.Exists(path)
-            parent.resolve(target.fileName.toString())
-        } catch (e: IOException) {
-            return CreateResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
+            resolveOrCreateParent(path)?.resolve(target.fileName.toString())
         }
-        // NFC-equivalent LEAF guard: same reasoning as the parent, for the file itself - a non-NFC
-        // sibling the scan has not yet seen occupies the path; treat it as already-present.
-        if (gates.nfcEquivalentSiblingExists(resolvedTarget)) return CreateResult.Exists(path)
-        return writeIfAbsent(path, resolvedTarget, bytes, hasher)
-    }
 
     override fun writeAssetExclusive(
         @Suppress("UNUSED_PARAMETER") grant: EditGrant,
@@ -764,17 +880,19 @@ class LocalContentStore(
             // `.${fileName}.` + random + `.tmp` temp past NAME_MAX. The temp only needs to be a hidden sibling.
             tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
             Files.write(tmp, bytes)
-            try {
+            val linkFailure = runCatching {
                 // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.
                 atomics.createLink(target, tmp)
-            } catch (_: FileAlreadyExistsException) {
-                return CreateResult.Exists(path) // a file already occupies the target - nothing written
-            } catch (e: Exception) {
-                if (e !is UnsupportedOperationException && e !is FileSystemException) throw e
-                logger.warn { "createLink unavailable for asset ${path.value}; failing closed (no reserve-then-move)" }
-                return CreateResult.Unreadable("hardlink unavailable on this filesystem; asset write fails closed")
+            }.exceptionOrNull()
+            when (linkFailure) {
+                null -> CreateResult.Created(newHash = hasher(bytes))
+                is FileAlreadyExistsException -> CreateResult.Exists(path)
+                is UnsupportedOperationException, is FileSystemException -> {
+                    logger.warn { "createLink unavailable for asset ${path.value}; failing closed (no reserve-then-move)" }
+                    CreateResult.Unreadable("hardlink unavailable on this filesystem; asset write fails closed")
+                }
+                else -> throw linkFailure
             }
-            CreateResult.Created(newHash = hasher(bytes))
         } catch (e: IOException) {
             CreateResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
         } finally {
@@ -802,19 +920,21 @@ class LocalContentStore(
             // `.${fileName}.` + random + `.tmp` temp past NAME_MAX. The temp only needs to be a hidden sibling.
             tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
             Files.write(tmp, bytes)
-            try {
+            val linkFailure = runCatching {
                 // Atomic O_EXCL create-with-full-content: the target never exists as a 0-byte file.
                 atomics.createLink(target, tmp)
-            } catch (_: FileAlreadyExistsException) {
-                return CreateResult.Exists(path) // a file already occupies the target - nothing written
-            } catch (e: Exception) {
-                if (e !is UnsupportedOperationException && e !is FileSystemException) throw e
-                // Hardlinks unsupported on this FS - fall back to reserve-then-move (the documented,
-                // self-healing crash window; still O_EXCL via createFile, still no clobber).
-                logger.warn { "createLink unsupported for ${path.value}; falling back to reserve-then-move" }
-                return reserveThenMove(path, target, bytes, hasher)
+            }.exceptionOrNull()
+            when (linkFailure) {
+                null -> CreateResult.Created(newHash = hasher(bytes))
+                is FileAlreadyExistsException -> CreateResult.Exists(path)
+                is UnsupportedOperationException, is FileSystemException -> {
+                    // Hardlinks unsupported on this FS - fall back to reserve-then-move (the documented,
+                    // self-healing crash window; still O_EXCL via createFile, still no clobber).
+                    logger.warn { "createLink unsupported for ${path.value}; falling back to reserve-then-move" }
+                    reserveThenMove(path, target, bytes, hasher)
+                }
+                else -> throw linkFailure
             }
-            CreateResult.Created(newHash = hasher(bytes))
         } catch (e: IOException) {
             CreateResult.Unreadable(e.message ?: e::class.simpleName ?: "io error")
         } finally {
@@ -904,6 +1024,14 @@ class LocalContentStore(
         if (dirPath == null) rawName else "${dirPath.value}/$rawName"
 
     /** A CAS read's captured identity: the bytes hashed, plus the file key + mtime the rename rechecks. */
+    private sealed interface CasTarget {
+        data object Missing : CasTarget
+
+        data class Unreadable(val reason: String) : CasTarget
+
+        data class Readable(val path: Path, val identity: FileIdentity) : CasTarget
+    }
+
     private class FileIdentity(val bytes: ByteArray, val fileKey: Any?, val modified: FileTime)
 
     companion object {

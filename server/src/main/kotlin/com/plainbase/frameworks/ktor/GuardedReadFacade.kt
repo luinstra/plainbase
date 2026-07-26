@@ -140,23 +140,30 @@ class GuardedReadFacade(
      */
     private fun gatedSnapshot(id: PageId, pinnedRoot: RootName?): RootedSnapshot? {
         val snapshot = indexBuilder.current
-        if (pinnedRoot != null) {
-            if (registry.byName(pinnedRoot) == null) return null // unregistered/detached pin -> 404 (AFTER checkRead)
-            when {
-                // PRESENT under the pin (coherent-stale, hot); carried-down root -> 503.
-                snapshot.pageAt(RootedPageId(pinnedRoot, id)) != null -> requireAvailable(pinnedRoot)
-                // LIVE-miss: the pin durably binds it but its bytes are not in the snapshot -> 503 limbo. The
-                // classifier re-reads `rootsHoldingId` that `bindsLive` just read - an accepted second point-SELECT,
-                // not an oversight: this is the RARE miss branch, and collapsing it would put the C1 rule back in the
-                // caller. The hot pinned HIT above pays neither.
-                resolver.bindsLive(pinnedRoot, id) -> {
-                    requireAvailable(pinnedRoot)
-                    absence.requireVerifiedAbsence(pinnedRoot, id, snapshot)
-                }
-                else -> return null // non-owner / tombstone / absent -> 404
-            }
-            return RootedSnapshot(snapshot, pinnedRoot)
+        return when (pinnedRoot) {
+            null -> unpinnedSnapshot(id, snapshot)
+            else -> pinnedSnapshot(id, pinnedRoot, snapshot)
         }
+    }
+
+    private fun pinnedSnapshot(id: PageId, root: RootName, snapshot: PageIndex): RootedSnapshot? =
+        when {
+            registry.byName(root) == null -> null
+            snapshot.pageAt(RootedPageId(root, id)) != null -> {
+                requireAvailable(root)
+                RootedSnapshot(snapshot, root)
+            }
+
+            resolver.bindsLive(root, id) -> {
+                requireAvailable(root)
+                absence.requireVerifiedAbsence(root, id, snapshot)
+                RootedSnapshot(snapshot, root)
+            }
+
+            else -> null
+        }
+
+    private fun unpinnedSnapshot(id: PageId, snapshot: PageIndex): RootedSnapshot? {
         val root = when (val res = resolver.resolve(id)) {
             IdResolution.None -> return null
             is IdResolution.Ambiguous -> throw AmbiguousPageId(id, res.candidates, res.hasRetiredCandidate)

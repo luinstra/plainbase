@@ -56,6 +56,7 @@ import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.spike.NativeSpike
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.koin.core.Koin
 import org.koin.core.context.startKoin
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
@@ -115,38 +116,7 @@ private fun serve(output: CommandOutput) {
     // is load-bearing, not stylistic: in object mode resolving RootStores resolves DirtyPageRepository, which
     // OPENS AND MIGRATES the app DB - and the DB may not be opened before the DATA_DIR lock (fix D, the rule
     // restated at the lock region below). A doomed boot must not migrate a database on its way out.
-    val refusals = config.bootRefusals()
-    fun refuse(kinds: Set<BootRefusal.Kind>) {
-        refusals.firstOrNull { it.kind in kinds }?.let {
-            output.error("serve: ${it.message}")
-            exitProcess(1)
-        }
-    }
-    // Site 2: the topology matrix (a missing CONTENT_DIR, a nested pair, a DATA_DIR collision, an incomplete
-    // object-mode key matrix). It names itself as a `serve:` refusal, never a raw stack trace, and never
-    // silently serves an empty tree. Within a stage the FIRST refusal in matrix order is the one printed -
-    // the same one `requireContentDir()` throws.
-    refuse(TOPOLOGY_REFUSAL_KINDS)
-    // Q9/Q10 ignored-key warnings (never fatal): local mode names any configured-but-ignored
-    // storage.object.* keys; object mode warns when CONTENT_DIR was explicitly set.
-    config.storageWarnings().forEach { logger.warn { it } }
-    // Multi-root warnings (never fatal): an ignored explicit CONTENT_DIR, an extra root whose path is not there
-    // (it serves 503 until restored + restarted), and direct-commit globs on a read-only root (ADR-0011 D11-D13).
-    config.rootsWarnings().forEach { logger.warn { it } }
-    // Site 3 - ADR-0008 fail-closed bind guard: config-only, so it fails BEFORE the heavier git-gate/lock/rebuild
-    // work, and AFTER the warnings above, exactly as it always has.
-    refuse(BIND_REFUSAL_KINDS)
-    if (config.auth.insecureHttp && config.isNonLoopbackBind()) {
-        logger.warn {
-            "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} - anyone on the " +
-                "network can capture them (ADR-0008)"
-        }
-    } else if (config.auth.insecureHttp) {
-        logger.info {
-            "PLAINBASE_INSECURE_HTTP set but the bind is loopback (${config.host}) - the override is redundant here " +
-                "(loopback HTTP is always allowed)"
-        }
-    }
+    consumeConfigBootGate(config, output)
     // Site 4 - the per-root verdicts (ADR-0006 git gate + the D5-over-D4 availability probe), walked in REGISTRY
     // (rank) order, which is the order the loop this replaces walked. An Unavailable WARNs and CONTINUES; a
     // Refused exits 1. This loop is also where boot availability is SEEDED - the gate DECIDES, `serve()` ACTS
@@ -155,25 +125,10 @@ private fun serve(output: CommandOutput) {
     //
     // Still BEFORE the lock/rebuild/reconcile block, because rebuild() and reconcileDirtyPages() trigger commits
     // and a "git missing" failure must fire FIRST with an actionable message, never as a doomed commit's stack trace.
-    val availability = koin.get<RootAvailability>()
-    val stores = koin.get<RootStores>()
-    val histories = koin.get<HistoryProviders>()
-    for (verdict in evaluateBootGate(config, koin.get<RootRegistry>(), stores, histories).verdicts) {
-        when (verdict) {
-            is RootGateVerdict.Unavailable -> {
-                availability.markUnavailable(verdict.root, UnavailableCause.MISSING_AT_BOOT)
-                logger.warn {
-                    "root '${verdict.root}' is not available at ${verdict.path}: it will serve 503 until the path is " +
-                        "restored and the server restarted (its pages, aliases and checkpoints are left untouched)"
-                }
-            }
-            is RootGateVerdict.Refused -> {
-                output.error("serve: ${verdict.message}")
-                exitProcess(1)
-            }
-            is RootGateVerdict.Ready -> Unit
-        }
-    }
+    val bootServices = consumeRootBootGate(config, koin, output)
+    val availability = bootServices.availability
+    val stores = bootServices.stores
+    val histories = bootServices.histories
     // Rev-3.4 DR nudge: an object boot that survives the gate check with git DISABLED (`git.enabled`
     // unset/false) has no commit-grained history, so name the exposure ONCE (backups are operator-owned).
     // Since C5, `git.enabled=true` in object mode wires a real GitCliHistoryProvider + bundle DR, so this
@@ -226,35 +181,7 @@ private fun serve(output: CommandOutput) {
         // behind `config.git.enabled == true` so a git-DISABLED object boot never constructs `GitBundleDr`
         // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
         // hydrate-only C4 boot).
-        if (config.storage.backend == StorageBackend.OBJECT) {
-            // C3, and it runs BEFORE the first LIST: record WHERE this root now points. A first sight or a CHANGED
-            // binding (a swapped bucket, a re-prefixed one, credentials that resolve somewhere else entirely) latches
-            // UNRESOLVED with an at-risk snapshot taken from the durable rows AT THIS MOMENT - so the empty LIST that
-            // a wrong bucket answers with is a perfectly successful LIST that PROVES NOTHING, rather than an
-            // authoritative "the corpus is gone". The root still serves everything it can read.
-            val objectStore = koin.get<ObjectContentStore>()
-            if (koin.get<BindingLatch>().observe(koin.get<RootRegistry>().main.name, objectStore.binding) != BindingStatus.TRUSTED) {
-                // ...and an unverified binding gets a mirror re-derived FROM IT, so the pages the latch witnesses are
-                // pages this boot actually fetched from the bucket the config now names (see [ObjectContentStore.rebind]).
-                objectStore.rebind()
-            }
-            try {
-                if (config.git.enabled == true) {
-                    val bundleDr = koin.get<GitBundleDr>()
-                    val restored = bundleDr.restore() // gate + FORK-2 sentinel truth table (2b); a non-404 GET failure aborts boot
-                    koin.get<ObjectContentStore>().hydrate(strict = restored.isRestored) // restore path is STRICT (FORK 1)
-                    bundleDr.reconcileBootCommit(restored) // ONE plumbing commit or no-op; clears the sentinel
-                } else {
-                    koin.get<ObjectContentStore>().hydrate()
-                }
-            } catch (e: Exception) {
-                // exitProcess skips the outer finally - release the lock explicitly (the prepare() idiom).
-                lock.close()
-                logger.error(e) { "serve object hydrate or bundle restore failed" }
-                output.error("serve: ${e.message ?: "unexpected failure"}")
-                exitProcess(1)
-            }
-        }
+        hydrateObjectMode(config, koin, lock, output)
         val now = Clock.System.now()
         // Startup-time prune, INSIDE the lock so no other process races the DB: drop dead session/setup-token
         // rows that accumulate in the insert/update-only tables. Once at boot, never per-write (write amplification).
@@ -276,21 +203,7 @@ private fun serve(output: CommandOutput) {
         // rebuild. The startup rebuild reads (lastCommits) before any save commits, and `git -C workTree log`
         // walks UP to an ancestor `.git` when CONTENT_DIR has none - so a forced-on content root with no own
         // repo would otherwise abort serve (plain dir) or read the wrong ancestor repo. NoOp is a no-op.
-        try {
-            // Same per-root loop as the gate, skipping the roots the gate loop marked unavailable: main-AUTO keeps
-            // its ensureRepo, a CLAIMED root readies only the git-home (its repo is the operator's), NoOp no-ops.
-            val serving = availability.current()
-            koin.get<RootRegistry>().roots
-                .filter { serving.isAvailable(it.name) }
-                .forEach { histories[it.name].prepare() }
-        } catch (e: Exception) {
-            // exitProcess terminates the JVM without running the outer finally, so release the lock
-            // explicitly here - otherwise a forced-on Git failure would leak it in embedded/test use.
-            lock.close()
-            logger.error(e) { "serve history preparation failed" }
-            output.error("serve: ${e.message ?: "unexpected failure"}")
-            exitProcess(1)
-        }
+        prepareHistories(koin, histories, availability, lock, output)
         val builder = koin.get<IndexBuilder>()
         // §B2 startup ordering, no unwatched window: the watchers register BEFORE the first rebuild.
         // Events arriving while the initial build is in flight coalesce into at most one follow-up
@@ -418,6 +331,127 @@ private fun serve(output: CommandOutput) {
     }
 }
 
+private data class BootServices(
+    val availability: RootAvailability,
+    val stores: RootStores,
+    val histories: HistoryProviders,
+)
+
+private fun consumeConfigBootGate(config: PlainbaseConfig, output: CommandOutput) {
+    val refusals = config.bootRefusals()
+    refuseFirst(refusals, TOPOLOGY_REFUSAL_KINDS, output)
+    config.storageWarnings().forEach { logger.warn { it } }
+    config.rootsWarnings().forEach { logger.warn { it } }
+    refuseFirst(refusals, BIND_REFUSAL_KINDS, output)
+    when {
+        config.auth.insecureHttp && config.isNonLoopbackBind() ->
+            logger.warn {
+                "PLAINBASE_INSECURE_HTTP set: serving credentials over PLAINTEXT on ${config.host} - anyone on the " +
+                    "network can capture them (ADR-0008)"
+            }
+
+        config.auth.insecureHttp ->
+            logger.info {
+                "PLAINBASE_INSECURE_HTTP set but the bind is loopback (${config.host}) - the override is redundant here " +
+                    "(loopback HTTP is always allowed)"
+            }
+    }
+}
+
+private fun refuseFirst(
+    refusals: List<BootRefusal>,
+    kinds: Set<BootRefusal.Kind>,
+    output: CommandOutput,
+) {
+    refusals.firstOrNull { it.kind in kinds }?.let {
+        output.error("serve: ${it.message}")
+        exitProcess(1)
+    }
+}
+
+private fun consumeRootBootGate(config: PlainbaseConfig, koin: Koin, output: CommandOutput): BootServices {
+    val availability = koin.get<RootAvailability>()
+    val stores = koin.get<RootStores>()
+    val histories = koin.get<HistoryProviders>()
+    evaluateBootGate(config, koin.get<RootRegistry>(), stores, histories).verdicts.forEach { verdict ->
+        when (verdict) {
+            is RootGateVerdict.Unavailable -> {
+                availability.markUnavailable(verdict.root, UnavailableCause.MISSING_AT_BOOT)
+                logger.warn {
+                    "root '${verdict.root}' is not available at ${verdict.path}: it will serve 503 until the path is " +
+                        "restored and the server restarted (its pages, aliases and checkpoints are left untouched)"
+                }
+            }
+
+            is RootGateVerdict.Refused -> {
+                output.error("serve: ${verdict.message}")
+                exitProcess(1)
+            }
+
+            is RootGateVerdict.Ready -> Unit
+        }
+    }
+    return BootServices(availability, stores, histories)
+}
+
+private fun hydrateObjectMode(
+    config: PlainbaseConfig,
+    koin: Koin,
+    lock: DataDirLock,
+    output: CommandOutput,
+) {
+    if (config.storage.backend != StorageBackend.OBJECT) return
+
+    // Record the binding before the first LIST; an untrusted binding gets a mirror derived from this bucket.
+    val objectStore = koin.get<ObjectContentStore>()
+    if (koin.get<BindingLatch>().observe(koin.get<RootRegistry>().main.name, objectStore.binding) != BindingStatus.TRUSTED) {
+        objectStore.rebind()
+    }
+    runCatching {
+        when (config.git.enabled) {
+            true -> {
+                val bundleDr = koin.get<GitBundleDr>()
+                val restored = bundleDr.restore()
+                objectStore.hydrate(strict = restored.isRestored)
+                bundleDr.reconcileBootCommit(restored)
+            }
+
+            false, null -> objectStore.hydrate()
+        }
+    }.onFailure { failure ->
+        rethrowError(failure)
+        lock.close()
+        logger.error(failure) { "serve object hydrate or bundle restore failed" }
+        output.error("serve: ${failure.message ?: "unexpected failure"}")
+        exitProcess(1)
+    }
+}
+
+private fun prepareHistories(
+    koin: Koin,
+    histories: HistoryProviders,
+    availability: RootAvailability,
+    lock: DataDirLock,
+    output: CommandOutput,
+) {
+    runCatching {
+        val serving = availability.current()
+        koin.get<RootRegistry>().roots
+            .filter { serving.isAvailable(it.name) }
+            .forEach { histories[it.name].prepare() }
+    }.onFailure { failure ->
+        rethrowError(failure)
+        lock.close()
+        logger.error(failure) { "serve history preparation failed" }
+        output.error("serve: ${failure.message ?: "unexpected failure"}")
+        exitProcess(1)
+    }
+}
+
+private fun rethrowError(failure: Throwable) {
+    if (failure is Error) throw failure
+}
+
 /**
  * How `serve()` CONSUMES the gate, in the order it has always emitted (C5 S1.7). Every [BootRefusal.Kind]
  * belongs to exactly one stage, and `BootGateOrderingTest` fails the build if a NEW kind belongs to none -
@@ -535,11 +569,12 @@ fun rootGateVerdicts(
     if (!stores[root.name].available()) {
         RootGateVerdict.Unavailable(root.name, root.localPath)
     } else {
-        try {
+        runCatching {
             histories[root.name].gateCheck()
             RootGateVerdict.Ready(root.name)
-        } catch (e: Exception) {
-            RootGateVerdict.Refused(root.name, e.message ?: e.toString())
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
+            RootGateVerdict.Refused(root.name, failure.message ?: failure.toString())
         }
     }
 }
@@ -726,9 +761,11 @@ internal fun deadLegacyAliasWarning(aliases: Map<RootedPath, RootedPageId>): Str
 /** The deterministic, testable offender bound the two texts above share: first 10, lexicographic, `(+N more)`. */
 private fun boundedPathList(paths: List<String>): String {
     val sorted = paths.sorted()
-    val overflow = sorted.size - 10
-    return sorted.take(10).joinToString(", ") + if (overflow > 0) " (+$overflow more)" else ""
+    val overflow = sorted.size - BOUNDED_PATH_LIST_LIMIT
+    return sorted.take(BOUNDED_PATH_LIST_LIMIT).joinToString(", ") + if (overflow > 0) " (+$overflow more)" else ""
 }
+
+private const val BOUNDED_PATH_LIST_LIMIT = 10
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [PlainbaseConfig.bindGuardRefusal]

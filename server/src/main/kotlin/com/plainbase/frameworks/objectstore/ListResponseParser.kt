@@ -17,6 +17,20 @@ package com.plainbase.frameworks.objectstore
  * oracle-agrees; refusing what the oracle can read is always safe).
  */
 object ListResponseParser {
+    private const val CHAR_REF_HEX_PREFIX_LENGTH = 2
+    private const val CHAR_REF_DECIMAL_PREFIX_LENGTH = 1
+    private const val HEX_RADIX = 16
+    private const val DECIMAL_RADIX = 10
+    private const val XML_TAB = 0x9
+    private const val XML_LINE_FEED = 0xA
+    private const val XML_CARRIAGE_RETURN = 0xD
+    private const val XML_SCALAR_START = 0x20
+    private const val XML_LOW_SCALAR_END = 0xD7FF
+    private const val XML_HIGH_SCALAR_START = 0xE000
+    private const val XML_HIGH_SCALAR_END = 0xFFFD
+    private const val XML_SUPPLEMENTARY_START = 0x10000
+    private const val XML_SUPPLEMENTARY_END = 0x10FFFF
+    private const val CODE_POINT_DISPLAY_WIDTH = 4
 
     data class Listing(val contents: List<Entry>, val isTruncated: Boolean, val nextContinuationToken: String?)
 
@@ -154,19 +168,24 @@ object ListResponseParser {
      */
     private fun parseCharRef(entity: String): Int? {
         val (digits, radix) = when {
-            entity.startsWith("#x") -> entity.substring(2) to 16
-            entity.startsWith("#") -> entity.substring(1) to 10
+            entity.startsWith("#x") -> entity.substring(CHAR_REF_HEX_PREFIX_LENGTH) to HEX_RADIX
+            entity.startsWith("#") -> entity.substring(CHAR_REF_DECIMAL_PREFIX_LENGTH) to DECIMAL_RADIX
             else -> return null
         }
         val asciiValid = digits.isNotEmpty() && digits.all {
-            it in '0'..'9' || (radix == 16 && (it in 'a'..'f' || it in 'A'..'F'))
+            it in '0'..'9' || (radix == HEX_RADIX && (it in 'a'..'f' || it in 'A'..'F'))
         }
         return if (asciiValid) digits.toIntOrNull(radix) else null
     }
 
     /** XML 1.0 `Char` production: tab / LF / CR, then the three legal scalar ranges. */
-    private fun isXmlChar(codePoint: Int): Boolean = codePoint == 0x9 || codePoint == 0xA || codePoint == 0xD ||
-        codePoint in 0x20..0xD7FF || codePoint in 0xE000..0xFFFD || codePoint in 0x10000..0x10FFFF
+    private fun isXmlChar(codePoint: Int): Boolean =
+        codePoint == XML_TAB ||
+            codePoint == XML_LINE_FEED ||
+            codePoint == XML_CARRIAGE_RETURN ||
+            codePoint in XML_SCALAR_START..XML_LOW_SCALAR_END ||
+            codePoint in XML_HIGH_SCALAR_START..XML_HIGH_SCALAR_END ||
+            codePoint in XML_SUPPLEMENTARY_START..XML_SUPPLEMENTARY_END
 
     /**
      * Every RAW code point in [text] must be a legal XML 1.0 `Char` (the last CharData rule): [unescape] only
@@ -179,7 +198,11 @@ object ListResponseParser {
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
-            if (!isXmlChar(cp)) refuse("illegal XML character U+${cp.toString(16).uppercase().padStart(4, '0')} in $context")
+            if (!isXmlChar(cp)) {
+                refuse(
+                    "illegal XML character U+${cp.toString(HEX_RADIX).uppercase().padStart(CODE_POINT_DISPLAY_WIDTH, '0')} in $context",
+                )
+            }
             i += Character.charCount(cp)
         }
     }

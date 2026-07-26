@@ -367,12 +367,22 @@ class GitCliHistoryProvider(
         // Cluster-1 (C5): the `--version` probe never touches `-C workTree`, so this passes even when
         // the object-mode mirror directory does not exist yet (this runs PRE-LOCK, before hydrate's mkdir).
         val version = exec.versionProbe()
+        requireGitAvailable(version)
+        requireSupportedVersion(version)
+        requireRepositoryAccess()
+        requireClaimedRepository()
+    }
+
+    private fun requireGitAvailable(version: GitResult) {
         if (!version.ok) {
             throw GitUnavailableException(
                 "Git mode is on but the `git` binary is unavailable (${version.stderr.ifBlank { "exit ${version.exitCode}" }}). " +
                     "Install git and ensure it is on PATH, or set PLAINBASE_GIT_ENABLED=false to run without history.",
             )
         }
+    }
+
+    private fun requireSupportedVersion(version: GitResult) {
         // The read path (`log`/`lastCommits`) passes `--diff-merges=first-parent`, which git only learned in
         // 2.31.0; on an older-but-present git every read exits non-zero and Git-mode startup (`rebuild` →
         // `lastCommits`) aborts serve AFTER this gate passes. Validate the version floor here so it fails LOUD
@@ -390,9 +400,12 @@ class GitCliHistoryProvider(
             throw GitUnavailableException(
                 "Git mode requires git >= $MIN_GIT_MAJOR.$MIN_GIT_MINOR (for --diff-merges=first-parent, used by " +
                     "Plainbase history reads); found $major.$minor. Upgrade git, or set PLAINBASE_GIT_ENABLED=false " +
-                    "to run without history.",
+                "to run without history.",
             )
         }
+    }
+
+    private fun requireRepositoryAccess() {
         // The binary is present, but `--version` never opens the worktree. When a repo IS present, validate
         // ACCESS to it so an inaccessible repo (Docker uid-mismatch `fatal: detected dubious ownership`,
         // permissions, a corrupt `.git`) aborts at startup — BEFORE any save writes content and then errors
@@ -419,6 +432,9 @@ class GitCliHistoryProvider(
                 )
             }
         }
+    }
+
+    private fun requireClaimedRepository() {
         // The D4 strict guard, for a root whose repo the operator CLAIMED. It runs after the shared version/access
         // probes above, so it can assume a working git; it refuses the boot loudly rather than degrading, because a
         // root that silently commits into the WRONG repository is worse than one that will not start.
@@ -468,7 +484,7 @@ class GitCliHistoryProvider(
     /** The all-zeros object id matching the repo's object format (r6e) — 40 zeros for sha1, 64 for sha256. */
     private fun zeroOid(): String {
         val format = exec.run(listOf("rev-parse", "--show-object-format")).let { if (it.ok) it.stdoutText.trim() else "" }
-        return if (format == "sha256") "0".repeat(64) else "0".repeat(40)
+        return if (format == "sha256") "0".repeat(SHA256_HEX_LENGTH) else "0".repeat(SHA1_HEX_LENGTH)
     }
 
     /** Hydrates a [Commit] from a SHA via one `git show -s` read (the SHA is the key, F7). */
@@ -488,9 +504,9 @@ class GitCliHistoryProvider(
         sha = fields[0],
         author = CommitIdentity(name = fields[1], email = fields[2]),
         committer = CommitIdentity(name = fields[4], email = fields[5]),
-        authorTime = Instant.fromEpochSeconds(fields[3].toLong()),
-        committerTime = Instant.fromEpochSeconds(fields[6].toLong()),
-        message = fields[7].removeSuffix("\n"),
+        authorTime = Instant.fromEpochSeconds(fields[AUTHOR_TIME_FIELD].toLong()),
+        committerTime = Instant.fromEpochSeconds(fields[COMMITTER_TIME_FIELD].toLong()),
+        message = fields[MESSAGE_FIELD].removeSuffix("\n"),
     )
 
     /**
@@ -577,10 +593,11 @@ class GitCliHistoryProvider(
 
     private fun dispatchMaintenance() {
         val task = maintenance ?: { runAutoMaintenance(exec) }
-        try {
+        runCatching {
             task()
-        } catch (e: Exception) {
-            logger.warn(e) { "auto-maintenance failed; the save still committed (non-fatal)" }
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
+            logger.warn(failure) { "auto-maintenance failed; the save still committed (non-fatal)" }
         }
     }
 
@@ -688,6 +705,11 @@ class GitCliHistoryProvider(
         private val GIT_VERSION_LINE = Regex("""git version (\d+)\.(\d+)""")
 
         private const val COMMIT_FIELD_COUNT = 8
+        private const val AUTHOR_TIME_FIELD = 3
+        private const val COMMITTER_TIME_FIELD = 6
+        private const val MESSAGE_FIELD = 7
+        private const val SHA1_HEX_LENGTH = 40
+        private const val SHA256_HEX_LENGTH = 64
 
         // Per-`git log` pathspec-byte budget for [lastCommits] batching. 128 KiB is far under the
         // smallest realistic OS `ARG_MAX` (macOS ~1 MiB, Linux ~2 MiB) once env + the rest of argv are

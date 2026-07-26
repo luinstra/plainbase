@@ -90,20 +90,20 @@ internal class GracefulShutdown(
         try {
             for (step in steps) {
                 inFlight.store(step.name)
-                try {
+                runCatching {
                     step.close()
-                } catch (e: Throwable) {
+                }.onFailure { failure ->
                     // Throwable, NOT Exception, and this is the one place in the tree where that is right: the
                     // JVM is already on its way out, so there is nothing left for a rethrow to protect - while an
                     // Error escaping this loop would skip every step BEHIND it, which is the DR bundle ship and
                     // the DATA_DIR lock release. Containment is the whole contract; it cannot have a hole in it.
-                    logger.warn(e) { "shutdown step '${step.name}' failed; continuing with the remaining steps" }
+                    logger.warn(failure) { "shutdown step '${step.name}' failed; continuing with the remaining steps" }
                 }
             }
             inFlight.store(null)
             // Logged BEFORE the countdown: the waiter is the shutdown hook, and the JVM halts the moment it
             // returns - a line logged after it would race the halt and could be lost from the operator's log.
-            logger.info { "shutdown complete in ${(System.nanoTime() - startedAt) / 1_000_000}ms" }
+            logger.info { "shutdown complete in ${(System.nanoTime() - startedAt) / NANOS_PER_MILLISECOND}ms" }
         } finally {
             finished.countDown()
         }
@@ -158,6 +158,7 @@ internal class GracefulShutdown(
          */
         const val WARN_AFTER_MILLIS = 8_000L
         private const val WORKER_THREAD = "plainbase-shutdown"
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
         private const val HOOK_THREAD = "plainbase-shutdown-hook"
     }
 }

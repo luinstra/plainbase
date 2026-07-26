@@ -5,27 +5,22 @@ import com.plainbase.domain.content.ContentEntry
 import com.plainbase.domain.content.ContentStat
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.CreateResult
-import com.plainbase.domain.content.Nfc
-import com.plainbase.domain.content.RawByteOrder
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.StoreRead
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.root.BindingEpoch
-import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.ObjectManifest
 import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RowsAtStart
-import com.plainbase.frameworks.filesystem.FOLDER_META_NAME
 import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.filesystem.isBlank
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
-import com.plainbase.frameworks.filesystem.withDirectoryStream
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.network.sockets.ConnectTimeoutException
 import kotlinx.coroutines.async
@@ -33,12 +28,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import java.io.IOException
 import java.net.ConnectException
 import java.nio.channels.UnresolvedAddressException
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -103,6 +95,9 @@ class ObjectContentStore(
 ) : ContentStore, ObjectManifestProvider, AutoCloseable {
 
     private val mirrorRoot: Path = mirrorRoot.toAbsolutePath().normalize()
+    private val mirrorFiles = ObjectMirrorFiles(this.mirrorRoot, mirror, ignoreRules, atomics, scan = { scan() })
+    private val bucketLister = ObjectBucketLister(client, keyPrefix, binding, rowsAtStart, mirrorFiles)
+    private val historyBundles = ObjectHistoryBundleStore(client, keyPrefix)
 
     /**
      * **The latest COMPLETE bucket LIST, published as ONE immutable value** (C3) - the codebase's snapshot idiom, and
@@ -116,7 +111,7 @@ class ObjectContentStore(
      * nothing until it lists again, and that is precisely why [scan]'s completeness is derived from this rather than
      * from a flag somebody set once at boot.
      */
-    private val generation = AtomicReference<Generation?>(null)
+    private val generation = AtomicReference<ObjectGeneration?>(null)
 
     // The hybrid apply monitor (M1): guards only the short local apply ({mirror write ->
     // recordConfirmed/invalidate -> persist} plus the per-key re-checks). Never held across a
@@ -278,9 +273,14 @@ class ObjectContentStore(
 
     override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {
         val key = keyOf(path)
+        return when (val comparison = resolveCasComparison(path, key)) {
+            is CasComparison.Finished -> comparison.result
+            is CasComparison.Ready -> compareAndPut(path, key, baseHash, bytes, hasher, comparison)
+        }
+    }
+
+    private fun resolveCasComparison(path: TreePath, key: String): CasComparison {
         // (1) Resolve the comparison bytes + the If-Match etag, absence-safely (seam h).
-        val compareBytes: ByteArray
-        val ifMatch: String
         val mapEtag = state.etagOf(path)
         // A state entry is a cache hit ONLY when the mirror file it describes is present AND readable. A
         // surviving entry over a DELETED mirror file (DATA_DIR/mirror is deletable derived state) is NOT
@@ -289,45 +289,72 @@ class ObjectContentStore(
         // likewise NOT a bucket answer: catch it (never let it escape UNTYPED after WritePipeline's
         // write-ahead dirty mark) and fall into the same authoritative read-back below.
         val mirrorBytes = if (mapEtag != null) {
-            try {
+            runCatching {
                 mirror.read(path)
-            } catch (e: Exception) {
-                logger.warn { "mirror read of '${path.value}' failed (${causeOf(e)}); reading the bucket authority instead" }
+            }.getOrElse { failure ->
+                rethrowError(failure)
+                logger.warn {
+                    "mirror read of '${path.value}' failed (${causeOf(failure)}); reading the bucket authority instead"
+                }
                 null
             }
         } else {
             null
         }
-        if (mapEtag != null && mirrorBytes != null) {
-            compareBytes = mirrorBytes
-            ifMatch = mapEtag
-        } else {
+        return when {
+            mapEtag != null && mirrorBytes != null -> CasComparison.Ready(mirrorBytes, mapEtag)
+            else -> {
             // Cache miss - never-seen / invalidated / post-failed-heal / mirror-file-gone / mirror-read-fault:
             // read the bucket back for both. A stale entry over an unusable mirror file is invalidated first (Q8b).
-            if (mapEtag != null) state.invalidate(path)
-            val fetched = try {
-                runBlocking { client.get(key) }
-            } catch (e: Exception) {
-                // Fail closed: never PUT blind when the authority cannot be read (the frozen retryable 503).
-                return CasResult.Unreadable(causeOf(e), targetMutated = false)
-            } ?: return CasResult.Deleted
-            healMirror(path, fetched) // opportunistic; a failed heal proceeds on the bucket bytes (seam g)
-            compareBytes = fetched.bytes
-            ifMatch = fetched.etag
+                if (mapEtag != null) state.invalidate(path)
+                runCatching {
+                    runBlocking { client.get(key) }
+                }.fold(
+                    onSuccess = { fetched ->
+                        when (fetched) {
+                            null -> CasComparison.Finished(CasResult.Deleted)
+                            else -> {
+                                healMirror(path, fetched) // a failed heal proceeds on the bucket bytes (seam g)
+                                CasComparison.Ready(fetched.bytes, fetched.etag)
+                            }
+                        }
+                    },
+                    onFailure = { failure ->
+                        rethrowError(failure)
+                        // Fail closed: never PUT blind when the authority cannot be read (the frozen retryable 503).
+                        CasComparison.Finished(CasResult.Unreadable(causeOf(failure), targetMutated = false))
+                    },
+                )
+            }
         }
+    }
+
+    private fun compareAndPut(
+        path: TreePath,
+        key: String,
+        baseHash: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+        comparison: CasComparison.Ready,
+    ): CasResult {
         // (2) Base compare.
-        val currentHash = hasher(compareBytes)
-        if (currentHash != baseHash) return CasResult.Mismatch(currentBytes = compareBytes, currentHash = currentHash)
+        val currentHash = hasher(comparison.bytes)
+        if (currentHash != baseHash) return CasResult.Mismatch(currentBytes = comparison.bytes, currentHash = currentHash)
 
         // (3) Conditional PUT at the authority - outside the lock.
         logger.info { "CAS-writing content object: ${path.value} (${bytes.size} bytes)" }
-        val outcome = try {
-            runBlocking { client.put(key, bytes, PutCondition.IfMatch(ifMatch), contentType = MARKDOWN) }
-        } catch (e: Exception) {
-            return if (isDefinitivePreSend(e)) {
-                CasResult.Unreadable(causeOf(e), targetMutated = false) // the request never went out (Q13)
-            } else {
-                disambiguateCas(path, key, bytes, hasher, priorEtag = ifMatch, failure = e) // Q8a
+        val outcome = runCatching {
+            runBlocking { client.put(key, bytes, PutCondition.IfMatch(comparison.etag), contentType = MARKDOWN) }
+        }.getOrElse { failure ->
+            return when (failure) {
+                is Exception ->
+                    when {
+                        isDefinitivePreSend(failure) ->
+                            CasResult.Unreadable(causeOf(failure), targetMutated = false) // the request never went out (Q13)
+                        else ->
+                            disambiguateCas(path, key, bytes, hasher, priorEtag = comparison.etag, failure = failure) // Q8a
+                    }
+                else -> throw failure
             }
         }
         return when (outcome) {
@@ -421,23 +448,20 @@ class ObjectContentStore(
     ): AutoCloseable {
         val stop = CountDownLatch(1)
         val thread = Thread {
-            while (true) {
-                val stopped = try {
-                    stop.await(pollSeconds, TimeUnit.SECONDS)
-                } catch (_: InterruptedException) {
-                    break // close() interrupted the sleep - exit cleanly
-                }
-                if (stopped) break // close() signalled - exit cleanly
-                try {
+            while (!awaitPollStop(stop)) {
+                runCatching {
                     pollOnce(onChange)
-                } catch (_: InterruptedException) {
-                    break // close() interrupted an in-flight cycle - exit cleanly
-                } catch (e: Exception) {
-                    // Any transient poll-cycle fault (a scan IO error, a future throw the inner guards miss)
-                    // must WARN and continue - NEVER permanently kill the poll thread (the Q13 "retry next
-                    // cycle" promise every fail-closed site depends on). Network GET/LIST faults are already
-                    // handled inside pollOnce; this is the last-resort backstop.
-                    logger.warn { "object poll cycle failed (${causeOf(e)}); retrying next cycle" }
+                }.onFailure { failure ->
+                    when (failure) {
+                        is InterruptedException -> return@Thread
+                        is Error -> throw failure
+                        else ->
+                            // Any transient poll-cycle fault (a scan IO error, a future throw the inner guards miss)
+                            // must WARN and continue - NEVER permanently kill the poll thread (the Q13 "retry next
+                            // cycle" promise every fail-closed site depends on). Network GET/LIST faults are already
+                            // handled inside pollOnce; this is the last-resort backstop.
+                            logger.warn { "object poll cycle failed (${causeOf(failure)}); retrying next cycle" }
+                    }
                 }
             }
         }
@@ -453,6 +477,17 @@ class ObjectContentStore(
             thread.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS)
         }
     }
+
+    /** Waits for the next poll interval; interruption is the same clean stop signal as the latch. */
+    private fun awaitPollStop(stop: CountDownLatch): Boolean =
+        runCatching {
+            stop.await(pollSeconds, TimeUnit.SECONDS)
+        }.getOrElse { failure ->
+            when (failure) {
+                is InterruptedException -> true
+                else -> throw failure
+            }
+        }
 
     /**
      * One poll cycle (the [watch] thread's loop body, callable directly for deterministic tests).
@@ -474,21 +509,23 @@ class ObjectContentStore(
         // A poll cycle is also a GENERATION (C3): every poll LISTs the whole bucket, so every poll that completes one
         // republishes what the bucket holds. A cycle whose LIST failed publishes NOTHING and the previous generation
         // stands - so a transient fault never becomes an "authoritative" smaller corpus.
-        val listed = try {
+        val listed = runCatching {
             listGeneration().listed
-        } catch (e: Exception) {
-            logger.warn { "poll LIST failed (${causeOf(e)}); nothing mutated, retrying next cycle" }
+        }.getOrElse { failure ->
+            rethrowError(failure)
+            logger.warn { "poll LIST failed (${causeOf(failure)}); nothing mutated, retrying next cycle" }
             return
         }
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
         val fetched = changed.mapNotNull { (path, entry) ->
-            try {
+            runCatching {
                 // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
                 // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
                 // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
                 runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
-            } catch (e: Exception) {
-                logger.warn { "poll GET of '${path.value}' failed (${causeOf(e)}); retrying next cycle" }
+            }.getOrElse { failure ->
+                rethrowError(failure)
+                logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
                 null
             }
         }
@@ -564,11 +601,9 @@ class ObjectContentStore(
         // (see [available]). Re-bound on every hydrate, because every hydrate re-materializes the mirror.
         mirrorProbe.set(rootLivenessProbe(mirrorRoot))
         val before = state.snapshot()
-        val listed = try {
+        val listed = runCatching {
             listGeneration().listed
-        } catch (e: Exception) {
-            throw bootRefusal(e)
-        }
+        }.getOrElse { failure -> throw bootRefusal(failure) }
         // Re-fetch a key when its bucket etag differs from state OR its mirror file is MISSING: DATA_DIR/
         // mirror is deletable derived state, so a deleted mirror file whose state entry survived must
         // self-heal on boot (never vanish from the rebuilt index until mirror-state is also wiped).
@@ -582,11 +617,12 @@ class ObjectContentStore(
                 chunk.map { (path, entry) ->
                     async {
                         gate.withPermit {
-                            try {
+                            runCatching {
                                 path to client.get(keyPrefix + entry.rawRelative)?.let { entry to it }
-                            } catch (e: Exception) {
+                            }.getOrElse { failure ->
+                                rethrowError(failure)
                                 logger.warn {
-                                    "hydrate GET of '${path.value}' failed (${causeOf(e)}); invalidating so a later poll re-detects"
+                                    "hydrate GET of '${path.value}' failed (${causeOf(failure)}); invalidating so a later poll re-detects"
                                 }
                                 path to null
                             }
@@ -711,10 +747,11 @@ class ObjectContentStore(
 
     /** The immediate single-key reconcile after Q8b: GET -> mirror write retry -> map restore. */
     private fun reconcileKey(path: TreePath) {
-        val fetched = try {
+        val fetched = runCatching {
             runBlocking { client.get(keyOf(path)) }
-        } catch (e: Exception) {
-            logger.warn { "single-key reconcile GET of '${path.value}' failed (${causeOf(e)}); the poll will retry" }
+        }.getOrElse { failure ->
+            rethrowError(failure)
+            logger.warn { "single-key reconcile GET of '${path.value}' failed (${causeOf(failure)}); the poll will retry" }
             return
         } ?: return
         healMirror(path, fetched)
@@ -743,10 +780,13 @@ class ObjectContentStore(
         // A missing OR unreadable mirror file over a surviving state entry means the mirror is not
         // trustworthy for [path]: heal from the bucket. Catch the read fault so it never escapes the
         // create UNTYPED after WritePipeline's write-ahead dirty mark (BLOCKING 3 class).
-        val mirrorMissingOrUnreadable = try {
+        val mirrorMissingOrUnreadable = runCatching {
             mirror.read(path) == null
-        } catch (e: Exception) {
-            logger.warn { "mirror read of '${path.value}' failed during create pre-check (${causeOf(e)}); healing from the bucket" }
+        }.getOrElse { failure ->
+            rethrowError(failure)
+            logger.warn {
+                "mirror read of '${path.value}' failed during create pre-check (${causeOf(failure)}); healing from the bucket"
+            }
             true
         }
         if (mirrorMissingOrUnreadable) reconcileKey(path)
@@ -773,11 +813,12 @@ class ObjectContentStore(
 
     /** CAS step 5: the precondition refused the PUT - the authoritative GET decides Mismatch/Deleted. */
     private fun readBackAfterPrecondition(path: TreePath, key: String, hasher: (ByteArray) -> String): CasResult {
-        val fetched = try {
+        val fetched = runCatching {
             runBlocking { client.get(key) }
-        } catch (e: Exception) {
+        }.getOrElse { failure ->
+            rethrowError(failure)
             // Nothing landed (the precondition refused the write) - the frozen retryable 503.
-            return CasResult.Unreadable(causeOf(e), targetMutated = false)
+            return CasResult.Unreadable(causeOf(failure), targetMutated = false)
         } ?: return CasResult.Deleted
         healMirror(path, fetched) // a failed heal still serves the GET'd bytes (seam g)
         return CasResult.Mismatch(currentBytes = fetched.bytes, currentHash = hasher(fetched.bytes))
@@ -791,42 +832,93 @@ class ObjectContentStore(
         hasher: (ByteArray) -> String,
         priorEtag: String,
         failure: Exception,
-    ): CasResult {
-        val stat = try {
-            runBlocking { client.head(key) }
-        } catch (e: Exception) {
-            return outcomeUnknown(path, failure, e) { cause, mutated -> CasResult.Unreadable(cause, mutated) }
-        } ?: return CasResult.Deleted // the object is gone - the authority's current state is "absent"
-        if (stat.etag == priorEtag) {
-            return CasResult.Unreadable(causeOf(failure), targetMutated = false) // the PUT did not land
-        }
-        val fetched = try {
-            runBlocking { client.get(key) }
-        } catch (e: Exception) {
-            return outcomeUnknown(path, failure, e) { cause, mutated -> CasResult.Unreadable(cause, mutated) }
-        } ?: return CasResult.Deleted
-        return if (hasher(fetched.bytes) == hasher(bytes)) {
-            // OUR put landed after all - complete the normal success apply.
-            when (val applyFailure = applyConfirmedWrite(path, bytes, fetched.etag)) {
-                null -> CasResult.Written(newHash = hasher(bytes))
-                else -> CasResult.Unreadable(applyFailure, targetMutated = true)
+    ): CasResult = when (
+            val stat = readCasAuthority(path, failure) {
+                runBlocking { client.head(key) }
             }
-        } else {
-            healMirror(path, fetched) // an external writer won the race - the standard mismatch path
-            CasResult.Mismatch(currentBytes = fetched.bytes, currentHash = hasher(fetched.bytes))
+        ) {
+            CasAuthorityRead.Deleted -> CasResult.Deleted
+            is CasAuthorityRead.Failed -> stat.result
+            is CasAuthorityRead.Found ->
+                when {
+                    stat.value.etag == priorEtag ->
+                        CasResult.Unreadable(causeOf(failure), targetMutated = false) // the PUT did not land
+
+                    else -> readBackAmbiguousCas(path, key, bytes, hasher, failure)
+                }
         }
-    }
+
+    private fun readBackAmbiguousCas(
+        path: TreePath,
+        key: String,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+        failure: Exception,
+    ): CasResult =
+        when (
+            val fetched = readCasAuthority(path, failure) {
+                runBlocking { client.get(key) }
+            }
+        ) {
+            CasAuthorityRead.Deleted -> CasResult.Deleted
+            is CasAuthorityRead.Failed -> fetched.result
+            is CasAuthorityRead.Found ->
+                when {
+                    hasher(fetched.value.bytes) == hasher(bytes) ->
+                        // OUR put landed after all - complete the normal success apply.
+                        when (val applyFailure = applyConfirmedWrite(path, bytes, fetched.value.etag)) {
+                            null -> CasResult.Written(newHash = hasher(bytes))
+                            else -> CasResult.Unreadable(applyFailure, targetMutated = true)
+                        }
+
+                    else -> {
+                        healMirror(path, fetched.value) // an external writer won the race - the standard mismatch path
+                        CasResult.Mismatch(
+                            currentBytes = fetched.value.bytes,
+                            currentHash = hasher(fetched.value.bytes),
+                        )
+                    }
+                }
+        }
+
+    private fun <T> readCasAuthority(
+        path: TreePath,
+        originalFailure: Exception,
+        read: () -> T?,
+    ): CasAuthorityRead<T> =
+        runCatching(read).fold(
+            onSuccess = { value ->
+                when (value) {
+                    null -> CasAuthorityRead.Deleted
+                    else -> CasAuthorityRead.Found(value)
+                }
+            },
+            onFailure = { readFailure ->
+                when (readFailure) {
+                    is Exception ->
+                        CasAuthorityRead.Failed(
+                            outcomeUnknown(path, originalFailure, readFailure) { cause, mutated ->
+                                CasResult.Unreadable(cause, mutated)
+                            },
+                        )
+                    else -> throw readFailure
+                }
+            },
+        )
 
     /** The shared exclusive-create PUT ([createExclusive] and its asset twin, post-gates). */
     private fun exclusivePut(path: TreePath, bytes: ByteArray, hasher: (ByteArray) -> String, contentType: String?): CreateResult {
         val key = keyOf(path)
-        val outcome = try {
+        val outcome = runCatching {
             runBlocking { client.put(key, bytes, PutCondition.IfAbsent, contentType = contentType) }
-        } catch (e: Exception) {
-            return if (isDefinitivePreSend(e)) {
-                CreateResult.Unreadable(causeOf(e), targetMutated = false)
-            } else {
-                disambiguateCreate(path, key, bytes, hasher, failure = e) // Q8a create twin
+        }.getOrElse { failure ->
+            return when (failure) {
+                is Exception ->
+                    when {
+                        isDefinitivePreSend(failure) -> CreateResult.Unreadable(causeOf(failure), targetMutated = false)
+                        else -> disambiguateCreate(path, key, bytes, hasher, failure = failure) // Q8a create twin
+                    }
+                else -> throw failure
             }
         }
         return when (outcome) {
@@ -846,10 +938,11 @@ class ObjectContentStore(
      */
     private fun existsAfterRefusedCreate(path: TreePath, key: String): CreateResult {
         if (!mirror.gates.nfcEquivalentSiblingExists(mirror.onDiskTarget(path))) {
-            val fetched = try {
+            val fetched = runCatching {
                 runBlocking { client.get(key) }
-            } catch (e: Exception) {
-                logger.warn { "post-conflict GET-heal of '${path.value}' failed (${causeOf(e)}); the poll will retry" }
+            }.getOrElse { failure ->
+                rethrowError(failure)
+                logger.warn { "post-conflict GET-heal of '${path.value}' failed (${causeOf(failure)}); the poll will retry" }
                 null
             }
             fetched?.let { healMirror(path, it) }
@@ -865,10 +958,13 @@ class ObjectContentStore(
         hasher: (ByteArray) -> String,
         failure: Exception,
     ): CreateResult {
-        val fetched = try {
+        val fetched = runCatching {
             runBlocking { client.get(key) }
-        } catch (e: Exception) {
-            return outcomeUnknown(path, failure, e) { cause, mutated -> CreateResult.Unreadable(cause, mutated) }
+        }.getOrElse { readFailure ->
+            return when (readFailure) {
+                is Exception -> outcomeUnknown(path, failure, readFailure) { cause, mutated -> CreateResult.Unreadable(cause, mutated) }
+                else -> throw readFailure
+            }
         } ?: return CreateResult.Unreadable(causeOf(failure), targetMutated = false) // absent: nothing landed
         return if (hasher(fetched.bytes) == hasher(bytes)) {
             when (val applyFailure = applyConfirmedWrite(path, bytes, fetched.etag)) {
@@ -894,10 +990,13 @@ class ObjectContentStore(
     /** Q8c audit trail: HEAD-and-warn, strictly observational - a null or a throw never gates. */
     private fun auditHead(path: TreePath, key: String) {
         val prior = state.etagOf(path)
-        val stat = try {
+        val stat = runCatching {
             runBlocking { client.head(key) }
-        } catch (e: Exception) {
-            logger.debug { "write audit HEAD for '${path.value}' failed (${causeOf(e)}); proceeding (the audit never gates)" }
+        }.getOrElse { failure ->
+            rethrowError(failure)
+            logger.debug {
+                "write audit HEAD for '${path.value}' failed (${causeOf(failure)}); proceeding (the audit never gates)"
+            }
             return
         }
         when {
@@ -916,15 +1015,24 @@ class ObjectContentStore(
     private fun putUnconditionalWithRetry(key: String, bytes: ByteArray): PutOutcome.Stored {
         lateinit var last: Exception
         repeat(2) { attempt ->
-            try {
-                return when (val outcome = runBlocking { client.put(key, bytes, PutCondition.None, contentType = MARKDOWN) }) {
+            val attemptResult = runCatching {
+                when (val outcome = runBlocking { client.put(key, bytes, PutCondition.None, contentType = MARKDOWN) }) {
                     is PutOutcome.Stored -> outcome
                     is PutOutcome.PreconditionFailed ->
                         throw ObjectStoreException("unconditional PUT of '$key' reported precondition status ${outcome.status}")
                 }
-            } catch (e: Exception) {
-                last = e
-                if (attempt == 0) logger.warn { "unconditional PUT of '$key' failed (${causeOf(e)}); retrying once (idempotent)" }
+            }
+            when (val failure = attemptResult.exceptionOrNull()) {
+                null -> return attemptResult.getOrThrow()
+                is Exception -> {
+                    last = failure
+                    if (attempt == 0) {
+                        logger.warn {
+                            "unconditional PUT of '$key' failed (${causeOf(failure)}); retrying once (idempotent)"
+                        }
+                    }
+                }
+                else -> throw failure
             }
         }
         throw last
@@ -934,233 +1042,31 @@ class ObjectContentStore(
     private fun mirrorWriteFailure(write: () -> Unit): String? {
         var lastError: String? = null
         repeat(2) {
-            try {
+            val writeResult = runCatching {
                 write()
-                return null
-            } catch (e: Exception) {
-                lastError = e.message ?: e::class.simpleName ?: "io error"
+            }
+            when (val failure = writeResult.exceptionOrNull()) {
+                null -> return null
+                is Exception -> lastError = failure.message ?: failure::class.simpleName ?: "io error"
+                else -> throw failure
             }
         }
         return lastError
     }
 
     /**
-     * **ONE generation: the durable rows as they stood BEFORE the first LIST page, then the whole LIST** (C3).
-     *
-     * The ORDER is the boundary and it is load-bearing. LIST pagination is not atomic, so a page CREATED while the
-     * pagination runs may legitimately be missing from the manifest - and it is not in [ObjectManifest.rowsAtStart]
-     * either, so this generation's proof can never cover it and it simply waits for the next cycle. Read the rows
-     * AFTER the LIST instead and a create racing the LIST is reaped by the very LIST that could not have seen it.
-     *
-     * Publication is all-or-nothing: [listBucket] THROWS if any page fails, so a partial pagination never reaches the
-     * `store` below and the previous generation stands. It does not "publish what it got" - an incomplete manifest is
-     * not a smaller corpus, it is an unknown one.
+     * Captures the durable boundary before LIST and publishes the complete generation atomically.
+     * ObjectBucketLister owns pagination, eligibility, and raw-name collision policy.
      */
-    private fun listGeneration(): Generation {
-        val boundary = rowsAtStart()
-        val listed = listBucket()
-        return Generation(
-            binding = binding,
-            listed = listed,
-            rowsAtStart = boundary.rows,
-            bindingEpoch = boundary.bindingEpoch,
-        ).also(generation::set)
-    }
+    private fun listGeneration(): ObjectGeneration =
+        bucketLister.listGeneration().also(generation::set)
 
-    /**
-     * LISTs the whole [keyPrefix] space through the eligibility funnel (seam a): wire decode
-     * ([S3WireKey]) -> prefix strip -> per-segment ignore check + the NFC [TreePath] parse, with B3
-     * winner resolution for NFC-colliding keys. Network - never called under the monitor. The
-     * parser's fail-closed truncation guard is inherited per page.
-     */
-    private fun listBucket(): Map<TreePath, ListedEntry> {
-        val entries = mutableMapOf<TreePath, ListedEntry>()
-        runBlocking {
-            client.forEachListedObject(keyPrefix) { wire ->
-                val raw = S3WireKey.decode(wire.key)
-                if (!raw.startsWith(keyPrefix)) {
-                    logger.warn { "skipping bucket key outside the configured prefix: '$raw'" }
-                    return@forEachListedObject
-                }
-                val relative = raw.removePrefix(keyPrefix)
-                val path = eligibleTreePath(relative) ?: return@forEachListedObject
-                val existing = entries[path]
-                when {
-                    existing == null -> entries[path] = ListedEntry(relative, wire.etag)
-                    RawByteOrder.compare(relative, existing.rawRelative) < 0 -> {
-                        logger.warn {
-                            "NFC key collision at '${path.value}': winner raw='$relative', loser raw='${existing.rawRelative}'"
-                        }
-                        entries[path] = ListedEntry(relative, wire.etag)
-                    }
-                    else -> logger.warn {
-                        "NFC key collision at '${path.value}': winner raw='${existing.rawRelative}', loser raw='$relative'"
-                    }
-                }
-            }
-        }
-        return entries
-    }
+    private fun writeMirrorRaw(rawRelative: String, bytes: ByteArray, fullNfcSweep: Boolean) =
+        mirrorFiles.writeRaw(rawRelative, bytes, fullNfcSweep)
 
-    /**
-     * The ONE eligibility predicate (seam a), shared by the hydrate GET-set, the poll diff, and the
-     * delete phase: every decoded segment passes the ignore rules (dotfiles - so `.git` and the
-     * reserved `.plainbase/` prefix are invisible by existing law) AND the NFC-normalized form
-     * parses as a [TreePath] (the R8 funnel). Ineligible keys are skipped with a warn; the expected
-     * app-owned `.plainbase/` prefix logs debug only.
-     */
-    private fun eligibleTreePath(rawRelative: String): TreePath? {
-        // The DECISION is single-sourced in [MirrorKeyFunnel] (so the native funnel test exercises the
-        // real logic, not a copy); this wrapper only adds the operational skip logging. The SECURITY
-        // escape guard runs first: a foreign/hostile key (`..\x`, `C:/x`) that would land outside the
-        // mirror on a Windows host is rejected before it can become a ListedEntry reaching writeMirrorRaw
-        // or the delete phase.
-        val path = MirrorKeyFunnel.eligible(rawRelative, mirrorRoot, ignoreRules)
-        if (path == null) {
-            when {
-                MirrorKeyFunnel.escapesRoot(rawRelative, mirrorRoot) ->
-                    logger.warn { "skipping bucket key that could escape the mirror root: '$rawRelative'" }
-                rawRelative.startsWith(APP_OWNED_PREFIX) -> logger.debug { "skipping app-owned bucket key: '$rawRelative'" }
-                else -> logger.warn { "skipping ineligible bucket key (ignored or unparseable): '$rawRelative'" }
-            }
-        }
-        return path
-    }
+    private fun mirrorHasRaw(rawRelative: String): Boolean = mirrorFiles.holdsRaw(rawRelative)
 
-    /**
-     * Writes [bytes] at the LITERAL raw relative location under the mirror root (temp-sibling +
-     * ATOMIC_MOVE): hydration/poll preserve the bucket's raw byte-form verbatim so the inner store's
-     * next scan applies NFC normalization, B3 collision resolution, and P4 raw-name retention to
-     * those files exactly as it does locally (the point of the hybrid composition).
-     */
-    private fun writeMirrorRaw(rawRelative: String, bytes: ByteArray, fullNfcSweep: Boolean) {
-        // SECURITY sandbox guard (write-sink side, belt-and-suspenders behind the funnel): NEVER create a
-        // dir or write bytes for a key that resolves outside the mirror root. Throwing here routes through
-        // `mirrorWriteFailure` so the apply is treated as NOT applied (the caller invalidates, never
-        // recordConfirmed for a skipped-unsafe key).
-        if (MirrorKeyFunnel.escapesRoot(rawRelative, mirrorRoot)) {
-            logger.warn { "refusing mirror write of a key that escapes the mirror root: '$rawRelative'" }
-            throw ObjectStoreException("mirror key '$rawRelative' resolves outside the mirror root")
-        }
-        val target = mirrorRoot.resolve(rawRelative)
-        Files.createDirectories(target.parent)
-        val tmp = Files.createTempFile(target.parent, ".pbtmp", ".tmp")
-        try {
-            Files.write(tmp, bytes)
-            try {
-                atomics.atomicMove(tmp, target)
-            } catch (_: AtomicMoveNotSupportedException) {
-                logger.warn { "ATOMIC_MOVE unsupported for '$rawRelative'; falling back to copy+delete (non-atomic)" }
-                atomics.copyReplace(tmp, target)
-            }
-            // The bucket keys by RAW bytes; LocalContentStore keys reads by NFC TreePath. If the bucket's raw
-            // key for this path changed (an NFC-equivalent re-upload / a raw-byte swap), the OLD raw file would
-            // survive and could win B3 collision resolution, serving a stale generation. Sweep any NFC-equivalent
-            // sibling that is NOT this exact raw name so one raw file backs each TreePath.
-            //
-            // O2: the sweep runs on EVERY apply-write, NOT only on a fresh ADD. A `replacingInPlace` skip (target
-            // already exists) would let a RETRY after a failed sweep - OR after a failed rollback-delete
-            // (double-fault) - see the target and SKIP the sweep, then `recordConfirmed` over a surviving stale
-            // sibling. Always-sweep makes the double-fault non-stranding: any retry / next poll re-sweeps until it
-            // succeeds, so a confirmed apply NEVER leaves a stale NFC sibling.
-            //
-            // MINOR-2: the warm poll passes fullNfcSweep=false so it names only THIS key's NFC/NFD sibling(s)
-            // instead of scanning the whole parent - a full scan per write is O(N^2) over a flat mega-dir on a
-            // bulk poll. Boot hydrate passes true (one full scan per write, boot-only) to also catch a rare
-            // non-canonically-ordered sibling the targeted names cannot enumerate.
-            try {
-                if (fullNfcSweep) removeStaleNfcSiblings(target) else removeStaleNfcSiblingsTargeted(target)
-            } catch (e: IOException) {
-                // A sweep FAILURE fails the whole apply (a surviving NFC-sibling can serve stale bytes). Roll back
-                // the just-added target; the caller invalidates and the next poll/hydrate re-applies AND re-sweeps.
-                // For a REPLACE this delete leaves the path ABSENT (the atomic move already displaced the old file),
-                // not the pre-apply bytes - a transient read-miss the invalidate + re-fetch self-heals, never stale.
-                runCatching { Files.deleteIfExists(target) }.onFailure { rollbackErr ->
-                    logger.warn {
-                        "rollback delete of '$rawRelative' after a failed NFC sweep ALSO failed " +
-                            "(${causeOf(rollbackErr)}); the next apply always re-sweeps, so this cannot strand the stale sibling"
-                    }
-                }
-                throw ObjectStoreException("mirror NFC-sibling sweep failed for '$rawRelative': ${causeOf(e)}", e)
-            }
-        } finally {
-            Files.deleteIfExists(tmp)
-        }
-    }
-
-    /**
-     * True iff the mirror holds a REGULAR FILE at the exact raw name [rawRelative] (the finding-1 self-heal probe,
-     * and half of [mirrorHoldsGeneration]'s completeness check).
-     *
-     * A bare `exists` was the bug: a DIRECTORY where a file should be exists perfectly well, and it serves no bytes.
-     * `NOFOLLOW` because this store writes plain files and nothing else - a symlink here is not something we put
-     * there, so it is not a mirror file, and treating it as one would be trusting a link we did not make.
-     */
-    private fun mirrorHasRaw(rawRelative: String): Boolean =
-        Files.isRegularFile(mirrorRoot.resolve(rawRelative), LinkOption.NOFOLLOW_LINKS)
-
-    /**
-     * The TARGETED sibling sweep for the warm poll path (MINOR-2): removes only the NFC- and NFD-encoded
-     * leaf names of [target] that resolve to a DIFFERENT file, without a whole-directory scan (which is
-     * O(N^2) over a flat mega-dir on a bulk poll). A canonically-equivalent re-upload stores at most those
-     * two canonical byte-forms; a rare non-canonically-ordered sibling is left for the boot hydrate's full
-     * [removeStaleNfcSiblings] scan. THROWS on an I/O failure exactly like the full sweep (same fail-the-apply
-     * contract). [Files.isSameFile] skips [target] itself by inode - on a folding filesystem (macOS/Windows)
-     * the NFC and NFD names resolve to the just-written file, so a name compare would delete what we healed.
-     */
-    private fun removeStaleNfcSiblingsTargeted(target: Path) {
-        val parent = target.parent ?: return
-        val name = target.fileName.toString()
-        val candidates = setOf(Nfc.normalize(name), Nfc.decompose(name)) - name
-        for (candidateName in candidates) {
-            val entry = parent.resolve(candidateName)
-            if (!Files.exists(entry, LinkOption.NOFOLLOW_LINKS) || Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
-            if (Files.isSameFile(entry, target)) continue
-            logger.warn { "removing stale NFC-equivalent mirror sibling '$candidateName' superseded by '$name'" }
-            Files.deleteIfExists(entry)
-        }
-    }
-
-    /**
-     * Removes any NFC-equivalent leaf sibling of [target] that is a DIFFERENT file, so one raw file per
-     * TreePath. THROWS on failure (B-C2): the sweep is load-bearing - a surviving NFC-sibling can win a
-     * `LocalContentStore` scan/read and serve a stale generation, so a failed sweep must fail the whole
-     * apply (the caller rolls back and never `recordConfirmed`s), never be swallowed as a WARN. Boot/hydrate
-     * only (fullNfcSweep); the warm poll uses [removeStaleNfcSiblingsTargeted].
-     */
-    private fun removeStaleNfcSiblings(target: Path) {
-        val parent = target.parent ?: return
-        val wantNfc = Nfc.normalize(target.fileName.toString())
-        withDirectoryStream(parent) { stream ->
-            for (entry in stream) {
-                if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) continue
-                if (Nfc.normalize(entry.fileName.toString()) != wantNfc) continue
-                // Skip [target] itself by IDENTITY, never by name string: on a normalization-INSENSITIVE
-                // filesystem (macOS/Windows) the just-written target and an NFD-named entry are the SAME
-                // inode whose directory-entry name differs in code units - a name compare would delete the
-                // file we just healed. On a preserving filesystem (Linux) they are distinct inodes to sweep.
-                if (Files.isSameFile(entry, target)) continue
-                logger.warn { "removing stale NFC-equivalent mirror sibling '${entry.fileName}' superseded by '${target.fileName}'" }
-                Files.deleteIfExists(entry)
-            }
-        }
-    }
-
-    /**
-     * EVERY bucket-managed file the mirror currently holds, as eligible [TreePath]s. [scan] refreshes
-     * the snapshot (so [deleteMirrorFile]'s [LocalContentStore.onDiskTarget] resolves NFD raw names
-     * correctly), but `scan().files` EXCLUDES folder-metadata sidecars (`_folder.yaml`) - and those ARE
-     * bucket-managed (an operator/adopted bucket can hold them; hydrate/poll sync them). A folder whose
-     * `_folder.yaml` is present carries non-null [ContentFolder.meta], so add those sidecar paths too:
-     * without them the delete-absent phase could not sweep an orphaned sidecar when mirror-state is
-     * empty/corrupt (its `before.keys` would be empty too), leaving stale folder title/slug metadata
-     * driving URLs and the tree.
-     */
-    private fun mirrorFilePaths(): Set<TreePath> {
-        val scanned = scan()
-        val sidecars = scanned.folders.filter { it.meta != null }.map { it.path.resolveChild(FOLDER_META_NAME) }
-        return (scanned.files.map { it.path } + sidecars).toSet()
-    }
+    private fun mirrorFilePaths(): Set<TreePath> = mirrorFiles.paths()
 
     /**
      * C5 BLOCKING 1: the intention-revealing internal accessor over [mirrorFilePaths] the boot
@@ -1168,82 +1074,15 @@ class ObjectContentStore(
      * listing by construction (HOLE A: the reconcile remove-set keys off THIS authority, never raw
      * disk-absence). `internal` is visible to `GitBundleDr` across packages within the `:server` module.
      */
-    internal fun authoritativeMirrorPaths(): Set<TreePath> = mirrorFilePaths()
+    internal fun authoritativeMirrorPaths(): Set<TreePath> = mirrorFiles.paths()
 
-    /**
-     * C5: STREAMS the bucket-shipped `.git` bundle to [target], returning true when found or false on a true
-     * 404 (no bundle has ever shipped - a fresh install / an abandoned restore). Any OTHER failure PROPAGATES
-     * (HOLE C): [client] throws on a non-404 status, so a TLS/connect blip is never misread as "no bundle" -
-     * that would let [restore] init a fresh empty repo the next ship would then CLOBBER over real history.
-     *
-     * B-C3: streamed straight to disk (never a whole-body in-heap array), so a bundle exceeding available heap
-     * on a smaller recovery host cannot throw `OutOfMemoryError` and escape the DR boot refusal; and given a
-     * bundle-appropriate request timeout, not the short page-op one, so a large bundle transfer does not time
-     * out (an unbootable restore loop). The restore caller catches `Throwable` and routes it through [bootRefusal].
-     */
-    fun fetchHistoryBundleTo(target: Path): Boolean =
-        runBlocking { client.getToFile(bundleKey, target, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS) }
+    fun fetchHistoryBundleTo(target: Path): Boolean = historyBundles.fetchTo(target)
 
-    /**
-     * C5: ships the DR bundle unconditionally (`PutCondition.None` - see the invariant comment at
-     * [GitBundleDr.ship]'s call site), with the bundle-appropriate request timeout (B-C3): a large bundle must
-     * not time out on the short page-op bound and leave the DR artifact permanently stale.
-     */
-    fun putHistoryBundle(bytes: ByteArray) {
-        runBlocking {
-            client.put(bundleKey, bytes, PutCondition.None, contentType = null, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS)
-        }
-    }
+    fun putHistoryBundle(bytes: ByteArray) = historyBundles.put(bytes)
 
-    /**
-     * C5: ships the DR bundle by STREAMING [source] straight to the PUT body (B-C3), never materializing the
-     * whole bundle in heap - so a later cadence ship on a memory-constrained host cannot OOM and strand the
-     * DR artifact. Unconditional, bundle-timeout, symmetric with [fetchHistoryBundleTo].
-     */
-    fun putHistoryBundleFrom(source: Path) {
-        runBlocking {
-            client.putFromFile(bundleKey, source, contentType = null, requestTimeoutMillis = BUNDLE_TRANSFER_TIMEOUT_MILLIS)
-        }
-    }
+    fun putHistoryBundleFrom(source: Path) = historyBundles.putFrom(source)
 
-    /**
-     * `<prefix/>.plainbase/history.bundle` - under the reserved [APP_OWNED_PREFIX] dot-skip law
-     * ([MirrorKeyFunnel]'s eligibility check, wrapped by [eligibleTreePath]) so it is invisible to
-     * scan/hydrate/poll like every other app-owned key.
-     */
-    private val bundleKey get() = keyPrefix + APP_OWNED_PREFIX + "history.bundle"
-
-    /**
-     * Deletes [path]'s mirror file (P4 raw-name-aware) and drops now-empty parent directories. Returns
-     * true iff the file is now absent (deleted, or already gone); false iff the delete FAILED, so the
-     * caller keeps the state entry rather than invalidating/emitting over a file that still serves.
-     */
-    private fun deleteMirrorFile(path: TreePath): Boolean {
-        val target = mirror.onDiskTarget(path)
-        logger.info { "deleting mirror file absent from the bucket: ${path.value}" }
-        return try {
-            Files.deleteIfExists(target)
-            dropEmptyParents(target.parent)
-            true
-        } catch (e: IOException) {
-            logger.warn { "mirror delete of '${path.value}' failed (${causeOf(e)}); keeping state, retrying next cycle" }
-            false
-        }
-    }
-
-    private fun dropEmptyParents(start: Path?) {
-        var dir = start?.toAbsolutePath()?.normalize()
-        while (dir != null && dir != mirrorRoot && dir.startsWith(mirrorRoot)) {
-            try {
-                val empty = Files.isDirectory(dir) && withDirectoryStream(dir) { !it.iterator().hasNext() }
-                if (!empty) return
-                Files.delete(dir)
-            } catch (_: IOException) {
-                return
-            }
-            dir = dir.parent
-        }
-    }
+    private fun deleteMirrorFile(path: TreePath): Boolean = mirrorFiles.delete(path)
 
     /**
      * Ambiguity classification (seam b): a failure where the request provably never went out
@@ -1281,23 +1120,25 @@ class ObjectContentStore(
         return ObjectStoreException(message, failure) // chain the original (keep its stack), not just its message
     }
 
+    private fun rethrowError(failure: Throwable) {
+        if (failure is Error) throw failure
+    }
+
     private fun causeOf(failure: Throwable): String = failure.message ?: failure::class.simpleName ?: "failure"
 
-    private class ListedEntry(val rawRelative: String, val etag: String)
+    private sealed interface CasComparison {
+        data class Ready(val bytes: ByteArray, val etag: String) : CasComparison
 
-    /**
-     * One complete LIST, as ONE immutable value (C3): what the bucket held, at which etags, and which durable rows
-     * this root had before the pagination started. Published whole or not at all - see [listGeneration].
-     *
-     * The etags are stored, not just the key names, because completeness is a claim about IDENTITY: see
-     * [mirrorHoldsGeneration].
-     */
-    private class Generation(
-        val binding: RootBinding,
-        val listed: Map<TreePath, ListedEntry>,
-        val rowsAtStart: Set<BindingRef>,
-        val bindingEpoch: BindingEpoch,
-    )
+        data class Finished(val result: CasResult) : CasComparison
+    }
+
+    private sealed interface CasAuthorityRead<out T> {
+        data class Found<T>(val value: T) : CasAuthorityRead<T>
+
+        data object Deleted : CasAuthorityRead<Nothing>
+
+        data class Failed(val result: CasResult) : CasAuthorityRead<Nothing>
+    }
 
     companion object {
         /** R9 test hook: LOCAL boot must construct ZERO hybrids - proven by counter, never reasoned. */

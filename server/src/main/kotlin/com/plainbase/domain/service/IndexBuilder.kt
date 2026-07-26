@@ -532,6 +532,17 @@ class IndexBuilder(
                 observedAt = retirements.observations(),
             ),
         )
+        finishRebuild(snapshot, retired, witnessed, scannedRoots, raisedIssues)
+        return snapshot
+    }
+
+    private fun finishRebuild(
+        snapshot: PageIndex,
+        retired: Set<RootedPageId>,
+        witnessed: Map<RootedPath, Witness>,
+        scannedRoots: Set<RootName>,
+        raisedIssues: List<IdentityIssue>,
+    ) {
         publishLimbo(witnessed, scannedRoots)
         logger.info {
             val breakdown = if (snapshot.sections.size > 1) {
@@ -555,7 +566,6 @@ class IndexBuilder(
             }
         }
         notifyPublished(snapshot, retired)
-        return snapshot
     }
 
     /**
@@ -749,45 +759,78 @@ class IndexBuilder(
         // the proof loses `applyProofs`' two-token compare. Captured in the loop below - after `durable` was read -
         // a bind in the gap would be folded into the stamp and the compare would MATCH the reap it must forbid.
         val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
-        val proofs = mutableListOf<AbsenceProof>()
-        val advances = mutableListOf<GitCheckpointAdvance>()
-        for (source in gitOracleRoots) {
-            val root = source.root.name
-            val preHead = headsBefore[root] ?: continue // G1
-            val postHead = source.history.currentHead()
-            if (postHead == null || postHead != preHead) continue // G2, the bracket
-            val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete } ?: continue // G3
-            // BOTH stamps were captured by the CALLER before the earliest evidence of the pass (revoke-before-stamp, C5).
-            // The observation half used to be read HERE, which made this source blind to the one event it most needed to
-            // respect: a break arriving between the scan and this line moved the token, and reading it after the move
-            // stamped the proof with the very value `applyProofs` would compare against - so the break was swallowed and
-            // a tree we had stopped watching was reaped anyway. It is safe to take the pre-evidence value now only because
-            // the epoch open that legitimately moves the token mid-pass has itself been hoisted above the evidence
-            // ([ObservationEpoch.establish]); before that, this source had no honest early value to read.
-            val token = observations.getValue(root)
-            val epoch = stamps.getValue(root)
+        val minted = gitOracleRoots.mapNotNull { source ->
+            mintGitForSource(source, scans, headsBefore, stamps, observations, durable)
+        }
+        return GitMint(
+            proofs = minted.flatMap(GitMint::proofs),
+            advances = minted.flatMap(GitMint::advances),
+        )
+    }
 
-            val oldHead = retirements.gitHead(root)
-            if (oldHead == null) {
-                advances += GitCheckpointAdvance(root, token, epoch, postHead) // BASELINE: record, prove nothing
-                continue
-            }
-            if (oldHead == postHead) continue // nothing new since the last checkpoint
-            if (!source.history.isAncestor(oldHead, postHead)) continue // force-push/unrelated: pin until reconcile
-            val deleted = source.history.deletedIn(oldHead, postHead) ?: continue
-
-            val enumerated = scan.drafts.mapTo(mutableSetOf()) { it.file.path }
-            val covers = durable[root].orEmpty()
-                .filterTo(mutableSetOf()) { it.path in deleted && it.path !in enumerated && it.path !in scan.unread }
-            if (covers.isNotEmpty()) {
-                proofs += AbsenceProof(root = root, source = ProofSource.GIT, observationId = token, bindingEpoch = epoch, covers = covers)
-            }
-            // Resolution-based advance: withhold ONLY when a deleted path is still UNREAD (unresolved this pass).
-            if ((deleted intersect scan.unread).isEmpty()) {
-                advances += GitCheckpointAdvance(root, token, epoch, postHead)
+    private fun mintGitForSource(
+        source: Source,
+        scans: List<SourceScan>,
+        headsBefore: Map<RootName, String>,
+        stamps: Map<RootName, BindingEpoch>,
+        observations: Map<RootName, ObservationId>,
+        durable: Map<RootName, List<BindingRef>>,
+    ): GitMint? {
+        val root = source.root.name
+        val preHead = headsBefore[root]
+        val postHead = source.history.currentHead()
+        val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete }
+        return when {
+            preHead == null -> null // G1
+            postHead == null || postHead != preHead -> null // G2, the bracket
+            scan == null -> null // G3
+            else -> {
+                // BOTH stamps were captured before the earliest evidence of the pass (revoke-before-stamp, C5).
+                val token = observations.getValue(root)
+                val epoch = stamps.getValue(root)
+                mintGitRange(source, scan, root, postHead, token, epoch, durable[root].orEmpty())
             }
         }
-        return GitMint(proofs, advances)
+    }
+
+    private fun mintGitRange(
+        source: Source,
+        scan: SourceScan,
+        root: RootName,
+        postHead: String,
+        token: ObservationId,
+        epoch: BindingEpoch,
+        durable: List<BindingRef>,
+    ): GitMint? {
+        val oldHead = retirements.gitHead(root)
+        return when {
+            oldHead == null ->
+                GitMint(
+                    proofs = emptyList(),
+                    advances = listOf(GitCheckpointAdvance(root, token, epoch, postHead)),
+                )
+
+            oldHead == postHead -> null
+            !source.history.isAncestor(oldHead, postHead) -> null
+            else -> source.history.deletedIn(oldHead, postHead)?.let { deleted ->
+                val enumerated = scan.drafts.mapTo(mutableSetOf()) { it.file.path }
+                val covers = durable.filterTo(mutableSetOf()) {
+                    it.path in deleted && it.path !in enumerated && it.path !in scan.unread
+                }
+                val proof = covers.takeIf { it.isNotEmpty() }?.let {
+                    AbsenceProof(
+                        root = root,
+                        source = ProofSource.GIT,
+                        observationId = token,
+                        bindingEpoch = epoch,
+                        covers = it,
+                    )
+                }
+                val advance = GitCheckpointAdvance(root, token, epoch, postHead)
+                    .takeIf { (deleted intersect scan.unread).isEmpty() }
+                GitMint(listOfNotNull(proof), listOfNotNull(advance))
+            }
+        }
     }
 
     /**
@@ -1034,11 +1077,12 @@ class IndexBuilder(
     /** §B4 listener exception policy: contain and log — the publish stands, the remaining listeners still run. */
     private fun notifyPublished(snapshot: PageIndex, retired: Set<RootedPageId>) {
         listeners.forEach { listener ->
-            try {
+            runCatching {
                 listener.published(snapshot, retired)
-            } catch (e: Exception) {
+            }.onFailure { failure ->
+                if (failure is Error) throw failure
                 // Exception, not Throwable — narrower than §B4's literal "nothing propagates" so a JVM Error (OOM/SOE) still fails loudly.
-                logger.error(e) { "publication listener failed; the published snapshot stands" }
+                logger.error(failure) { "publication listener failed; the published snapshot stands" }
             }
         }
     }
@@ -1115,31 +1159,40 @@ class IndexBuilder(
      */
     private fun scanIfAvailable(source: Source): SourceScan? {
         val root = source.root.name
-        if (!availability.current().isAvailable(root)) {
-            logger.warn { "root '$root' is unavailable; skipping its scan and carrying its last-good section forward" }
-            return null
+        return when {
+            !availability.current().isAvailable(root) -> {
+                logger.warn { "root '$root' is unavailable; skipping its scan and carrying its last-good section forward" }
+                null
+            }
+
+            rootLoss.markIfGone(root, source.store) ->
+                skipAndCarry(root, "its backing tree is not traversable")
+
+            else -> runCatching { scan(source) }.fold(
+                onSuccess = { scan ->
+                    when {
+                        rootLoss.markIfGone(root, source.store) ->
+                            skipAndCarry(root, "it vanished while being scanned, so the tree it handed back is not a corpus")
+                        else -> scan
+                    }
+                },
+                onFailure = { failure ->
+                    when (failure) {
+                        is RootUnavailable -> {
+                            availability.markUnavailable(failure.root, failure.reason)
+                            logger.warn {
+                                "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward"
+                            }
+                            null
+                        }
+
+                        is IOException -> classifyScanFailure(source, failure)
+                        is HistoryCommandException -> classifyScanFailure(source, failure)
+                        else -> throw failure
+                    }
+                },
+            )
         }
-        if (rootLoss.markIfGone(root, source.store)) return skipAndCarry(root, "its backing tree is not traversable")
-        val scan = try {
-            scan(source)
-        } catch (unavailable: RootUnavailable) {
-            // RootUnavailable is already a classified answer, so publish it here instead of relying on every
-            // ContentStore adapter to have invoked an out-of-band marker before returning RootDown. The mark is
-            // idempotent when an adapter already did so. Never re-probe: a vanished root whose path has since
-            // REAPPEARED could pass that probe and make us trust the scan the store already refused to answer for.
-            availability.markUnavailable(unavailable.root, unavailable.reason)
-            logger.warn { "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward" }
-            return null
-        } catch (e: IOException) {
-            return classifyScanFailure(source, e)
-        } catch (e: HistoryCommandException) {
-            return classifyScanFailure(source, e)
-        }
-        // The handoff probe: the tree that handed this scan back must still be the tree we started on.
-        if (rootLoss.markIfGone(root, source.store)) {
-            return skipAndCarry(root, "it vanished while being scanned, so the tree it handed back is not a corpus")
-        }
-        return scan
     }
 
     /**
@@ -1445,27 +1498,8 @@ class IndexBuilder(
         // gap for MATERIALIZED pages (the id travels in the file). An unmaterialized page moved
         // while down still gets a fresh id and no alias: the accepted §5.2 path-keyed-identity
         // trade-off, restated, not fixed here.
-        for (page in snapshot.pages) {
-            // EXACT rooted match ONLY (per-root identity, C5): a move is detected as a same-root (root, urlPath)
-            // change. The bare-id cross-root fallback is DROPPED - once a bare id may name two roots a cross-root
-            // move is UNDECIDABLE (the absence theorem, DECISION doc), so we require EXACT rooted evidence rather
-            // than a bare-id guess that would register a wrong-root alias.
-            val priorKey = page.rooted.takeIf { it in previousUrlPaths } ?: continue
-            val oldUrlPath = previousUrlPaths.getValue(priorKey) ?: continue
-            val old = RootedPath(priorKey.root, oldUrlPath) // OLD root = the prior entry's KEY root
-            if (old == page.urlPath?.let { RootedPath(page.root, it) }) continue
-            if (old in liveCanonicals) {
-                record(
-                    raised,
-                    IdentityIssue.RedirectConflict(
-                        root = old.root,
-                        path = old.path,
-                        message = "move alias for page ${page.id} dropped: shadowed by a live canonical path",
-                    ),
-                )
-            } else {
-                aliasRegistry.register(old, page.rooted)
-            }
+        snapshot.pages.forEach { page ->
+            recordMoveAlias(page, previousUrlPaths, liveCanonicals, raised)
         }
 
         // redirect_from registration: file-path values converted through the same URL construction,
@@ -1493,6 +1527,32 @@ class IndexBuilder(
                     ),
                 )
             }
+        }
+    }
+
+    private fun recordMoveAlias(
+        page: IndexedPage,
+        previousUrlPaths: Map<RootedPageId, TreePath?>,
+        liveCanonicals: Set<RootedPath>,
+        raised: MutableList<IdentityIssue>,
+    ) {
+        // EXACT rooted match ONLY (per-root identity, C5): cross-root movement is undecidable.
+        val priorKey = page.rooted.takeIf { it in previousUrlPaths } ?: return
+        val oldUrlPath = previousUrlPaths.getValue(priorKey) ?: return
+        val old = RootedPath(priorKey.root, oldUrlPath)
+        when {
+            old == page.urlPath?.let { RootedPath(page.root, it) } -> Unit
+            old in liveCanonicals ->
+                record(
+                    raised,
+                    IdentityIssue.RedirectConflict(
+                        root = old.root,
+                        path = old.path,
+                        message = "move alias for page ${page.id} dropped: shadowed by a live canonical path",
+                    ),
+                )
+
+            else -> aliasRegistry.register(old, page.rooted)
         }
     }
 

@@ -37,10 +37,18 @@ fun Route.searchRoute(ctx: RouteContext) {
             // §A1 parameter NAMES are matched in raw form (deliberate): no real client percent-encodes
             // ASCII names, and decoding names would re-open the throwing decode this handler avoids.
             for (name in listOf("q", "limit", "offset")) {
-                decoded[name] = try {
+                decoded[name] = runCatching {
                     raw[name]?.decodeURLQueryComponent(plusIsSpace = true)
-                } catch (cause: URLDecodeException) {
-                    return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, malformedQueryMessage(raw))
+                }.getOrElse { failure ->
+                    when (failure) {
+                        is URLDecodeException ->
+                            return@guarded call.respondError(
+                                HttpStatusCode.BadRequest,
+                                ErrorCodes.INVALID_QUERY,
+                                malformedQueryMessage(raw),
+                            )
+                        else -> throw failure
+                    }
                 }
             }
             // Blocking JDBC must never park a CIO event-loop thread — the SearchDb contract makes this

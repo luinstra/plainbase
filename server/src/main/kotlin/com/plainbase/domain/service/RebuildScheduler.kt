@@ -81,10 +81,12 @@ class RebuildScheduler(
             firstEventAt = null
             running = true
         }
-        try {
+        runCatching {
             rebuild()
-        } catch (e: Exception) {
-            logger.error(e) { "scheduled rebuild failed; the next change schedules another full pass" }
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
+            logger.error(failure) { "scheduled rebuild failed; the next change schedules another full pass" }
         }
         synchronized(lock) {
             running = false

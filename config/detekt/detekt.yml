@@ -3,14 +3,41 @@
 # Initial adoption policy: style/size debt remains visible as warnings while the
 # existing backlog is reviewed. Revisit these thresholds and promote useful
 # rules back to errors as the backlog is cleaned up.
+config:
+  validation: true
+  warningsAsErrors: true
+
 complexity:
+  ComplexCondition:
+    allowedConditions: 4
+  CyclomaticComplexMethod:
+    allowedComplexity: 20
+    ignoreNestingFunctions: true
+    ignoreSimpleWhenEntries: true
+    ignoreSingleWhenExpression: true
   LargeClass:
+    allowedLines: 800
     excludes:
       - '**/test/**'
     severity: Warning
   LongMethod:
+    allowedLines: 100
     severity: Warning
+  LongParameterList:
+    allowedConstructorParameters: 7
+    allowedFunctionParameters: 8
+    ignoreDataClasses: true
+    ignoreDefaultParameters: true
+  NestedBlockDepth:
+    allowedDepth: 5
   TooManyFunctions:
+    allowedFunctionsPerClass: 25
+    allowedFunctionsPerEnum: 15
+    allowedFunctionsPerFile: 20
+    allowedFunctionsPerInterface: 20
+    allowedFunctionsPerObject: 20
+    ignoreOverridden: true
+    ignorePrivate: true
     severity: Warning
 
 exceptions:
@@ -31,4 +58,8 @@ style:
     active: false
   ReturnCount:
     excludeGuardClauses: true
+    max: 4
     severity: Warning
+  ThrowsCount:
+    excludeGuardClauses: true
+    max: 4

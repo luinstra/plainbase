@@ -191,20 +191,28 @@ class ObservationEpoch(
         bindingEpoch: BindingEpoch,
     ): AbsenceProof? {
         val state = holder.load()[root] ?: Epoch.Unobserved
-        if (state == Epoch.Unobserved) return null // nobody is watching: a scan-diff is not an observation
         val epoch = liveEpoch(root)
-        if (!convergence.isWhole(root)) {
-            // A tree with an unwatched subtree in it is not an observation, it is a sample: an edit under that
-            // subtree raises NO event at all. The LOSS of coverage already broke the epoch (the watcher reports the
-            // transition); this is the REOPEN guard, because coverage that STAYS partial reports nothing further -
-            // and it is the belt for a live epoch that somehow outlived the transition.
-            if (epoch != null) broke(root, BreakCause.COVERAGE_LOST)
-            return null
+        return when {
+            state == Epoch.Unobserved -> null
+            !convergence.isWhole(root) -> {
+                // A tree with an unwatched subtree in it is a sample, not an observation.
+                if (epoch != null) broke(root, BreakCause.COVERAGE_LOST)
+                null
+            }
+
+            epoch == null -> null
+            else -> proofFromScan(root, witnessed, unread, durable, bindingEpoch, epoch)
         }
-        // A break that landed after [establish] left this epoch behind is FINAL for this pass, and the reopen belongs
-        // to the NEXT pass - whose [establish] opens over a witness set gathered AFTER the break. Reopening HERE would
-        // open on the scan this pass already took, and so claim to have watched the very gap it just fell into.
-        if (epoch == null) return null
+    }
+
+    private fun proofFromScan(
+        root: RootName,
+        witnessed: Set<TreePath>,
+        unread: Set<TreePath>,
+        durable: Set<BindingRef>,
+        bindingEpoch: BindingEpoch,
+        epoch: Epoch.Open,
+    ): AbsenceProof? {
         val gone = durable.filterTo(mutableSetOf()) { it.path in epoch.witnessed && it.path !in witnessed && it.path !in unread }
         holder.store(holder.load() + (root to epoch.copy(witnessed = epoch.witnessed + witnessed)))
         if (gone.isEmpty()) return null

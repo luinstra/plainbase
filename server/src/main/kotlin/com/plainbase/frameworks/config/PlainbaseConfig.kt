@@ -689,10 +689,17 @@ data class PlainbaseConfig(
                 if (hasBackup) throw IllegalArgumentException(damagedRootsMessage(path, backup, "it is MISSING"))
                 return ConfigFactory.empty()
             }
-            val parsed = try {
+            val parsed = runCatching {
                 ConfigFactory.parseFile(path.toFile()).resolve(ConfigResolveOptions.defaults())
-            } catch (e: ConfigException) {
-                throw IllegalArgumentException(damagedRootsMessage(path, backup.takeIf { hasBackup }, "it does not parse: ${e.message}"))
+            }.getOrElse { failure ->
+                when (failure) {
+                    is ConfigException ->
+                        throw IllegalArgumentException(
+                            damagedRootsMessage(path, backup.takeIf { hasBackup }, "it does not parse: ${failure.message}"),
+                            failure,
+                        )
+                    else -> throw failure
+                }
             }
             if (!parsed.hasPath("roots")) {
                 throw IllegalArgumentException(
@@ -823,11 +830,7 @@ data class PlainbaseConfig(
             requireCoherentMainHistory(roots, env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"))
             return PlainbaseConfig(
                 contentDir = contentDir,
-                contentDirSource = when {
-                    contentDirEnv != null -> ConfigSource.ENV
-                    contentDirFile != null -> ConfigSource.FILE
-                    else -> ConfigSource.DEFAULT
-                },
+                contentDirSource = contentDirSource(contentDirEnv, contentDirFile),
                 storage = storage,
                 roots = roots,
                 // RootName.require, not `of`: a typo'd name would otherwise silently arm nothing at all, and the
@@ -837,37 +840,74 @@ data class PlainbaseConfig(
                 dataDir = dataDirFrom(env),
                 host = env["PLAINBASE_HOST"] ?: file.stringOrNull("host") ?: DEFAULT_HOST,
                 port = env.longStrict("PLAINBASE_PORT")?.toIntInRange("PLAINBASE_PORT") ?: file.intOrNull("port") ?: DEFAULT_PORT,
-                maxWriteBodyBytes = env.positiveLongStrict("PLAINBASE_MAX_WRITE_BODY_BYTES")
-                    ?: file.longOrNull("maxWriteBodyBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_WRITE_BODY_BYTES,
-                maxAssetBytes = env.positiveLongStrict("PLAINBASE_MAX_ASSET_BYTES")
-                    ?: file.longOrNull("maxAssetBytes")?.takeIf { it > 0 } ?: DEFAULT_MAX_ASSET_BYTES,
-                git = GitConfig(
-                    enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
-                    authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: file.stringOrNull("git.authorName") ?: DEFAULT_GIT_AUTHOR_NAME,
-                    authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: file.stringOrNull("git.authorEmail") ?: DEFAULT_GIT_AUTHOR_EMAIL,
+                maxWriteBodyBytes = positiveSize(
+                    env,
+                    file,
+                    "PLAINBASE_MAX_WRITE_BODY_BYTES",
+                    "maxWriteBodyBytes",
+                    DEFAULT_MAX_WRITE_BODY_BYTES,
                 ),
-                auth = AuthConfig(
-                    mode = AuthMode.parse(env["PLAINBASE_AUTH_MODE"] ?: file.stringOrNull("auth.mode")),
-                    trustedProxyCidrs = requireParseableCidrs(
-                        env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList() ?: file.stringListOrNull("auth.trustedProxy") ?: emptyList(),
-                    ),
-                    insecureHttp = insecureHttp,
-                    agentDirectCommitGlobs = requireParseableGlobs(mainDirectCommitGlobs(env, file)),
-                    agentDirectCommitGlobsByRoot = buildDirectCommitGlobsByRoot(file, roots),
-                    // A secret SHOULD come from env (the "secrets stay in env" rule), but the file path is allowed for
-                    // completeness; the deploy docs steer operators to env.
-                    proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
-                    proxyIdentityHeader = (env["PLAINBASE_PROXY_IDENTITY_HEADER"] ?: file.stringOrNull("auth.proxyIdentityHeader"))
-                        ?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
-                    // P3 MCP DNS-rebinding allowlists. Empty here → the fail-closed bind-host default (see mcpHostAllowlist);
-                    // reuse the SAME comma-or-list parser the trustedProxyCidrs path uses (never hand-roll a second one).
-                    mcpAllowedHosts = env["PLAINBASE_MCP_ALLOWED_HOSTS"]?.toCommaList()
-                        ?: file.stringListOrNull("auth.mcpAllowedHosts") ?: emptyList(),
-                    mcpAllowedOrigins = env["PLAINBASE_MCP_ALLOWED_ORIGINS"]?.toCommaList()
-                        ?: file.stringListOrNull("auth.mcpAllowedOrigins") ?: emptyList(),
-                ),
+                maxAssetBytes = positiveSize(env, file, "PLAINBASE_MAX_ASSET_BYTES", "maxAssetBytes", DEFAULT_MAX_ASSET_BYTES),
+                git = buildGit(env, file),
+                auth = buildAuth(env, file, insecureHttp, roots),
             )
         }
+
+        private fun contentDirSource(envValue: String?, fileValue: String?): ConfigSource =
+            when {
+                envValue != null -> ConfigSource.ENV
+                fileValue != null -> ConfigSource.FILE
+                else -> ConfigSource.DEFAULT
+            }
+
+        private fun positiveSize(
+            env: Map<String, String>,
+            file: Config,
+            envKey: String,
+            filePath: String,
+            default: Long,
+        ): Long =
+            env.positiveLongStrict(envKey)
+                ?: file.longOrNull(filePath)?.takeIf { it > 0 }
+                ?: default
+
+        private fun buildGit(env: Map<String, String>, file: Config): GitConfig =
+            GitConfig(
+                enabled = env.boolStrict("PLAINBASE_GIT_ENABLED") ?: file.boolStrict("git.enabled"),
+                authorName = env["PLAINBASE_GIT_AUTHOR_NAME"] ?: file.stringOrNull("git.authorName") ?: DEFAULT_GIT_AUTHOR_NAME,
+                authorEmail = env["PLAINBASE_GIT_AUTHOR_EMAIL"] ?: file.stringOrNull("git.authorEmail") ?: DEFAULT_GIT_AUTHOR_EMAIL,
+            )
+
+        private fun buildAuth(
+            env: Map<String, String>,
+            file: Config,
+            insecureHttp: Boolean,
+            roots: RootsConfig,
+        ): AuthConfig =
+            AuthConfig(
+                mode = AuthMode.parse(env["PLAINBASE_AUTH_MODE"] ?: file.stringOrNull("auth.mode")),
+                trustedProxyCidrs = requireParseableCidrs(
+                    env["PLAINBASE_TRUSTED_PROXY"]?.toCommaList()
+                        ?: file.stringListOrNull("auth.trustedProxy")
+                        ?: emptyList(),
+                ),
+                insecureHttp = insecureHttp,
+                agentDirectCommitGlobs = requireParseableGlobs(mainDirectCommitGlobs(env, file)),
+                agentDirectCommitGlobsByRoot = buildDirectCommitGlobsByRoot(file, roots),
+                // Secrets should come from env; the file fallback exists for completeness.
+                proxySecret = env["PLAINBASE_PROXY_SECRET"] ?: file.stringOrNull("auth.proxySecret"),
+                proxyIdentityHeader = (
+                    env["PLAINBASE_PROXY_IDENTITY_HEADER"]
+                        ?: file.stringOrNull("auth.proxyIdentityHeader")
+                )?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROXY_IDENTITY_HEADER,
+                // Empty allowlists select the fail-closed bind-host default.
+                mcpAllowedHosts = env["PLAINBASE_MCP_ALLOWED_HOSTS"]?.toCommaList()
+                    ?: file.stringListOrNull("auth.mcpAllowedHosts")
+                    ?: emptyList(),
+                mcpAllowedOrigins = env["PLAINBASE_MCP_ALLOWED_ORIGINS"]?.toCommaList()
+                    ?: file.stringListOrNull("auth.mcpAllowedOrigins")
+                    ?: emptyList(),
+            )
 
         /**
          * The Q9 storage matrix, strict env-wins like every other field. Object mode fail-fasts its

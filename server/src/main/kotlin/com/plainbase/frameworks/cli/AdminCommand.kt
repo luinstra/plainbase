@@ -70,10 +70,11 @@ object AdminCommand {
         output: CommandOutput = systemCommandOutput(),
         reloadConfig: () -> PlainbaseConfig? = { config },
     ): Int =
-        try {
+        runCatching {
             runChecked(args, config, output, reloadConfig)
-        } catch (e: Exception) {
-            logger.error(e) { "admin command failed" }
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
+            logger.error(failure) { "admin command failed" }
             output.error("admin: unexpected failure")
             1
         }
@@ -180,7 +181,7 @@ object AdminCommand {
      * builtin admin.
      */
     private fun grantRole(roleRepo: SqlDelightRoleRepository, args: List<String>, output: CommandOutput): Int {
-        if (args.size != 3) {
+        if (args.size != GRANT_ROLE_ARGUMENT_COUNT) {
             output.error("usage: plainbase admin grant-role <issuer> <external_id> <${roleUsage()}>")
             return 2
         }
@@ -389,6 +390,7 @@ object AdminCommand {
 
     /** The lock-guarded subcommand group (NOT setup-token, which has its own lock path) — the dispatch `when` mirror. */
     private val LOCKED_SUBCOMMANDS = setOf("mint-token", "revoke-token", "list-tokens", "grant-role", "force-retire")
+    private const val GRANT_ROLE_ARGUMENT_COUNT = 3
 
     private val USAGE = "usage: plainbase admin <mint-token <label> [${modeUsage()}] | revoke-token <id> | " +
         "list-tokens | grant-role <issuer> <external_id> <${roleUsage()}> | force-retire <root> <id> | setup-token [--force]>"

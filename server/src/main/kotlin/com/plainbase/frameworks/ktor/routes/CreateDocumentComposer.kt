@@ -44,9 +44,12 @@ private fun yamlDoubleQuoted(value: String): String =
                 c == '\n' -> append("\\n")
                 c == '\r' -> append("\\r")
                 c == '\t' -> append("\\t")
-                c < ' ' -> append("\\u").append(c.code.toString(16).padStart(4, '0'))
+                c < ' ' -> append("\\u").append(c.code.toString(UNICODE_RADIX).padStart(UNICODE_ESCAPE_WIDTH, '0'))
                 else -> append(c)
             }
         }
         append('"')
     }
+
+private const val UNICODE_RADIX = 16
+private const val UNICODE_ESCAPE_WIDTH = 4

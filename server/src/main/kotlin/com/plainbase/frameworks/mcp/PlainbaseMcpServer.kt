@@ -216,21 +216,9 @@ private fun <T> jsonResult(serializer: KSerializer<T>, dto: T): CallToolResult =
  * to the log, NEVER on the wire).
  */
 private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): CallToolResult =
-    try {
-        val dto = body() ?: return errorResult("not_found", "No such resource")
-        jsonResult(serializer, dto)
-    } catch (denied: AccessDenied) {
-        deniedResult(denied)
-    } catch (unavailable: RootUnavailable) {
-        unavailableResult(unavailable)
-    } catch (unverified: AbsenceUnverified) {
-        unverifiedResult(unverified)
-    } catch (ambiguous: AmbiguousPageId) {
-        ambiguousResult(ambiguous)
-    } catch (t: Throwable) {
-        logger.error(t) { "MCP tool failed" } // cause to the log, never the wire
-        errorResult("internal", "Internal error")
-    }
+    runCatching {
+        body()?.let { jsonResult(serializer, it) } ?: errorResult("not_found", "No such resource")
+    }.getOrElse(::mcpFailureResult)
 
 /**
  * The outer wrapper for any handler that PRE-VALIDATES an arg or maps a discriminated outcome to a [CallToolResult]
@@ -239,19 +227,20 @@ private inline fun <T> toolResult(serializer: KSerializer<T>, body: () -> T?): C
  * no throw escapes the SSE stream. A handler returns a known bad-input outcome via `errorResult` from inside [body].
  */
 private inline fun catchingErrors(body: () -> CallToolResult): CallToolResult =
-    try {
+    runCatching {
         body()
-    } catch (denied: AccessDenied) {
-        deniedResult(denied)
-    } catch (unavailable: RootUnavailable) {
-        unavailableResult(unavailable)
-    } catch (unverified: AbsenceUnverified) {
-        unverifiedResult(unverified)
-    } catch (ambiguous: AmbiguousPageId) {
-        ambiguousResult(ambiguous)
-    } catch (t: Throwable) {
-        logger.error(t) { "MCP tool failed" }
-        errorResult("internal", "Internal error")
+    }.getOrElse(::mcpFailureResult)
+
+private fun mcpFailureResult(failure: Throwable): CallToolResult =
+    when (failure) {
+        is AccessDenied -> deniedResult(failure)
+        is RootUnavailable -> unavailableResult(failure)
+        is AbsenceUnverified -> unverifiedResult(failure)
+        is AmbiguousPageId -> ambiguousResult(failure)
+        else -> {
+            logger.error(failure) { "MCP tool failed" } // cause to the log, never the wire
+            errorResult("internal", "Internal error")
+        }
     }
 
 /**

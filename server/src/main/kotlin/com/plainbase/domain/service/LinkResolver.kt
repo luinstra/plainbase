@@ -34,22 +34,19 @@ class LinkResolver(private val index: PageIndexView) {
      */
     private fun classify(rawLink: String): LinkOutcome? {
         // Scheme'd / protocol-relative: allowlist decides external pass-through vs blocked_scheme.
-        schemePrefix(rawLink)?.let { scheme ->
-            return if (scheme.lowercase() in ALLOWED_SCHEMES) {
+        val scheme = schemePrefix(rawLink)
+        return when {
+            scheme != null && scheme.lowercase() in ALLOWED_SCHEMES ->
                 LinkOutcome.Resolved.External(rawLink)
-            } else {
-                LinkOutcome.Broken(BrokenReason.BLOCKED_SCHEME)
-            }
-        }
-        if (rawLink.startsWith("//")) return LinkOutcome.Resolved.External(rawLink) // protocol-relative
+            scheme != null -> LinkOutcome.Broken(BrokenReason.BLOCKED_SCHEME)
+            rawLink.startsWith("//") -> LinkOutcome.Resolved.External(rawLink)
 
-        // Same-page anchor (`#fragment` only): the fragment takes the same strict decode/re-encode
-        // path as every other fragment (see decodedOrNull) — never emitted raw.
-        if (rawLink.startsWith("#")) {
-            val fragment = decodedOrNull(rawLink.substring(1)) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED)
-            return LinkOutcome.Resolved.Anchor("#${PercentCoding.encodeSegment(fragment)}")
+            rawLink.startsWith("#") ->
+                decodedOrNull(rawLink.substring(1))
+                    ?.let { LinkOutcome.Resolved.Anchor("#${PercentCoding.encodeSegment(it)}") }
+                    ?: LinkOutcome.Broken(BrokenReason.MALFORMED)
+            else -> null
         }
-        return null
     }
 
     /** §A2 steps 1–6 for an internal target (path/query/fragment split, decode, lexical resolve, match). */
@@ -62,68 +59,47 @@ class LinkResolver(private val index: PageIndexView) {
         val (rawPath, rawQuery) = splitOnce(beforeFragment, '?')
 
         // Empty path (`[]()` or a `?...#...` with no path) is malformed; a bare `#...` was handled above.
-        if (rawPath.isEmpty()) return LinkOutcome.Broken(BrokenReason.MALFORMED)
-
-        val emittedFragment = when (fragment) {
-            null -> null
-            else -> PercentCoding.encodeSegment(decodedOrNull(fragment) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED))
+        val decodedFragment = fragment?.let(::decodedOrNull)
+        val decodedPath = decodedOrNull(rawPath)
+        return when {
+            rawPath.isEmpty() -> LinkOutcome.Broken(BrokenReason.MALFORMED)
+            fragment != null && decodedFragment == null -> LinkOutcome.Broken(BrokenReason.MALFORMED)
+            decodedPath == null -> LinkOutcome.Broken(BrokenReason.MALFORMED)
+            else -> {
+                val emittedFragment = decodedFragment?.let(PercentCoding::encodeSegment)
+                when (val resolved = ContentRoot.resolve(sourcePath.parent, decodedPath)) {
+                    is ContentRoot.ResolveResult.Resolved ->
+                        resolveTarget(resolved.path, decodedPath.endsWith("/"), emittedFragment, rawQuery)
+                    ContentRoot.ResolveResult.Outside ->
+                        LinkOutcome.Broken(BrokenReason.OUTSIDE_CONTENT_ROOT)
+                    ContentRoot.ResolveResult.Root -> resolveDirectory(null, emittedFragment)
+                }
+            }
         }
-
-        val decodedPath = decodedOrNull(rawPath) ?: return LinkOutcome.Broken(BrokenReason.MALFORMED)
-
-        // Steps 3+4: NFC-normalize and resolve lexically against the root (ContentRoot does both —
-        // it NFC-normalizes each surviving segment and is the single containment guard). A leading
-        // '/' resolves against the root; otherwise against the current page's directory.
-        val baseDir = sourcePath.parent
-        val resolved: TreePath = when (val rr = ContentRoot.resolve(baseDir, decodedPath)) {
-            is ContentRoot.ResolveResult.Resolved -> rr.path
-            ContentRoot.ResolveResult.Outside -> return LinkOutcome.Broken(BrokenReason.OUTSIDE_CONTENT_ROOT)
-            // Collapsed to the content root itself (e.g. `../` from a top-level dir): treat the root
-            // directory like any directory target — try index.md / README.md.
-            ContentRoot.ResolveResult.Root -> return resolveDirectory(null, emittedFragment)
-        }
-
-        // Step 5: match against the index by target form. A trailing '/' forces directory handling.
-        val hasTrailingSlash = decodedPath.endsWith("/")
-        return resolveTarget(resolved, hasTrailingSlash, emittedFragment, rawQuery)
     }
 
     /** §A2 step 5/6 — match a resolved [path] against the index by target form, then classify. */
     private fun resolveTarget(path: TreePath, trailingSlash: Boolean, fragment: String?, rawQuery: String?): LinkOutcome {
         val name = path.name
-
-        // Explicit directory request (trailing slash) -> index.md / README.md probe.
-        if (trailingSlash) return resolveDirectory(path, fragment)
-
-        // .md -> page target.
-        if (name.endsWith(".md")) {
-            return when (index.kindOf(path)) {
+        return when {
+            trailingSlash -> resolveDirectory(path, fragment)
+            name.endsWith(".md") -> when (index.kindOf(path)) {
                 PageIndexView.EntryKind.PAGE -> pageOutcome(path, fragment)
                 else -> rescue(path)
             }
-        }
-
-        // A path that resolves to a known directory -> index.md / README.md probe.
-        if (index.kindOf(path) == PageIndexView.EntryKind.DIRECTORY) {
-            return resolveDirectory(path, fragment)
-        }
-
-        // Extensionless file -> try `<path>.md` (page) first, then `<path>` (asset).
-        if (!name.contains('.')) {
-            val asMd = TreePath.childOf(path.parent, "$name.md")
-            if (index.kindOf(asMd) == PageIndexView.EntryKind.PAGE) return pageOutcome(asMd, fragment)
-            if (index.kindOf(path) == PageIndexView.EntryKind.ASSET) return assetOutcome(path, fragment, rawQuery)
-            // Rescue across BOTH inferred candidates (§A2 step 5 precedence: `.md` page first, then the
-            // bare asset path). A wrong-case extensionless link to an existing page (`Setup` for
-            // `setup.md`) must classify as broken_case_mismatch via the inferred `.md` candidate — not
-            // broken_missing from rescuing the literal extensionless path alone (PB-LINK-1 fix).
-            return rescue(asMd, path)
-        }
-
-        // Any other extension -> asset target.
-        return when (index.kindOf(path)) {
-            PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery)
+            index.kindOf(path) == PageIndexView.EntryKind.DIRECTORY -> resolveDirectory(path, fragment)
+            !name.contains('.') -> resolveExtensionless(path, fragment, rawQuery)
+            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery)
             else -> rescue(path)
+        }
+    }
+
+    private fun resolveExtensionless(path: TreePath, fragment: String?, rawQuery: String?): LinkOutcome {
+        val asMd = TreePath.childOf(path.parent, "${path.name}.md")
+        return when {
+            index.kindOf(asMd) == PageIndexView.EntryKind.PAGE -> pageOutcome(asMd, fragment)
+            index.kindOf(path) == PageIndexView.EntryKind.ASSET -> assetOutcome(path, fragment, rawQuery)
+            else -> rescue(asMd, path)
         }
     }
 

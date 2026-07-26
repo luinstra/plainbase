@@ -20,12 +20,14 @@ class SqlDelightPageCheckpointRepository(private val db: PlainbaseDb) : PageChec
 
     private val queries get() = db.pageCheckpointQueries
 
-    override fun load(): Map<RootedPageId, TreePath?> = try {
-        queries.selectAll().executeAsList().associate { RootedPageId(it.root, it.id) to it.url_path }
-    } catch (e: Exception) {
-        logger.warn(e) { "page_checkpoint unreadable; continuing without down-time move aliases (advisory, §B3)" }
-        emptyMap()
-    }
+    override fun load(): Map<RootedPageId, TreePath?> =
+        runCatching {
+            queries.selectAll().executeAsList().associate { RootedPageId(it.root, it.id) to it.url_path }
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
+            logger.warn(failure) { "page_checkpoint unreadable; continuing without down-time move aliases (advisory, §B3)" }
+            emptyMap()
+        }
 
     override fun replace(urlPaths: Map<RootedPageId, TreePath?>) {
         db.transaction {

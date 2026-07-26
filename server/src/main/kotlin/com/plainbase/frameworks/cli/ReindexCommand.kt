@@ -97,12 +97,13 @@ object ReindexCommand {
             output.error(USAGE) // reindex takes no flags
             return 2
         }
-        return try {
+        return runCatching {
             config.requireContentDir() // inside try → a bad config exits 1, honoring the contract (not a stack trace)
             reindex(config, decorate, output)
             0
-        } catch (e: Exception) {
-            logger.error(e) { "reindex failed" } // diagnostics via the facade, not println
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
+            logger.error(failure) { "reindex failed" } // diagnostics via the facade, not println
             1
         }
     }
@@ -212,7 +213,7 @@ object ReindexCommand {
         decorate: StoreDecorator,
     ): Map<RootName, ContentStore> {
         val stores = LinkedHashMap<RootName, ContentStore>()
-        try {
+        runCatching {
             // Main is explicit (it rides the backend-selected store); the fold sees ONLY extras, never re-selecting
             // main by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
             // disappearance test drives, so dropping it here would disarm that test for main's own tree, silently.
@@ -227,9 +228,10 @@ object ReindexCommand {
                 )
                 stores[root.name] = decorate(root.name, store)
             }
-        } catch (e: Exception) {
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
             stores.values.forEach { (it as? AutoCloseable)?.close() }
-            throw e
+            throw failure
         }
         return stores
     }
@@ -256,11 +258,12 @@ object ReindexCommand {
                 dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
                 isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
             )
-            try {
+            runCatching {
                 hybrid.hydrate()
-            } catch (e: Exception) {
+            }.onFailure { failure ->
+                if (failure is Error) throw failure
                 hybrid.close()
-                throw e
+                throw failure
             }
             hybrid
         }

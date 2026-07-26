@@ -27,7 +27,9 @@ class Argon2PasswordHasher(
         require(memoryKb in 1..MAX_MEMORY_KB) { "Argon2 memory must be between 1 and $MAX_MEMORY_KB KiB" }
         require(iterations in 1..MAX_ITERATIONS) { "Argon2 iterations must be between 1 and $MAX_ITERATIONS" }
         require(parallelism in 1..MAX_PARALLELISM) { "Argon2 parallelism must be between 1 and $MAX_PARALLELISM" }
-        require(memoryKb >= 8 * parallelism) { "Argon2 memory must be at least 8 KiB per lane" }
+        require(memoryKb >= MIN_MEMORY_KB_PER_LANE * parallelism) {
+            "Argon2 memory must be at least $MIN_MEMORY_KB_PER_LANE KiB per lane"
+        }
         require(saltLength in MIN_SALT_BYTES..MAX_SALT_BYTES) {
             "Argon2 salt length must be between $MIN_SALT_BYTES and $MAX_SALT_BYTES bytes"
         }
@@ -68,19 +70,26 @@ class Argon2PasswordHasher(
      * not pass.
      */
     private fun parsePhc(encoded: String): Phc? {
-        if (encoded.length > MAX_PHC_CHARS) return null
-        val parts = encoded.split('$')
-        if (parts.size != 6 || parts[1] != "argon2id") return null
-        val version = parts[2].takeIf { it.startsWith("v=") }?.removePrefix("v=")?.toIntOrNull()
-        if (version != PHC_VERSION) return null
-        val params = parseParams(parts[3]) ?: return null
-        val m = params["m"]?.takeIf { it in 1..MAX_MEMORY_KB } ?: return null
-        val t = params["t"]?.takeIf { it in 1..MAX_ITERATIONS } ?: return null
-        val p = params["p"]?.takeIf { it in 1..MAX_PARALLELISM } ?: return null
-        if (m < 8 * p) return null
-        val salt = decodeBase64(parts[4])?.takeIf { it.size in MIN_SALT_BYTES..MAX_SALT_BYTES } ?: return null
-        val hash = decodeBase64(parts[5])?.takeIf { it.size in MIN_HASH_BYTES..MAX_HASH_BYTES } ?: return null
-        return Phc(m, t, p, salt, hash)
+        val parts = encoded.takeIf { it.length <= MAX_PHC_CHARS }
+            ?.split('$')
+            ?.takeIf { it.size == PHC_PART_COUNT && it[1] == "argon2id" }
+        val version = parts?.get(2)?.takeIf { it.startsWith("v=") }?.removePrefix("v=")?.toIntOrNull()
+        val params = parts?.get(3)?.takeIf { version == PHC_VERSION }?.let(::parseParams)
+        val memory = params?.get("m")?.takeIf { it in 1..MAX_MEMORY_KB }
+        val iterations = params?.get("t")?.takeIf { it in 1..MAX_ITERATIONS }
+        val parallelism = params?.get("p")?.takeIf { it in 1..MAX_PARALLELISM }
+        val salt = parts?.get(4)?.let(::decodeBase64)?.takeIf { it.size in MIN_SALT_BYTES..MAX_SALT_BYTES }
+        val hash = parts?.get(5)?.let(::decodeBase64)?.takeIf { it.size in MIN_HASH_BYTES..MAX_HASH_BYTES }
+        return when {
+            memory != null &&
+                iterations != null &&
+                parallelism != null &&
+                memory >= MIN_MEMORY_KB_PER_LANE * parallelism &&
+                salt != null &&
+                hash != null ->
+                Phc(memory, iterations, parallelism, salt, hash)
+            else -> null
+        }
     }
 
     private fun parseParams(segment: String): Map<String, Int>? = buildMap {
@@ -132,6 +141,9 @@ class Argon2PasswordHasher(
     }
 
     private companion object {
+        private const val MIN_MEMORY_KB_PER_LANE = 8
+        private const val PHC_PART_COUNT = 6
+
         /** The only Argon2 version we emit or accept (0x13 — “v=19” in PHC strings). */
         const val PHC_VERSION = 19
 

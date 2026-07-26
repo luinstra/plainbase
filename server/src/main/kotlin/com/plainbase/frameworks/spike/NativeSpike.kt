@@ -127,7 +127,7 @@ object NativeSpike {
         output.result("runtime: $vm / $vmVersion")
         val results = runAll()
         for (r in results) {
-            output.result("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(28)} ${r.detail}")
+            output.result("${if (r.passed) "PASS" else "FAIL"}  ${r.name.padEnd(RESULT_NAME_WIDTH)} ${r.detail}")
         }
         val failed = results.count { !it.passed }
         return if (failed == 0) {
@@ -139,14 +139,15 @@ object NativeSpike {
         }
     }
 
-    private fun check(name: String, block: () -> String): CheckResult = try {
-        CheckResult(name, true, block())
-    } catch (t: Throwable) {
-        val causes = generateSequence(t) { it.cause }.toList()
-        val chain = causes.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
-        val origin = causes.last().stackTrace.take(12).joinToString("") { "\n        at $it" }
-        CheckResult(name, false, chain + origin)
-    }
+    private fun check(name: String, block: () -> String): CheckResult =
+        runCatching {
+            CheckResult(name, true, block())
+        }.getOrElse { failure ->
+            val causes = generateSequence(failure) { it.cause }.toList()
+            val chain = causes.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
+            val origin = causes.last().stackTrace.take(12).joinToString("") { "\n        at $it" }
+            CheckResult(name, false, chain + origin)
+        }
 
     // ---- 1. Ktor CIO client TLS round-trip (the standing native-HTTPS gate, plan C0) ------
 
@@ -206,7 +207,7 @@ object NativeSpike {
                 "on port ${serverSocket.localPort}; default trust refused it"
         } finally {
             serverSocket.close()
-            listener.join(5_000)
+            listener.join(TLS_LISTENER_JOIN_TIMEOUT_MILLIS)
         }
     }
 
@@ -269,24 +270,24 @@ object NativeSpike {
 
                 // bm25 column weights steer ordering: the title-hit page outranks the page whose
                 // BODY repeats the term; scores are finite (negated bm25), descending.
-                val deploy = provider.search(SearchQuery("deploy", limit = 10, offset = 0))
+                val deploy = provider.search(SearchQuery("deploy", limit = SEARCH_RESULT_LIMIT, offset = 0))
                 require(deploy.total == 2L) { "expected 2 'deploy' hits, got ${deploy.total}" }
                 require(deploy.hits.first().pageId.value == SPIKE_DEPLOY_ID) { "title weight did not win: ${deploy.hits}" }
                 require(deploy.hits.all { it.score.isFinite() }) { "non-finite score in ${deploy.hits}" }
                 require(deploy.hits.zipWithNext().all { (a, b) -> a.score >= b.score }) { "scores not descending: ${deploy.hits}" }
 
                 // Prefix matching: the MATCH builder stars the final token ("deplo"*).
-                require(provider.search(SearchQuery("deplo", 10, 0)).total == 2L) { "prefix query missed" }
+                require(provider.search(SearchQuery("deplo", SEARCH_RESULT_LIMIT, 0)).total == 2L) { "prefix query missed" }
 
                 // Snippet sentinels -> A3 offsets: markers never escape, ranges extract the match.
-                val kube = provider.search(SearchQuery("kubernetes", 10, 0)).hits.single()
+                val kube = provider.search(SearchQuery("kubernetes", SEARCH_RESULT_LIMIT, 0)).hits.single()
                 require('\u0001' !in kube.snippet && '\u0002' !in kube.snippet) { "sentinels leaked: ${kube.snippet}" }
                 require(kube.highlights.isNotEmpty()) { "no highlight offsets for the kubernetes hit" }
                 val marked = kube.highlights.map { kube.snippet.substring(it.start, it.end) }
                 require(marked.all { it.equals("kubernetes", ignoreCase = true) }) { "offsets marked $marked" }
 
                 // Trigram CJK rescue: unicode61 cannot match ガイド inside 日本語ガイド; the fallback can.
-                val cjk = provider.search(SearchQuery("ガイド", 10, 0))
+                val cjk = provider.search(SearchQuery("ガイド", SEARCH_RESULT_LIMIT, 0))
                 require(cjk.hits.singleOrNull()?.pageId?.value == SPIKE_CJK_ID) { "CJK rescue missed: ${cjk.hits}" }
 
                 // highlight() aux-function round-trip (the S0-proven surface stays in the gate even
@@ -309,7 +310,9 @@ object NativeSpike {
 
                 // Per-page replace + indexedState (the engine-truth diff base).
                 provider.index(listOf(spikeWelcomePage(contentHash = "sha256:replaced", body = "deploy on metal only")))
-                require(provider.search(SearchQuery("kubernetes", 10, 0)).total == 0L) { "replaced section still matches" }
+                require(provider.search(SearchQuery("kubernetes", SEARCH_RESULT_LIMIT, 0)).total == 0L) {
+                    "replaced section still matches"
+                }
                 val state = provider.indexedState().mapKeys { it.key.id.value }
                 require(state[SPIKE_WELCOME_ID]?.contentHash == "sha256:replaced") { "indexedState stale: $state" }
             }
@@ -333,6 +336,10 @@ object NativeSpike {
     private const val SPIKE_DEPLOY_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     private const val SPIKE_WELCOME_ID = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
     private const val SPIKE_CJK_ID = "0197c2d1-6f3b-7c45-8d2e-3a7b9f5c8e02"
+    private const val RESULT_NAME_WIDTH = 28
+    private const val TLS_LISTENER_JOIN_TIMEOUT_MILLIS = 5_000L
+    private const val SEARCH_RESULT_LIMIT = 10
+    private const val MCP_TIMEOUT_MILLIS = 15_000L
 
     private fun spikeDeployPage() =
         spikePage(SPIKE_DEPLOY_ID, "guides/deploy-guide.md", "Deploy Guide", "sha256:deploy", "Introduction to the knowledge base")
@@ -445,10 +452,10 @@ object NativeSpike {
         val session = server.createSession(serverTransport)
         val client = Client(Implementation(name = "spike-client", version = "0.0.1"))
         try {
-            withTimeout(15_000) { client.connect(clientTransport) }
+            withTimeout(MCP_TIMEOUT_MILLIS) { client.connect(clientTransport) }
             val serverInfo = client.serverVersion
             require(serverInfo?.name == "plainbase-spike") { "unexpected server info: $serverInfo" }
-            val tools = withTimeout(15_000) { client.listTools() }
+            val tools = withTimeout(MCP_TIMEOUT_MILLIS) { client.listTools() }
             require(tools.tools.any { it.name == "ping" }) { "ping tool not listed: ${tools.tools.map { it.name }}" }
             "initialize handshake + listTools over in-process stdio transport"
         } finally {
@@ -506,18 +513,22 @@ object NativeSpike {
                     }
                     val client = Client(Implementation(name = "plainbase-sse-spike", version = "0.0.1"))
                     try {
-                        withTimeout(15_000) { client.connect(transport) }
+                        withTimeout(MCP_TIMEOUT_MILLIS) { client.connect(transport) }
                         require(client.serverVersion?.name == "plainbase") { "unexpected server info: ${client.serverVersion}" }
-                        val names = withTimeout(15_000) { client.listTools() }.tools.map { it.name }.toSet()
+                        val names = withTimeout(MCP_TIMEOUT_MILLIS) { client.listTools() }.tools.map { it.name }.toSet()
                         require(names == McpTools.ALL) { "MCP tool surface drift: $names (expected ${McpTools.ALL})" }
                         // TWO calls over the SAME open stream (keep-alive / SSE-flush proof, not one round-trip).
                         val listText = (
-                            withTimeout(15_000) { client.callTool("list_changes", emptyMap<String, Any?>()) }
+                            withTimeout(MCP_TIMEOUT_MILLIS) {
+                                client.callTool("list_changes", emptyMap<String, Any?>())
+                            }
                                 ?.content?.firstOrNull() as? TextContent
                             )?.text
                         require(listText?.contains("\"proposals\"") == true) { "list_changes over SSE failed: $listText" }
                         val readText = (
-                            withTimeout(15_000) { client.callTool("read_page", mapOf("id" to seedPageId)) }
+                            withTimeout(MCP_TIMEOUT_MILLIS) {
+                                client.callTool("read_page", mapOf("id" to seedPageId))
+                            }
                                 ?.content?.firstOrNull() as? TextContent
                             )?.text
                         require(readText?.contains(seedPageId) == true) { "read_page over SSE failed: $readText" }

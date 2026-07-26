@@ -22,11 +22,11 @@ object DatabaseFactory {
 
     /** Migrate [driver], closing the handle before rethrowing on ANY failure: a rejected boot must not leak the open connection. */
     internal fun migrateOrClose(driver: SqlDriver): SqlDriver {
-        try {
+        runCatching {
             migrate(driver)
-        } catch (e: Throwable) {
+        }.onFailure { failure ->
             driver.close()
-            throw e
+            throw failure
         }
         return driver
     }

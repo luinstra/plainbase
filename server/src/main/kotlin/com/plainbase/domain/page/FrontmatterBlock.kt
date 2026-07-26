@@ -27,6 +27,7 @@ object FrontmatterBlock {
     private const val DOT = '.'.code.toByte()
     private const val LF = '\n'.code.toByte()
     private const val CR = '\r'.code.toByte()
+    private const val DELIMITER_LENGTH = 3
 
     /**
      * The result of running the grammar: either a [Present] block (a valid opener AND a closing
@@ -106,11 +107,11 @@ object FrontmatterBlock {
     }
 
     private fun isExactlyThreeDashes(input: ByteArray, start: Int, contentEnd: Int): Boolean =
-        contentEnd - start == 3 && (start until contentEnd).all { input[it] == DASH }
+        contentEnd - start == DELIMITER_LENGTH && (start until contentEnd).all { input[it] == DASH }
 
     /** A closing delimiter line is exactly `---` or `...` (§A3): three identical dashes or dots. */
     private fun isDelimiterLine(input: ByteArray, start: Int, contentEnd: Int): Boolean {
-        if (contentEnd - start != 3) return false
+        if (contentEnd - start != DELIMITER_LENGTH) return false
         val first = input[start]
         return (first == DASH || first == DOT) && (start until contentEnd).all { input[it] == first }
     }

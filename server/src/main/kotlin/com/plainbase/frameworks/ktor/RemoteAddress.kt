@@ -15,6 +15,10 @@ import java.net.InetAddress
  * Source identity is ALWAYS the socket remote address — `X-Forwarded-For` is never an input here (§0.10).
  */
 object RemoteAddress {
+    private const val BITS_PER_BYTE = 8
+    private const val IPV4_OCTET_COUNT = 4
+    private const val MAX_IPV4_OCTET_DIGITS = 3
+    private const val MAX_IPV4_OCTET = 255
 
     /**
      * Is [remoteHost] a loopback address? Handles IPv4 `127.0.0.0/8`, IPv6 `::1`, the IPv4-mapped form
@@ -82,16 +86,14 @@ object RemoteAddress {
      */
     private fun stripPort(hostPort: String): String? {
         val host = hostPort.trim()
-        if (host.startsWith("[")) {
-            val close = host.indexOf(']')
-            if (close < 0) return null // unterminated bracket
-            val suffix = host.substring(close + 1)
-            if (suffix.isNotEmpty() && !(suffix.startsWith(':') && suffix.drop(1).all { it.isDigit() })) return null
-            return host.substring(1, close)
+        val close = host.indexOf(']')
+        return when {
+            !host.startsWith("[") && host.count { it == ':' } == 1 -> host.substringBefore(':')
+            !host.startsWith("[") -> host
+            close < 0 -> null
+            host.substring(close + 1).let { it.isNotEmpty() && !(it.startsWith(':') && it.drop(1).all(Char::isDigit)) } -> null
+            else -> host.substring(1, close)
         }
-        // A bare IPv6 literal has multiple colons and no brackets — leave it; only strip a single host:port colon.
-        if (host.count { it == ':' } == 1) return host.substringBefore(':')
-        return host
     }
 
     /**
@@ -118,46 +120,47 @@ object RemoteAddress {
      * literal parse + prefix-bounds logic [matchesCidr] uses (one source of truth), minus the remote: a MISSING
      * `/prefix` (a bare address) and an OUT-OF-RANGE prefix (`/33`, `/129`, negative/non-numeric) both reject.
      */
-    fun isParseableCidr(cidr: String): Boolean {
-        val slash = cidr.indexOf('/')
-        if (slash < 0) return false // a bare address with no `/prefix` is NOT a CIDR
-        val networkPart = cidr.substring(0, slash).trim()
-        // An IPv4 network MUST be a strict 4-octet dotted quad: `InetAddress.getByName` (in parseNumericLiteral)
-        // accepts legacy abbreviated forms (`10.0/8` → `10.0.0.0/8`, `192.168.1/24` → `192.168.0.1/24`), so a typo'd
-        // allowlist would be ADMITTED as a different range instead of failing fast — defeating A1-amber's intent.
-        // IPv6 (it contains `:`) keeps the numeric-literal parse.
-        if (':' !in networkPart && !isStrictIpv4(networkPart)) return false
-        val network = parseNumericLiteral(networkPart) ?: return false
-        val prefix = cidr.substring(slash + 1).trim().toIntOrNull() ?: return false
-        return prefix in 0..(network.address.size * 8)
-    }
+    fun isParseableCidr(cidr: String): Boolean = parseCidr(cidr, requireStrictIpv4 = true) != null
 
     /** A strict dotted quad: exactly four `0..255` octets, no abbreviation, no leading-zero (octal) ambiguity. */
     private fun isStrictIpv4(s: String): Boolean {
         val octets = s.split('.')
-        return octets.size == 4 &&
-            octets.all { o -> o.length in 1..3 && (o.length == 1 || o[0] != '0') && o.toIntOrNull()?.let { it in 0..255 } == true }
+        return octets.size == IPV4_OCTET_COUNT &&
+            octets.all { octet ->
+                octet.length in 1..MAX_IPV4_OCTET_DIGITS &&
+                    (octet.length == 1 || octet[0] != '0') &&
+                    octet.toIntOrNull()?.let { it in 0..MAX_IPV4_OCTET } == true
+            }
     }
 
     private fun matchesCidr(remoteBytes: ByteArray, cidr: String): Boolean {
-        val slash = cidr.indexOf('/')
-        if (slash < 0) return false
-        val network = parseNumericLiteral(cidr.substring(0, slash).trim()) ?: return false
-        val prefix = cidr.substring(slash + 1).trim().toIntOrNull() ?: return false
-        val networkBytes = network.address
-        if (networkBytes.size != remoteBytes.size) return false // different families never match
-        if (prefix < 0 || prefix > networkBytes.size * 8) return false
-        return sharesPrefix(remoteBytes, networkBytes, prefix)
+        val parsed = parseCidr(cidr, requireStrictIpv4 = false)
+        return parsed?.let { it.network.size == remoteBytes.size && sharesPrefix(remoteBytes, it.network, it.prefix) } == true
+    }
+
+    private data class ParsedCidr(val network: ByteArray, val prefix: Int)
+
+    private fun parseCidr(cidr: String, requireStrictIpv4: Boolean): ParsedCidr? {
+        val slash = cidr.indexOf('/').takeIf { it >= 0 }
+        val networkPart = slash?.let { cidr.substring(0, it).trim() }
+        val strictEnough = networkPart?.let { ':' in it || !requireStrictIpv4 || isStrictIpv4(it) } == true
+        val network = networkPart?.takeIf { strictEnough }?.let(::parseNumericLiteral)
+        val prefix = slash?.let { cidr.substring(it + 1).trim().toIntOrNull() }
+        return when {
+            network != null && prefix != null && prefix in 0..(network.address.size * BITS_PER_BYTE) ->
+                ParsedCidr(network.address, prefix)
+            else -> null
+        }
     }
 
     private fun sharesPrefix(a: ByteArray, b: ByteArray, prefixBits: Int): Boolean {
-        val fullBytes = prefixBits / 8
+        val fullBytes = prefixBits / BITS_PER_BYTE
         for (i in 0 until fullBytes) {
             if (a[i] != b[i]) return false
         }
-        val remainder = prefixBits % 8
+        val remainder = prefixBits % BITS_PER_BYTE
         if (remainder == 0) return true
-        val mask = (0xFF shl (8 - remainder)) and 0xFF
+        val mask = (MAX_IPV4_OCTET shl (BITS_PER_BYTE - remainder)) and MAX_IPV4_OCTET
         return (a[fullBytes].toInt() and mask) == (b[fullBytes].toInt() and mask)
     }
 }

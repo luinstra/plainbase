@@ -12,6 +12,7 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootTopology
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
 /**
@@ -102,13 +103,19 @@ class SqlDelightRootTopologyRepository(private val db: PlainbaseDb) : RootTopolo
      * satisfied, and a corrupt safety latch that promotes itself to TRUSTED is worse than no latch at all.
      */
     private fun decode(root: RootName, raw: String): AtRisk {
-        val document = try {
+        val document = runCatching {
             Json.decodeFromString<AtRiskDocument>(raw)
-        } catch (e: Exception) {
-            logger.error {
-                "root '$root''s at-risk snapshot is undecodable (${e.message}): it can satisfy NOTHING, so the root stays UNRESOLVED"
+        }.getOrElse { failure ->
+            when (failure) {
+                is SerializationException -> {
+                    logger.error {
+                        "root '$root''s at-risk snapshot is undecodable (${failure.message}): " +
+                            "it can satisfy NOTHING, so the root stays UNRESOLVED"
+                    }
+                    return AtRisk.Unreadable
+                }
+                else -> throw failure
             }
-            return AtRisk.Unreadable
         }
         if (document.version != AT_RISK_VERSION) {
             logger.error {

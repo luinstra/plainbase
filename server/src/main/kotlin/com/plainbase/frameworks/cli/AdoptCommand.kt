@@ -21,6 +21,7 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
@@ -58,6 +59,12 @@ import kotlin.time.Clock
  */
 object AdoptCommand {
     private val logger = KotlinLogging.logger {}
+
+    private sealed interface PlanExecution {
+        data class Success(val plan: AdoptionPass.Plan) : PlanExecution
+
+        data class Failed(val exitCode: Int) : PlanExecution
+    }
 
     /**
      * Entry point for the `main` dispatch: env + `DATA_DIR/plainbase.conf`, exit-code result. Resolves via
@@ -132,14 +139,8 @@ object AdoptCommand {
                         isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
                     )
                     stores[registry.main.name] = hybrid
-                    if (mode != AdoptionPass.Mode.PREVIEW) {
-                        try {
-                            hybrid.hydrate()
-                        } catch (e: Exception) {
-                            logger.error(e) { "adopt hydrate failed" }
-                            output.error("adopt: ${e.message ?: "unexpected failure"}")
-                            return 1
-                        }
+                    if (mode != AdoptionPass.Mode.PREVIEW && !hydrate(hybrid, output)) {
+                        return 1
                     }
                 }
             }
@@ -161,8 +162,6 @@ object AdoptCommand {
                 registeredRoots = registry.roots.map { it.name }.toSet(),
             )
             val qualified = stores.size > 1
-            var wrote = false
-
             // ONE global read-only plan across ALL roots, THEN the write (D19). The identity motivation was a
             // cross-root rank contest, which per-root identity dissolved (ADR-0012), but a WITHIN-root one took
             // its place with the shared owner gate: a materialized binding whose file lost its `id:` is
@@ -170,26 +169,9 @@ object AdoptCommand {
             // owner visible enough to record its issue instead of silently minting it a fresh id - which
             // `--write-ids` would then put in the FILE. Plus whole-command ATOMICITY (the plan writes nothing,
             // so a root vanishing mid-scan costs nothing) and preview/write equivalence.
-            val plan = try {
-                pass.run(mode) { page, id ->
-                    try {
-                        output.intent(WriteIntent(id.toString(), page, qualified))
-                    } catch (e: Exception) {
-                        throw CommandEventPublicationFailed(e)
-                    }
-                    wrote = true
-                }
-            } catch (e: RootUnavailable) {
-                return abort(e.root, wrote, output)
-            } catch (e: PlanStale) {
-                return abortStale(label(e.page, qualified), e.reason, wrote, output)
-            } catch (e: AdoptWriteFailed) {
-                val landed = if (e.targetMutated) " (the bytes may already be durable at the authority)" else ""
-                return abortStale(label(e.page, qualified), "could not be written: ${e.reason}$landed", wrote, output)
-            } catch (e: CommandEventPublicationFailed) {
-                logger.error(e.cause) { "adopt command event publication failed" }
-                output.error("adopt: the pre-write intent could not be published; nothing was written for that intent")
-                return 1
+            val plan = when (val execution = executePlan(pass, mode, qualified, output)) {
+                is PlanExecution.Success -> execution.plan
+                is PlanExecution.Failed -> return execution.exitCode
             }
 
             // D7 order, said out loud rather than inherited from a map's insertion order. The two key sets are equal:
@@ -207,6 +189,72 @@ object AdoptCommand {
             driver.close()
         }
         return 0
+    }
+
+    private fun hydrate(store: ObjectContentStore, output: CommandOutput): Boolean =
+        runCatching { store.hydrate() }.fold(
+            onSuccess = { true },
+            onFailure = { failure ->
+                when (failure) {
+                    is Error -> throw failure
+                    else -> {
+                        logger.error(failure) { "adopt hydrate failed" }
+                        output.error("adopt: ${failure.message ?: "unexpected failure"}")
+                        false
+                    }
+                }
+            },
+        )
+
+    private fun executePlan(
+        pass: AdoptionPass,
+        mode: AdoptionPass.Mode,
+        qualified: Boolean,
+        output: CommandOutput,
+    ): PlanExecution {
+        var wrote = false
+        return runCatching {
+            pass.run(mode) { page, id ->
+                runCatching {
+                    output.intent(WriteIntent(id.toString(), page, qualified))
+                }.getOrElse { failure ->
+                    when (failure) {
+                        is Exception -> throw CommandEventPublicationFailed(failure)
+                        else -> throw failure
+                    }
+                }
+                wrote = true
+            }
+        }.fold(
+            onSuccess = { PlanExecution.Success(it) },
+            onFailure = { failure ->
+                when (failure) {
+                    is RootUnavailable -> PlanExecution.Failed(abort(failure.root, wrote, output))
+                    is PlanStale -> PlanExecution.Failed(abortStale(label(failure.page, qualified), failure.reason, wrote, output))
+                    is AdoptWriteFailed -> {
+                        val landed = if (failure.targetMutated) {
+                            " (the bytes may already be durable at the authority)"
+                        } else {
+                            ""
+                        }
+                        PlanExecution.Failed(
+                            abortStale(
+                                label(failure.page, qualified),
+                                "could not be written: ${failure.reason}$landed",
+                                wrote,
+                                output,
+                            ),
+                        )
+                    }
+                    is CommandEventPublicationFailed -> {
+                        logger.error(failure.cause) { "adopt command event publication failed" }
+                        output.error("adopt: the pre-write intent could not be published; nothing was written for that intent")
+                        PlanExecution.Failed(1)
+                    }
+                    else -> throw failure
+                }
+            },
+        )
     }
 
     /**

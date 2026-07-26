@@ -201,16 +201,17 @@ class ProposalService(
         // the SAME single-row inspect-then-decide recovery the boot reconciler uses ([recoverApplyingRow]) — the bytes
         // either landed (-> APPLIED "recovered") or did not (-> back to PENDING, decidable again) — log, then RETHROW
         // so the route still surfaces the 500 (we are not swallowing the failure, only un-wedging the row).
-        val disposition = try {
+        val disposition = runCatching {
             // (3) write — routes through the guarded mutating path (checkEdit -> WritePipeline) at the CURRENT pageId path.
             val outcome = writer.write(row, proposer, committer)
-            if (outcome is WriteOutcome.Unreadable) {
-                // The raw cause is diagnostic and MUST NOT reach the wire/status_reason — log it server-side only.
-                logger.error { "apply $id: the content write was Unreadable (cause logged, never surfaced): ${outcome.cause}" }
-            }
-            if (outcome is WriteOutcome.InvalidLocation) {
-                // The raw reason can carry FS detail; dispositionOf emits only a stable string (the same no-leak rule).
-                logger.error { "apply $id: create InvalidLocation (reason logged, never surfaced): ${outcome.reason}" }
+            when (outcome) {
+                is WriteOutcome.Unreadable ->
+                    // The raw cause is diagnostic and MUST NOT reach the wire/status_reason — log it server-side only.
+                    logger.error { "apply $id: the content write was Unreadable (cause logged, never surfaced): ${outcome.cause}" }
+                is WriteOutcome.InvalidLocation ->
+                    // The raw reason can carry FS detail; dispositionOf emits only a stable string (the same no-leak rule).
+                    logger.error { "apply $id: create InvalidLocation (reason logged, never surfaced): ${outcome.reason}" }
+                else -> Unit
             }
 
             // (4) map the outcome via the FROZEN pure table.
@@ -243,12 +244,12 @@ class ProposalService(
                 error("apply $id: terminal stamp CAS affected != 1 row (the APPLYING claim was lost — broken single-writer invariant)")
             }
             disposition
-        } catch (e: Throwable) {
-            logger.error(e) {
+        }.getOrElse { failure ->
+            logger.error(failure) {
                 "apply $id: the post-claim write/stamp threw — running single-row recovery so the row is not wedged in APPLYING"
             }
             recoverApplyingRow(row)
-            throw e
+            throw failure
         }
 
         // (6) re-read for the wire body (reflects the winning stamp) + return the typed outcome.

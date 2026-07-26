@@ -152,29 +152,43 @@ fun decidePrincipalExtraction(
     // count it — otherwise a proxy request carrying ONLY the identity header would early-return Anonymous before the
     // transport gate fires.
     val proxyIdentityPresent = proxyAuthEnabled && proxyIdentityValues.isNotEmpty()
-    if (pbBearer == null && effectiveCookie == null && !proxyIdentityPresent) {
-        return PrincipalExtraction.Resolved(Principal.Anonymous) // gate does not fire — no credential present
+    return when {
+        pbBearer == null && effectiveCookie == null && !proxyIdentityPresent ->
+            PrincipalExtraction.Resolved(Principal.Anonymous)
+        !isSecureContext(remoteHost, forwardedProtoValues, trustedProxyCidrs) -> {
+            if (proxyIdentityPresent) logProxyGateFailure(remoteHost, trustedProxyCidrs)
+            PrincipalExtraction.InsecureTransportRefused
+        }
+        else -> resolveSecurePrincipal(
+            pbBearer,
+            effectiveCookie,
+            proxyIdentityPresent,
+            authenticateBearer,
+            authenticateCookie,
+            resolveProxy = {
+                resolveProxyIdentity(proxyIdentityValues, presentedProxySecrets, configuredProxySecret, remoteHost)
+            },
+        )
     }
-    if (!isSecureContext(remoteHost, forwardedProtoValues, trustedProxyCidrs)) {
-        // Diagnosability: a proxy request that fails the gate logs WHICH half failed (CIDR miss vs proto
-        // mismatch) so an operator can tell a misrouted/spoofed peer from a missing `X-Forwarded-Proto`. The client
-        // always sees the same 421 — no oracle. Never logs the secret/identity value.
-        if (proxyIdentityPresent) logProxyGateFailure(remoteHost, trustedProxyCidrs)
-        return PrincipalExtraction.InsecureTransportRefused // refuse BEFORE any secret/identity is touched
-    }
+}
+
+private fun resolveSecurePrincipal(
+    bearer: String?,
+    cookie: String?,
+    proxyIdentityPresent: Boolean,
+    authenticateBearer: (String) -> Principal,
+    authenticateCookie: (String) -> SessionService.Authenticated?,
+    resolveProxy: () -> PrincipalExtraction,
+): PrincipalExtraction {
     // Bearer wins: an agent call carrying a stray cookie/proxy header is still an agent.
-    if (pbBearer != null) {
-        val agent = authenticateBearer(pbBearer)
-        if (agent !is Principal.Anonymous) return PrincipalExtraction.Resolved(agent)
+    val agent = bearer?.let(authenticateBearer)
+    val session = cookie?.takeIf { agent is Principal.Anonymous || agent == null }?.let(authenticateCookie)
+    return when {
+        agent != null && agent !is Principal.Anonymous -> PrincipalExtraction.Resolved(agent)
+        session != null -> PrincipalExtraction.Resolved(session.principal, session.csrfToken, Source.COOKIE)
+        proxyIdentityPresent -> resolveProxy()
+        else -> PrincipalExtraction.Resolved(Principal.Anonymous)
     }
-    if (effectiveCookie != null) {
-        val session = authenticateCookie(effectiveCookie)
-        if (session != null) return PrincipalExtraction.Resolved(session.principal, session.csrfToken, Source.COOKIE)
-    }
-    if (proxyIdentityPresent) {
-        return resolveProxyIdentity(proxyIdentityValues, presentedProxySecrets, configuredProxySecret, remoteHost)
-    }
-    return PrincipalExtraction.Resolved(Principal.Anonymous)
 }
 
 private val logger = KotlinLogging.logger {}

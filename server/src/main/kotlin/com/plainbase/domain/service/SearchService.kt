@@ -52,14 +52,22 @@ class SearchService(
     /** Runs the frozen §A1 grammar over the raw parameters, then queries and assembles (§B7). */
     fun search(q: String?, limit: String? = null, offset: String? = null): Outcome {
         val query = q?.trim().orEmpty()
-        if (query.isEmpty()) return Outcome.InvalidQuery("q is required and must be non-empty after trimming")
-        if (query.length > MAX_QUERY_UTF16_UNITS) return Outcome.InvalidQuery("q exceeds $MAX_QUERY_UTF16_UNITS UTF-16 code units")
         val limitValue = limit.boundedInt(MIN_LIMIT, MAX_LIMIT, DEFAULT_LIMIT)
-            ?: return Outcome.InvalidQuery("limit must be an integer between $MIN_LIMIT and $MAX_LIMIT")
         val offsetValue = offset.boundedInt(MIN_OFFSET, MAX_OFFSET, DEFAULT_OFFSET)
-            ?: return Outcome.InvalidQuery("offset must be an integer between $MIN_OFFSET and $MAX_OFFSET")
+        return when {
+            query.isEmpty() -> Outcome.InvalidQuery("q is required and must be non-empty after trimming")
+            query.length > MAX_QUERY_UTF16_UNITS ->
+                Outcome.InvalidQuery("q exceeds $MAX_QUERY_UTF16_UNITS UTF-16 code units")
+            limitValue == null ->
+                Outcome.InvalidQuery("limit must be an integer between $MIN_LIMIT and $MAX_LIMIT")
+            offsetValue == null ->
+                Outcome.InvalidQuery("offset must be an integer between $MIN_OFFSET and $MAX_OFFSET")
+            else -> executeSearch(query, limitValue, offsetValue)
+        }
+    }
 
-        val results = provider.search(SearchQuery(text = query, limit = limitValue, offset = offsetValue))
+    private fun executeSearch(query: String, limit: Int, offset: Int): Outcome.Results {
+        val results = provider.search(SearchQuery(text = query, limit = limit, offset = offset))
         val snapshot = indexBuilder.current
         // ONE availability snapshot per request, threaded - the same discipline as the page snapshot beside it.
         // A hit whose root is not serving is DROPPED here: a vanished root's section is carried forward, so its
@@ -70,8 +78,8 @@ class SearchService(
             SearchPayload(
                 query = query,
                 engine = ENGINE,
-                limit = limitValue,
-                offset = offsetValue,
+                limit = limit,
+                offset = offset,
                 total = results.total,
                 hits = results.hits.mapNotNull { hit ->
                     // pageAt keys on (root, id) - the page id is not enough (see [assemble]'s root rule):

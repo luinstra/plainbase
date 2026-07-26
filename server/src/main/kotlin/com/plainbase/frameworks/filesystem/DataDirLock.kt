@@ -79,17 +79,23 @@ class DataDirLock private constructor(
             dataDir.createDirectories()
             val path = dataDir.resolve(fileName)
             val channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-            val lock = try {
+            val lock = runCatching {
                 channel.tryLock()
-            } catch (_: OverlappingFileLockException) {
-                // Another holder in THIS JVM already owns the region (tryLock is JVM-wide): treat it
-                // exactly like cross-process contention — held, caller decides what that means.
-                channel.close()
-                logger.debug { "DATA_DIR lock $path is already held in this JVM" }
-                return null
-            } catch (e: Exception) {
-                channel.close()
-                throw e
+            }.getOrElse { failure ->
+                when (failure) {
+                    is OverlappingFileLockException -> {
+                        // Another holder in THIS JVM already owns the region (tryLock is JVM-wide): treat it
+                        // exactly like cross-process contention — held, caller decides what that means.
+                        channel.close()
+                        logger.debug { "DATA_DIR lock $path is already held in this JVM" }
+                        return null
+                    }
+                    is Error -> throw failure
+                    else -> {
+                        channel.close()
+                        throw failure
+                    }
+                }
             }
             if (lock == null) {
                 channel.close()

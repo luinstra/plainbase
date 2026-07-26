@@ -58,7 +58,13 @@ import io.ktor.server.routing.route
  */
 fun Route.pageWriteRoutes(ctx: RouteContext) {
     route("/api/v1/pages") {
-        put("/{id}") {
+        registerPageSave(ctx)
+        registerAssetUpload(ctx)
+    }
+}
+
+private fun Route.registerPageSave(ctx: RouteContext) {
+    put("/{id}") {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@put
             call.guarded {
                 val id = call.pageId() ?: return@guarded
@@ -128,7 +134,9 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 }
             }
         }
+}
 
+private fun Route.registerAssetUpload(ctx: RouteContext) {
         // The asset upload (NON-FROZEN): `POST /api/v1/pages/{id}/assets` — uploads a raw binary into the page's OWN
         // folder. NOT a page (no frontmatter, no minted id, no WritePipeline) — it maps CreateResult
         // directly, never the page-shaped toWire/WriteOutcome. The write goes through the new fail-closed,
@@ -207,7 +215,6 @@ fun Route.pageWriteRoutes(ctx: RouteContext) {
                 }
             }
         }
-    }
 }
 
 /** The on-disk name of a folder's metadata sidecar (mirrors `LocalContentStore.FOLDER_META_NAME`). */
@@ -258,20 +265,29 @@ private fun ApplicationCall.assetFilename(): String? {
 }
 
 /** True iff [name] is a legal, single-segment, indexable-as-an-asset filename (the [assetFilename] gate). */
-private fun isValidAssetSegment(name: String): Boolean {
-    if (name.isBlank()) return false
-    if (name == "." || name == "..") return false
-    if (name.any { it == '/' || it == '\\' || it.isISOControl() || it.isBidiControl() || it in WINDOWS_INVALID_CHARS }) return false
+private fun isValidAssetSegment(name: String): Boolean =
+    when {
+        name.isBlank() -> false
+        name == "." || name == ".." -> false
+        name.any(Char::isInvalidAssetCharacter) -> false
     // Windows silently trims a trailing dot or space, so `foo.png.` and `foo.png ` collide with `foo.png` —
     // reject for portability (distinct from the `.`/`..` whole-name reject above).
-    if (name.endsWith('.') || name.endsWith(' ')) return false
+        name.endsWith('.') || name.endsWith(' ') -> false
     // Windows treats the name before the FIRST dot as the device — `CON`, `CON.png`, `CON.foo.png` all map
     // to CON. substringBefore('.') of a dotless name is the whole name, so this subsumes the bare-name check.
-    if (name.substringBefore('.').uppercase() in WINDOWS_RESERVED_NAMES) return false
-    if (name.endsWith(".md", ignoreCase = true)) return false // would be indexed as a PAGE by rebuild()
-    if (isAssetSkippedName(name)) return false
-    return true
-}
+        name.substringBefore('.').uppercase() in WINDOWS_RESERVED_NAMES -> false
+        name.endsWith(".md", ignoreCase = true) -> false // would be indexed as a PAGE by rebuild()
+        isAssetSkippedName(name) -> false
+        else -> true
+    }
+
+private fun Char.isInvalidAssetCharacter(): Boolean =
+    when {
+        this == '/' || this == '\\' -> true
+        isISOControl() || isBidiControl() -> true
+        this in WINDOWS_INVALID_CHARS -> true
+        else -> false
+    }
 
 /**
  * Mirrors `LocalContentStore.isScanSkippedName` for a single segment: a name the scan would skip — the
