@@ -32,8 +32,8 @@ import com.plainbase.domain.root.RootedPath
  *    the same root claim one id. §5.2 decides it - the previously-bound path keeps the id and the other reassigns -
  *    and registry rank plays NO part, because every page in a root shares that root's rank. First-detection order
  *    matters only when neither path is bound yet, and it differs by caller: the index pass sorts frontmatter-first
- *    then by path, `AdoptionPass` takes plain path order. The id moves to the winner and stays LIVE. Nothing is
- *    tombstoned, because nothing died - the permalink follows the id.
+ *    then by path, and `AdoptionPass` does the same since it shares the gate. The id moves to the winner and
+ *    stays LIVE. Nothing is tombstoned, because nothing died - the permalink follows the id.
  *  - **ABSENCE**: needs an `AbsenceProof`, and is applied nowhere but the one proof-apply transaction
  *    ([AbsenceReaper]). In C0 no production code mints a proof, so nothing is ever reaped by inference.
  *

@@ -89,8 +89,9 @@ class PageIdentityService(
      * @param ownerOf the previously-bound owner of a given id WITHIN this page's root (root-scoped since C5), or
      *   null if that id is not yet bound to another live path under this root — the duplicate-detection seam. The
      *   caller threads its already-assigned ids through this lookup so a within-run duplicate is caught
-     *   deterministically, and applies the D16 [BindingVisibility.isLive] rule to id_map rows so a detached binding
-     *   is never treated as an owner. Because it is root-scoped, a returned owner is always in [path]'s own root: a
+     *   deterministically, and applies the shared [BindingVisibility.isOwner] rule to id_map rows - D16 liveness
+     *   PLUS the path-reuse gate - so neither a detached binding nor a row whose file broke its materialized
+     *   promise is treated as an owner. Because it is root-scoped, a returned owner is always in [path]'s own root: a
      *   cross-root duplicate is no longer a contest (per-root identity), so both roots keep the id.
      */
     fun resolve(

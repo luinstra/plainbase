@@ -83,8 +83,8 @@ class SqlDelightIdMapRepository(
      *  3. **The displacement tombstone.** Whatever id this key held before is leaving the live key space with no
      *     one else to hold it, so it is retired here, in the same transaction as the bind that displaces it -
      *     `/p/{root}/{oldId}` answers 410, never 404. (Safe against a same-pass claimant of that id purely by the
-     *     caller's deterministic bind order (`IndexBuilder`: rank, then frontmatter-first, then path;
-     *     `AdoptionPass`: rank then path): a winner always binds before the page it beat. If that order ever breaks,
+     *     callers' shared deterministic bind order (rank, then frontmatter-first, then path - BOTH passes since
+     *     they share the owner gate): a winner always binds before the page it beat. If that order ever breaks,
      *     step 1 REFUSES the late claimant - a loud failure, never a silent steal.)
      *  4. **The binding-epoch advance (revoke-before-stamp, C5).** A successful bind is a binding change, so it
      *     increments `path.root`'s `binding_epoch` in this SAME transaction (NOT its observation - that would collapse

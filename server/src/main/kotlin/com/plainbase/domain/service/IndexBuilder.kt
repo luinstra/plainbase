@@ -461,9 +461,10 @@ class IndexBuilder(
         // them as they were found would leave rows behind from a pass that never happened: a scan that dies
         // half-way is SKIPPED and its last-good section carried, so its half-walked path/URL collisions describe
         // a tree nobody indexed. The identity issues below ride the resolve, which only ever sees full scans.
-        scans.forEach { scan -> scan.issues.forEach(idMap::record) }
+        val raisedIssues = mutableListOf<IdentityIssue>()
+        scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
 
-        val identities = resolveIdentities(scans, witnessed, scannedRoots)
+        val identities = resolveIdentities(scans, witnessed, scannedRoots, raisedIssues)
 
         // Build ALL provisional sections, then render each root's pages against ITS view of the
         // ONE URL-complete skeleton (identity and URLs final; render fields filled below).
@@ -521,7 +522,7 @@ class IndexBuilder(
         }
 
         val snapshot = PageIndex(sections)
-        recordAliases(previousUrlPaths, snapshot)
+        recordAliases(previousUrlPaths, snapshot, raisedIssues)
         holder.store(
             Published(
                 snapshot = snapshot,
@@ -541,6 +542,17 @@ class IndexBuilder(
             "indexed ${snapshot.pages.size} page(s), ${snapshot.sections.sumOf { it.assets.size }} asset(s), " +
                 "${snapshot.sections.sumOf { it.folders.size }} folder(s); " +
                 "${snapshot.pages.count { it.urlPath == null }} excluded from path space" + breakdown
+        }
+        // An identity issue used to land in the `identity_issue` table and NOWHERE else, so a corpus that raises
+        // one on every pass - a pasted duplicate is the common case, and it never self-heals - was invisible
+        // unless an operator opened the admin list. The §5.2 policy is defensible only if the person who can fix
+        // it can find out, so say it once per rebuild, at WARN, naming the paths.
+        if (raisedIssues.isNotEmpty()) {
+            logger.warn {
+                val shown = raisedIssues.take(MAX_LOGGED_ISSUES).joinToString("; ") { it.summary() }
+                val more = (raisedIssues.size - MAX_LOGGED_ISSUES).takeIf { it > 0 }?.let { " (+$it more)" } ?: ""
+                "${raisedIssues.size} identity issue(s) this pass, unresolved until the tree changes: $shown$more"
+            }
         }
         notifyPublished(snapshot, retired)
         return snapshot
@@ -1281,13 +1293,24 @@ class IndexBuilder(
      *
      * **RESOLVE THE WHOLE CORPUS, THEN BIND IT** - the `AdoptionPass` two-phase split (D19), for the same
      * reason and now literally the same seam. Binding INLINE, as this used to, made the loser issue
-     * UNRECORDABLE for one specific WITHIN-root loser: a page whose identity lives in `id_map` ONLY (no
-     * frontmatter id of its own). The winner's key-complete bind DELETES that row on its way through, so when
-     * the loser's own draft came up for resolution its `mappedId` read back null - and a page with no
-     * frontmatter id and no mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, so
-     * the `/p/{root}/{id}` permalink its readers held stopped naming it, with no `DuplicateId` issue recorded
-     * anywhere. A durable permalink reassignment with no record is precisely the outcome the loser-behalf
-     * issue recording exists to make impossible.
+     * UNRECORDABLE for one specific WITHIN-root loser: a page that ends up with NO frontmatter id of its own and
+     * whose `id_map` row is swept out from under it mid-pass. The winner's key-complete bind DELETES that row on
+     * its way through, so when the loser's own draft came up for resolution its `mappedId` read back null - and a
+     * page with no frontmatter id and no mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id,
+     * silently, so the `/p/{root}/{id}` permalink its readers held stopped naming it, with no `DuplicateId` issue
+     * recorded anywhere. A durable permalink reassignment with no record is precisely the outcome the
+     * loser-behalf issue recording exists to make impossible.
+     *
+     * **The reachable shape of that loser is narrower than it used to be, and naming it precisely matters** -
+     * this paragraph is the most-cited justification for the split, and a justification that has quietly become
+     * unreachable is how a defence gets refactored away. Since [BindingVisibility.isOwner] gained the
+     * materialized-aware path-reuse gate, an UNMATERIALIZED owner is never displaced at all (its file was never
+     * expected to carry the id, so witnessing it carry none confirms nothing), which used to be the headline
+     * example here and no longer occurs. What remains reachable is the MATERIALIZED page whose `id:` line was
+     * STRIPPED externally: the gate correctly stops treating it as the owner, a claimant takes the id, its row is
+     * swept, and it then has neither frontmatter id nor mapping - a virgin page, silently minted. (A file whose
+     * `id:` was REWRITTEN to some other valid id is not this case: it resolves on the frontmatter arm under its
+     * new id and is never a virgin page.)
      *
      * Resolving first fixes it at the root: every draft's `mappedId` is read against the id_map as it stood
      * BEFORE this pass touched it, so the beaten owner still sees the contested id, `PageIdentityService`
@@ -1299,6 +1322,11 @@ class IndexBuilder(
         scans: List<SourceScan>,
         witnessed: Map<RootedPath, Witness>,
         scannedRoots: Set<RootName>,
+        // Collects what this pass RAISED, so [rebuild] can warn about it. Deliberately not re-read from
+        // `idMap.issues()`: that decode path has no production caller by design (removing an unconstructible
+        // `Kind` in C7 was safe precisely because nothing in production decodes a row), and giving it one would
+        // turn a stale mid-branch row into a crash on every rebuild.
+        raised: MutableList<IdentityIssue>,
     ): Map<RootedPath, Identity> {
         // The ONE supersession rule, built once and handed to BOTH the resolver below and every bind it
         // produces - so the plan the pass makes and the writes the repository will accept cannot disagree.
@@ -1339,17 +1367,9 @@ class IndexBuilder(
                         claimed[RootedPageId(path.root, id)]
                             ?: idMap.bindingInRoot(path.root, id)
                                 ?.takeIf { binding ->
-                                    BindingVisibility.isLive(
-                                        binding,
-                                        witnessed.keys,
-                                        scannedRoots,
-                                        registeredRoots,
-                                        supersession,
-                                    ) &&
-                                        // A witnessed path that no longer carries this id is path reuse, not
-                                        // the old page still owning the id. An unwitnessed owner remains live
-                                        // and non-supersedable under D16, so absence here must stay fail-closed.
-                                        (witnessed[binding.path]?.let { it.observedId == id } ?: true)
+                                    // isLive + the path-reuse gate, as ONE shared question - see [BindingVisibility.isOwner]
+                                    // for why an unmaterialized owner carrying no `id:` is witnessing itself, not reused.
+                                    BindingVisibility.isOwner(binding, witnessed, scannedRoots, registeredRoots, supersession)
                                 }
                                 ?.path
                             ?: idMap.retiredAt(path.root, id)?.path
@@ -1387,14 +1407,32 @@ class IndexBuilder(
                     }}. " +
                     "The resolver and the bind gate disagree about who owns that id - no supersession is safe under that."
             }
-            assignment.issue?.let(idMap::record)
+            assignment.issue?.let { record(raised, it) }
             identities[path] = Identity(assignment.id, materialized)
         }
         return identities
     }
 
+    /**
+     * Records an identity issue AND remembers it for the rebuild WARN. Every `idMap.record` on the rebuild path
+     * goes through here: the first version of the WARN threaded only the resolver's issues and silently omitted
+     * every alias conflict, so a corpus whose only permanent problem was a shadowed redirect stayed as invisible
+     * as before.
+     */
+    private fun record(into: MutableList<IdentityIssue>, issue: IdentityIssue) {
+        idMap.record(issue)
+        into += issue
+    }
+
     /** §A4 alias semantics for one rebuild: move detection, `redirect_from`, then the shadow sweep. */
-    private fun recordAliases(previousUrlPaths: Map<RootedPageId, TreePath?>, snapshot: PageIndex) {
+    private fun recordAliases(
+        previousUrlPaths: Map<RootedPageId, TreePath?>,
+        snapshot: PageIndex,
+        // Alias conflicts are identity issues too, and just as invisible: they were recorded straight to the
+        // table, so the rebuild WARN would have claimed to report "identity issues this pass" while silently
+        // omitting every dropped move alias and shadowed redirect.
+        raised: MutableList<IdentityIssue>,
+    ) {
         val liveCanonicals = snapshot.byUrlPath.keys
 
         // Move/rename/slug-change detection: a known id whose canonical (root, URL path) changed
@@ -1417,7 +1455,8 @@ class IndexBuilder(
             val old = RootedPath(priorKey.root, oldUrlPath) // OLD root = the prior entry's KEY root
             if (old == page.urlPath?.let { RootedPath(page.root, it) }) continue
             if (old in liveCanonicals) {
-                idMap.record(
+                record(
+                    raised,
                     IdentityIssue.RedirectConflict(
                         root = old.root,
                         path = old.path,
@@ -1438,14 +1477,15 @@ class IndexBuilder(
                     logger.warn { "ignoring unusable redirect_from '$raw' on ${page.path.value}" }
                     continue
                 }
-                registerRedirect(RootedPath(page.root, target), page, liveCanonicals)
+                registerRedirect(RootedPath(page.root, target), page, liveCanonicals, raised)
             }
         }
 
         // Shadow sweep: an alias persisted earlier that a live canonical path claims now is dropped.
         for (canonical in liveCanonicals) {
             aliasRegistry.dropShadowed(canonical)?.let { dropped ->
-                idMap.record(
+                record(
+                    raised,
                     IdentityIssue.RedirectConflict(
                         root = canonical.root,
                         path = canonical.path,
@@ -1457,17 +1497,24 @@ class IndexBuilder(
     }
 
     /** Registers one `redirect_from` alias unless a live canonical or another page's alias claims it. */
-    private fun registerRedirect(target: RootedPath, page: IndexedPage, liveCanonicals: Set<RootedPath>) {
+    private fun registerRedirect(
+        target: RootedPath,
+        page: IndexedPage,
+        liveCanonicals: Set<RootedPath>,
+        raised: MutableList<IdentityIssue>,
+    ) {
         val existing = aliasRegistry.find(target)
         when {
-            target in liveCanonicals -> idMap.record(
+            target in liveCanonicals -> record(
+                raised,
                 IdentityIssue.RedirectConflict(
                     root = target.root,
                     path = target.path,
                     message = "redirect_from of ${page.path.value} ignored: a live canonical path claims it",
                 ),
             )
-            existing != null && existing != page.rooted -> idMap.record(
+            existing != null && existing != page.rooted -> record(
+                raised,
                 IdentityIssue.RedirectConflict(
                     root = target.root,
                     path = target.path,
@@ -1487,7 +1534,29 @@ class IndexBuilder(
 
     private val TreePath.stem: String get() = name.removeSuffix(".md")
 
+    /**
+     * A one-line rendering for the rebuild WARN. Deliberately NOT `AdoptCommand.describe`: that is operator CLI
+     * output with its own wording contract (a smoke test greps it), this is a log line, and coupling them would
+     * make a log tweak a CLI change.
+     */
+    private fun IdentityIssue.summary(): String = when (this) {
+        // "resolved first", NOT "keeps it": the two are the same in the ordinary copied-file case, but when the
+        // winner goes on to RE-IDENTIFY itself the id ends up retired and nobody holds it. On a console line
+        // whose whole purpose is telling an operator where to look, "keeps it" would send them to the wrong file.
+        is IdentityIssue.DuplicateId ->
+            "duplicate_id $id: $root:${keptPath.value} resolved first, ${reassignedPath.value} reassigned"
+        // These two carry their reason in `message`, and it is the only part that says what to DO about them.
+        is IdentityIssue.PatchRefused -> "patch_refused $root:${path.value}: $message"
+        is IdentityIssue.RedirectConflict -> "redirect_conflict $root:${path.value}: $message"
+        is IdentityIssue.PathCollision -> "path_collision $root:${keptPath.value} (excluded sibling '$loserRawName')"
+        is IdentityIssue.PathSlugCollision ->
+            "path_slug_collision $root:${keptPath.value} owns the URL, ${loserPath.value} is id-only"
+    }
+
     companion object {
         private val logger = KotlinLogging.logger {}
+
+        /** Enough to act on without turning a pathological corpus into a wall of log. The count is always exact. */
+        private const val MAX_LOGGED_ISSUES = 5
     }
 }

@@ -164,10 +164,12 @@ object AdoptCommand {
             var wrote = false
 
             // ONE global read-only plan across ALL roots, THEN the write (D19). The identity motivation was a
-            // cross-root rank contest, which per-root identity dissolved (ADR-0012), and adopt's own witnessed
-            // set makes every on-disk binding a live owner, so no draft's row is swept here. What the split
-            // still buys is whole-command ATOMICITY - the plan writes nothing, so a root vanishing mid-scan
-            // costs nothing - and preview/write equivalence: the dry run renders the very Plan a write applies.
+            // cross-root rank contest, which per-root identity dissolved (ADR-0012), but a WITHIN-root one took
+            // its place with the shared owner gate: a materialized binding whose file lost its `id:` is
+            // displaceable, so the winner's bind sweeps its row and only resolve-before-bind keeps the beaten
+            // owner visible enough to record its issue instead of silently minting it a fresh id - which
+            // `--write-ids` would then put in the FILE. Plus whole-command ATOMICITY (the plan writes nothing,
+            // so a root vanishing mid-scan costs nothing) and preview/write equivalence.
             val plan = try {
                 pass.run(mode) { page, id ->
                     try {

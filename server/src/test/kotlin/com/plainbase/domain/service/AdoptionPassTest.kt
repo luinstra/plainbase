@@ -200,6 +200,57 @@ class AdoptionPassTest : FunSpec({
         }
     }
 
+    // Adopt had NO path-reuse gate and no move coverage, so it answered this the opposite way to the index pass:
+    // it handed X to the id-less newcomer at the vacated path and minted fresh for the moved page whose FILE still
+    // carries X, and the next server boot flipped it back. Both passes now ask [BindingVisibility.isOwner].
+    test("a MATERIALIZED page moved out keeps its id; the id-less newcomer at the vacated path does not inherit it") {
+        withHarness { h ->
+            val moved = PageId.require("0197c002-1111-7222-8333-444455556601")
+            // The VACATED path sorts BEFORE the page's new home on purpose: under plain path order the id-less
+            // newcomer resolves first and claims X off the stale binding at its own path, and the carrier is
+            // then reassigned - a self-perpetuating inversion. Only `precedenceOrdered` (frontmatter first)
+            // prevents it, so this fixture falsifies the SORT as well as the gate. Do not "tidy" the names.
+            val from = TreePath.require("archive/start.md")
+            val to = TreePath.require("docs/start.md")
+            Files.createDirectories(h.root.resolve("docs"))
+            Files.createDirectories(h.root.resolve("archive"))
+            // Materialized: the id IS in the file, which is the promise the path-reuse gate checks against.
+            Files.writeString(h.root.resolve(to.value), "---\nid: ${moved.value}\ntitle: Start\n---\nbody\n")
+            h.idMap.bind(RootedPath(RootName.MAIN, from), moved, materialized = true)
+            // A different, id-less page now occupies the path the moved page vacated.
+            Files.writeString(h.root.resolve(from.value), "---\ntitle: New Start\n---\nbody\n")
+
+            val plan = h.pass().run(AdoptionPass.Mode.RECORD)
+
+            plan.pages.single { it.path == to }.id shouldBe moved
+            plan.pages.single { it.path == to }.source shouldBe PageIdentityService.Source.FRONTMATTER
+            plan.pages.single { it.path == from }.id shouldNotBe moved
+            h.idMap.bindingInRoot(RootName.MAIN, moved)?.path shouldBe RootedPath(RootName.MAIN, to)
+        }
+    }
+
+    // The adopt half of the swap row. Adopt reaches the same gate now, so it must reach the same answer - and
+    // must NOT throw. It did, briefly: when the gate treated "the file carries a DIFFERENT id" as freeing that id,
+    // the resolver awarded X to the claimant and adopt's own bind then refused it, because re-identifying a.md
+    // tombstones X at a.md and a tombstone is reclaimable only by the page returning to its own path.
+    test("two files swapping ids: adopt reassigns the claimant and does not resolve an id its own bind will refuse") {
+        withHarness { h ->
+            val x = PageId.require("0197c003-1111-7222-8333-4444555566a1")
+            val y = PageId.require("0197c003-1111-7222-8333-4444555566a2")
+            val a = TreePath.require("swap-a.md")
+            val b = TreePath.require("swap-b.md")
+            h.idMap.bind(RootedPath(RootName.MAIN, a), x, materialized = true)
+            Files.writeString(h.root.resolve(a.value), "---\nid: ${y.value}\ntitle: A\n---\nbody\n")
+            Files.writeString(h.root.resolve(b.value), "---\nid: ${x.value}\ntitle: B\n---\nbody\n")
+
+            val plan = h.pass().run(AdoptionPass.Mode.RECORD) // must not throw
+
+            plan.pages.single { it.path == a }.id shouldBe y
+            plan.pages.single { it.path == b }.id shouldNotBe x // the claimant reassigns rather than taking X
+            h.idMap.retiredAt(RootName.MAIN, x).shouldNotBeNull().path shouldBe RootedPath(RootName.MAIN, a)
+        }
+    }
+
     test("intent log: a simulated mid-batch abort leaves a log from which completed/pending is reconstructable") {
         withHarness { h ->
             val real = LocalContentStore(h.root)
