@@ -88,7 +88,7 @@ fun buildRouteContext(
     secureCookie: Boolean = false,
     // TEST-ONLY default: production wiring (Application.kt) ALWAYS passes the real key-derived ProxyCsrf, so this
     // zero-key fallback is never reached in prod — it only spares non-proxy route tests from constructing one.
-    proxyCsrf: ProxyCsrf = ProxyCsrf(ByteArray(32)),
+    proxyCsrf: ProxyCsrf = ProxyCsrf(ByteArray(PROXY_CSRF_KEY_BYTES)),
     // P5: the validated `agentDirectCommit.globs`. Defaulted empty so existing callers compile unchanged (every agent
     // write degrades); the production wiring passes `config.agentDirectCommitGlobs()`, a P5 test a non-empty list.
     agentDirectCommitGlobs: List<CommitGlob> = emptyList(),
@@ -174,6 +174,8 @@ fun buildRouteContext(
         },
     )
 }
+
+private const val PROXY_CSRF_KEY_BYTES = 32
 
 /** A fixed-`Principal` extraction source for the route-test harnesses (auth ON, a real role-appropriate principal). */
 fun fixedPrincipal(principal: Principal): ApplicationCall.() -> PrincipalExtraction =

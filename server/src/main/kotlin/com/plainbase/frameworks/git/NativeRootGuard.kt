@@ -42,62 +42,97 @@ import java.nio.file.Path
  */
 fun nativeRootGuardFailure(exec: GitExecutor, declaredRoot: Path): String? {
     val prefix = "the root at $declaredRoot declares `history = native`, but"
+    return gitDirectoryFailure(declaredRoot, prefix)
+        ?: topLevelFailure(exec, declaredRoot, prefix)
+        ?: superprojectFailure(exec, prefix)
+        ?: commonDirectoryFailure(exec, declaredRoot, prefix)
+}
 
+private fun gitDirectoryFailure(declaredRoot: Path, prefix: String): String? =
     // (1) A real .git DIRECTORY. NOFOLLOW so a symlinked .git cannot present itself as one.
-    if (!Files.isDirectory(declaredRoot.resolve(".git"), LinkOption.NOFOLLOW_LINKS)) {
-        return "$prefix it has no `.git` DIRECTORY of its own (check 1). A linked worktree and a submodule both mark " +
+    when {
+        !Files.isDirectory(declaredRoot.resolve(".git"), LinkOption.NOFOLLOW_LINKS) ->
+            "$prefix it has no `.git` DIRECTORY of its own (check 1). A linked worktree and a submodule both mark " +
             "themselves with a `.git` FILE pointing at somebody else's repository, and Plainbase will not commit into " +
             "one. Point this root at a real repository, or set `history = off` for it."
+
+        else -> null
     }
 
+private fun topLevelFailure(exec: GitExecutor, declaredRoot: Path, prefix: String): String? {
     // (2) The repo is rooted EXACTLY here - not at an ancestor this root happens to sit inside.
     val toplevel = exec.run(listOf("rev-parse", "--show-toplevel"))
-    if (!toplevel.ok) {
-        return "$prefix `git rev-parse --show-toplevel` failed there (check 2): ${toplevel.stderr.ifBlank { "exit ${toplevel.exitCode}" }}"
-    }
-    val actual = realPathOrNull(Path.of(toplevel.stdoutText.trim()))
-    val declared = realPathOrNull(declaredRoot)
-    if (actual == null || declared == null || actual != declared) {
-        return "$prefix the repository git finds there is rooted at ${toplevel.stdoutText.trim()}, not at the root " +
-            "itself (check 2). Plainbase would be committing into a SURROUNDING checkout. Give this root its own " +
-            "repository, or set `history = off` for it."
-    }
+    return when {
+        !toplevel.ok ->
+            "$prefix `git rev-parse --show-toplevel` failed there (check 2): " +
+                toplevel.stderr.ifBlank { "exit ${toplevel.exitCode}" }
 
+        else -> {
+            val actual = realPathOrNull(Path.of(toplevel.stdoutText.trim()))
+            val declared = realPathOrNull(declaredRoot)
+            when {
+                actual == null || declared == null || actual != declared ->
+                    "$prefix the repository git finds there is rooted at ${toplevel.stdoutText.trim()}, not at the root " +
+                        "itself (check 2). Plainbase would be committing into a SURROUNDING checkout. Give this root its own " +
+                        "repository, or set `history = off` for it."
+
+                else -> null
+            }
+        }
+    }
+}
+
+private fun superprojectFailure(exec: GitExecutor, prefix: String): String? {
     // (3) Not a submodule (belt behind check 1, for a submodule whose .git was converted back to a directory).
     val superproject = exec.run(listOf("rev-parse", "--show-superproject-working-tree"))
-    if (!superproject.ok) {
-        return "$prefix `git rev-parse --show-superproject-working-tree` failed there (check 3): " +
-            superproject.stderr.ifBlank { "exit ${superproject.exitCode}" }
-    }
-    if (superproject.stdoutText.isNotBlank()) {
-        return "$prefix it is a SUBMODULE of the checkout at ${superproject.stdoutText.trim()} (check 3). Its history " +
-            "belongs to the superproject, so Plainbase will not write to it. Set `history = off` for this root."
-    }
+    return when {
+        !superproject.ok ->
+            "$prefix `git rev-parse --show-superproject-working-tree` failed there (check 3): " +
+                superproject.stderr.ifBlank { "exit ${superproject.exitCode}" }
 
+        superproject.stdoutText.isNotBlank() ->
+            "$prefix it is a SUBMODULE of the checkout at ${superproject.stdoutText.trim()} (check 3). Its history " +
+                "belongs to the superproject, so Plainbase will not write to it. Set `history = off` for this root."
+
+        else -> null
+    }
+}
+
+private fun commonDirectoryFailure(exec: GitExecutor, declaredRoot: Path, prefix: String): String? {
     // (4) The git-dir IS the common-dir - the definitive linked-worktree signature.
     val dirs = exec.run(listOf("rev-parse", "--git-dir", "--git-common-dir"))
-    if (!dirs.ok) {
-        return "$prefix `git rev-parse --git-dir --git-common-dir` failed there (check 4): ${dirs.stderr.ifBlank {
-            "exit ${dirs.exitCode}"
-        }}"
-    }
     // Both are printed relative to the WORK TREE when they are relative, so resolve against it before comparing.
-    val (gitDir, commonDir) = dirs.stdoutText.lines().filter { it.isNotBlank() }.let { lines ->
-        if (lines.size < 2) return "$prefix `git rev-parse --git-dir --git-common-dir` printed ${lines.size} line(s), not 2 (check 4)"
-        realPathOrNull(declaredRoot.resolve(lines[0].trim())) to realPathOrNull(declaredRoot.resolve(lines[1].trim()))
+    val lines = dirs.stdoutText.lines().filter { it.isNotBlank() }
+    val resolvedDirectories = lines.takeIf { it.size >= 2 }?.let {
+        realPathOrNull(declaredRoot.resolve(it[0].trim())) to realPathOrNull(declaredRoot.resolve(it[1].trim()))
     }
-    if (gitDir == null || commonDir == null || gitDir != commonDir) {
-        return "$prefix its git directory ($gitDir) is not its own - it shares a common directory ($commonDir) with " +
-            "another checkout, which is what a LINKED WORKTREE looks like (check 4). Plainbase will not commit into a " +
-            "repository whose refs another worktree owns. Set `history = off` for this root."
+    val gitDir = resolvedDirectories?.first
+    val commonDir = resolvedDirectories?.second
+    return when {
+        !dirs.ok ->
+            "$prefix `git rev-parse --git-dir --git-common-dir` failed there (check 4): " +
+                dirs.stderr.ifBlank { "exit ${dirs.exitCode}" }
+
+        lines.size < 2 ->
+            "$prefix `git rev-parse --git-dir --git-common-dir` printed ${lines.size} line(s), not 2 (check 4)"
+
+        gitDir == null || commonDir == null || gitDir != commonDir ->
+            "$prefix its git directory ($gitDir) is not its own - it shares a common directory ($commonDir) with " +
+                "another checkout, which is what a LINKED WORKTREE looks like (check 4). Plainbase will not commit into a " +
+                "repository whose refs another worktree owns. Set `history = off` for this root."
+
+        else -> null
     }
-    return null
 }
 
 /** [path]'s real path, or null when it cannot be resolved — a resolution failure is a guard FAILURE (fail closed). */
 private fun realPathOrNull(path: Path): Path? =
-    try {
-        path.toRealPath()
-    } catch (_: IOException) {
-        null
-    }
+    runCatching { path.toRealPath() }.fold(
+        onSuccess = { it },
+        onFailure = { failure ->
+            when (failure) {
+                is IOException -> null
+                else -> throw failure
+            }
+        },
+    )

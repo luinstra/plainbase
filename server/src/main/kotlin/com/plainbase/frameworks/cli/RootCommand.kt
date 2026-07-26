@@ -88,10 +88,11 @@ object RootCommand {
         env: Map<String, String>,
         output: CommandOutput = systemCommandOutput(),
     ): Int =
-        try {
+        runCatching {
             execute(args, env, output)
-        } catch (e: Exception) {
-            logger.error(e) { "root failed" }
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
+            logger.error(failure) { "root failed" }
             1
         }
 
@@ -186,48 +187,10 @@ object RootCommand {
         // through the product's own UI brick the next restart). It runs AFTER the gate, so the cheap
         // deterministic refusals fire before the corpus scan - and it MAY run after the gate because it can only
         // refuse HARDER: it never approves what the gate rejected, and it never touches the candidate bytes.
-        if (!request.force) {
-            when (val shadow = shadowScan(config, request.name)) {
-                is Shadow.Segments -> {
-                    output.error(
-                        "root add: '${request.name.value}' is already a top-level segment of the main root " +
-                            "(${shadow.paths.joinToString(", ")}). Adding it would silently re-point every circulating " +
-                            "link through /docs/${request.name.value}/... into the NEW root - main's own entries under " +
-                            "that segment would then be reachable only by permalink. Rename the main-root entry, pick " +
-                            "another root name, or pass --force to accept the collision. (This scan cannot see a " +
-                            "`redirect_from` alias row - the boot WARN is the backstop for those - nor a folder someone " +
-                            "creates tomorrow.)",
-                    )
-                    return 1
-                }
-                // Fail CLOSED. A main root that cannot be read says NOTHING about what the new name would shadow,
-                // and reporting "shadows nothing" from a tree we could not read is the root-down-as-absent lie the
-                // classified read exists to make unsayable.
-                // Fail CLOSED for the SAME reason again, and this is the arm a permission-dropped root actually takes:
-                // its names still LIST (the read bit) while nothing under them can be STAT-ed (no search bit), so the
-                // walk comes back SHORT rather than failing - and a short walk that called itself complete would report
-                // "shadows nothing" from a tree it never read.
-                Shadow.MainDown, Shadow.Incomplete -> {
-                    output.error(
-                        "root add: the main root at ${config.roots.main.localPath} is not readable right now, so the " +
-                            "shadow check cannot run and this add would be accepted BLIND. Restore the path (a missing " +
-                            "mount, a permission drop), or pass --force to add without the check.",
-                    )
-                    return 1
-                }
-                // Fail CLOSED for the SAME reason, one page down: an absence this scan cannot verify never becomes a
-                // fact (C1), and here the fact it would silently become is "that page's slug shadows nothing".
-                is Shadow.Unverified -> {
-                    output.error(
-                        "root add: main's page ${shadow.path} was listed by the scan and could not be read, so the shadow " +
-                            "check ran against a view that is not main and would be accepted on incomplete evidence. " +
-                            "Re-run (it self-heals if the page was simply being written), or pass --force to add without " +
-                            "the check.",
-                    )
-                    return 1
-                }
-                Shadow.None -> Unit
-            }
+        val shadowFailure = request.takeUnless { it.force }?.let { shadowRefusal(config, it.name) }
+        if (shadowFailure != null) {
+            output.error(shadowFailure)
+            return 1
         }
         // An add always leaves at least one managed root, so the delete arm `remove` needs cannot arise here.
         ManagedRootsFile.writeAtomically(config.managedRootsPath, requireNotNull(hocon.text))
@@ -239,6 +202,36 @@ object RootCommand {
         output.result("restart the server to apply.")
         return 0
     }
+
+    private fun shadowRefusal(config: PlainbaseConfig, name: RootName): String? =
+        when (val shadow = shadowScan(config, name)) {
+            is Shadow.Segments ->
+                "root add: '${name.value}' is already a top-level segment of the main root " +
+                    "(${shadow.paths.joinToString(", ")}). Adding it would silently re-point every circulating " +
+                    "link through /docs/${name.value}/... into the NEW root - main's own entries under " +
+                    "that segment would then be reachable only by permalink. Rename the main-root entry, pick " +
+                    "another root name, or pass --force to accept the collision. (This scan cannot see a " +
+                    "`redirect_from` alias row - the boot WARN is the backstop for those - nor a folder someone " +
+                    "creates tomorrow.)"
+
+            // Fail CLOSED. A main root that cannot be read says NOTHING about what the new name would shadow,
+            // and reporting "shadows nothing" from a tree we could not read is the root-down-as-absent lie the
+            // classified read exists to make unsayable. A short walk is equally incomplete evidence.
+            Shadow.MainDown, Shadow.Incomplete ->
+                "root add: the main root at ${config.roots.main.localPath} is not readable right now, so the " +
+                    "shadow check cannot run and this add would be accepted BLIND. Restore the path (a missing " +
+                    "mount, a permission drop), or pass --force to add without the check."
+
+            // Fail CLOSED for the SAME reason, one page down: an absence this scan cannot verify never becomes a
+            // fact (C1), and here the fact it would silently become is "that page's slug shadows nothing".
+            is Shadow.Unverified ->
+                "root add: main's page ${shadow.path} was listed by the scan and could not be read, so the shadow " +
+                    "check ran against a view that is not main and would be accepted on incomplete evidence. " +
+                    "Re-run (it self-heals if the page was simply being written), or pass --force to add without " +
+                    "the check."
+
+            Shadow.None -> null
+        }
 
     /** `root remove <name>` - same lock, same gate, same one policy. */
     private fun remove(
@@ -550,11 +543,12 @@ object RootCommand {
         val positional = mutableListOf<String>()
         var editable = false
         var force = false
+        var parseError: String? = null
         // `off|native` ONLY. This is NOT a duplicate of the boot rule that refuses `auto` on an extra: it means
         // no code path in this CLI can CONSTRUCT an AUTO extra at all. A smaller input space, not a second check.
         var history = HistoryMode.OFF
         var index = 0
-        while (index < argv.size) {
+        while (index < argv.size && parseError == null) {
             when (val token = argv[index]) {
                 "--editable" -> editable = true
                 "--force" -> force = true
@@ -564,44 +558,58 @@ object RootCommand {
                         "off" -> HistoryMode.OFF
                         "native" -> HistoryMode.NATIVE
                         else -> {
-                            output.error("root add: --history accepts off|native (got '${raw.orEmpty()}')")
-                            return null
+                            parseError = "root add: --history accepts off|native (got '${raw.orEmpty()}')"
+                            history
                         }
                     }
                     index++
                 }
                 else -> {
                     if (token.startsWith("--")) {
-                        output.error("root add: unknown flag '$token'")
-                        return null
+                        parseError = "root add: unknown flag '$token'"
+                    } else {
+                        positional += token
                     }
-                    positional += token
                 }
             }
             index++
         }
-        if (positional.size != 2) return usage(output)
-        val name = RootName.of(positional[0]) ?: run {
-            if (PageId.of(positional[0]) != null) {
-                output.error("root add: '${positional[0]}' may not look like a page id")
-            } else {
-                output.error(
-                    "root add: '${positional[0]}' is not a valid root name " +
-                        "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
-                )
+        val rawName = positional.getOrNull(0)
+        val name = rawName?.let(RootName::of)
+        val path = positional.getOrNull(1)
+        return when {
+            parseError != null -> {
+                output.error(parseError)
+                null
             }
-            return null
+
+            positional.size != 2 -> usage(output)
+            name == null -> {
+                when {
+                    rawName != null && PageId.of(rawName) != null ->
+                        output.error("root add: '$rawName' may not look like a page id")
+
+                    else ->
+                        output.error(
+                            "root add: '$rawName' is not a valid root name " +
+                                "(a lowercase slug [a-z0-9][a-z0-9-]*, max 32 chars)",
+                        )
+                }
+                null
+            }
+
+            path.isNullOrBlank() -> {
+                // BLANK is refused HERE, before anything absolutizes it - the loader's identical guard cannot save us,
+                // because by the time a path reaches roots.conf this command has already made it absolute. `Path.of("")`
+                // is the process working directory, so `root add docs "$DOCS_DIR"` with DOCS_DIR unset would otherwise
+                // serve and index whatever the CLI happened to be run from (under systemd, `/`) - and, with --editable,
+                // hand an agent write access to it.
+                output.error("root add: the path is empty - an unset shell variable expands to nothing, and the CWD is not a root")
+                usage(output)
+            }
+
+            else -> RootArgs.Add(name = name, path = path, editable = editable, history = history, force = force)
         }
-        // BLANK is refused HERE, before anything absolutizes it - the loader's identical guard cannot save us,
-        // because by the time a path reaches roots.conf this command has already made it absolute. `Path.of("")`
-        // is the process working directory, so `root add docs "$DOCS_DIR"` with DOCS_DIR unset would otherwise
-        // serve and index whatever the CLI happened to be run from (under systemd, `/`) - and, with --editable,
-        // hand an agent write access to it.
-        val path = positional[1].takeIf { it.isNotBlank() } ?: run {
-            output.error("root add: the path is empty - an unset shell variable expands to nothing, and the CWD is not a root")
-            return usage(output)
-        }
-        return RootArgs.Add(name = name, path = path, editable = editable, history = history, force = force)
     }
 
     private fun parseRemove(argv: List<String>, output: CommandOutput): RootArgs? {

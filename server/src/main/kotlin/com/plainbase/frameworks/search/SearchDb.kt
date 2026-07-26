@@ -156,10 +156,12 @@ class SearchDb(path: Path) : AutoCloseable {
 internal inline fun <T> Connection.transaction(block: () -> T): T {
     autoCommit = false // xerial BEGINs DEFERRED: the first statement establishes the WAL read snapshot
     return try {
-        block().also { commit() }
-    } catch (t: Throwable) {
-        rollback()
-        throw t
+        runCatching {
+            block().also { commit() }
+        }.getOrElse { failure ->
+            rollback()
+            throw failure
+        }
     } finally {
         autoCommit = true
     }

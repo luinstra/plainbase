@@ -169,7 +169,7 @@ class GuardedMutatingFacade(
             // there is no content to smuggle and no applyable proposal to mint.
             IdResolution.None -> {
                 policy.checkEdit(principal, WriteClass.PageEdit, RootedResource(null, request.pageId.value))
-                goneOrNotFound(request.pageId, request.expectedRoot, claims)
+                goneOrNotFound(request.expectedRoot, claims)
             }
             is IdResolution.One -> {
                 val current = snapshot.pageAt(RootedPageId(res.root, request.pageId)) ?: run {
@@ -184,7 +184,7 @@ class GuardedMutatingFacade(
                     // The bare One-race fallback reads a FRESH claims snapshot at the RECHECK (post-unbind state) so the
                     // frozen 409 page_deleted survives a live->tombstone race; the pinned fallback passes null (404).
                     val recheck = if (request.expectedRoot == null) resolver.claimants(request.pageId) else null
-                    return goneOrNotFound(request.pageId, request.expectedRoot, recheck)
+                    return goneOrNotFound(request.expectedRoot, recheck)
                 }
                 // A null mode (revoked/expired token at clock.now()) is fail-safe DEGRADE; match against the SAME
                 // server-resolved current.path the pipeline writes (smuggling closed by construction), in the page's
@@ -245,7 +245,7 @@ class GuardedMutatingFacade(
             // is the frozen C1 answer: 409 page_deleted, current_* null - a page PROVEN gone is reported as deleted,
             // never as never-existed. Only a genuinely-unknown id (or a pin that no longer binds it - the pinned
             // fresh-fail-closed arm, which the apply path's toWriteOutcome maps to its own page_deleted) is 404.
-            IdResolution.None -> goneOrNotFound(request.pageId, request.expectedRoot, claims)
+            IdResolution.None -> goneOrNotFound(request.expectedRoot, claims)
             is IdResolution.One -> {
                 requireAvailable(res.root)
                 // (5) Path-param id is the identity authority (R1): an id absent from the index is 404 - the route
@@ -258,7 +258,7 @@ class GuardedMutatingFacade(
                     ?: run {
                         absence.requireVerifiedAbsence(res.root, request.pageId, snapshot)
                         val recheck = if (request.expectedRoot == null) resolver.claimants(request.pageId) else null
-                        return goneOrNotFound(request.pageId, request.expectedRoot, recheck)
+                        return goneOrNotFound(request.expectedRoot, recheck)
                     }
                 directWriteResolved(grant, request, current, request.author, request.committer)
             }
@@ -288,7 +288,7 @@ class GuardedMutatingFacade(
      * byte-identical to the old `resolveRetired(id) != None` - only the read is now the same atomic snapshot as
      * `resolution()`, closing the reclaim-race that flipped the frozen 409 to a 404.
      */
-    private fun goneOrNotFound(pageId: PageId, expectedRoot: RootName?, claims: ResolvedClaimants?): SaveResult =
+    private fun goneOrNotFound(expectedRoot: RootName?, claims: ResolvedClaimants?): SaveResult =
         if (expectedRoot == null && claims?.retired?.isNotEmpty() == true) {
             SaveResult.Written(
                 WriteOutcome.Conflict(
@@ -472,16 +472,7 @@ class GuardedMutatingFacade(
         val res: IdResolution = expectedRoot?.let { resolver.resolvePinned(it, pageId) }
             ?: resolver.resolve(pageId)
         val grant = policy.checkEdit(principal, WriteClass.AssetWrite, RootedResource((res as? IdResolution.One)?.root, pageId.value))
-        val page = when (res) {
-            is IdResolution.Ambiguous -> throw AmbiguousPageId(pageId, res.candidates, res.hasRetiredCandidate)
-            IdResolution.None -> return AssetWriteOutcome.PageMissing
-            is IdResolution.One -> {
-                requireAvailable(res.root)
-                // 503 before 404 for a page we still BIND but did not witness, for the same reason (C1).
-                absence.requireVerifiedAbsence(res.root, pageId, snapshot)
-                snapshot.pageAt(RootedPageId(res.root, pageId)) ?: return AssetWriteOutcome.PageMissing
-            }
-        }
+        val page = resolveAssetPage(res, pageId, snapshot) ?: return AssetWriteOutcome.PageMissing
         val store = stores(page.root)
 
         // Snapshot membership ≠ disk reality: re-check the page file on disk so we don't write an asset (and
@@ -495,33 +486,69 @@ class GuardedMutatingFacade(
         // the blanket catch just below would have swallowed a throw and re-emitted it as 503 `content_unreadable`,
         // one of the very codes the invariant forbids for a root-gone condition.
         val target = RootedPath(page.root, page.path)
-        val pageOnDisk = try {
-            absence.read(store, target)
-        } catch (e: Exception) {
-            logger.warn(e) { "stale-page re-check failed reading '${page.path.value}'; treating as unreadable" }
-            return AssetWriteOutcome.Unreadable
-        }
-        when (pageOnDisk) {
-            is ContentRead.Bytes -> Unit
-            ContentRead.ConfirmedAbsent -> return AssetWriteOutcome.PageMissing
-            // The page is still BOUND and its bytes are missing (C1): `PageMissing` is a 404, and a 404 here would
-            // tell an author uploading an image that their page is gone while it sits on an unmounted disk. 503.
-            ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
-            ContentRead.RootDown -> throw RootUnavailable(page.root, UnavailableCause.VANISHED)
-        }
+        verifyAssetPageOnDisk(store, target, page)?.let { return it }
 
         // The asset path = the page's folder + the validated segment (childOf throws only on a bad segment, which
         // the route's filename validator already excluded).
         val assetPath = TreePath.childOf(page.path.parent, filename)
 
+        return finishAssetWrite(page, assetPath, store, grant, bytes, hasher)
+    }
+
+    private fun resolveAssetPage(resolution: IdResolution, pageId: PageId, snapshot: PageIndex): IndexedPage? =
+        when (resolution) {
+            is IdResolution.Ambiguous ->
+                throw AmbiguousPageId(pageId, resolution.candidates, resolution.hasRetiredCandidate)
+
+            IdResolution.None -> null
+            is IdResolution.One -> {
+                requireAvailable(resolution.root)
+                // 503 before 404 for a page we still BIND but did not witness, for the same reason (C1).
+                absence.requireVerifiedAbsence(resolution.root, pageId, snapshot)
+                snapshot.pageAt(RootedPageId(resolution.root, pageId))
+            }
+        }
+
+    private fun verifyAssetPageOnDisk(
+        store: ContentStore,
+        target: RootedPath,
+        page: IndexedPage,
+    ): AssetWriteOutcome? =
+        runCatching { absence.read(store, target) }.fold(
+            onSuccess = { pageOnDisk ->
+                when (pageOnDisk) {
+                    is ContentRead.Bytes -> null
+                    ContentRead.ConfirmedAbsent -> AssetWriteOutcome.PageMissing
+                    // The page is still BOUND and its bytes are missing (C1): `PageMissing` is a 404, and a 404 here would
+                    // tell an author uploading an image that their page is gone while it sits on an unmounted disk. 503.
+                    ContentRead.AbsenceUnknown -> throw AbsenceUnverified(target)
+                    ContentRead.RootDown -> throw RootUnavailable(page.root, UnavailableCause.VANISHED)
+                }
+            },
+            onFailure = { failure ->
+                rethrowError(failure)
+                logger.warn(failure) { "stale-page re-check failed reading '${page.path.value}'; treating as unreadable" }
+                AssetWriteOutcome.Unreadable
+            },
+        )
+
+    private fun finishAssetWrite(
+        page: IndexedPage,
+        assetPath: TreePath,
+        store: ContentStore,
+        grant: EditGrant,
+        bytes: ByteArray,
+        hasher: (ByteArray) -> String,
+    ): AssetWriteOutcome {
         return when (val result = store.writeAssetExclusive(grant, assetPath, bytes, hasher)) {
             is CreateResult.Created -> {
                 // Make the asset reachable: a full rebuild puts it in current.assets. A throw leaves the bytes
                 // durably on disk but unindexed (the route's 503). Uses the UNGATED rebuild (part of the write).
-                try {
+                runCatching {
                     indexBuilder.rebuild()
-                } catch (e: Exception) {
-                    logger.error(e) { "asset written but rebuild failed for '${assetPath.value}'; bytes are durable" }
+                }.onFailure { failure ->
+                    rethrowError(failure)
+                    logger.error(failure) { "asset written but rebuild failed for '${assetPath.value}'; bytes are durable" }
                     return AssetWriteOutcome.WrittenButUnindexed(assetPath)
                 }
                 // A rebuild no longer THROWS on a lost root - it probes, MARKS, skips, carries and returns normally -
@@ -569,6 +596,10 @@ class GuardedMutatingFacade(
                     AssetWriteOutcome.Unreadable // nothing landed (a pre-send / atomic failure) - honest "nothing written"
                 }
         }
+    }
+
+    private fun rethrowError(failure: Throwable) {
+        if (failure is Error) throw failure
     }
 
     override fun rescan(principal: Principal): PageIndex {

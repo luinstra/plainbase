@@ -196,25 +196,29 @@ class GitExecutor(
         stdinWriter?.join()
         stdoutDrain.join()
         stderrDrain.join()
-        if (overflowed.load()) {
-            // A drain hit its byte ceiling and force-killed git. Fail loud (NOT silently truncate): the
-            // provider's fail-loud path turns this non-zero result into a GitCommandException — `/history`
-            // and `/diff` surface a 500, the startup `lastCommits` aborts serve, never an OOM. The actionable
-            // text names the cap so an operator knows the repo's history/diff is too large for an in-memory read.
-            logger.error { "git ${args.firstOrNull()} output exceeded the in-memory read cap and was force-killed" }
-            return GitResult(
-                exitCode = -1,
-                stdout = stdoutBuffer.toByteArray(),
-                stderr = "git ${args.firstOrNull()} output exceeded the in-memory read cap " +
-                    "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) and was " +
-                    "force-killed — repo history/diff too large for an in-memory read",
-            )
+        return when {
+            overflowed.load() -> {
+                // A drain hit its byte ceiling and force-killed git. Fail loud (NOT silently truncate): the
+                // provider's fail-loud path turns this non-zero result into a GitCommandException — `/history`
+                // and `/diff` surface a 500, the startup `lastCommits` aborts serve, never an OOM. The actionable
+                // text names the cap so an operator knows the repo's history/diff is too large for an in-memory read.
+                logger.error { "git ${args.firstOrNull()} output exceeded the in-memory read cap and was force-killed" }
+                GitResult(
+                    exitCode = -1,
+                    stdout = stdoutBuffer.toByteArray(),
+                    stderr = "git ${args.firstOrNull()} output exceeded the in-memory read cap " +
+                        "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) and was " +
+                        "force-killed — repo history/diff too large for an in-memory read",
+                )
+            }
+
+            else ->
+                GitResult(
+                    exitCode = process.exitValue(),
+                    stdout = stdoutBuffer.toByteArray(),
+                    stderr = stderrBuffer.toString(Charsets.UTF_8),
+                )
         }
-        return GitResult(
-            exitCode = process.exitValue(),
-            stdout = stdoutBuffer.toByteArray(),
-            stderr = stderrBuffer.toString(Charsets.UTF_8),
-        )
     }
 
     /**
@@ -267,17 +271,27 @@ class GitExecutor(
         val chunk = ByteArray(DRAIN_CHUNK_BYTES)
         var total = 0L
         stream.use {
-            while (true) {
+            var draining = true
+            while (draining) {
                 val n = it.read(chunk)
-                if (n < 0) break
-                total += n
-                if (total > cap) {
-                    overflowed.store(true)
-                    runCatching { process.descendants().forEach { d -> runCatching { d.destroyForcibly() } } }
-                    process.destroyForcibly()
-                    break
+                when {
+                    n < 0 -> draining = false
+                    total + n > cap -> {
+                        overflowed.store(true)
+                        runCatching {
+                            process.descendants().forEach { descendant ->
+                                runCatching { descendant.destroyForcibly() }
+                            }
+                        }
+                        process.destroyForcibly()
+                        draining = false
+                    }
+
+                    else -> {
+                        total += n
+                        buffer.write(chunk, 0, n)
+                    }
                 }
-                buffer.write(chunk, 0, n)
             }
         }
     }

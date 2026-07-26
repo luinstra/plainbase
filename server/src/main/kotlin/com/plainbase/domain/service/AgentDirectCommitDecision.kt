@@ -106,27 +106,33 @@ class CommitGlob private constructor(private val segments: List<String>, val roo
         private fun matchChars(pattern: String, patternIndex: Int, text: String, textIndex: Int): Boolean {
             var pi = patternIndex
             var ti = textIndex
-            while (pi < pattern.length) {
+            var matched: Boolean? = null
+            while (pi < pattern.length && matched == null) {
                 when (pattern[pi]) {
                     '*' -> {
-                        for (k in ti..text.length) {
-                            if (matchChars(pattern, pi + 1, text, k)) return true
-                        }
-                        return false
+                        matched = (ti..text.length).any { index -> matchChars(pattern, pi + 1, text, index) }
                     }
                     '?' -> {
-                        if (ti >= text.length) return false
-                        pi++
-                        ti++
+                        when {
+                            ti >= text.length -> matched = false
+                            else -> {
+                                pi++
+                                ti++
+                            }
+                        }
                     }
                     else -> {
-                        if (ti >= text.length || text[ti] != pattern[pi]) return false
-                        pi++
-                        ti++
+                        when {
+                            ti >= text.length || text[ti] != pattern[pi] -> matched = false
+                            else -> {
+                                pi++
+                                ti++
+                            }
+                        }
                     }
                 }
             }
-            return ti == text.length
+            return matched ?: (ti == text.length)
         }
 
         /**

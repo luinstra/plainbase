@@ -9,6 +9,8 @@ import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.page.RootSection
 import com.plainbase.domain.principal.CreateGrant
 import com.plainbase.domain.principal.EditGrant
 import com.plainbase.domain.render.HeadingSlugger
@@ -220,7 +222,7 @@ class WritePipeline(
 
     /** (3) Post-create steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun createAndIndex(intent: CreateIntent, newHash: String): WriteOutcome =
-        try {
+        runCatching {
             // the create composed the id INTO frontmatter
             idMap.bind(RootedPath(intent.root, intent.path), intent.pageId, materialized = true)
             // The create's commit SHA (null off Git). A plain POST /pages leaves author/committer null (server
@@ -247,12 +249,13 @@ class WritePipeline(
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
             dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
-        } catch (e: Exception) {
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
             // the next startup reconciles. The cause is mapped to a structured code at the create route.
             markIfRootGone(intent.root)
-            logger.error(e) { "create wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
-            WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = e.message ?: e::class.simpleName ?: "unknown")
+            logger.error(failure) { "create wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
+            WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = failure.message ?: failure::class.simpleName ?: "unknown")
         }
 
     /**
@@ -278,8 +281,15 @@ class WritePipeline(
         // so a rebuild landing under it can change WHICH pages it sees but never WHICH root it consults.
         val snapshot = indexBuilder.current
         val section = snapshot.section(intent.root)
-        val folderPath = intent.path.parent
         val slugOverride = frontmatterParser.parse(intent.bytes).scalar("slug")
+        return when (val folderWalk = walkFolderUrls(intent.path.parent, section)) {
+            FolderUrlWalk.Unavailable -> null
+            is FolderUrlWalk.Collision -> folderWalk.url
+            is FolderUrlWalk.Available -> pageUrlCollision(intent, folderWalk.prefix, slugOverride, snapshot)
+        }
+    }
+
+    private fun walkFolderUrls(folderPath: TreePath?, section: RootSection): FolderUrlWalk {
         val existingFolderUrls = CanonicalUrlBuilder.folderUrlPaths(section.folders)
         val indexedFolderPaths = section.folders.map { it.path }.toSet()
         val folderUrlOwner = existingFolderUrls.entries.mapNotNull { (p, u) -> u?.let { it to p } }.toMap()
@@ -292,28 +302,39 @@ class WritePipeline(
         for (i in 1..(folderPath?.segments?.size ?: 0)) {
             val ancestor = TreePath.require(folderPath!!.segments.take(i).joinToString("/"))
             if (ancestor in indexedFolderPaths) {
-                prefix = existingFolderUrls[ancestor] ?: return null
+                prefix = existingFolderUrls[ancestor] ?: return FolderUrlWalk.Unavailable
             } else {
                 val segment = HeadingSlugger.slugify(ancestor.name, HeadingSlugger.FOLDER_FALLBACK)
                 prefix = prefix?.resolveChild(segment) ?: TreePath.require(segment)
                 val owner = folderUrlOwner[prefix]
-                if (owner != null && owner != ancestor) return prefix.value
+                if (owner != null && owner != ancestor) return FolderUrlWalk.Collision(prefix.value)
             }
         }
+        return FolderUrlWalk.Available(prefix)
+    }
 
+    private fun pageUrlCollision(
+        intent: CreateIntent,
+        prefix: TreePath?,
+        slugOverride: String?,
+        snapshot: PageIndex,
+    ): String? {
         // The new page's full canonical URL: the (possibly null = root) prefix + the page slug.
         val pageSlug = HeadingSlugger.slugify(slugOverride ?: intent.path.name.removeSuffix(".md"), HeadingSlugger.PAGE_FALLBACK)
         val pageUrl = prefix?.resolveChild(pageSlug) ?: TreePath.require(pageSlug)
         val pageOwner = snapshot.byUrlPath[RootedPath(intent.root, pageUrl)]
-        if (pageOwner != null && pageOwner.path != intent.path) return pageUrl.value // page-page
         // Only a LIVE alias blocks: a row pointing at a page id no longer in THIS root is dangling (the
         // shadow-sweep hasn't dropped it yet) and must not permanently wedge the URL. Liveness is judged in
         // the alias's OWN root - an alias is a within-root redirect, so a page that now holds the id under a
         // DIFFERENT root (its own page, legal since ADR-0012) leaves this row just as dangling as an absent id
         // would, and a bare-pageId probe would read it as live and 409 a create that should have succeeded.
         val aliasTarget = aliasRegistry.find(RootedPath(intent.root, pageUrl))
-        if (aliasTarget != null && snapshot.pageAt(RootedPageId(intent.root, aliasTarget.id)) != null) return pageUrl.value
-        return null
+        val liveAlias = aliasTarget != null && snapshot.pageAt(RootedPageId(intent.root, aliasTarget.id)) != null
+        return when {
+            pageOwner != null && pageOwner.path != intent.path -> pageUrl.value // page-page
+            liveAlias -> pageUrl.value
+            else -> null
+        }
     }
 
     /**
@@ -356,26 +377,35 @@ class WritePipeline(
         val available = availability.current()
         for (page in dirty) {
             val root = page.path.root
-            try {
-                // The cheap status arms, first: DETACHED (a root whose rows outlive its name in `roots {}` - it
-                // has no store, so there is nothing to read) and already-marked UNAVAILABLE. Neither may clear.
-                if (!knownRoot(root)) {
-                    logger.warn {
-                        "dirty page ${page.path.path.value} belongs to root '$root', which is not configured; " +
-                            "leaving it journaled for a boot where that root is back"
-                    }
-                    continue
+            runCatching {
+                reconcileDirtyPage(page, available)
+            }.onFailure { failure ->
+                if (failure is Error) throw failure
+                markIfRootGone(root)
+                logger.error(failure) { "reconciliation of ${page.path.path.value} failed; leaving it dirty for the next startup" }
+            }
+        }
+    }
+
+    private fun reconcileDirtyPage(page: DirtyPage, available: RootAvailability.Snapshot) {
+        val root = page.path.root
+        // The cheap status arms, first: DETACHED (a root whose rows outlive its name in `roots {}` - it
+        // has no store, so there is nothing to read) and already-marked UNAVAILABLE. Neither may clear.
+        when {
+            !knownRoot(root) ->
+                logger.warn {
+                    "dirty page ${page.path.path.value} belongs to root '$root', which is not configured; " +
+                        "leaving it journaled for a boot where that root is back"
                 }
-                if (!available.isAvailable(root)) {
-                    logger.warn {
-                        "dirty page ${page.path.path.value} belongs to root '$root', which is not serving; " +
-                            "leaving it journaled for a boot where that root is back"
-                    }
-                    continue
+            !available.isAvailable(root) ->
+                logger.warn {
+                    "dirty page ${page.path.path.value} belongs to root '$root', which is not serving; " +
+                        "leaving it journaled for a boot where that root is back"
                 }
-                val onDisk = when (val read = absence.read(stores(root), page.path)) {
-                    is ContentRead.Bytes -> read.bytes
-                    ContentRead.RootDown -> {
+            else ->
+                when (val read = absence.read(stores(root), page.path)) {
+                    is ContentRead.Bytes -> reconcileDirtyBytes(page, read.bytes)
+                    ContentRead.RootDown ->
                         // The status arms passed and the root STILL turned out to be gone - the unmarked window.
                         // A bare null here would have taken the clear arm below and silently destroyed an
                         // interrupted save's recovery record because the whole disk was missing.
@@ -383,8 +413,6 @@ class WritePipeline(
                             "dirty page ${page.path.path.value}: root '$root' went away under the reconcile; " +
                                 "leaving it journaled (nothing is cleared for a root that cannot answer for its pages)"
                         }
-                        continue
-                    }
                     // **NEITHER absence clears (C0/C1), and they are one arm because they have one answer.** "The
                     // file is not there" is not "the page was deleted" - it is equally what a failed submount, a
                     // partial restore and a decoy tree look like - and this row is an interrupted save's ONLY
@@ -394,30 +422,31 @@ class WritePipeline(
                     // the first place - so a clear-on-confirmed rule would destroy exactly the rows most in need of
                     // recovery. It is cleared in ONE place, the proof-apply transaction, alongside the retirement of
                     // the binding it belongs to (`RetirementRepository.applyProofs`) - never on a bare read.
-                    ContentRead.AbsenceUnknown, ContentRead.ConfirmedAbsent -> {
+                    ContentRead.AbsenceUnknown, ContentRead.ConfirmedAbsent ->
                         logger.warn {
                             "dirty page ${page.path.path.value} is not on disk under a live root '$root'; leaving it journaled. " +
                                 "Nothing but an absence PROOF may destroy an interrupted save's recovery record, and in C0 there " +
                                 "is no proof source - if the page really was deleted, the row is cleared when one arrives."
                         }
-                        continue
-                    }
                 }
-                if (citations.contentHash(onDisk) != page.expectedHash) {
-                    logger.warn {
-                        "dirty page ${page.path.path.value} drifted on disk since the interrupted save; skipping reconcile (left marked)"
-                    }
-                    continue
+        }
+    }
+
+    private fun reconcileDirtyBytes(page: DirtyPage, onDisk: ByteArray) {
+        when {
+            citations.contentHash(onDisk) != page.expectedHash ->
+                logger.warn {
+                    "dirty page ${page.path.path.value} drifted on disk since the interrupted save; " +
+                        "skipping reconcile (left marked)"
                 }
+            else -> {
+                val root = page.path.root
                 historyHook.commit(root, page.path.path, onDisk) // idempotent commit recovery
                 // The journal row's OWN RootedPath - the location the interrupted save wrote to. This path is
                 // ungated and runs at boot against a snapshot the startup rebuild has already published, so an
                 // id-addressed reindex here would be the same cross-root re-derivation the write path forbids.
-                indexBuilder.reindex(page.path) // tolerated to throw only if the page truly vanished — caught below
-                dirtyPages.clear(RootedPageId(page.path.root, page.pageId))
-            } catch (e: Exception) {
-                markIfRootGone(root)
-                logger.error(e) { "reconciliation of ${page.path.path.value} failed; leaving it dirty for the next startup" }
+                indexBuilder.reindex(page.path) // tolerated to throw only if the page truly vanished — caught by the caller
+                dirtyPages.clear(RootedPageId(root, page.pageId))
             }
         }
     }
@@ -448,7 +477,7 @@ class WritePipeline(
 
     /** (3)+(4) Post-write steps; the bytes are already durably on disk and the page already marked dirty. */
     private fun commitAndIndex(intent: WriteIntent, newHash: String): WriteOutcome =
-        try {
+        runCatching {
             // The save's commit SHA (null off Git). Threads the proposer->author + approver->committer
             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
@@ -459,12 +488,13 @@ class WritePipeline(
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
             dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
-        } catch (e: Exception) {
+        }.getOrElse { failure ->
+            if (failure is Error) throw failure
             // The bytes ARE on disk and the page is ALREADY marked dirty (write-ahead). Leave the mark;
             // the next startup reconciles. The cause is mapped to a structured code at the wire route.
             markIfRootGone(intent.root)
-            logger.error(e) { "save wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
-            WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = e.message ?: e::class.simpleName ?: "unknown")
+            logger.error(failure) { "save wrote ${intent.path.value} but a post-write step failed; left dirty for reconcile" }
+            WriteOutcome.WrittenButUnindexed(newHash = newHash, cause = failure.message ?: failure::class.simpleName ?: "unknown")
         }
 
     /**
@@ -517,6 +547,14 @@ class WritePipeline(
     companion object {
         private val logger = KotlinLogging.logger {}
     }
+}
+
+private sealed interface FolderUrlWalk {
+    data object Unavailable : FolderUrlWalk
+
+    data class Collision(val url: String) : FolderUrlWalk
+
+    data class Available(val prefix: TreePath?) : FolderUrlWalk
 }
 
 /**

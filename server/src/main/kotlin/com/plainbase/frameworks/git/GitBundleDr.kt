@@ -159,15 +159,19 @@ class GitBundleDr(
         // B-C3: STREAM the (possibly large) bundle straight to the tmp file - never a whole-body in-heap array.
         // Catch Throwable, not just Exception: an OutOfMemoryError (or any Error) on the transfer must STILL
         // surface as the operator-actionable bootRefusal (HOLE-C/R16), never a raw crash in the exact DR path.
-        val found = try {
+        val found = runCatching {
             objectStore.fetchHistoryBundleTo(tmpBundlePath)
-        } catch (e: Throwable) {
+        }.getOrElse { failure ->
             // G5: handle only the INTENDED targets (any Exception, plus OutOfMemoryError from a heap-tight
             // recovery host); rethrow every other fatal Error (ThreadDeath / LinkageError / StackOverflowError /
             // other VirtualMachineError) rather than mask a broken JVM as an object-storage boot refusal.
-            if (e !is Exception && e !is OutOfMemoryError) throw e
-            runCatching { Files.deleteIfExists(tmpBundlePath) }
-            throw objectStore.bootRefusal(e)
+            when {
+                failure !is Exception && failure !is OutOfMemoryError -> throw failure
+                else -> {
+                    runCatching { Files.deleteIfExists(tmpBundlePath) }
+                    throw objectStore.bootRefusal(failure)
+                }
+            }
         }
         if (!found) {
             runCatching { Files.deleteIfExists(tmpBundlePath) }
@@ -420,25 +424,35 @@ class GitBundleDr(
         }
         var failed = false
         try {
-            ship()
-            synchronized(cadenceLock) {
-                everShipped = true
-                consecutiveShipFailures = 0
-            }
-        } catch (e: Throwable) {
-            // G5/B-C3: handle any Exception plus OutOfMemoryError (a heap-tight ship must NOT kill the dispatch
-            // thread and leave the DR bundle permanently stale - WARN/re-arm and let a later, less-pressured tick
-            // succeed); rethrow every OTHER fatal Error (ThreadDeath / LinkageError / StackOverflowError / other
-            // VirtualMachineError) rather than swallow a broken JVM under the never-throws contract.
-            if (e !is Exception && e !is OutOfMemoryError) throw e
-            failed = true
-            val failures = synchronized(cadenceLock) { ++consecutiveShipFailures }
-            if (failures >= SHIP_FAILURE_ESCALATION_THRESHOLD) {
-                logger.error(e) {
-                    "bundle ship failed $failures times in a row (${causeOf(e)}); the DR bundle is stale until a ship succeeds"
+            runCatching {
+                ship()
+                synchronized(cadenceLock) {
+                    everShipped = true
+                    consecutiveShipFailures = 0
                 }
-            } else {
-                logger.warn(e) { "bundle ship failed (${causeOf(e)}); the next commit or cadence tick retries" }
+            }.onFailure { failure ->
+                // G5/B-C3: handle any Exception plus OutOfMemoryError (a heap-tight ship must NOT kill the dispatch
+                // thread and leave the DR bundle permanently stale - WARN/re-arm and let a later, less-pressured tick
+                // succeed); rethrow every OTHER fatal Error (ThreadDeath / LinkageError / StackOverflowError / other
+                // VirtualMachineError) rather than swallow a broken JVM under the never-throws contract.
+                when {
+                    failure !is Exception && failure !is OutOfMemoryError -> throw failure
+                    else -> {
+                        failed = true
+                        val failures = synchronized(cadenceLock) { ++consecutiveShipFailures }
+                        when {
+                            failures >= SHIP_FAILURE_ESCALATION_THRESHOLD ->
+                                logger.error(failure) {
+                                    "bundle ship failed $failures times in a row (${causeOf(failure)}); " +
+                                        "the DR bundle is stale until a ship succeeds"
+                                }
+                            else ->
+                                logger.warn(failure) {
+                                    "bundle ship failed (${causeOf(failure)}); the next commit or cadence tick retries"
+                                }
+                        }
+                    }
+                }
             }
         } finally {
             synchronized(cadenceLock) {
@@ -525,10 +539,13 @@ class GitBundleDr(
             }
             return
         }
-        try {
+        runCatching {
             ship()
-        } catch (e: Exception) {
-            logger.warn(e) { "graceful-shutdown bundle ship failed (${causeOf(e)}); the DR bundle stays as of the last successful ship" }
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
+            logger.warn(failure) {
+                "graceful-shutdown bundle ship failed (${causeOf(failure)}); the DR bundle stays as of the last successful ship"
+            }
         }
     }
 

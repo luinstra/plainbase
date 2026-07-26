@@ -33,34 +33,40 @@ internal fun parseProposeCommand(request: ProposeChangeRequest, roots: Set<RootN
 
 private fun parseEditCommand(request: ProposeChangeRequest): ProposeCommandParse {
     val rawPageId = request.pageId
-    if (rawPageId.isNullOrBlank()) return ProposeCommandParse.Invalid("an edit requires page_id")
-    val pageId = PageId.of(rawPageId) ?: return ProposeCommandParse.Invalid("page_id is not a valid UUID")
+    val pageId = rawPageId?.let(PageId::of)
     val baseHash = request.baseHash
-    if (baseHash.isNullOrBlank()) return ProposeCommandParse.Invalid("an edit requires base_hash")
-    if (!isContentHash(baseHash)) return ProposeCommandParse.Invalid("base_hash must be the sha256:<64-hex> form")
     // The optional client target_path is non-authoritative; if present it MUST be a valid TreePath (a traversal is a 400).
-    val clientTargetPath = request.targetPath?.let { raw ->
-        TreePath.of(raw) ?: return ProposeCommandParse.Invalid("target_path is not a valid content-relative path: '$raw'")
-    }
+    val rawTargetPath = request.targetPath
+    val clientTargetPath = rawTargetPath?.let(TreePath::of)
     // The optional edit `root` pin (C4, 5.2a #6): GRAMMAR only - `RootName.of`, NOT `RootName.registered`. An
     // unregistered-but-legal slug must NOT leak a root's existence pre-auth; the facade durable-validates it AFTER
     // checkEdit (a pin that holds no live binding answers StaleBase). A create's root stays REQUIRED + registered
     // (parseCreateCommand, 5.2a #9): a required authoritative field for a NEW page leaks nothing.
-    val editRoot = request.root?.let {
+    val rawRoot = request.root
+    val editRoot = rawRoot?.let(RootName::of)
+    return when {
+        rawPageId.isNullOrBlank() -> ProposeCommandParse.Invalid("an edit requires page_id")
+        pageId == null -> ProposeCommandParse.Invalid("page_id is not a valid UUID")
+        baseHash.isNullOrBlank() -> ProposeCommandParse.Invalid("an edit requires base_hash")
+        !isContentHash(baseHash) -> ProposeCommandParse.Invalid("base_hash must be the sha256:<64-hex> form")
+        rawTargetPath != null && clientTargetPath == null ->
+            ProposeCommandParse.Invalid("target_path is not a valid content-relative path: '$rawTargetPath'")
         // The message names the BODY field, not `?root=`: this pin arrives in the propose JSON, and an agent sent
         // hunting for a query string it never sent is an agent that cannot fix its request.
-        RootName.of(it) ?: return ProposeCommandParse.Invalid("root must be a valid root name: '$it'", ErrorCodes.INVALID_ROOT)
+        rawRoot != null && editRoot == null ->
+            ProposeCommandParse.Invalid("root must be a valid root name: '$rawRoot'", ErrorCodes.INVALID_ROOT)
+        else ->
+            ProposeCommandParse.Ok(
+                ProposeCommand.Edit(
+                    pageId = pageId,
+                    baseHash = baseHash,
+                    clientTargetPath = clientTargetPath,
+                    proposedContent = request.proposedContent.encodeToByteArray(),
+                    rationale = request.rationale,
+                    root = editRoot,
+                ),
+            )
     }
-    return ProposeCommandParse.Ok(
-        ProposeCommand.Edit(
-            pageId = pageId,
-            baseHash = baseHash,
-            clientTargetPath = clientTargetPath,
-            proposedContent = request.proposedContent.encodeToByteArray(),
-            rationale = request.rationale,
-            root = editRoot,
-        ),
-    )
 }
 
 private fun parseCreateCommand(request: ProposeChangeRequest, roots: Set<RootName>): ProposeCommandParse {

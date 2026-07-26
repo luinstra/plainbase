@@ -302,11 +302,12 @@ class FileWatcher(
      * [onFailure] exists for. `Exception`, not `Throwable`: a JVM `Error` (OOM/SOE) must still fail loudly.
      */
     private fun processEvents() {
-        try {
+        runCatching {
             pollLoop()
-        } catch (e: Exception) {
-            logger.error(e) { "the watch worker for $root died; changes under it will NOT converge until a restart" }
-            fail(e)
+        }.onFailure { failure ->
+            if (failure is Error) throw failure
+            logger.error(failure) { "the watch worker for $root died; changes under it will NOT converge until a restart" }
+            fail(failure)
         }
     }
 
@@ -315,14 +316,15 @@ class FileWatcher(
         // a shared field would be a race to invent for no reason.
         var nextRetry = System.nanoTime() + coverageRetryInterval.inWholeNanoseconds
         while (true) {
-            val key = try {
+            val key = runCatching {
                 // NOT take(): a poll TIMEOUT is the root's heartbeat (see the class doc), and it is also what
                 // keeps a watcher whose last key died from blocking forever with nothing left to wake it.
                 watchService.poll(livenessInterval.inWholeMilliseconds, TimeUnit.MILLISECONDS)
-            } catch (_: ClosedWatchServiceException) {
-                return
-            } catch (_: InterruptedException) {
-                return
+            }.getOrElse { failure ->
+                when (failure) {
+                    is ClosedWatchServiceException, is InterruptedException -> return
+                    else -> throw failure
+                }
             }
             // Coverage runs on its OWN, COARSE cadence - deliberately NOT hung on the liveness tick, which fires
             // every few seconds: the scheduler would coalesce the passes, but each pass it does run is O(corpus),
@@ -333,35 +335,48 @@ class FileWatcher(
             }
             if (key == null) {
                 if (rootLost()) return // an idle interval - the one tick that catches a root nobody is writing to
-                continue
+            } else if (processKey(key)) {
+                return
             }
-            val dir = keys[key]
-            for (event in key.pollEvents()) {
-                try {
-                    deliver(dir, event)
-                } catch (e: Exception) {
-                    logger.error(e) { "watch event handling failed; the next rebuild converges regardless" }
-                }
+        }
+    }
+
+    /** Processes one key and reports whether the worker should stop. */
+    private fun processKey(key: WatchKey): Boolean {
+        val dir = keys[key]
+        for (event in key.pollEvents()) {
+            runCatching {
+                deliver(dir, event)
+            }.onFailure { failure ->
+                if (failure is Error) throw failure
+                logger.error(failure) { "watch event handling failed; the next rebuild converges regardless" }
             }
-            if (key.reset()) continue
-            keys.remove(key)
-            // A deleted SUBdirectory's key cancels itself; the delete event in its PARENT already scheduled the
-            // rebuild that drops its entries. The ROOT's key is the different story: nothing above it is watched,
-            // so its death is the only signal there is.
-            if (dir != root) {
+        }
+        if (key.reset()) return false
+
+        keys.remove(key)
+        // A deleted SUBdirectory's key cancels itself; the delete event in its PARENT already scheduled the
+        // rebuild that drops its entries. The ROOT's key is the different story: nothing above it is watched,
+        // so its death is the only signal there is.
+        return when {
+            dir != root -> {
                 if (cancellationIsAGap(dir)) onBreak(BreakCause.WATCH_KEY_CANCELLED)
-                continue
+                false
             }
-            if (rootLost()) return
-            // The root's key died but its path is still traversable - the root directory was REPLACED (rename-in,
-            // a remount over it). Watch coverage for the whole tree went with the old key, which no rebuild can
-            // repair, so re-register and converge: the OVERFLOW recovery, for the same reason. And it is a BREAK
-            // for a reason no rebuild can repair either: every page this epoch witnessed, it witnessed on the tree
-            // that just went away.
-            logger.warn { "the watch key for $root was invalidated but the path is still there: re-registering the tree" }
-            onBreak(BreakCause.WATCH_KEY_CANCELLED)
-            registerWholeTree()
-            onChange(ContentStore.OVERFLOW)
+
+            rootLost() -> true
+            else -> {
+                // The root's key died but its path is still traversable - the root directory was REPLACED (rename-in,
+                // a remount over it). Watch coverage for the whole tree went with the old key, which no rebuild can
+                // repair, so re-register and converge: the OVERFLOW recovery, for the same reason. And it is a BREAK
+                // for a reason no rebuild can repair either: every page this epoch witnessed, it witnessed on the tree
+                // that just went away.
+                logger.warn { "the watch key for $root was invalidated but the path is still there: re-registering the tree" }
+                onBreak(BreakCause.WATCH_KEY_CANCELLED)
+                registerWholeTree()
+                onChange(ContentStore.OVERFLOW)
+                false
+            }
         }
     }
 
@@ -475,7 +490,14 @@ class FileWatcher(
 
         /** The first few uncovered directories: an inotify-limit failure can name thousands of them, and the WARN cannot. */
         private fun bounded(uncovered: List<Path>): String =
-            uncovered.take(3).joinToString() + if (uncovered.size > 3) " (+${uncovered.size - 3} more)" else ""
+            uncovered.take(UNCOVERED_DIRECTORY_LIMIT).joinToString() +
+                if (uncovered.size > UNCOVERED_DIRECTORY_LIMIT) {
+                    " (+${uncovered.size - UNCOVERED_DIRECTORY_LIMIT} more)"
+                } else {
+                    ""
+                }
+
+        private const val UNCOVERED_DIRECTORY_LIMIT = 3
 
         /**
          * Registration-failure classification — and the ONE place that decides whether coverage was LOST

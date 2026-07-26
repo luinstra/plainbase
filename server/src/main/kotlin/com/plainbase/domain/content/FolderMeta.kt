@@ -42,16 +42,10 @@ data class FolderMeta(
             var slug: String? = null
             var description: String? = null
 
-            for (rawLine in body.lineSequence()) {
-                val line = rawLine.trim()
-                if (line.isEmpty() || line.startsWith("#")) continue
-                val colon = line.indexOf(':')
-                if (colon < 0) {
-                    logger.warn { "Ignoring malformed line in $source (no ':'): '$line'" }
-                    continue
-                }
-                val key = line.substring(0, colon).trim()
-                val value = stripQuotes(line.substring(colon + 1).trim())
+            body.lineSequence()
+                .map(String::trim)
+                .mapNotNull { parseEntry(it, source) }
+                .forEach { (key, value) ->
                 when (key) {
                     "title" -> title = value
                     "slug" -> slug = value
@@ -62,9 +56,22 @@ data class FolderMeta(
                     }
                     else -> logger.warn { "Ignoring unknown key '$key' in $source (known keys: title, order, slug, description)" }
                 }
-            }
+                }
             return FolderMeta(title = title, order = order, slug = slug, description = description)
         }
+
+        private fun parseEntry(line: String, source: String): Pair<String, String>? =
+            when {
+                line.isEmpty() || line.startsWith("#") -> null
+                ':' !in line -> {
+                    logger.warn { "Ignoring malformed line in $source (no ':'): '$line'" }
+                    null
+                }
+                else -> {
+                    val colon = line.indexOf(':')
+                    line.substring(0, colon).trim() to stripQuotes(line.substring(colon + 1).trim())
+                }
+            }
 
         /** Strips one layer of matching surrounding single or double quotes, if present. */
         private fun stripQuotes(value: String): String = when {

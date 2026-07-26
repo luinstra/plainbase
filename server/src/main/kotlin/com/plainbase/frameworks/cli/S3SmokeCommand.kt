@@ -169,7 +169,9 @@ object S3SmokeCommand {
         }
         captureDir?.let { pass("captures", "wrote ${pages.size} raw LIST bodies to $it (record as ListResponseParser goldens)", output) }
         val listedKeys = pages.flatMap { ListResponseParser.parse(it).contents }.map { it.key }
-        check(listedKeys.size == 4) { "LIST pagination saw ${listedKeys.size} keys, expected 4: $listedKeys" }
+        check(listedKeys.size == EXPECTED_LISTED_KEY_COUNT) {
+            "LIST pagination saw ${listedKeys.size} keys, expected $EXPECTED_LISTED_KEY_COUNT: $listedKeys"
+        }
         pass("list-paginated", "LIST v2 max-keys=2 paginated ${pages.size} pages, 4 keys (raw): $listedKeys", output)
 
         // Close the LIST -> decode -> GET loop PER PROVIDER (C4 hydrates every listed key through S3WireKey,
@@ -240,42 +242,55 @@ object S3SmokeCommand {
             "PLAINBASE_SMOKE_SECRET_ACCESS_KEY",
         )
         val missing = required.filter { env[it].isNullOrBlank() }
-        if (missing.isNotEmpty()) {
-            output.error(USAGE)
-            output.error("missing env: ${missing.joinToString(", ")}")
-            return null
-        }
         // Same endpoint gate as the object-storage config: an absolute http(s) URL, and https UNLESS the
         // shared PLAINBASE_INSECURE_HTTP override is set - never send SigV4 credentials over cleartext on a typo.
-        val endpoint = env.getValue("PLAINBASE_SMOKE_ENDPOINT")
-        if (!PlainbaseConfig.isAbsoluteHttpUrl(endpoint)) {
-            output.error("PLAINBASE_SMOKE_ENDPOINT is not an absolute http(s) URL: '$endpoint'")
-            return null
-        }
-        if (!insecureHttpOverride(env) && !PlainbaseConfig.isHttpsUrl(endpoint)) {
-            output.error(
-                "PLAINBASE_SMOKE_ENDPOINT must be https to protect S3 credentials in transit: '$endpoint' " +
-                    "(set PLAINBASE_INSECURE_HTTP=1 to knowingly send credentials over plaintext)",
-            )
-            return null
-        }
-        val addressing = when (val raw = env["PLAINBASE_SMOKE_ADDRESSING"] ?: "path") {
+        val endpoint = env["PLAINBASE_SMOKE_ENDPOINT"]
+        val endpointError = endpoint?.let { endpointValidationError(it, env) }
+        val rawAddressing = env["PLAINBASE_SMOKE_ADDRESSING"] ?: "path"
+        val addressing = when (rawAddressing) {
             "path" -> S3Addressing.PATH_STYLE
             "virtual-host" -> S3Addressing.VIRTUAL_HOST
-            else -> {
-                output.error("unknown PLAINBASE_SMOKE_ADDRESSING '$raw' - legal values: path | virtual-host")
-                return null
-            }
+            else -> null
         }
-        return S3ClientConfig(
-            endpoint = endpoint,
-            region = env.getValue("PLAINBASE_SMOKE_REGION"),
-            bucket = env.getValue("PLAINBASE_SMOKE_BUCKET"),
-            accessKeyId = env.getValue("PLAINBASE_SMOKE_ACCESS_KEY_ID"),
-            secretAccessKey = env.getValue("PLAINBASE_SMOKE_SECRET_ACCESS_KEY"),
-            addressing = addressing,
-        )
+        return when {
+            missing.isNotEmpty() -> {
+                output.error(USAGE)
+                output.error("missing env: ${missing.joinToString(", ")}")
+                null
+            }
+
+            endpointError != null -> {
+                output.error(endpointError)
+                null
+            }
+
+            addressing == null -> {
+                output.error("unknown PLAINBASE_SMOKE_ADDRESSING '$rawAddressing' - legal values: path | virtual-host")
+                null
+            }
+
+            else -> S3ClientConfig(
+                endpoint = checkNotNull(endpoint),
+                region = env.getValue("PLAINBASE_SMOKE_REGION"),
+                bucket = env.getValue("PLAINBASE_SMOKE_BUCKET"),
+                accessKeyId = env.getValue("PLAINBASE_SMOKE_ACCESS_KEY_ID"),
+                secretAccessKey = env.getValue("PLAINBASE_SMOKE_SECRET_ACCESS_KEY"),
+                addressing = addressing,
+            )
+        }
     }
+
+    private fun endpointValidationError(endpoint: String, env: Map<String, String>): String? =
+        when {
+            !PlainbaseConfig.isAbsoluteHttpUrl(endpoint) ->
+                "PLAINBASE_SMOKE_ENDPOINT is not an absolute http(s) URL: '$endpoint'"
+
+            !insecureHttpOverride(env) && !PlainbaseConfig.isHttpsUrl(endpoint) ->
+                "PLAINBASE_SMOKE_ENDPOINT must be https to protect S3 credentials in transit: '$endpoint' " +
+                    "(set PLAINBASE_INSECURE_HTTP=1 to knowingly send credentials over plaintext)"
+
+            else -> null
+        }
 
     /**
      * The soak-arm GET count: absent defaults to 100, present must be a NON-NEGATIVE integer (0 skips the
@@ -295,7 +310,7 @@ object S3SmokeCommand {
         env["PLAINBASE_INSECURE_HTTP"]?.trim()?.lowercase() in setOf("1", "true")
 
     private fun pass(name: String, detail: String, output: CommandOutput) =
-        output.result("PASS  ${name.padEnd(22)} $detail")
+        output.result("PASS  ${name.padEnd(PASS_NAME_WIDTH)} $detail")
 
     private fun PutOutcome.stored(what: String): PutOutcome.Stored =
         this as? PutOutcome.Stored ?: throw IllegalStateException("$what was refused: $this")
@@ -314,4 +329,6 @@ object S3SmokeCommand {
     }.joinToString(" <- ") { "${it::class.simpleName}: ${it.message}" }
 
     private const val USAGE = "usage: plainbase s3-smoke  (config via PLAINBASE_SMOKE_* env - see S3SmokeCommand)"
+    private const val EXPECTED_LISTED_KEY_COUNT = 4
+    private const val PASS_NAME_WIDTH = 22
 }

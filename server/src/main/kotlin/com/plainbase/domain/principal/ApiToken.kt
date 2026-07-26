@@ -52,17 +52,18 @@ class ParsedToken(val id: String, val secret: ByteArray)
  * oversized bearer cannot drive avoidable substring/base64/hash work — a real token still parses unchanged.
  */
 fun parseToken(raw: String): ParsedToken? {
-    if (!raw.startsWith(TOKEN_PREFIX)) return null
-    val body = raw.removePrefix(TOKEN_PREFIX)
-    val boundary = body.indexOf('_')
-    if (boundary <= 0 || boundary == body.lastIndex) return null // empty id or empty secret
-    val id = body.substring(0, boundary)
-    if (!idPattern.matches(id)) return null // exactly 16 lowercase-hex chars — the minter's id shape
-    val encodedSecret = body.substring(boundary + 1)
-    if (encodedSecret.length != SECRET_BASE64_LENGTH) return null // reject before the decode/hash work
-    val secret = runCatching { secretBase64.decode(encodedSecret) }
-        .getOrNull()?.takeIf { it.size == SECRET_BYTES } ?: return null
-    return ParsedToken(id = id, secret = secret)
+    val body = raw.takeIf { it.startsWith(TOKEN_PREFIX) }?.removePrefix(TOKEN_PREFIX)
+    val boundary = body?.indexOf('_')?.takeIf { it > 0 && it != body.lastIndex }
+    val id = boundary?.let { body.substring(0, it) }?.takeIf(idPattern::matches)
+    val encodedSecret = boundary?.let { body.substring(it + 1) }
+        ?.takeIf { it.length == SECRET_BASE64_LENGTH }
+    val secret = encodedSecret
+        ?.let { runCatching { secretBase64.decode(it) }.getOrNull() }
+        ?.takeIf { it.size == SECRET_BYTES }
+    return when {
+        id != null && secret != null -> ParsedToken(id = id, secret = secret)
+        else -> null
+    }
 }
 
 /** Encodes the public id bytes as lowercase hex (the `_`-free id alphabet — see the file note). */

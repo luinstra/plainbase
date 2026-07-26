@@ -78,22 +78,23 @@ class FrontmatterReader : FrontmatterParser {
      * (`!`). Indented lines (nested-map members, block-list `- item` continuations) are never keys, so
      * a leaked nested scalar like `name` (under `author:`) is absent here and gets dropped + warned.
      */
-    private fun supportedKeys(inner: String): Set<String> {
-        val keys = LinkedHashSet<String>()
-        for (line in inner.split("\n")) {
-            if (line.isEmpty() || line.first() == ' ' || line.first() == '\t') continue // indented ⇒ not a top-level key
-            val trimmedRight = line.trimEnd('\r')
-            if (trimmedRight.isEmpty() || trimmedRight.first() == '#') continue // blank or comment
-            val colon = trimmedRight.indexOf(':')
-            if (colon <= 0) continue
-            val afterColon = trimmedRight.substring(colon + 1)
+    private fun supportedKeys(inner: String): Set<String> = inner.split("\n").mapNotNull(::supportedKey).toCollection(LinkedHashSet())
+
+    private fun supportedKey(line: String): String? {
+        val trimmedRight = line.trimEnd('\r')
+        val colon = trimmedRight.indexOf(':')
+        val afterColon = trimmedRight.substring((colon + 1).coerceAtMost(trimmedRight.length))
+        val value = afterColon.trim()
+        return when {
+            line.isEmpty() || line.first() == ' ' || line.first() == '\t' -> null
+            trimmedRight.isEmpty() || trimmedRight.first() == '#' -> null
+            colon <= 0 -> null
             // The colon must terminate the key: EOL or whitespace right after (not `key:value`).
-            if (afterColon.isNotEmpty() && afterColon.first() != ' ' && afterColon.first() != '\t') continue
-            val value = afterColon.trim()
-            if (value.isNotEmpty() && value.first() in OUT_OF_SUBSET_VALUE_INDICATORS) continue // block-scalar/anchor/alias/tag
-            keys += trimmedRight.substring(0, colon)
+            afterColon.isNotEmpty() && afterColon.first() != ' ' && afterColon.first() != '\t' -> null
+            // Block-scalar, anchor, alias, and tag values sit outside the supported subset.
+            value.isNotEmpty() && value.first() in OUT_OF_SUBSET_VALUE_INDICATORS -> null
+            else -> trimmedRight.substring(0, colon)
         }
-        return keys
     }
 
     /** Maps one key's raw extension entries to a subset [FrontmatterValue] (block list, flow list, or scalar). */

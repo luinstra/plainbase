@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.frameworks.filesystem.FileAtomics
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
@@ -100,11 +101,18 @@ class MirrorState(
     /** The cold-path load: missing / unparseable / wrong version / invalid key => start EMPTY. */
     private fun load(): MutableMap<TreePath, String> {
         if (!Files.isRegularFile(file)) return mutableMapOf()
-        val document = try {
+        val document = runCatching {
             Json.decodeFromString<Document>(Files.readString(file))
-        } catch (e: Exception) {
-            logger.warn { "mirror-state at $file is unreadable (${e.message}); starting empty (cold path, derived state)" }
-            return mutableMapOf()
+        }.getOrElse { failure ->
+            when (failure) {
+                is IOException, is SerializationException -> {
+                    logger.warn {
+                        "mirror-state at $file is unreadable (${failure.message}); starting empty (cold path, derived state)"
+                    }
+                    return mutableMapOf()
+                }
+                else -> throw failure
+            }
         }
         if (document.version != VERSION) {
             logger.warn { "mirror-state at $file has version ${document.version} (expected $VERSION); starting empty (cold path)" }

@@ -124,12 +124,21 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
 
     override fun indexedState(): Map<RootedPageId, PageSearchState> = db.write { connection ->
         connection.prepareStatement("SELECT page_id, content_hash, root, path FROM search_page WHERE generation = ?").use { statement ->
-            statement.setLong(1, connection.activeGeneration())
-            statement.executeQuery().use { rows ->
-                buildMap {
-                    while (rows.next()) {
-                        val key = RootedPageId(RootName.require(rows.getString(3)), PageId.fromByteArray(rows.getBytes(1)))
-                        put(key, PageSearchState(contentHash = rows.getString(2), path = TreePath.require(rows.getString(4))))
+                statement.setLong(SearchPageParams.GENERATION, connection.activeGeneration())
+                statement.executeQuery().use { rows ->
+                    buildMap {
+                        while (rows.next()) {
+                            val key = RootedPageId(
+                                RootName.require(rows.getString(SearchPageColumns.ROOT)),
+                                PageId.fromByteArray(rows.getBytes(SearchPageColumns.PAGE_ID)),
+                            )
+                            put(
+                                key,
+                                PageSearchState(
+                                    contentHash = rows.getString(SearchPageColumns.CONTENT_HASH),
+                                    path = TreePath.require(rows.getString(SearchPageColumns.PATH)),
+                                ),
+                            )
                     }
                 }
             }
@@ -227,11 +236,11 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
 
     private fun Connection.insertPage(generation: Long, page: PageDocuments) {
         prepareStatement("INSERT INTO search_page(generation, page_id, content_hash, root, path) VALUES (?, ?, ?, ?, ?)").use { statement ->
-            statement.setLong(1, generation)
-            statement.setBytes(2, page.pageId.toByteArray())
-            statement.setString(3, page.contentHash)
-            statement.setString(4, page.root.value)
-            statement.setString(5, page.path.value)
+            statement.setLong(SearchPageParams.GENERATION, generation)
+            statement.setBytes(SearchPageParams.PAGE_ID, page.pageId.toByteArray())
+            statement.setString(SearchPageParams.CONTENT_HASH, page.contentHash)
+            statement.setString(SearchPageParams.ROOT, page.root.value)
+            statement.setString(SearchPageParams.PATH, page.path.value)
             statement.executeUpdate()
         }
         val insertDoc = prepareStatement(
@@ -245,29 +254,29 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             insertFts.use {
                 insertTrigram.use {
                     page.sections.forEach { section ->
-                        insertDoc.setLong(1, generation)
-                        insertDoc.setBytes(2, page.pageId.toByteArray())
-                        insertDoc.setString(3, page.root.value)
-                        insertDoc.setString(4, section.headingId)
-                        insertDoc.setString(5, section.status)
+                        insertDoc.setLong(SectionDocParams.GENERATION, generation)
+                        insertDoc.setBytes(SectionDocParams.PAGE_ID, page.pageId.toByteArray())
+                        insertDoc.setString(SectionDocParams.ROOT, page.root.value)
+                        insertDoc.setString(SectionDocParams.HEADING_ID, section.headingId)
+                        insertDoc.setString(SectionDocParams.STATUS, section.status)
                         insertDoc.executeUpdate()
                         val docId = insertDoc.generatedKeys.use { keys ->
                             keys.next()
-                            keys.getLong(1)
+                            keys.getLong(GeneratedKeyColumns.ID)
                         }
-                        insertFts.setLong(1, docId)
-                        insertFts.setString(2, section.title)
-                        insertFts.setString(3, section.heading)
-                        insertFts.setString(4, section.body)
+                        insertFts.setLong(SectionFtsParams.DOC_ID, docId)
+                        insertFts.setString(SectionFtsParams.TITLE, section.title)
+                        insertFts.setString(SectionFtsParams.HEADING, section.heading)
+                        insertFts.setString(SectionFtsParams.BODY, section.body)
                         // Lists collapse to newline-joined text: `\n` is a tokenizer separator and
                         // the only control character (with \t) the §B4 invariant lets through.
-                        insertFts.setString(5, section.tags.joinToString("\n"))
-                        insertFts.setString(6, section.aliases.joinToString("\n"))
-                        insertFts.setString(7, section.owner)
+                        insertFts.setString(SectionFtsParams.TAGS, section.tags.joinToString("\n"))
+                        insertFts.setString(SectionFtsParams.ALIASES, section.aliases.joinToString("\n"))
+                        insertFts.setString(SectionFtsParams.OWNER, section.owner)
                         insertFts.executeUpdate()
-                        insertTrigram.setLong(1, docId)
-                        insertTrigram.setString(2, section.title)
-                        insertTrigram.setString(3, section.body)
+                        insertTrigram.setLong(SectionTrigramParams.DOC_ID, docId)
+                        insertTrigram.setString(SectionTrigramParams.TITLE, section.title)
+                        insertTrigram.setString(SectionTrigramParams.BODY, section.body)
                         insertTrigram.executeUpdate()
                     }
                 }
@@ -285,9 +294,9 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             "DELETE FROM search_page WHERE generation = ? AND root = ? AND page_id = ?",
         ).forEach { sql ->
             prepareStatement(sql).use { statement ->
-                statement.setLong(1, generation)
-                statement.setString(2, root.value)
-                statement.setBytes(3, bytes)
+                statement.setLong(DeletePageParams.GENERATION, generation)
+                statement.setString(DeletePageParams.ROOT, root.value)
+                statement.setBytes(DeletePageParams.PAGE_ID, bytes)
                 statement.executeUpdate()
             }
         }
@@ -314,6 +323,55 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
     }
 
     companion object {
+        private object SearchPageColumns {
+            const val PAGE_ID = 1
+            const val CONTENT_HASH = 2
+            const val ROOT = 3
+            const val PATH = 4
+        }
+
+        private object SearchPageParams {
+            const val GENERATION = 1
+            const val PAGE_ID = 2
+            const val CONTENT_HASH = 3
+            const val ROOT = 4
+            const val PATH = 5
+        }
+
+        private object SectionDocParams {
+            const val GENERATION = 1
+            const val PAGE_ID = 2
+            const val ROOT = 3
+            const val HEADING_ID = 4
+            const val STATUS = 5
+        }
+
+        private object GeneratedKeyColumns {
+            const val ID = 1
+        }
+
+        private object SectionFtsParams {
+            const val DOC_ID = 1
+            const val TITLE = 2
+            const val HEADING = 3
+            const val BODY = 4
+            const val TAGS = 5
+            const val ALIASES = 6
+            const val OWNER = 7
+        }
+
+        private object SectionTrigramParams {
+            const val DOC_ID = 1
+            const val TITLE = 2
+            const val BODY = 3
+        }
+
+        private object DeletePageParams {
+            const val GENERATION = 1
+            const val ROOT = 2
+            const val PAGE_ID = 3
+        }
+
         // §B5 bm25 column weights (title, heading, body, tags, aliases, owner) — tier-2
         // pinned-but-reviewable, tuned against golden/search/bm25-queries.tsv, NOT frozen.
         const val WEIGHT_TITLE: Double = 10.0

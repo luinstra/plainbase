@@ -80,22 +80,19 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
         // order, the encoding check precedes the size bound (a block that is both oversized and
         // malformed reports invalid_encoding); `inner` is already materialized, so size-first saves nothing.
         val innerText = strictUtf8(inner)
-            ?: return PatchResult.Refused(RefusalReason.INVALID_ENCODING, "frontmatter block is not valid UTF-8")
-
-        // Case 10 — block_too_large (sanity bound).
-        if (inner.size > maxBlockBytes) {
-            return PatchResult.Refused(RefusalReason.BLOCK_TOO_LARGE, "frontmatter block exceeds the $maxBlockBytes-byte sanity bound")
+        return when {
+            innerText == null ->
+                PatchResult.Refused(RefusalReason.INVALID_ENCODING, "frontmatter block is not valid UTF-8")
+            inner.size > maxBlockBytes ->
+                PatchResult.Refused(RefusalReason.BLOCK_TOO_LARGE, "frontmatter block exceeds the $maxBlockBytes-byte sanity bound")
+            !isBlockMapping(innerText) ->
+                PatchResult.Refused(RefusalReason.NOT_A_MAPPING, NOT_A_MAPPING_MESSAGE)
+            hasIdKey(innerText) -> PatchResult.AlreadyPresent
+            else -> {
+                val eol = openerTerminator(original, block)
+                insert(original, block.innerStart, idLine(id, eol), id)
+            }
         }
-
-        // Case 9 — strictest-subset mapping check (every non-blank, non-comment line is an unquoted simple key).
-        if (!isBlockMapping(innerText)) return PatchResult.Refused(RefusalReason.NOT_A_MAPPING, NOT_A_MAPPING_MESSAGE)
-
-        // Case 5 — id-presence (evaluated only after the checks above): a column-0 `id` key ⇒ no-op.
-        if (hasIdKey(innerText)) return PatchResult.AlreadyPresent
-
-        // Case 1/4 — insert as the first line inside the block, copying the opener line's terminator.
-        val eol = openerTerminator(original, block)
-        return insert(original, block.innerStart, idLine(id, eol), id)
     }
 
     /**
@@ -198,23 +195,22 @@ class FrontmatterPatcher(private val maxBlockBytes: Int = DEFAULT_MAX_BLOCK_BYTE
      * earlier anchoring rule (` indented scalar` alone is an indented plain SCALAR, not a mapping).
      */
     private fun isBlockMapping(innerText: String): Boolean {
-        if (innerText.any { it in YAML_1_1_EXTRA_BREAKS }) return false
         val lines = innerText.lineSequence()
             .filter { line -> line.any { it != ' ' && it != '\t' } }
             .filterNot { it.trimStart(' ').startsWith("#") }
             .toList()
-        // A tab can never legally indent YAML; one in indentation position would make the document invalid.
-        if (lines.any { it[0] == '\t' }) return false
-        // Empty block (case 4): no content lines at all ⇒ vacuously a mapping (the `id:` line becomes the first).
-        if (lines.isEmpty()) return true
-        // A continuation run before the first key would be an indented root scalar — nothing anchors it.
-        if (lines.first()[0] == ' ') return false
         val keyIndices = lines.indices.filter { lines[it][0] != ' ' }
-        if (!keyIndices.all { isSimpleKeyLine(lines[it]) }) return false
-        // Each key line owns the indented run that follows it, up to the next column-0 key line.
-        return keyIndices.withIndex().all { (ordinal, keyIndex) ->
-            val runEnd = keyIndices.getOrElse(ordinal + 1) { lines.size }
-            continuationRunAllowed(lines[keyIndex], lines.subList(keyIndex + 1, runEnd))
+        return when {
+            innerText.any { it in YAML_1_1_EXTRA_BREAKS } -> false
+            lines.any { it[0] == '\t' } -> false
+            lines.isEmpty() -> true
+            lines.first()[0] == ' ' -> false
+            !keyIndices.all { isSimpleKeyLine(lines[it]) } -> false
+            else ->
+                keyIndices.withIndex().all { (ordinal, keyIndex) ->
+                    val runEnd = keyIndices.getOrElse(ordinal + 1) { lines.size }
+                    continuationRunAllowed(lines[keyIndex], lines.subList(keyIndex + 1, runEnd))
+                }
         }
     }
 

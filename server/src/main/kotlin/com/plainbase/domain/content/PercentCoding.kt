@@ -49,6 +49,9 @@ object PercentCoding {
     }
 
     private const val UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    private const val PERCENT_ESCAPE_LENGTH = 3
+    private const val BITS_PER_HEX_DIGIT = 4
+    private const val HEX_ALPHA_OFFSET = 10
     private val HEX = "0123456789ABCDEF".toCharArray()
 
     /**
@@ -66,32 +69,41 @@ object PercentCoding {
     fun decodeOnce(input: String, allowEncodedSlash: Boolean = false): DecodeResult {
         val bytes = ByteArrayOutputStream(input.length)
         var i = 0
-        while (i < input.length) {
+        var failure: DecodeError? = null
+        while (i < input.length && failure == null) {
             val c = input[i]
-            if (c == '%') {
-                if (i + 2 >= input.length) return DecodeResult.Failure(DecodeError.MALFORMED_ESCAPE)
-                val hi = hexValue(input[i + 1]) ?: return DecodeResult.Failure(DecodeError.MALFORMED_ESCAPE)
-                val lo = hexValue(input[i + 2]) ?: return DecodeResult.Failure(DecodeError.MALFORMED_ESCAPE)
-                val byte = (hi shl 4) or lo
-                if (byte == '/'.code && !allowEncodedSlash) return DecodeResult.Failure(DecodeError.ENCODED_SLASH)
-                bytes.write(byte)
-                i += 3
-            } else {
-                // Encode the whole literal run at once: char-by-char would split a surrogate pair into
-                // two lone surrogates. The strict encoder keeps a valid pair intact and rejects an
-                // unpaired surrogate (symmetric with the strict decode below — never emits U+FFFD).
-                val start = i
-                i++
-                while (i < input.length && input[i] != '%') i++
-                val runBytes = strictUtf8Encode(input.substring(start, i))
-                    ?: return DecodeResult.Failure(DecodeError.INVALID_UTF8)
-                bytes.write(runBytes)
+            when (c) {
+                '%' -> {
+                    val hi = input.getOrNull(i + 1)?.let(::hexValue)
+                    val lo = input.getOrNull(i + 2)?.let(::hexValue)
+                    val byte = hi?.let { high -> lo?.let { low -> (high shl BITS_PER_HEX_DIGIT) or low } }
+                    when {
+                        byte == null -> failure = DecodeError.MALFORMED_ESCAPE
+                        byte == '/'.code && !allowEncodedSlash -> failure = DecodeError.ENCODED_SLASH
+                        else -> {
+                            bytes.write(byte)
+                            i += PERCENT_ESCAPE_LENGTH
+                        }
+                    }
+                }
+
+                else -> {
+                    val start = i
+                    i++
+                    while (i < input.length && input[i] != '%') i++
+                    when (val runBytes = strictUtf8Encode(input.substring(start, i))) {
+                        null -> failure = DecodeError.INVALID_UTF8
+                        else -> bytes.write(runBytes)
+                    }
+                }
             }
         }
 
-        return when (val decoded = strictUtf8Decode(bytes.toByteArray())) {
-            null -> DecodeResult.Failure(DecodeError.INVALID_UTF8)
-            else -> DecodeResult.Success(decoded)
+        return when (failure) {
+            null -> strictUtf8Decode(bytes.toByteArray())
+                ?.let(DecodeResult::Success)
+                ?: DecodeResult.Failure(DecodeError.INVALID_UTF8)
+            else -> DecodeResult.Failure(failure)
         }
     }
 
@@ -107,7 +119,7 @@ object PercentCoding {
                 append(ch.toChar())
             } else {
                 append('%')
-                append(HEX[ch ushr 4])
+                append(HEX[ch ushr BITS_PER_HEX_DIGIT])
                 append(HEX[ch and 0x0F])
             }
         }
@@ -151,8 +163,8 @@ object PercentCoding {
 
     private fun hexValue(c: Char): Int? = when (c) {
         in '0'..'9' -> c - '0'
-        in 'a'..'f' -> c - 'a' + 10
-        in 'A'..'F' -> c - 'A' + 10
+        in 'a'..'f' -> c - 'a' + HEX_ALPHA_OFFSET
+        in 'A'..'F' -> c - 'A' + HEX_ALPHA_OFFSET
         else -> null
     }
 }

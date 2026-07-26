@@ -101,35 +101,34 @@ class PageIdentityService(
         ownerOf: (PageId) -> RootedPath?,
     ): Assignment {
         val frontmatterId = rawFrontmatterId?.let { PageId.of(it) }
-        if (frontmatterId != null) {
-            val owner = ownerOf(frontmatterId)
-            if (owner != null && owner != path) {
-                return duplicate(path, frontmatterId, mappedId, owner, ownerOf)
+        return when {
+            frontmatterId != null -> {
+                val owner = ownerOf(frontmatterId)
+                when {
+                    owner != null && owner != path -> duplicate(path, frontmatterId, mappedId, owner, ownerOf)
+                    else -> Assignment(frontmatterId, Source.FRONTMATTER)
+                }
             }
-            return Assignment(frontmatterId, Source.FRONTMATTER)
+
+            mappedId == null -> Assignment(idProvider.next(), Source.MINTED)
+            else -> {
+                val owner = ownerOf(mappedId)
+                when {
+                    owner == null || owner == path -> Assignment(mappedId, Source.ID_MAP)
+                    else ->
+                        Assignment(
+                            id = idProvider.next(),
+                            source = Source.MINTED,
+                            issue = IdentityIssue.DuplicateId(
+                                id = mappedId,
+                                root = path.root,
+                                keptPath = owner.path,
+                                reassignedPath = path.path,
+                            ),
+                        )
+                }
+            }
         }
-
-        // No valid frontmatter id: keep the id_map entry if one exists, else mint a fresh UUIDv7.
-        val mapped = mappedId ?: return Assignment(idProvider.next(), Source.MINTED)
-
-        // ...unless the binding is no longer this page's to keep, because an earlier claimant in THIS pass
-        // already took the id (a within-root contest, lost by a page that had no frontmatter id of its
-        // own to lose it with). A pass that binds INLINE never reaches this check - the winner's key-complete
-        // bind has already deleted the row, so `mappedId` came back null and the mint below is the `null` arm
-        // above. A pass that RESOLVES BEFORE IT BINDS (`AdoptionPass`'s read-only plan, which must be able to
-        // abort without a trace) still reads the stale row, and honoring it would hand the winner's id to two
-        // pages at once: a duplicate in the plan, and a byRootedId uniqueness crash the moment it is indexed. So the
-        // owner check gates EVERY reuse of a mappedId - this arm and the reassignments in [duplicate] - and
-        // resolve() no longer depends on a side effect of the last bind.
-        val owner = ownerOf(mapped)
-        if (owner == null || owner == path) return Assignment(mapped, Source.ID_MAP)
-        // owner is in path.root by construction (ownerOf is root-scoped, C5): a within-root claimant already took
-        // the mapped id this pass, so this page reassigns and records the within-root duplicate.
-        return Assignment(
-            id = idProvider.next(),
-            source = Source.MINTED,
-            issue = IdentityIssue.DuplicateId(id = mapped, root = path.root, keptPath = owner.path, reassignedPath = path.path),
-        )
     }
 
     /**

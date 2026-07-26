@@ -50,165 +50,177 @@ import kotlinx.serialization.SerializationException
  */
 fun Route.proposalRoutes(ctx: RouteContext) {
     route("/api/v1/changes") {
-        post {
-            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            // This surface's root pin is the propose body's own `root` field, not `?root=` - so an ambiguity 409 here
-            // names that field instead of handing back a query url the caller could not have sent.
-            call.guarded(AmbiguityRemedy.BodyPin("root")) {
-                if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
-                    return@guarded call.respondError(
-                        HttpStatusCode.UnsupportedMediaType,
-                        ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
-                        "POST requires Content-Type: application/json",
-                    )
-                }
-                val rawBody = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
-                    ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
-                val request = parseProposeRequest(rawBody)
-                    ?: return@guarded call.invalidProposeRequest(
-                        "Request body must be JSON: {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
-                    )
+        proposeRoute(ctx)
+        listProposalsRoute(ctx)
+        getProposalRoute(ctx)
+        rejectProposalRoute(ctx)
+        approveProposalRoute(ctx)
+        rebaseProposalRoute(ctx)
+    }
+}
 
-                // The parser owns the code, not this mapping site: an unknown root answers 400 `invalid_root`
-                // here and `invalid_root` on MCP, because BOTH read `parse.code` rather than hardcoding one.
-                val command = when (val parse = parseProposeCommand(request, ctx.roots)) {
-                    is ProposeCommandParse.Ok -> parse.command
-                    is ProposeCommandParse.Invalid ->
-                        return@guarded call.respondError(HttpStatusCode.BadRequest, parse.code, parse.message)
-                }
-                when (val outcome = ctx.proposals.propose(principal, command)) {
-                    is ProposeOutcome.Created -> call.respondRest(
-                        ProposeChangeResponse.serializer(),
-                        ProposeChangeResponse(
-                            id = outcome.id.value,
-                            status = ProposalStatusWire.PENDING,
-                            unifiedDiff = outcome.unifiedDiff,
-                        ),
-                        HttpStatusCode.Created,
-                    )
-                    ProposeOutcome.StaleBase -> call.respondError(
-                        HttpStatusCode.BadRequest,
-                        ErrorCodes.STALE_BASE,
-                        "The base you proposed against is no longer current; re-read the page and re-propose.",
-                    )
-                    ProposeOutcome.InvalidRequest -> call.invalidProposeRequest(
-                        "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
-                    )
-                    is ProposeOutcome.InvalidCreateContent -> call.respondError(
-                        HttpStatusCode.BadRequest,
-                        ErrorCodes.INVALID_CREATE_CONTENT,
-                        outcome.message,
-                    )
-                }
+private fun Route.proposeRoute(ctx: RouteContext) {
+    post {
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+        call.guarded(AmbiguityRemedy.BodyPin("root")) {
+            if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
+                return@guarded call.respondError(
+                    HttpStatusCode.UnsupportedMediaType,
+                    ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
+                    "POST requires Content-Type: application/json",
+                )
+            }
+            val rawBody = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
+                ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
+            val request = parseProposeRequest(rawBody)
+                ?: return@guarded call.invalidProposeRequest(
+                    "Request body must be JSON: {operation, page_id?, base_hash?, target_path?, proposed_content, rationale}",
+                )
+            val command = when (val parse = parseProposeCommand(request, ctx.roots)) {
+                is ProposeCommandParse.Ok -> parse.command
+                is ProposeCommandParse.Invalid ->
+                    return@guarded call.respondError(HttpStatusCode.BadRequest, parse.code, parse.message)
+            }
+            when (val outcome = ctx.proposals.propose(principal, command)) {
+                is ProposeOutcome.Created -> call.respondRest(
+                    ProposeChangeResponse.serializer(),
+                    ProposeChangeResponse(
+                        id = outcome.id.value,
+                        status = ProposalStatusWire.PENDING,
+                        unifiedDiff = outcome.unifiedDiff,
+                    ),
+                    HttpStatusCode.Created,
+                )
+                ProposeOutcome.StaleBase -> call.respondError(
+                    HttpStatusCode.BadRequest,
+                    ErrorCodes.STALE_BASE,
+                    "The base you proposed against is no longer current; re-read the page and re-propose.",
+                )
+                ProposeOutcome.InvalidRequest -> call.invalidProposeRequest(
+                    "target_path disagrees with the page_id-resolved path; the server resolves the path from page_id.",
+                )
+                is ProposeOutcome.InvalidCreateContent -> call.respondError(
+                    HttpStatusCode.BadRequest,
+                    ErrorCodes.INVALID_CREATE_CONTENT,
+                    outcome.message,
+                )
             }
         }
+    }
+}
 
-        get {
-            val principal = ctx.principalOrRefuse(call) ?: return@get
-            call.guarded {
-                val proposals = ctx.proposals.list(principal).map { it.toDto() }
-                call.respondRest(ListChangesResponse.serializer(), ListChangesResponse(proposals = proposals))
+private fun Route.listProposalsRoute(ctx: RouteContext) {
+    get {
+        val principal = ctx.principalOrRefuse(call) ?: return@get
+        call.guarded {
+            val proposals = ctx.proposals.list(principal).map { it.toDto() }
+            call.respondRest(ListChangesResponse.serializer(), ListChangesResponse(proposals = proposals))
+        }
+    }
+}
+
+private fun Route.getProposalRoute(ctx: RouteContext) {
+    get("/{id}") {
+        val principal = ctx.principalOrRefuse(call) ?: return@get
+        call.guarded {
+            val id = call.proposalId() ?: return@guarded
+            val view = ctx.proposals.get(principal, id)
+                ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
+            call.respondRest(ChangeDetail.serializer(), view.toDto())
+        }
+    }
+}
+
+private fun Route.rejectProposalRoute(ctx: RouteContext) {
+    post("/{id}/reject") {
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+        call.guarded {
+            if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
+                return@guarded call.respondError(
+                    HttpStatusCode.UnsupportedMediaType,
+                    ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
+                    "POST requires Content-Type: application/json",
+                )
+            }
+            val id = call.proposalId() ?: return@guarded
+            val rawBody = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
+                ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
+            val request = parseRejectRequest(rawBody)
+                ?: return@guarded call.invalidProposeRequest("Request body must be JSON: {comment?}")
+            when (val outcome = ctx.proposals.reject(principal, id, request.comment)) {
+                is RejectOutcome.Rejected -> call.respondRest(ChangeDetail.serializer(), outcome.view.toDto())
+                RejectOutcome.NotPending ->
+                    call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
+                RejectOutcome.NotFound ->
+                    call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
             }
         }
+    }
+}
 
-        get("/{id}") {
-            val principal = ctx.principalOrRefuse(call) ?: return@get
-            call.guarded {
-                val id = call.proposalId() ?: return@guarded
-                val view = ctx.proposals.get(principal, id)
-                    ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
-                call.respondRest(ChangeDetail.serializer(), view.toDto())
+private fun Route.approveProposalRoute(ctx: RouteContext) {
+    post("/{id}/approve") {
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+        call.guarded {
+            val id = call.proposalId() ?: return@guarded
+            when (val outcome = ctx.proposals.approve(principal, id)) {
+                is ApplyOutcome.Applied -> call.respondRest(
+                    ApplyResultResponse.serializer(),
+                    ApplyResultResponse(
+                        newHash = outcome.newHash,
+                        commitSha = outcome.commit,
+                        appliedAt = requireNotNull(outcome.view.row.decidedAt) {
+                            "Applied proposal ${id.value} has no decided_at"
+                        }.toString(),
+                        warnings = if (outcome.reindexDeferred) listOf("reindex_deferred") else null,
+                    ),
+                    HttpStatusCode.OK,
+                )
+                is ApplyOutcome.Conflicted -> call.respondRest(
+                    ConflictedResponse.serializer(),
+                    ConflictedResponse(currentHash = outcome.currentHash, currentPath = outcome.currentPath?.value),
+                    HttpStatusCode.Conflict,
+                )
+                is ApplyOutcome.Failed ->
+                    call.respondError(HttpStatusCode.UnprocessableEntity, ErrorCodes.APPLY_FAILED, outcome.reason)
+                ApplyOutcome.NotPending ->
+                    call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
+                ApplyOutcome.NotFound ->
+                    call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
             }
         }
+    }
+}
 
-        post("/{id}/reject") {
-            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            call.guarded {
-                if (call.request.contentType().withoutParameters() != ContentType.Application.Json) {
-                    return@guarded call.respondError(
-                        HttpStatusCode.UnsupportedMediaType,
-                        ErrorCodes.UNSUPPORTED_MEDIA_TYPE,
-                        "POST requires Content-Type: application/json",
-                    )
-                }
-                val id = call.proposalId() ?: return@guarded
-                val rawBody = call.receiveBodyCapped(ctx.maxWriteBodyBytes)
-                    ?: return@guarded call.respondBodyTooLarge(ctx.maxWriteBodyBytes)
-                val request = parseRejectRequest(rawBody)
-                    ?: return@guarded call.invalidProposeRequest("Request body must be JSON: {comment?}")
-
-                when (val outcome = ctx.proposals.reject(principal, id, request.comment)) {
-                    is RejectOutcome.Rejected ->
-                        call.respondRest(ChangeDetail.serializer(), outcome.view.toDto())
-                    RejectOutcome.NotPending ->
-                        call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
-                    RejectOutcome.NotFound ->
-                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
-                }
-            }
-        }
-
-        post("/{id}/approve") {
-            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            call.guarded {
-                val id = call.proposalId() ?: return@guarded
-                when (val outcome = ctx.proposals.approve(principal, id)) {
-                    is ApplyOutcome.Applied -> call.respondRest(
-                        ApplyResultResponse.serializer(),
-                        ApplyResultResponse(
-                            newHash = outcome.newHash,
-                            commitSha = outcome.commit,
-                            // The Applied terminal ALWAYS stamps decided_at; assert it rather than emit the literal "null".
-                            appliedAt = requireNotNull(outcome.view.row.decidedAt) {
-                                "Applied proposal ${id.value} has no decided_at"
-                            }.toString(),
-                            warnings = if (outcome.reindexDeferred) listOf("reindex_deferred") else null,
-                        ),
-                        HttpStatusCode.OK,
-                    )
-                    is ApplyOutcome.Conflicted -> call.respondRest(
-                        ConflictedResponse.serializer(),
-                        ConflictedResponse(currentHash = outcome.currentHash, currentPath = outcome.currentPath?.value),
+private fun Route.rebaseProposalRoute(ctx: RouteContext) {
+    post("/{id}/rebase") {
+        val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
+        call.guarded {
+            val id = call.proposalId() ?: return@guarded
+            when (val outcome = ctx.proposals.rebase(principal, id)) {
+                is RebaseOutcome.Rebased -> call.respondRest(
+                    RebasedResponse.serializer(),
+                    RebasedResponse(
+                        newBaseHash = requireNotNull(outcome.view.row.baseHash) {
+                            "Rebased proposal ${id.value} has no base_hash"
+                        },
+                        unifiedDiff = outcome.view.row.diffArtifact,
+                    ),
+                    HttpStatusCode.OK,
+                )
+                RebaseOutcome.NotConflicted ->
+                    call.respondError(
                         HttpStatusCode.Conflict,
+                        ErrorCodes.NOT_CONFLICTED,
+                        "Change ${id.value} is not in a conflicted state",
                     )
-                    is ApplyOutcome.Failed ->
-                        call.respondError(HttpStatusCode.UnprocessableEntity, ErrorCodes.APPLY_FAILED, outcome.reason)
-                    ApplyOutcome.NotPending ->
-                        call.respondError(HttpStatusCode.Conflict, ErrorCodes.NOT_PENDING, "Change ${id.value} is no longer pending")
-                    ApplyOutcome.NotFound ->
-                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
-                }
-            }
-        }
-
-        post("/{id}/rebase") {
-            val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
-            call.guarded {
-                val id = call.proposalId() ?: return@guarded
-                when (val outcome = ctx.proposals.rebase(principal, id)) {
-                    is RebaseOutcome.Rebased -> call.respondRest(
-                        RebasedResponse.serializer(),
-                        // rebaseToPending ALWAYS re-pins a non-null base_hash; assert it rather than emit "".
-                        RebasedResponse(
-                            newBaseHash = requireNotNull(outcome.view.row.baseHash) { "Rebased proposal ${id.value} has no base_hash" },
-                            unifiedDiff = outcome.view.row.diffArtifact,
-                        ),
-                        HttpStatusCode.OK,
-                    )
-                    RebaseOutcome.NotConflicted ->
-                        call.respondError(
-                            HttpStatusCode.Conflict,
-                            ErrorCodes.NOT_CONFLICTED,
-                            "Change ${id.value} is not in a conflicted state",
-                        )
-                    RebaseOutcome.Gone -> call.respondError(
-                        HttpStatusCode.UnprocessableEntity,
-                        ErrorCodes.APPLY_FAILED,
-                        "target page was deleted; rebase is impossible",
-                    )
-                    RebaseOutcome.NotFound ->
-                        call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
-                }
+                RebaseOutcome.Gone -> call.respondError(
+                    HttpStatusCode.UnprocessableEntity,
+                    ErrorCodes.APPLY_FAILED,
+                    "target page was deleted; rebase is impossible",
+                )
+                RebaseOutcome.NotFound ->
+                    call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No change with id ${id.value}")
             }
         }
     }
