@@ -173,11 +173,12 @@ object RootCommand {
             editable = request.editable,
             history = request.history,
         )
-        // APPENDED, and that is Invariant R rather than an implementation detail: rank decides the cross-root
-        // duplicate-id winner and the LOWEST index wins, so a newcomer always ranks last and therefore LOSES
-        // against every incumbent. `root add` is an operator convenience and it must not be able to take a page
-        // id away from a root that was already serving it. (Never rebuild the list as `listOf(main) + extras +
-        // new` - that hoist forces main to rank 0 and silently reassigns every shared id to main's page.)
+        // APPENDED, and that is Invariant R rather than an implementation detail: rank is SOURCE precedence and
+        // the LOWEST index wins, so a newcomer always ranks last and can never outrank an incumbent. `root add`
+        // is an operator convenience and it must not silently re-order roots that were already serving. (Since
+        // per-root identity, ADR-0012, it could not take an id from an incumbent in any case - the same id under
+        // two roots is two pages.) Never rebuild the list as `listOf(main) + extras + new`: that hoist forces
+        // main to rank 0 and re-orders every other root.
         val hocon = gate(config, env, "add", managed + newRoot, output) ?: return 1
 
         // CLI-OWNED, and the ONE place this command is deliberately STRICTER than boot (boot only WARNs, per

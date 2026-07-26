@@ -1,7 +1,6 @@
 package com.plainbase.domain.service
 
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.root.AbsenceProof
@@ -219,9 +218,6 @@ class AbsenceAuthorityTest : FunSpec({
                     snapshot.pageAt(RootedPageId(RootName.MAIN, stolen)).shouldNotBeNull().path.value shouldBe "pasted.md"
                     world.idMap.rootsHoldingId(stolen) shouldContainExactlyInAnyOrder listOf(RootName.MAIN, extra)
                 }
-                withClue("no cross-root contest is recorded, because per-root identity has none to record") {
-                    world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
-                }
             }
         }
     }
@@ -251,9 +247,8 @@ class AbsenceAuthorityTest : FunSpec({
 
                 snapshot.pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull().path.value shouldBe "pasted.md" // main's OWN id
                 world.idMap.bindingInRoot(extra, id)?.path shouldBe home // extra's binding was never stolen
-                // Both roots hold the id in the map - a legal per-root duplicate, no steal, no cross-root issue.
+                // Both roots hold the id in the map - a legal per-root duplicate, no steal.
                 world.idMap.rootsHoldingId(id) shouldContainExactlyInAnyOrder listOf(RootName.MAIN, extra)
-                world.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             }
         }
     }

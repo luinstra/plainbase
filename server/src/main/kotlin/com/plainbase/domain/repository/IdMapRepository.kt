@@ -28,8 +28,12 @@ import com.plainbase.domain.root.RootedPath
  * The three legal retirements, and only the third is an absence claim:
  *  - **DISPLACEMENT** ([bind]): the file at (root, path) now carries a DIFFERENT id. The displaced id is
  *    tombstoned in the SAME transaction as the new bind - `/p/{root}/{oldId}` stays a 410, never a 404.
- *  - **CONTEST** (a within-root rank contest, C5 - the D17 cross-root transfer is dissolved): the id moves to
- *    the winner and stays LIVE. Nothing is tombstoned, because nothing died - the permalink follows the id.
+ *  - **CONTEST** (WITHIN one root; per-root identity dissolved the cross-root transfer, ADR-0012): two paths under
+ *    the same root claim one id. §5.2 decides it - the previously-bound path keeps the id and the other reassigns -
+ *    and registry rank plays NO part, because every page in a root shares that root's rank. First-detection order
+ *    matters only when neither path is bound yet, and it differs by caller: the index pass sorts frontmatter-first
+ *    then by path, `AdoptionPass` takes plain path order. The id moves to the winner and stays LIVE. Nothing is
+ *    tombstoned, because nothing died - the permalink follows the id.
  *  - **ABSENCE**: needs an `AbsenceProof`, and is applied nowhere but the one proof-apply transaction
  *    ([AbsenceReaper]). In C0 no production code mints a proof, so nothing is ever reaped by inference.
  *
@@ -118,8 +122,9 @@ data class ClaimantState(
  * POSITIVE evidence:
  *
  *  1. **WITNESSED.** We READ the file at the incumbent's (root, path) this pass. Whatever it carries now, we
- *     are looking at it - the page is not in doubt, so rank may settle the contest. This is what lets rank settle
- *     a WITHIN-root contest (C5, root-scoped since the D17 cross-root transfer dissolved): every page in it is witnessed.
+ *     are looking at it - the page is not in doubt, so the contest may be settled against it. This is what lets a
+ *     WITHIN-root contest resolve at all (root-scoped since the cross-root transfer dissolved, ADR-0012): every
+ *     page in it is witnessed.
  *
  *  2. **PROVEN.** An [com.plainbase.domain.root.AbsenceProof] covers the binding - a commit range, an unbroken
  *     observation epoch, a complete bucket LIST, an operator. In C0 there are no proof sources, so [proven] is

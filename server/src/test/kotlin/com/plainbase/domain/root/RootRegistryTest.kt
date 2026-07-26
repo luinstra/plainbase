@@ -11,7 +11,7 @@ import java.nio.file.Path
  * The immutable topology snapshot: main is required, names are distinct (defense for programmatic
  * construction - HOCON parsing can never produce duplicates), and the GIVEN order is preserved
  * verbatim (buildRoots produces origin-line-with-name-tiebreak order, ADR-0011 D7 - the contract
- * C2's cross-root duplicate-id winner inherits).
+ * source precedence inherits, ADR-0012).
  */
 class RootRegistryTest : FunSpec({
 

@@ -163,7 +163,7 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
         """.trimIndent()
 
         // `d.root` is part of the hit, not decoration: the row says which root's bytes produced this snippet, and
-        // assembly can only tell a re-awarded page id from an honest one by comparing it to the snapshot (§B7).
+        // assembly can only tell a stale-root hit from an honest one by comparing it to the snapshot (§B7).
         val hits = prepareStatement(
             """
             SELECT d.page_id, d.heading_id,

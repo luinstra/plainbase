@@ -28,14 +28,13 @@ import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * An approved edit must land in the root it was APPROVED for (ADR-0011 D17).
+ * An approved edit must land in the root it was APPROVED for (ADR-0012).
  *
- * A proposal decides its root at propose time, shows that root to the admin, and gates on it. The cross-root
- * duplicate-id rank contest can then re-award the page id to a higher-ranked root — WITHOUT moving any file: the
- * proposal's own page is still exactly where it was, merely re-minted. An id-addressed apply follows the id, so it
- * would write the approved bytes into a DIFFERENT repository, and `base_hash` would not stop it: two checkouts of one
- * repo (the ADR-0011 D2 case that makes duplicate ids routine in the first place) hold byte-identical files, so the
- * CAS matches.
+ * A proposal decides its root at propose time, shows that root to the admin, and gates on it. Under per-root
+ * identity the same frontmatter `id:` may be live in SEVERAL roots at once, so an id-addressed apply is not
+ * following a page, it is choosing among candidates - and it can choose a DIFFERENT repository than the one the
+ * admin reviewed. `base_hash` would not stop it: two checkouts of one repo (the routine case that makes duplicate
+ * ids common in the first place) hold byte-identical files, so the CAS matches.
  *
  * `SaveRequest.expectedRoot` pins it. The id still picks the PATH — an in-root move still applies, which
  * `ProposalApplyAuthzRouteTest` pins from the other side — but it can no longer pick the ROOT.

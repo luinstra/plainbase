@@ -194,7 +194,6 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
                 IdentityIssue.RedirectConflict(main, pathB.path, "alias shadowed by live canonical path"),
                 IdentityIssue.PathCollision(root = main, keptPath = pathB.path, loserRawName = "re\u0301union.md"),
                 IdentityIssue.PathSlugCollision(root = main, keptPath = pathA.path, loserPath = pathB.path),
-                IdentityIssue.CrossRootDuplicateId(idY, kept = RootedPath(extra, pathA.path), reassigned = pathA),
             )
             all.forEach(repo::record)
             repo.issues() shouldContainExactly all
@@ -235,16 +234,6 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
-    test("a cross-root issue dedups on its full (kept, reassigned) rooted key") {
-        withRepo { repo, driver ->
-            val issue = IdentityIssue.CrossRootDuplicateId(idX, kept = RootedPath(extra, pathA.path), reassigned = pathA)
-            repo.record(issue)
-            repo.record(issue)
-            repo.issues() shouldContainExactly listOf(issue)
-            driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe 1L
-        }
-    }
-
     test("re-recording an issue whose message changed refreshes it: one row, current guidance") {
         withRepo { repo, driver ->
             repo.record(IdentityIssue.PatchRefused(main, pathA.path, "frontmatter keys must be plain unquoted scalars"))
@@ -279,13 +268,20 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
         }
     }
 
-    test("other_root is the sentinel for every same-root kind and the real root for the cross-root kind (direct SQL)") {
+    test("other_root is the sentinel for EVERY surviving kind: none of them names a second root (direct SQL)") {
         withRepo { repo, driver ->
-            repo.record(IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path))
-            repo.record(IdentityIssue.CrossRootDuplicateId(idY, kept = RootedPath(extra, pathA.path), reassigned = pathA))
-            driver.queryLong("SELECT count(*) FROM identity_issue WHERE kind != 'CROSS_ROOT_DUPLICATE_ID' AND other_root != ''") shouldBe 0L
-            driver.queryLong("SELECT count(*) FROM identity_issue WHERE kind = 'CROSS_ROOT_DUPLICATE_ID' AND other_root = 'main'") shouldBe
-                1L
+            listOf(
+                IdentityIssue.DuplicateId(idX, root = main, keptPath = pathA.path, reassignedPath = pathB.path),
+                IdentityIssue.PatchRefused(main, pathA.path, "frontmatter keys must be plain unquoted scalars"),
+                IdentityIssue.RedirectConflict(main, pathB.path, "alias shadowed by live canonical path"),
+                IdentityIssue.PathCollision(root = main, keptPath = pathB.path, loserRawName = "re\u0301union.md"),
+                IdentityIssue.PathSlugCollision(root = extra, keptPath = pathA.path, loserPath = pathB.path),
+            ).forEach(repo::record)
+            // The row count is the anti-vacuity anchor. Without it the sentinel assertion below is also satisfied by
+            // an EMPTY table, so a record() that silently stopped writing would read as a green invariant. It also
+            // pins that this really is EVERY kind: add a sixth and this count fails until the kind is covered here.
+            driver.queryLong("SELECT count(*) FROM identity_issue") shouldBe IdentityIssue.Kind.entries.size.toLong()
+            driver.queryLong("SELECT count(*) FROM identity_issue WHERE other_root != ''") shouldBe 0L
         }
     }
 

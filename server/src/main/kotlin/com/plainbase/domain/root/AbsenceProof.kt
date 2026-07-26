@@ -21,9 +21,10 @@ import com.plainbase.domain.page.PageId
  *    becoming a 404.
  *  - **CONTEST** - WITHIN one root, two pages resolve to the same id and BOTH are witnessed (the same id in two
  *    DIFFERENT roots is legal post-flip and contests nothing, C5). The PREVIOUSLY-BOUND path keeps the id (on first
- *    detection, the earlier of the two in the pass's rank-then-path resolve order); the loser reassigns to a fresh id
- *    and records a `DuplicateId` (`PageIdentityService`). Registry rank compares ROOTS, so it decides nothing here -
- *    within one root there is only path/scan order. Nothing is tombstoned, because nothing DIED: the contested id is
+ *    detection, whichever the pass resolves first); the loser reassigns to a fresh id and records a `DuplicateId`
+ *    (`PageIdentityService`). Registry rank compares ROOTS, so it decides nothing here - within one root the
+ *    order is the caller's: `IndexBuilder` takes frontmatter-carrying pages first and then path, while
+ *    `AdoptionPass` takes plain path order. Nothing is tombstoned, because nothing DIED: the contested id is
  *    still live, at its keeper, and the permalink follows the id.
  *  - **ABSENCE** - we did NOT see it. *This is the only one that needs a proof, and it is the only one that
  *    has ever destroyed a corpus.*

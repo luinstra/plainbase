@@ -22,21 +22,22 @@ import java.nio.file.Path
 /**
  * **INVARIANT R (rank stability), and it is a DATA-CORRECTNESS contract wearing a config-plumbing costume.**
  *
- * Root RANK is not cosmetic. It is the deterministic winner of the cross-root duplicate-id contest (ADR-0011
- * D2/D17), i.e. **WHICH ROOT'S PAGE KEEPS A PERMALINK** when the same frontmatter id appears in two roots - a
- * routine input, not an exotic one (two checkouts of one repo; templated pages). The contest is won by the
- * LOWEST rank index. **A wrong rank produces no error and no log line. The wrong page just answers.**
+ * Root RANK is not cosmetic. It is the operator's declared SOURCE PRECEDENCE (ADR-0012), lowest index first:
+ * which root a pass reads before another, and the order candidates are offered in when a bare id has several
+ * holders. It no longer decides which root's page keeps a permalink - per-root identity made the same id in two
+ * roots two legitimate pages, and a bare id with several holders answers 300 rather than picking a winner.
+ * **A wrong rank still produces no error and no log line**, which is why it is pinned here.
  *
  * > Adding or removing a root in `roots.conf` never changes the RELATIVE rank of any other root. A newly added
- * > root always ranks LAST, so it always LOSES against every incumbent. A hand-declared root always outranks
+ * > root always ranks LAST, so it never outranks an incumbent. A hand-declared root always outranks
  * > every CLI-added root, and **`main` keeps the rank its own declaration gave it.**
  *
  * The two ways to break it, both of which an earlier revision of this design actually wrote:
  *
  *  - **Hoisting main** (`listOf(main) + extras`) forces main to rank 0, demoting every root an operator
  *    deliberately declared ahead of it. Someone who wrote `roots { zeta {…} main {…} }` - zeta first, because
- *    zeta's copy of a page is the one that should keep the permalink - would have had zeta demoted by a CLI
- *    change that never touched zeta, and every id both roots share would silently move to main's page.
+ *    zeta's copy is the one that should be read first - would have had zeta demoted by a CLI change that never
+ *    touched zeta, silently re-ordering precedence they set on purpose.
  *  - **Sorting `(line, name)` ACROSS both files** (the literal reading of ADR-0011's own D7 aside) lets a
  *    CLI-added root at `roots.conf` line 4 outrank a hand-declared incumbent at `plainbase.conf` line 8. Worse,
  *    it is not even stable: adding a root rewrites `roots.conf` and shifts the line numbers of roots the

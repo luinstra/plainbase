@@ -78,8 +78,9 @@ class SearchServiceTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 val alpha = harness.builder.current.pages.single() // root = main in the snapshot
-                // The engine still holds this id under a DIFFERENT root: exactly what a rebuild that re-awarded the id
-                // across roots leaves behind between the snapshot publish and the search sync that follows it. Joining
+                // The engine still holds this id under a DIFFERENT root: exactly what the window between the snapshot
+                // publish and the search sync that follows it leaves behind, now that the same id may be live under
+                // several roots at once (ADR-0012) and the indexed root can lag the snapshot's. Joining
                 // on the id alone would pair the OLD root's snippet with main's url, main's citation and main's
                 // availability check - and, when the old root is the unavailable one, walk straight past the liveness
                 // filter, which reads the page's CURRENT root.

@@ -93,8 +93,8 @@ class GuardedProposalFacade(
      * throw - and the GATED target THREADED into the service rather than re-resolved there.
      *
      * Threading is the point. `ProposalService` used to call `baseReader.pathOf` itself, which is a FRESH read of the
-     * published snapshot: a rebuild landing between the gate and the service call could re-award the id to another
-     * root, and the row would be persisted against a root the gate never authorized - possibly a non-editable or an
+     * published snapshot: a rebuild landing between the gate and the service call could change which root answers
+     * that id, and the row would be persisted against a root the gate never authorized - possibly a non-editable or an
      * unavailable one. Both classes are `gatedByEditable`, so a proposal against a read-only root now denies AT
      * PROPOSE TIME with `root_not_editable` rather than surviving to surprise a reviewer at apply.
      */
@@ -222,7 +222,7 @@ class GuardedProposalFacade(
                         origin = WriteOrigin.PROPOSAL_APPLY,
                         // An EDIT-proposal's stored root is AUTHORITATIVE too - the same rule the CREATE arm below has
                         // always followed. The id still picks the PATH (an in-root move applies); the root is pinned, so
-                        // an id re-awarded across roots (D17) answers `page_deleted` -> CONFLICTED instead of landing an
+                        // an id the stored root no longer holds answers `page_deleted` -> CONFLICTED instead of landing an
                         // approved edit in a repository the admin never saw.
                         expectedRoot = row.root,
                     ),

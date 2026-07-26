@@ -66,7 +66,7 @@ class ProposalService(
      * target-missing). The stored `diff_artifact` is `live-base -> proposed` (so base == current). Nothing is
      * persisted on a `StaleBase`.
      *
-     * [target] is THREADED from the facade, never re-resolved here (ADR-0011 D17). The facade had to resolve the
+     * [target] is THREADED from the facade, never re-resolved here (ADR-0012). The facade had to resolve the
      * page anyway to derive the gate's rooted resource, and `baseReader.pathOf` is a FRESH read of the published
      * snapshot — so re-resolving would let a rebuild landing between the gate and this call persist a proposal
      * against a root the gate never authorized (possibly a non-editable or unavailable one). Gate-root and
@@ -330,12 +330,12 @@ class ProposalService(
      * ALREADY-DECIDED row can be reported as decided — a 409 — without first demanding that its root be up. Reading
      * the state of a proposal nobody can act on any more needs no disk.
      *
-     * The root is the STORED one, for BOTH operations (ADR-0011 D15/D17). A create has no page to resolve one from.
-     * An edit HAS one - and still does not follow it: the D17 cross-root duplicate-id contest re-awards an ID, it
-     * does not MOVE a file, so following the id would walk an approved edit off the root it was proposed, reviewed
-     * and gated against. The apply pins the same stored root ([SaveRequest.expectedRoot]), so the guard and the
-     * write can never disagree about which root a 503 is about; an id re-awarded across roots answers `page_deleted`
-     * -> CONFLICTED instead. That is also why the guard needs nothing but this name.
+     * The root is the STORED one, for BOTH operations (ADR-0011 D15, ADR-0012). A create has no page to resolve one
+     * from. An edit HAS one - and still does not follow it: the same id may be live under SEVERAL roots at once, so
+     * following it would be picking a root rather than reading one, and could walk an approved edit off the root it
+     * was proposed, reviewed and gated against. The apply pins the same stored root ([SaveRequest.expectedRoot]), so
+     * the guard and the write can never disagree about which root a 503 is about; an id the stored root no longer
+     * holds answers `page_deleted` -> CONFLICTED instead. That is also why the guard needs nothing but this name.
      */
     fun guardOf(id: ProposalId): ProposalGuard? = repository.findById(id)?.let { ProposalGuard(it.root, it.status) }
 

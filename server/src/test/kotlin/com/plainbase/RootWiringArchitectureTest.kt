@@ -105,23 +105,24 @@ class RootWiringArchitectureTest : FunSpec({
         violations.shouldBeEmpty()
     }
 
-    // TIER 3 - the banned HOIST (multi-root C5, D-C5-4). `listOf(main) + extras` forces main to rank 0, and rank is
-    // the cross-root duplicate-id winner (LOWEST index wins - PageIdentityService), i.e. WHICH ROOT'S PAGE KEEPS A
-    // PERMALINK. So the hoist is a silent permalink reassignment: no error, no log line, the wrong page just answers.
-    // An operator who deliberately declared `roots { zeta {…} main {…} }` - zeta first, because zeta's copy of a page
-    // is the one that should keep the permalink - would have zeta demoted by a change that never touched zeta.
+    // TIER 3 - the banned HOIST (multi-root C5, D-C5-4). `listOf(main) + extras` forces main to rank 0, silently
+    // re-ordering every other root. Rank no longer decides which root's page keeps a permalink (per-root identity,
+    // ADR-0012: both roots keep their own page and a bare id with several holders answers 300, never a rank pick),
+    // but it IS an operator-visible ordering contract: source precedence and the order candidates are offered in.
+    // An operator who deliberately declared `roots { zeta {…} main {…} }` - zeta first, because zeta's copy is the
+    // one that should be read first - would have zeta demoted by a change that never touched zeta.
     //
     // ZERO exemptions: `main` is a typed ACCESSOR, never a promotion. Matched over COMMENT-STRIPPED code, because the
     // only correct place for this literal is a comment WARNING against it - which the merge in `PlainbaseConfig` and
     // the candidate build in `RootCommand` both carry. A plain grep for the pattern would eat its own teaching.
     val bannedHoist = Regex("""listOf\(\s*\w+(\.\w+)*\.main\s*\)\s*\+|listOf\(\s*main\s*\)\s*\+""")
 
-    test("no source builds a root list by hoisting main to the front: `listOf(main) + extras` reassigns permalinks") {
+    test("no source builds a root list by hoisting main to the front: `listOf(main) + extras` re-orders every root") {
         val violations = files.flatMap { file ->
             bannedHoist.findAll(stripComments(file.readText())).map {
-                "${mainRoot.relativize(file)}: '${it.value}' hoists main to rank 0. Rank decides which root's page keeps " +
-                    "a permalink on a cross-root duplicate id, so this silently reassigns every shared id to main's " +
-                    "page. Preserve the declared order - main sits wherever config put it."
+                "${mainRoot.relativize(file)}: '${it.value}' hoists main to rank 0, silently re-ordering every other " +
+                    "root. Rank is the operator's declared source precedence, not an id winner. Preserve the declared " +
+                    "order - main sits wherever config put it."
             }
         }
         violations.shouldBeEmpty()

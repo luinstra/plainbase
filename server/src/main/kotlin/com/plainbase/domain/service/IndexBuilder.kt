@@ -121,13 +121,13 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * **Per-root identity (C5, the flip):** an id is scoped to its ROOT. The SAME frontmatter id may live in several
  * roots at once, each answering its own rooted permalink `/p/{root}/{id}` - a cross-root duplicate is no longer a
  * contest, and rank (which compares ROOTS) decides SOURCE precedence only, never an id transfer between roots. A
- * genuine duplicate is WITHIN one root, resolved in the pass's rank-then-path order (the previously-bound path keeps
+ * genuine duplicate is WITHIN one root, resolved in the pass's rank-then-frontmatter-then-path order (the previously-bound path keeps
  * the id; the loser reassigns). All sources still resolve together before any bind so that in-pass order is
  * well-defined. A binding's liveness and supersedability are classified by the shared [BindingVisibility] rule over
  * the scanned/registered root sets (D16): a pass NEVER supersedes a binding under a root it did not scan, the same
  * no-delete rule the carried-forward section implements - a skipped root's page stays IN the snapshot, so taking its
  * id would destroy a durable binding an outage gave no authority to touch (D-C4-10) and put a duplicate `(root, id)`
- * in the snapshot (a rebuild crash). The broader ADR-0011/essay rewrite is C7.
+ * in the snapshot (a rebuild crash).
  *
  * **Safe publication, no `@Volatile`:** the new snapshot is built entirely off to the side and
  * published with a single [AtomicReference.store]; [current] readers always observe a complete,
@@ -146,8 +146,8 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * live canonical path always shadows an alias (dropped, with a recorded `redirect_conflict` issue).
  *
  * Identity binding mirrors `AdoptionPass` RECORD semantics over the in-hand bytes (zero content
- * writes): id_map rows plus issues, sources in rank order and pages in path order so duplicate
- * resolution is deterministic.
+ * writes): id_map rows plus issues, sources in rank order and, within each root, frontmatter-carrying
+ * pages before the rest and then by path, so duplicate resolution is deterministic.
  *
  * **Publication listeners (§B4, the Phase-2/3 seam):** after the snapshot publishes, [rebuild] —
  * still inside its serialized section — synchronously invokes every registered
@@ -243,9 +243,10 @@ class IndexBuilder(
         }
     }
 
-    // Sorted by the shared D7 rank (the SAME lambda PageIdentityService receives, wired once):
-    // scan-and-resolve order is correctness-critical - the registry-order winner must always be
-    // claimed and bound first - so it is enforced by construction, never trusted from the caller.
+    // Sorted by the shared D7 rank, enforced by construction rather than trusted from the caller, so the pass has
+    // ONE deterministic source order (and with it a deterministic section order). Per-root identity (ADR-0012)
+    // dissolved the cross-root contest this sort used to decide, so rank no longer picks an id winner and plays no
+    // part inside a root at all. Within-root resolution order is established separately, by `precedenceOrdered`.
     private val sources: List<Source> = sources.sortedBy { rootRank(it.root.name) }
 
     private val sourcesByRoot: Map<RootName, Source> = this.sources.associateBy { it.root.name }
@@ -331,9 +332,11 @@ class IndexBuilder(
                 previous.pages.associate { it.rooted to it.urlPath }
             }
 
-        // D17 execution invariant (b): scan ALL sources before the FIRST resolve. Only then is the WITNESS map
-        // complete - under interleaved scan+resolve a binding in a not-yet-scanned later root would be
-        // misclassified by the D16 visibility rule.
+        // Execution invariant (b): scan ALL sources before the FIRST resolve. The original reason is vestigial -
+        // `ownerOf` is root-scoped, so no other root's binding is ever handed to the visibility rule during this
+        // root's resolve, and a registered-but-unscanned root reads untouchable-LIVE rather than detached. What
+        // still needs the whole corpus up front is the WITNESS map every absence proof is minted against, and a
+        // deterministic pass shape.
         //
         // D5: probe first, and skip what is not there. `scans` holds only the roots this pass actually walked.
         // Nothing here is an ADMISSION any more - there is no tripwire to pass and no authority to be granted,
@@ -886,9 +889,9 @@ class IndexBuilder(
      * stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher rebuild never
      * interleaves. Bytes and history come from the target root's source.
      *
-     * **The target is a [RootedPath], NOT a page id, and that is the whole point (ADR-0011 D17).** A page id
-     * does not durably name a location: a rebuild can re-award it to another root the moment that root claims
-     * the same frontmatter id (the cross-root duplicate-id rank contest). This method runs DOWNSTREAM of a CAS
+     * **The target is a [RootedPath], NOT a page id, and that is the whole point (ADR-0012).** A page id does
+     * not name a location on its own: under per-root identity the SAME id may be live in several roots at once,
+     * so resolving one here would be picking a root, not reading one. This method runs DOWNSTREAM of a CAS
      * that has already put bytes on ONE root's disk, and it takes a FRESH snapshot — so resolving the id here
      * would let a rebuild landing in that window send the reindex at a DIFFERENT root's file, splitting disk
      * truth from index truth. Taking the location the bytes actually went to makes that unreachable rather than
@@ -1281,23 +1284,24 @@ class IndexBuilder(
 
     /**
      * §5.2 identity over the in-hand bytes — the same precedence/duplicate seam as `AdoptionPass`
-     * RECORD, run ONCE globally across all sources in rank-then-path order so the registry-order
-     * winner is always claimed first.
+     * RECORD, run ONCE globally across all sources in a deterministic order: roots by rank, then within
+     * each root frontmatter-carrying drafts first (`precedenceOrdered`), then by path. Rank orders the
+     * roots and nothing else - it picks no id winner (ADR-0012).
      *
      * **RESOLVE THE WHOLE CORPUS, THEN BIND IT** - the `AdoptionPass` two-phase split (D19), for the same
-     * reason and now literally the same seam. Binding INLINE, as this used to, made the D16/D17 loser issue
-     * UNRECORDABLE for one specific loser: a page whose identity lives in `id_map` ONLY (no frontmatter id of
-     * its own). The winner's key-complete bind DELETES that row on its way through, so when the loser's own
-     * draft came up for resolution its `mappedId` read back null - and a page with no frontmatter id and no
-     * mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, so the `/p/{root}/{id}`
-     * permalink its readers held stopped naming it, with no `CrossRootDuplicateId` issue recorded anywhere.
-     * A durable permalink reassignment with no record is precisely the outcome D16/D17's loser-behalf issue
-     * recording exists to make impossible.
+     * reason and now literally the same seam. Binding INLINE, as this used to, made the loser issue
+     * UNRECORDABLE for one specific WITHIN-root loser: a page whose identity lives in `id_map` ONLY (no
+     * frontmatter id of its own). The winner's key-complete bind DELETES that row on its way through, so when
+     * the loser's own draft came up for resolution its `mappedId` read back null - and a page with no
+     * frontmatter id and no mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id, silently, so
+     * the `/p/{root}/{id}` permalink its readers held stopped naming it, with no `DuplicateId` issue recorded
+     * anywhere. A durable permalink reassignment with no record is precisely the outcome the loser-behalf
+     * issue recording exists to make impossible.
      *
      * Resolving first fixes it at the root: every draft's `mappedId` is read against the id_map as it stood
      * BEFORE this pass touched it, so the beaten owner still sees the contested id, `PageIdentityService`
      * reaches its owner check on the id_map arm (the arm its doc says an inline-binding pass can never reach),
-     * and the loser reassigns WITH its issue. The binds then replay the resolved plan in the same rank-then-path
+     * and the loser reassigns WITH its issue. The binds then replay the resolved plan in the same rank-then-frontmatter-then-path
      * order, so the winner's key-complete bind still lands before the loser's row is rewritten.
      */
     private fun resolveIdentities(
@@ -1319,7 +1323,7 @@ class IndexBuilder(
         // than handed a dead page's permalink.)
         val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
         val claimed = HashMap<RootedPageId, RootedPath>()
-        val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-path = the bind order
+        val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-frontmatter-then-path = the bind order
         for (scan in scans) {
             // Within one root, a valid frontmatter id travels with its page before an unmaterialized
             // newcomer at the vacated path can reuse the stale id_map row. The sort is stable, so
@@ -1375,9 +1379,9 @@ class IndexBuilder(
         val identities = HashMap<RootedPath, Identity>()
         for ((path, assignment) in resolved) {
             val materialized = assignment.source == PageIdentityService.Source.FRONTMATTER
-            // Rank-then-path order (the map's insertion order): the winner's key-complete bind sweeps the loser's
+            // Rank-then-frontmatter-then-path order (the map's insertion order): the winner's key-complete bind sweeps the loser's
             // stale row BEFORE the loser rebinds itself, so no page ever reads back an identity this pass has
-            // already re-awarded. The ISSUE lands with the bind that supersedes it, never after it or not at all.
+            // already reassigned. The ISSUE lands with the bind that supersedes it, never after it or not at all.
             //
             // The bind is handed the SAME [Supersession] the resolve above ran under, so a REFUSAL means the two
             // disagreed - a rule-drift bug, not a data condition. It is checked rather than ignored for the same

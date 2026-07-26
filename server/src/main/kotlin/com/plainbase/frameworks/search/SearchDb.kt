@@ -110,8 +110,8 @@ class SearchDb(path: Path) : AutoCloseable {
             )
             // root lives on the metadata tables only, NEVER the FTS virtual tables - a root column
             // there would index root names as matchable tokens. The hit query SELECTs section_doc.root
-            // and assembly rejects a hit whose indexed root is no longer the page's root (a re-awarded
-            // id), so the column is READ on every search, not just written.
+            // and assembly rejects a hit whose indexed root is no longer the page's root (a stale-root
+            // hit), so the column is READ on every search, not just written.
             statement.execute(
                 """
                 CREATE TABLE section_doc(doc_id INTEGER PRIMARY KEY, generation INTEGER NOT NULL,

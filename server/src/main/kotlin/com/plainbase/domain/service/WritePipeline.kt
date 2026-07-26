@@ -242,8 +242,8 @@ class WritePipeline(
             // is RETAINED for reconcile. Idempotent on success (a second single-page upsert).
             //
             // Pinned to the LOCATION the bytes went to, never to the page id: the `rebuild()` just above is
-            // itself the window in which the D17 contest can hand this id to another root, and an id-addressed
-            // reindex would then index a different root's file than the one this create wrote.
+            // itself the window in which ANOTHER root can legally begin holding this same id (ADR-0012), and an
+            // id-addressed reindex would then have to pick a root and could index a file this create never wrote.
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
             dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
@@ -309,7 +309,7 @@ class WritePipeline(
         // Only a LIVE alias blocks: a row pointing at a page id no longer in THIS root is dangling (the
         // shadow-sweep hasn't dropped it yet) and must not permanently wedge the URL. Liveness is judged in
         // the alias's OWN root - an alias is a within-root redirect, so a page that now holds the id under a
-        // DIFFERENT root (the D17 contest re-awarding it) leaves this row just as dangling as an absent id
+        // DIFFERENT root (its own page, legal since ADR-0012) leaves this row just as dangling as an absent id
         // would, and a bare-pageId probe would read it as live and 409 a create that should have succeeded.
         val aliasTarget = aliasRegistry.find(RootedPath(intent.root, pageUrl))
         if (aliasTarget != null && snapshot.pageAt(RootedPageId(intent.root, aliasTarget.id)) != null) return pageUrl.value
@@ -453,8 +453,9 @@ class WritePipeline(
             // attribution from the apply call site through [WriteIntent]; a plain PUT leaves them null (server identity).
             val commit = historyHook.commit(intent.root, intent.path, intent.bytes, intent.author, intent.committer)
             // Targeted O(1); THROWS on a vanished save-path page. Addressed by the LOCATION the CAS just wrote
-            // to - never by the page id, which a concurrent rebuild's D17 contest can re-award to another root
-            // between the CAS and this call, sending the reindex at a file these bytes never touched.
+            // to - never by the page id, which a concurrent rebuild can make AMBIGUOUS by admitting that same id
+            // under another root between the CAS and this call, sending the reindex at a file these bytes never
+            // touched.
             indexBuilder.reindex(RootedPath(intent.root, intent.path))
             dirtyPages.clear(RootedPageId(intent.root, intent.pageId)) // every post-step succeeded — clear the write-ahead mark
             WriteOutcome.Written(newHash = newHash, commit = commit)
@@ -478,8 +479,8 @@ class WritePipeline(
      *
      * The comparison TARGET is the page the bytes are about to land on - [RootedPath], the same pinned
      * target the CAS and the reindex take - never the bare pageId. A guard is only as good as what it
-     * compares against: a D17 rank contest can re-award the id to another root between the gate and this
-     * call, and an id-addressed lookup would then diff the submitted frontmatter against a DIFFERENT
+     * compares against: another root can begin holding that same id between the gate and this call
+     * (ADR-0012), and an id-addressed lookup would then diff the submitted frontmatter against a DIFFERENT
      * page's, letting a rename through whenever the foreign page happens to carry the new value (and
      * rejecting a legitimate body edit whenever it does not). It never decides WHERE the bytes go - which
      * is exactly why this looked benign - but a rename that gets PERMITTED is then written and preserved
@@ -501,8 +502,8 @@ class WritePipeline(
      *
      * [currentPath] is the location the CAS actually read [current] from, i.e. the intent's own pinned target -
      * not a snapshot lookup. A bare-pageId lookup here was wrong for the [classifyEdit] reason AND had nothing
-     * to look up: the conflicting bytes came from THIS root's THIS path, so after a cross-root id reassignment
-     * the snapshot would have named a foreign root's file as the thing the client should rebase onto. A
+     * to look up: the conflicting bytes came from THIS root's THIS path, and a bare id may be held by SEVERAL
+     * roots (ADR-0012), so the snapshot could have named a foreign root's file as the thing to rebase onto. A
      * `page_deleted` (no current bytes) carries no path at all, which is also the shape the wire freezes.
      */
     private fun conflict(intent: WriteIntent, reason: String, current: ByteArray?): WriteOutcome.Conflict =
@@ -527,7 +528,7 @@ class WritePipeline(
  *
  * [root] comes from the SERVER side, always: it is the root of the snapshot page the write gate authorized,
  * threaded here off the SAME snapshot object the gate read. Gate-root and write-root are therefore one
- * object's answer by construction, so a rebuild that re-awards the id to another root mid-request cannot make
+ * object's answer by construction, so a rebuild that admits the id under another root mid-request cannot make
  * them disagree - the race is unreachable rather than detected.
  */
 // Array field on a one-shot param (never a map key) — no generated equals/hashCode (house style).

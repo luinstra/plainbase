@@ -261,8 +261,8 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
-            // main keeps the id it carries in its frontmatter; extra keeps its own binding. Nothing minted, nothing
-            // rewritten, no cross-root issue - the two ids are legal per-root.
+            // main keeps the id it carries in its frontmatter; extra keeps its own binding. Nothing minted and
+            // nothing rewritten - the same id under two roots is legal per-root.
             val winner = plan.pages.single { it.path.value == "notes/claimant.md" }
             winner.id shouldBe CONTESTED
             winner.source shouldBe PageIdentityService.Source.FRONTMATTER
@@ -271,7 +271,7 @@ class AdoptionPassTest : FunSpec({
             val other = plan.report(EXTRA).pages.single()
             other.id shouldBe CONTESTED // extra keeps it, never reassigned
             h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.issues().shouldBeEmpty() // "no contest" in the name, pinned over EVERY kind
         }
     }
 
@@ -288,7 +288,6 @@ class AdoptionPassTest : FunSpec({
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
             claimant.id shouldBe CONTESTED
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
         }
     }
 
@@ -309,11 +308,11 @@ class AdoptionPassTest : FunSpec({
             val other = plan.report(EXTRA).pages.single()
             other.id shouldBe CONTESTED // extra keeps its id_map-only claim
             other.source shouldBe PageIdentityService.Source.ID_MAP
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             // BOTH roots hold the id under their own binding - the per-root byRootedId key keeps them distinct.
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, winner.path)
             h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_PAGE
             h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
+            h.idMap.issues().shouldBeEmpty() // "no contest" in the name, pinned over EVERY kind
         }
     }
 
@@ -370,7 +369,6 @@ class AdoptionPassTest : FunSpec({
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe claimantPath
             h.idMap.bindingInRoot(EXTRA, CONTESTED)?.path shouldBe EXTRA_WINNER
             h.idMap.bindingInRoot(EXTRA, MAPPED)?.path shouldBe EXTRA_PAGE
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             h.idMap.bindings().map { RootedPageId(it.path.root, it.id) }.toSet() shouldHaveSize h.idMap.bindings().size
         }
     }
@@ -525,13 +523,13 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD) // ...and no source for 'extra'
 
-            // main's claimant keeps CONTESTED (its frontmatter id, root-scoped), the foreign binding is untouched,
-            // and no cross-root issue is raised - a same id in two roots is legal.
+            // main's claimant keeps CONTESTED (its frontmatter id, root-scoped) and the foreign binding is
+            // untouched - the same id under two roots is legal.
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
             claimant.id shouldBe CONTESTED
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
             h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign // the foreign row survives
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.issues().shouldBeEmpty() // "no contest" in the name, pinned over EVERY kind
         }
     }
 
@@ -544,14 +542,16 @@ class AdoptionPassTest : FunSpec({
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.PREVIEW)
 
-            // The report shows main keeping its own id, no cross-root issue...
+            // The report shows main keeping its own id...
             val claimant = plan.pages.single { it.path.value == "notes/claimant.md" }
             claimant.id shouldBe CONTESTED
-            claimant.issues.filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
             // ...and preview binds nothing: main's claimant is NOT recorded, and the foreign row stands alone.
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED).shouldBeNull()
             h.idMap.bindingInRoot(RootName.require("extra"), CONTESTED)?.path shouldBe foreign
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            // "no issue" in the name, pinned on the PLAN over every kind. Deliberately NOT `idMap.issues()`: only
+            // `apply()` records, and PREVIEW never calls it, so a repository check here could not fail for any
+            // identity outcome. `PageReport.issues` is built in `plan()` regardless of mode, so this one can.
+            claimant.issues.shouldBeEmpty()
         }
     }
 
@@ -567,7 +567,7 @@ class AdoptionPassTest : FunSpec({
             claimant.id shouldBe CONTESTED
             h.idMap.bindingInRoot(RootName.MAIN, CONTESTED)?.path shouldBe RootedPath(RootName.MAIN, claimant.path)
             h.idMap.bindingInRoot(RootName.require("gone"), CONTESTED)?.path shouldBe detached // the detached row survives
-            h.idMap.issues().filterIsInstance<IdentityIssue.CrossRootDuplicateId>().shouldBeEmpty()
+            h.idMap.issues().shouldBeEmpty() // "no issue" in the name, pinned over EVERY kind rather than one
         }
     }
 })

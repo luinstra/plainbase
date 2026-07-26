@@ -72,7 +72,8 @@ class PageRootResolver(
      * never trusted blind: it is [IdResolution.One] only when the registry still knows the root (not DETACHED) AND
      * the root still holds a LIVE binding for [id]; anything else is [IdResolution.None], which each entry maps to
      * its own not-found vocabulary. Fail-CLOSED is the whole point - a pin that stopped binding the id reads as gone
-     * from the pinned root rather than walking the write into whichever root now holds it (ADR-0011 D17).
+     * from the pinned root rather than walking the write into whichever root now holds it (ADR-0012: several
+     * roots may hold the same id at once, so an id alone does not name a file).
      *
      * This exact triple used to be copy-pasted into `save`, `directSave`, `writeAsset` and `proposeEdit`. It is a
      * security-relevant rule, and a security-relevant rule in four places is a security-relevant rule that drifts.
