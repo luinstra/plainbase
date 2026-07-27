@@ -278,80 +278,6 @@ class RootCommandTest : FunSpec({
         }
     }
 
-    // --- T-CLI-5: the SHADOW refusal - the one place the CLI is STRICTER than boot -----------------------
-
-    context("T-CLI-5 - the shadow refusal catches all THREE collision kinds, and --force overrides") {
-
-        test("(a) a top-level DIRECTORY named guides") {
-            world { w ->
-                Files.createDirectories(w.content.resolve("guides"))
-                Files.writeString(w.content.resolve("guides/page.md"), "---\ntitle: P\n---\n\n# P\n")
-                val err = captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                err shouldContain "already a top-level segment of the main root"
-                Files.exists(w.rootsConf) shouldBe false
-                // --force is the escape, because ADR-0011 D3 rules the check best-effort by nature.
-                captureStdout { w.root("add", "guides", w.tmp("g2").toString(), "--force") shouldBe 0 }
-                Files.exists(w.rootsConf) shouldBe true
-            }
-        }
-
-        test("(b) a top-level PAGE whose frontmatter says slug: guides - a check listing directories sails past this") {
-            world { w ->
-                Files.writeString(w.content.resolve("anything.md"), "---\ntitle: A\nslug: guides\n---\n\n# A\n")
-                captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                Files.exists(w.rootsConf) shouldBe false
-            }
-        }
-
-        test("(c) a top-level FOLDER whose _folder.yaml says slug: guides") {
-            world { w ->
-                Files.createDirectories(w.content.resolve("Whatever"))
-                Files.writeString(w.content.resolve("Whatever/_folder.yaml"), "slug: guides\n")
-                Files.writeString(w.content.resolve("Whatever/p.md"), "---\ntitle: P\n---\n\n# P\n")
-                captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                Files.exists(w.rootsConf) shouldBe false
-            }
-        }
-
-        test("the negative control: a name that matches NOTHING is added with no --force") {
-            world { w ->
-                Files.writeString(w.content.resolve("readme.md"), "---\ntitle: R\n---\n\n# R\n")
-                captureStdout { w.root("add", "unrelated", w.tmp("u").toString()) shouldBe 0 }
-                Files.exists(w.rootsConf) shouldBe true
-            }
-        }
-
-        test("(d) a main root it cannot READ fails the check CLOSED - an unscannable tree proves nothing") {
-            // The classified-read boundary, at the one decision site left that did not use it. A page read on a
-            // root that has gone away returns no bytes, and a scan that reads no frontmatter finds no `slug:`
-            // shadow - so a raw read would report "shadows nothing" from a tree it never actually read, and a
-            // shadowing topology would be written on the strength of it. RootDown is not Absent.
-            //
-            // main is DECLARED here so the unreadable-path refusal sits in the BASELINE as well as the candidate:
-            // it is then the operator's pre-existing fault (warned, not refused), and the add runs on to the
-            // shadow check, which is the code under test.
-            world(plainbaseConf = """roots { main { path = "CONTENT" } }""") { w ->
-                w.rewriteMain()
-                Files.writeString(w.content.resolve("anything.md"), "---\ntitle: A\nslug: guides\n---\n\n# A\n")
-                if (!w.data.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
-                // r-- : the names still list (the read bit), but nothing under them can be opened (no search bit)
-                // - which is exactly what `rootIsTraversable` calls a downed root.
-                Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
-                try {
-                    if (Files.isExecutable(w.content)) return@world // running as root: the permission drop is inert
-                    val err = captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 } }
-                    err shouldContain "not readable right now"
-                    Files.exists(w.rootsConf) shouldBe false
-                    // --force is still the escape: it declines the check outright rather than trusting a bad answer.
-                    captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString(), "--force") shouldBe 0 } }
-                    Files.exists(w.rootsConf) shouldBe true
-                } finally {
-                    Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("rwxr-xr-x"))
-                }
-            }
-        }
-    }
-
     // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
 
     test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {
@@ -451,8 +377,7 @@ class RootCommandTest : FunSpec({
     test("T-CLI-12 sibling: a LEGACY install whose CONTENT_DIR lost its search bit is warned, not held hostage") {
         // The arm-switch trap, end to end. The baseline is SYNTHESIZED (no roots block anywhere); the candidate
         // carries a roots.conf and is therefore EXPLICIT. Both must key the operator's own broken permissions the
-        // same way, or the CLI reads a pre-existing fault as one it introduced and refuses. --force isolates the
-        // gate: the shadow scan cannot read this tree either, and fails closed on its own (test (d) above).
+        // same way, or the CLI reads a pre-existing fault as one it introduced and refuses.
         world { w ->
             if (!w.content.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
             Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
@@ -460,7 +385,7 @@ class RootCommandTest : FunSpec({
             try {
                 val extra = Files.createDirectory(w.tmp("notes"))
                 val err = captureStderr {
-                    captureStdout { w.root("add", "notes", extra.toString(), "--force") shouldBe 0 }
+                    captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
                 }
                 withClue("the permission fault is the operator's - warned, naming it, and blocking nothing") {
                     err shouldContain "WARNING"

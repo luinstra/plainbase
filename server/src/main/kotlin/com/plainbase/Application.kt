@@ -1,10 +1,8 @@
 package com.plainbase
 
 import com.plainbase.domain.content.ContentStore
-import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
-import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.SessionRepository
 import com.plainbase.domain.repository.SetupTokenRepository
@@ -18,15 +16,10 @@ import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
-import com.plainbase.domain.root.RootShadow
-import com.plainbase.domain.root.RootedPageId
-import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
-import com.plainbase.domain.service.CanonicalUrlBuilder
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
 import com.plainbase.domain.service.RebuildScheduler
-import com.plainbase.domain.service.UrlAliasRegistry
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
@@ -303,20 +296,6 @@ private fun serve(output: CommandOutput) {
             // reconcileDirtyPages may have re-committed a crashed dirty page - it resolves each APPLYING row's
             // CURRENT pageId path and stamps APPLIED (write landed) or PENDING (it didn't). Cannot race a live apply.
             koin.get<ProposalService>().reconcileApplying()
-            // Multi-root C3 boot guard (ADR-0011 D3(a)): a top-level 'main' URL segment in the main
-            // root makes legacy /docs/main/... links indistinguishable from root-qualified URLs.
-            // Deliberately AFTER both reconciles - each can WRITE pages (a crash-recovered save/apply
-            // of a main/... create) and republish, so the guard must judge the LAST pre-serve snapshot.
-            mainRootUrlCollisionRefusal(builder.current)?.let { refusal ->
-                lock.close() // exitProcess skips the outer finally (the hydrate-failure arm's shape)
-                output.error("serve: $refusal")
-                exitProcess(1)
-            }
-            val aliases = koin.get<UrlAliasRegistry>().all()
-            deadLegacyAliasWarning(aliases)?.let { logger.warn { it } }
-            // The C5 shadow WARN, on the same last-pre-serve snapshot and for the same reason: a root name that
-            // shadows a top-level segment of main silently re-points every circulating link through it.
-            shadowedRootWarning(builder.current, aliases, koin.get<RootRegistry>())?.let { logger.warn { it } }
             // Armed as late as possible - directly around the only call that parks the main thread. Arming it
             // earlier would let a SIGTERM during the boot rebuild tear the tree down UNDER a main thread that
             // then goes on to bind the port; boot is already crash-safe (the reconciles above recover an
@@ -646,126 +625,6 @@ internal fun detachedRootsRefusal(bound: Set<RootName>, configured: Set<RootName
     }
 
 private fun Set<RootName>.sortedNames(): String = map { it.value }.sorted().joinToString(", ")
-
-/**
- * Main's top-level segment space, from the BUILT snapshot (C5 S3.1): the ONE index the reserved-`main`
- * refusal and the shadowed-root warning both read, so they cannot drift - they are the same map.
- *
- * Both grammars, because `splitRootTail`'s four callers do not all speak one path language (see [RootShadow]):
- * the SLUGIFIED url space (`/docs`, `by-path`, and main's `url_alias` rows) and the RAW content-path space
- * (`/browse`, `/assets`). Feeding [aliases] is the BOOT side's alone - an alias outlives the `redirect_from`
- * frontmatter that minted it, so no filesystem scan can find one, which is exactly why `plainbase root`'s
- * scan-derived twin cannot see them and why this warning exists rather than being "the CLI's check, later".
- */
-private fun mainSegmentIndex(snapshot: PageIndex, aliases: Map<RootedPath, RootedPageId>): Map<String, List<TreePath>> {
-    val section = snapshot.section(RootName.MAIN)
-    return RootShadow.topLevelIndex(
-        urlPaths = section.pages.mapNotNull { it.urlPath } +
-            CanonicalUrlBuilder.folderUrlPaths(section.folders).values.filterNotNull() +
-            aliases.keys.filter { it.root == RootName.MAIN }.map { it.path },
-        contentPaths = section.pages.map { it.path } + section.folders.map { it.path } + section.assets,
-    )
-}
-
-/**
- * The C3 boot guard (ADR-0011 D3(a)), pure like [detachedRootsRefusal]: the fatal refusal text when
- * the MAIN root's built snapshot contains a top-level segment literally `main` - a page URL
- * path, a folder URL (the [CanonicalUrlBuilder.folderUrlPaths] truth `TreeBuilder` consumes, never
- * re-derived slugification), an asset path (assets mirror the redirect grammar, so `/assets/main/...` is
- * equally ambiguous), or a RAW content path - or null to serve. Segment-level detection catches the
- * whole equivalence class the URL grammar cares about (a dir `Main` slugifies to the same colliding
- * segment, a frontmatter `slug: main` page, an asset dir) and works in object mode where there is
- * no local FS to list. Main only: an extra root's top-level `main` dir is harmless (its URLs are
- * `/docs/{extra}/main/...`, root segment first - no legacy form ever pointed there). Boot-only is
- * sufficient: a `main/` dir created at RUNTIME mints self-consistent `/docs/main/main/...` URLs
- * with no pre-existing legacy links to break; the guard exists to stop the UPGRADE of a corpus
- * whose circulating `/docs/main-dir/...` links would otherwise silently re-resolve.
- *
- * **C5 WIDENED it to the raw content-path space**, which it had been missing: a `main/` folder carrying a
- * `_folder.yaml slug:` override moves OUT of the URL space (so the old check saw nothing) while
- * `/browse/main/…` stays ambiguous - `BrowseRedirectRoute` splits it as root `main` plus a tail naming no
- * file, and a link that used to 302 to the page now 404s. Nobody is upgrading into this (the whole multi-root
- * feature is unreleased), so widening the refusal now is free, and it will never be this cheap again.
- */
-internal fun mainRootUrlCollisionRefusal(snapshot: PageIndex): String? {
-    val main = RootName.MAIN.value
-    val colliding = mainSegmentIndex(snapshot, emptyMap())[main].orEmpty().map { it.value }.distinct()
-    if (colliding.isEmpty()) return null
-    return "REFUSING TO SERVE: the main root contains top-level URL segment '$main' - since multi-root " +
-        "(ADR-0011 D1/D3) '$main' is the RESERVED root segment, so an old /docs/$main/... deep link is " +
-        "indistinguishable from a root-qualified URL and would silently re-resolve to the wrong page. " +
-        "Colliding entries: ${boundedPathList(colliding)}. Rename the directory (or the frontmatter `slug:` / " +
-        "_folder.yaml `slug:` source producing the segment) so no top-level URL segment is '$main'. This applies " +
-        "even to a fresh corpus - the reservation is deterministic, not upgrade-conditional. NOTE: renaming " +
-        "permanently forfeits any circulating /docs/$main/... deep links and their recorded aliases; after the " +
-        "rename those old links answer not-found instead of redirecting."
-}
-
-/**
- * The C5 shadow WARN (D-C5-6), from the SAME segment index the reserved-`main` refusal reads: a REGISTERED
- * extra root whose NAME is a top-level segment of main. `splitRootTail` treats a tail's first segment as a
- * root iff it names a registered root, so the moment a root named `guides` joins a main that already has a
- * top-level `guides/` - or a page whose `slug:` is `guides`, or an alias row at `guides/…` - every circulating
- * link through that segment stops resolving inside main and starts resolving inside the new root.
- *
- * **BOOT WARNS AND NEVER REFUSES, and this is the decision most worth arguing with.** A refusal would mean an
- * author creating a top-level folder called `handbook` in main - a pure docs edit, through the product's own
- * UI - BRICKS THE NEXT RESTART of a server that has a root named `handbook`. That converts a link ambiguity
- * into a production outage, and it is precisely the "residual shadow edge ... accepted tradeoff" ADR-0011 D3
- * ruled on. The reserved-`main` case stays a REFUSAL because it is deterministic and unavoidable, not because
- * refusal is the general policy. `plainbase root add` DOES refuse (with `--force`), and that is a CLI-owned
- * policy decision - deliberately stricter than boot, not a proxy for a boot check.
- */
-internal fun shadowedRootWarning(
-    snapshot: PageIndex,
-    aliases: Map<RootedPath, RootedPageId>,
-    registry: RootRegistry,
-): String? {
-    val index = mainSegmentIndex(snapshot, aliases)
-    // registry.extras, never `registry.roots.filter { it.name != RootName.MAIN }`: the partition exists for
-    // exactly this, and the hand-rolled filter would cost this file a second ledgered main-by-name comparison.
-    val shadowed = registry.extras.mapNotNull { root -> index[root.name.value]?.let { root.name to it } }
-    if (shadowed.isEmpty()) return null
-    val detail = shadowed.joinToString("; ") { (name, paths) ->
-        "root '${name.value}' shadows ${boundedPathList(paths.map { it.value })}"
-    }
-    return "root name(s) collide with a top-level segment of the main root: $detail. Links through that segment " +
-        "(/docs/<name>/..., /browse/<name>/..., /assets/<name>/...) now resolve inside the ROOT, not inside main - " +
-        "main's own entries under it are reachable only through their rooted permalinks (/p/{root}/{id}). Rename the " +
-        "main-root entry, or re-add this root under a different name (remove + add) - but that changes every rooted " +
-        "/p/{root}/{id} citation into it."
-}
-
-/**
- * The companion boot WARN (never a refusal - the corpus itself is fine): main-root `url_alias`
- * rows whose stored URL path starts with the reserved `main` segment. If such a row predates the
- * multi-root upgrade, its legacy link is PERMANENTLY dead: `/docs/main/x` now resolves as
- * root `main` + path `x`, so the recorded `(main, main/x)` row is only reachable at
- * `/docs/main/main/x` - a URL that never circulated pre-upgrade. The wording is deliberately
- * hedged: a row minted AFTER the upgrade (a runtime-created `main/` dir whose page later moved) is
- * legitimately reachable at that doubled URL, and the row alone cannot tell the two apart.
- */
-internal fun deadLegacyAliasWarning(aliases: Map<RootedPath, RootedPageId>): String? {
-    val main = RootName.MAIN.value
-    val dead = aliases.keys
-        .filter { it.root == RootName.MAIN && it.path.segments.first() == main }
-        .map { it.path.value }
-    if (dead.isEmpty()) return null
-    return "url_alias holds ${dead.size} main-root row(s) whose URL path starts with the reserved '$main' " +
-        "segment: ${boundedPathList(dead)}. If these rows predate the multi-root upgrade, their old " +
-        "/docs/<path> links are dead: the reserved root segment routes /docs/$main/x to ($main, x), so such a " +
-        "row is only reachable at /docs/$main/<path> - a URL that never circulated before the upgrade. Rows " +
-        "recorded after the upgrade are unaffected."
-}
-
-/** The deterministic, testable offender bound the two texts above share: first 10, lexicographic, `(+N more)`. */
-private fun boundedPathList(paths: List<String>): String {
-    val sorted = paths.sorted()
-    val overflow = sorted.size - BOUNDED_PATH_LIST_LIMIT
-    return sorted.take(BOUNDED_PATH_LIST_LIMIT).joinToString(", ") + if (overflow > 0) " (+$overflow more)" else ""
-}
-
-private const val BOUNDED_PATH_LIST_LIMIT = 10
 
 /**
  * The single rev-3.4 backup-guidance WARN (pure accessor, the [PlainbaseConfig.bindGuardRefusal]

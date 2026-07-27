@@ -11,7 +11,7 @@ import kotlin.io.path.readText
  * **The drift-proofing (C5 S1.7b), and the reason the shared boot gate is a STRUCTURAL fix rather than another
  * good intention.**
  *
- * A shared function does not stop someone adding a TENTH `exitProcess(1)` to `serve()` next quarter and never
+ * A shared function does not stop someone adding a NINTH `exitProcess(1)` to `serve()` next quarter and never
  * telling the CLI. So the boot path's refusal sites are ledgered, one line each, with a written disposition:
  * either the shared gate PRODUCES it (and `plainbase root` gets it for free) or it is EXCLUDED for a reason the
  * code FORCES rather than a reason somebody chose. A tenth appears -> this goes RED -> somebody decides. That
@@ -25,7 +25,7 @@ import kotlin.io.path.readText
  *
  * The tightness is the subtle half, and it went wrong once already: `ledger.size` is NOT the site count, because
  * one textual `exitProcess(1)` (the `refuse(kinds)` helper) is called from two consumption stages and so backs
- * two ledger entries. A ceiling of `ledger.size` therefore left a FREE SLOT - a ninth, unledgered exit fit
+ * two ledger entries. A ceiling of `ledger.size` therefore left a FREE SLOT - an unledgered exit fit
  * inside the slack and this test stayed green, which is precisely the drift it exists to catch. The ceiling is
  * the ledger MINUS the entries that share a site.
  */
@@ -52,9 +52,6 @@ class BootRefusalLedgerTest : FunSpec({
         "prepare()" to
             "EXCLUDED: it MUTATES (git init, the git-home mkdir). The gate is pure inspection - BootGatePurityTest " +
             "diffs the filesystem across a run - and nothing `root` writes changes prepare()'s outcome anyway.",
-        "mainRootUrlCollisionRefusal" to
-            "EXCLUDED: it needs a BUILT PageIndex (scan + render + DB), and it is main-only - and `root` has no code " +
-            "path that can write main's name or path into any file, so no value it writes can change the verdict",
     )
 
     // `refuse(kinds)` is ONE textual exitProcess(1), called from the topology stage AND the bind stage - so those

@@ -77,10 +77,10 @@ stop() {
 # Isolation: adopt --write-ids MUTATES the trees, so main is always a throwaway copy of the
 # fixtures, never the checkout (the enforced-auth-smoke rationale). No .git in the copy.
 cp -r fixtures/demo-docs "$tmp/main"
-mkdir -p "$tmp/hand/notes" "$tmp/extra/notes" "$tmp/shadow" "$tmp/data"
+mkdir -p "$tmp/hand/notes" "$tmp/extra/notes" "$tmp/refused" "$tmp/data"
 printf '# Hand Note\n\nDeclared in plainbase.conf.\n' >"$tmp/hand/notes/hand-note.md"
 printf '# Extra Note\n\nAdded by `plainbase root add`.\n' >"$tmp/extra/notes/extra-note.md"
-printf '# Shadow\n\nA tree for the shadowing-name refusal.\n' >"$tmp/shadow/note.md"
+printf '# Refused\n\nA real tree for the refused-add rows, so the refusal is the only reason they fail.\n' >"$tmp/refused/note.md"
 
 # `main` MUST be declared here: a PRESENT roots {} block that omits it is a boot refusal.
 cat >"$tmp/data/plainbase.conf" <<CONF
@@ -132,13 +132,12 @@ pass "3 roots available; by-path reads resolve in each; cross-root url is root-q
 expect_exit 1 "root remove hand (declared in plainbase.conf)" "$BIN" root remove hand
 grep -q "declared in plainbase.conf" "$tmp/cli.err" || fail "root remove hand: refusal did not name plainbase.conf"
 expect_exit 2 "root remove main (never CLI-managed)" "$BIN" root remove main
-# `guides` is a top-level segment of main (fixtures/demo-docs/guides): adding it would re-point every
-# circulating /docs/guides/... link into the NEW root.
-expect_exit 1 "root add guides (shadows a main segment)" "$BIN" root add guides "$tmp/shadow"
-[ -f "$tmp/data/roots.conf" ] || fail "root add guides: a REFUSED add must not delete roots.conf"
-expect_exit 0 "root add guides --force" "$BIN" root add guides "$tmp/shadow" --force
-expect_exit 0 "root remove guides" "$BIN" root remove guides
-pass "refusals: remove hand -> 1, remove main -> 2, shadowing add -> 1, --force -> 0"
+# `api` is a reserved top-level segment: Plainbase owns that URL space, so no root may take the name.
+# A bad ARGUMENT, so exit 2 - refused before the lock and before anything reads the path.
+expect_exit 2 "root add api (reserved segment)" "$BIN" root add api "$tmp/refused"
+grep -q "reserved segment" "$tmp/cli.err" || fail "root add api: refusal did not name the reserved segment"
+[ -f "$tmp/data/roots.conf" ] || fail "root add api: a REFUSED add must not delete roots.conf"
+pass "refusals: remove hand -> 1, remove main -> 2, reserved-segment add -> 2"
 
 # --- 6. An unavailable root answers 503, NOT 404 - the distinction is the whole point. -----------
 mv "$tmp/extra" "$tmp/extra-away"

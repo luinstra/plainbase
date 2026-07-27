@@ -1069,9 +1069,9 @@ data class PlainbaseConfig(
             val name = RootName.of(key) ?: throw IllegalArgumentException(
                 "roots.$key is not a valid root name (a lowercase slug [a-z][a-z0-9]*(-[a-z0-9]+)*, 2-32 chars)",
             )
-            // This one REFUSES where the shadow check could only warn, and the difference is who caused it: a
-            // reserved-name collision comes from operator CONFIG, so refusing cannot let an author brick a restart
-            // by creating a top-level folder. Both HOCON files funnel through here, so there is no second check.
+            // Refused rather than warned, because a reserved-name collision comes from operator CONFIG: refusing
+            // cannot brick a restart the way a rule over author-created CONTENT could. Both HOCON files funnel
+            // through here, so there is no second check.
             if (ReservedSegments.isReserved(name)) {
                 throw IllegalArgumentException(
                     // Not "rename this root" alone: `root remove` takes the lock and then reloads the config, so it

@@ -113,8 +113,9 @@ segment - so no top-level URL segment is `main`. There is no config key to disab
 reservation is deterministic, and a fresh corpus is refused exactly like an upgraded one.
 **Renaming permanently forfeits any circulating `/docs/main/...` deep links into that entry** (and
 their recorded aliases): after the rename those old links answer not-found instead of redirecting.
-`plainbase root add` applies a stricter, `--force`-able version of the same rule to the names you
-give extra roots (see [the CLI](#the-cli-and-the-two-files) below).
+A separate rule governs the names you may give extra roots. Plainbase reserves a set of top-level
+segments for its own URLs, and no root may take one, whether you declare it in `plainbase.conf` or
+add it with `plainbase root add` (see [the CLI](#the-cli-and-the-two-files) below).
 
 ## Multiple document roots - the `roots {}` block
 
@@ -251,7 +252,7 @@ a startup warning: `roots.main.path` is main's directory.
 ### The CLI and the two files
 
 ```
-plainbase root add <name> <path> [--editable] [--history off|native] [--force]
+plainbase root add <name> <path> [--editable] [--history off|native]
 plainbase root remove <name>
 plainbase root list
 ```
@@ -276,9 +277,10 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
 
 `root add` refuses outright (an error message, not a silent skip) on:
 
-- **a name that shadows an existing top-level entry of main** - a page, a folder, an asset, or a URL
-  minted by a `slug:`/`_folder.yaml slug:` - overridable with `--force`. See below for exactly what
-  this check does and does not catch.
+- **a reserved segment** - Plainbase owns a set of top-level URLs for its own surfaces (`api`,
+  `assets`, `browse`, `healthz`, `p`, `admin`, `new`, `review` and the like), plus the `pb-` and
+  `plainbase-` prefixes and any `v` followed only by digits. No root may take one. The refusal names
+  the word, and it is exit 2 - a bad argument, refused before anything is locked or read.
 - **nesting** - the new path may not sit inside another configured root or inside `DATA_DIR`, and may
   not equal one already configured.
 - **a duplicate declaration** - the name is already in `roots.conf` or in `plainbase.conf`'s block.
@@ -289,9 +291,6 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
   too.
 - **an empty path** - `plainbase root add docs "$DOCS_DIR"` with `DOCS_DIR` unset is a usage error
   (exit 2), never a root pointing at the process's working directory.
-- **a main root it cannot read** - the shadow check needs to scan main, and a tree it cannot read
-  proves nothing about what the new name would shadow, so it refuses rather than accept the add
-  blind. Restore the path, or pass `--force` to add without the check.
 
 It does **not** refuse a path that is not there: an extra root may legitimately be a volume that is
 not mounted yet (the server marks it unavailable and serves 503 for it until it is restored and the
@@ -311,23 +310,6 @@ remove those - deleting `roots.conf` returns the install to single-root behavior
 **right now**. It does not report live serving state - a separate process cannot know what a running
 server has marked unavailable in memory - so it points at `GET /healthz` for that instead (see
 [When a root is not there](#when-a-root-is-not-there) above).
-
-#### What the shadow check does not catch
-
-`root add`'s shadow refusal scans main's content tree at add time: every page, folder and asset
-path, plus every URL a page's `slug:`/a `_folder.yaml slug:` mints. Two things it structurally cannot
-see - and an operator who reads "refuses shadows" as "shadows are impossible" will be wrong in
-exactly these two ways:
-
-1. **A `redirect_from` alias.** Alias rows live in the database, not on disk, and they outlive the
-   frontmatter that minted them; the CLI opens no database (it is a plain filesystem scan), so it
-   cannot see them. This one has a backstop: **boot WARNs** on it, because boot builds the real index
-   and reads the alias registry - which is exactly why the boot warn exists, not as "the CLI check
-   again, later."
-2. **A folder created tomorrow through Plainbase's own UI.** The check runs once, at `add` time, and
-   nothing re-checks it afterward. This is [ADR-0011 D3](decisions/0011-multi-root-document-directories.md)'s
-   explicitly accepted tradeoff, not an oversight - and nothing is a backstop for it. A runtime shadow
-   resolves that one segment to the root, not to main's directory, until an operator renames one side.
 
 ## Per-root agent direct-commit globs
 

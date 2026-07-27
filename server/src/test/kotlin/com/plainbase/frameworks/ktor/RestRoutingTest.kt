@@ -142,8 +142,8 @@ class RestRoutingTest : FunSpec({
             body.getValue("url").jsonPrimitive.content shouldBe "/docs/main/guides/deploy-guide"
 
             // The root segment is REQUIRED: the same tail without it names no page. This is the
-            // second in-file falsifier for the by-path fallback's death, and it is what makes
-            // deleting the shadow machinery safe (nothing else observes that ordering).
+            // second in-file falsifier for the by-path fallback's death, which is what made
+            // deleting the shadow machinery safe (nothing else observed that ordering).
             client.get("/api/v1/pages/by-path/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
             client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.NotFound
             client.get("/api/v1/pages/by-path/main/no/such/page").status shouldBe HttpStatusCode.NotFound
