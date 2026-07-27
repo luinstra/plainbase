@@ -1,3 +1,4 @@
+import org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -42,6 +43,15 @@ kover {
     currentProject {
         sources {
             includedSourceSets.add("main")
+        }
+    }
+
+    reports {
+        filters {
+            excludes {
+                classes("com.plainbase.ApplicationKt*")
+                classes("com.plainbase.frameworks.cli.S3SmokeCommand*")
+            }
         }
     }
 }
@@ -398,7 +408,7 @@ run {
         classpath(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
     }
 
-    tasks.named<org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask>("nativeTestCompile") {
+    tasks.named<BuildNativeImageTask>("nativeTestCompile") {
         // Read the native test set from `nativeTestList` (nativeTest source set) instead of the
         // full-suite `test` task. (The plugin leaves a `dependsOn(test)` edge so the JVM suite runs
         // first; harmless — `testListDirectory` is what decides the image's test set.)
