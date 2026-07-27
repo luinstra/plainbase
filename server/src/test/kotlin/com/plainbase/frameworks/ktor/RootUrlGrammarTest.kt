@@ -23,8 +23,11 @@ import java.nio.file.Files
  * nothing at all - it is never reinterpreted as a path under the primary - so every surface answers
  * a miss in its own idiom (`/docs` the shell body at 404, the rest their error envelope). A KNOWN
  * root scopes the remainder; an unknown root is never a distinct error (D-C3-4). Bundle-wins
- * precedes the root parse on `/assets` (a root name cannot contain a dot, a bundle file name
- * always does).
+ * precedes the root parse on `/assets`, and cannot collide with a SINGLE-segment tail: a root name
+ * carries no dot and a bundle file name always does. That argument is narrower than it looks, and
+ * `AssetRoute`'s own comment carries the rest of it: the check runs on the WHOLE tail, so a nested
+ * bundle entry would answer under a same-named root. `FrontendBundleTest` is what keeps the bundle
+ * flat enough for the short version to hold.
  */
 class RootUrlGrammarTest : FunSpec({
 

@@ -9,76 +9,77 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * The falsifier under [ReservedSegments]'s claim about the embedded frontend bundle. Today that claim is a
- * sentence in a comment, and a sentence cannot notice `frontend/public/img/` being added: the bundle is served
- * wholesale from the classpath (`staticResources("/", "static")`), so a new directory is a live route the product
- * owns from the moment it is staged. The inventory is READ from the served tree, never transcribed, so a grown
- * bundle is answered by this test rather than by a list somebody has to remember to update. It reads the CLASSPATH
- * copy rather than `frontend/dist`, because the classpath is what is actually served; `processResources` depends
- * on `copyFrontend`, so it is staged before any test runs.
+ * Two properties of the embedded frontend bundle. The inventory is READ from the served tree, never
+ * transcribed, so a bundle that grows is answered here rather than by a list somebody has to remember to
+ * update. It reads the CLASSPATH copy rather than `frontend/dist`, because the classpath is what is
+ * actually served; `processResources` depends on `copyFrontend`, so it is staged before any test runs.
  *
- * Candidates go through [RootName.of] and are then checked against the whole [ReservedSegments.isReserved]
- * predicate rather than [ReservedSegments.words]. Both halves matter: an entry no root could be NAMED after
- * (`favicon.svg`, `_app`, a single character) is unshadowable by construction and is not a hazard, while `v2`
- * and `pb-icons` ARE already reserved - by the version shape and the prefixes, which are not in the word list.
- * A `words`-only membership test would false-fail on every one of them.
+ * RESERVATION, at the top level. [ReservedSegments] claims the product owns the top-level URLs it serves,
+ * and the bundle is served wholesale from `staticResources("/", "static")`, so a new directory there is a
+ * live route from the moment it is staged. Candidates go through [RootName.of] and then the whole
+ * [ReservedSegments.isReserved] predicate rather than [ReservedSegments.words]: an entry no root could be
+ * NAMED after (`favicon.svg`, `_app`, a single character) is unshadowable by construction, while `v2` and
+ * `pb-icons` ARE already reserved, by the version shape and the prefixes, which are not in the word list.
+ * This row is legitimately empty if no entry parses as a name at all, and that is not a gap: an
+ * unnameable bundle is one nothing can shadow.
  *
- * The two rows guard different things. The ASSETS-level one is the hazard that is live today: `staticResourceBytes`
- * resolves `static/assets/$tail` and `AssetRoute` runs the `325d195` bundle-wins check on the FULL tail BEFORE the
- * root split, so a `static/assets/img/x.png` would serve bundle bytes at `/assets/img/x.png` even for a registered
- * root named `img`. Vite's output is flat today, so that is latent rather than live - which is exactly when a
- * falsifier is worth having. The TOP-LEVEL one is not a shadow at HEAD: a root name never occupies a bare segment,
- * it appears only after `/docs`, `/assets`, `/p` and `/browse`. It enforces [ReservedSegments]'s own policy that
- * Plainbase owns the top-level URLs it serves or expects to, and it is what would keep that policy honest if the
- * URL shape ever flattened to `/{root}/{path}`.
+ * FLATNESS, under `assets/`. This is what `AssetRoute`'s bundle-wins comment and [RootUrlGrammarTest]'s
+ * KDoc both rest on, and reservation is not a substitute for it: the bundle-wins check runs on the FULL
+ * tail before the root split, so a `static/assets/img/x.png` would answer `/assets/img/x.png` from the
+ * bundle even for a registered root named `img`, and reserving `img` would not change that. Both comments
+ * hold only while Vite's output stays flat, which is exactly the kind of thing a dependency bump changes.
+ *
+ * Asserting flatness makes the assets level's reservation question moot rather than merely likely: a
+ * dotted name cannot parse as a [RootName] at all. That is why there is no third row.
  */
 class FrontendBundleTest : FunSpec({
 
     test("every top-level bundle entry that could name a root is a reserved segment") {
         withClue("these bundle entries are live top-level routes; ReservedSegments must already own their names") {
-            unreservedNames(bundleTopLevel()).shouldBeEmpty()
+            bundleTopLevel().mapNotNull { RootName.of(it) }.filterNot(ReservedSegments::isReserved).map { it.value }.shouldBeEmpty()
         }
     }
 
-    test("every entry under the bundle's assets/ that could name a root is a reserved segment") {
-        withClue("these would shadow a same-named root's /assets/{root}/... space via the bundle-wins check") {
-            unreservedNames(bundleAssetsLevel()).shouldBeEmpty()
+    test("the bundle's assets/ is FLAT: every entry is a dotted regular file, so none can name a root") {
+        // Every entry, not a filtered subset - the filter is what made the reservation form of this row
+        // vacuous, since `RootName.of` dropped all of today's hashed files before the check was reached.
+        val offenders = bundleAssetsLevel().filterNot { (name, path) -> "." in name && Files.isRegularFile(path) }
+        withClue("a nested or dot-free assets/ entry defeats the bundle-wins check on the full tail") {
+            offenders.map { (name, _) -> name }.shouldBeEmpty()
         }
     }
 })
 
-/** The hazard set: bundle entries that a root COULD be named after and that nothing reserves. Empty by contract. */
-private fun unreservedNames(entries: Set<String>): List<String> =
-    entries.mapNotNull { RootName.of(it) }.filterNot { ReservedSegments.isReserved(it) }.map { it.value }
-
 /**
- * The served bundle's directory on the test classpath. The `index.html` check is the anti-vacuity guard for BOTH
- * rows, and it is also what pins this to OUR bundle: `getResource` hands back the FIRST `static/` on the
- * classpath, so a dependency shipping one of its own would otherwise be inventoried in place of the real thing.
+ * The served bundle's directory on the test classpath, guarded so both rows cannot inventory the WRONG
+ * tree. `getResource` returns the first `static/` on the classpath and would silently hand back a
+ * dependency's, or a stray one left in a build directory - a real accident, hit while developing this
+ * file: a `mkdir` under `build/resources/test/static` shadowed the real bundle and both rows then ran
+ * against an empty decoy. Enumerating ALL of them and demanding exactly one closes that; the `index.html`
+ * check then catches an unstaged or half-copied bundle.
  */
 private fun bundleDir(): Path {
-    val url = requireNotNull(FrontendBundleTest::class.java.classLoader.getResource("static")) {
-        "static/ is not on the test classpath - processResources must depend on copyFrontend"
+    val found = FrontendBundleTest::class.java.classLoader.getResources("static").toList()
+    check(found.size == 1) {
+        "expected exactly one static/ on the test classpath, found ${found.size}: $found - " +
+            "a second one shadows the real bundle and would silently be inventoried in its place"
     }
-    val dir = Path.of(url.toURI()) // a directory classpath under test; a JAR URI would throw here, loudly
+    val dir = Path.of(found.single().toURI()) // a directory classpath under test; a JAR URI would throw here, loudly
     check(Files.isRegularFile(dir.resolve("index.html"))) {
-        "$dir holds no index.html - the bundle is unstaged or stale (run :frontend:npmBuild), or it is not ours"
+        "$dir holds no index.html - the bundle is unstaged or stale (run :frontend:npmBuild)"
     }
     return dir
 }
 
-/** The bundle's top-level entries - what `staticResources("/", "static")` serves directly under `/`. */
+/** The bundle's top-level entry names - what `staticResources("/", "static")` serves directly under `/`. */
 private fun bundleTopLevel(): Set<String> =
     Files.list(bundleDir()).use { stream -> stream.map { it.fileName.toString() }.toList() }.toSet()
 
-/**
- * The entries under `static/assets/`, where Vite emits its hashed js/css. This row's own anti-vacuity guard is the
- * non-empty check: a staged-but-empty `assets/` would otherwise let it pass by asserting over nothing.
- */
-private fun bundleAssetsLevel(): Set<String> {
+/** The entries under `static/assets/`, where Vite emits its hashed js/css, as name-to-path pairs. */
+private fun bundleAssetsLevel(): List<Pair<String, Path>> {
     val assets = bundleDir().resolve("assets")
     check(Files.isDirectory(assets)) { "static/assets/ is missing - run :frontend:npmBuild" }
-    val entries = Files.list(assets).use { stream -> stream.map { it.fileName.toString() }.toList() }.toSet()
+    val entries = Files.list(assets).use { stream -> stream.map { it.fileName.toString() to it }.toList() }
     check(entries.isNotEmpty()) { "static/assets/ is empty - the Vite bundle did not stage" }
     return entries
 }

@@ -158,8 +158,9 @@ class RootCommandTest : FunSpec({
     }
 
     test("root add's invalid-name refusal quotes the grammar the loader enforces") {
-        // The one gate on this copy of the regex text. Three other copies of it are hand-maintained and
-        // unasserted; this is the operator's first encounter with the rule, so it is the one worth pinning.
+        // The one gate on this copy of the regex text. Five further copies are hand-maintained and unasserted
+        // (see `RootName`'s KDoc for the census); this is the operator's first encounter with the rule, so it
+        // is the one worth pinning.
         world { w ->
             captureStderr { w.root("add", "Bad_Name", "/tmp/x") shouldBe 2 } shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
         }
