@@ -83,29 +83,19 @@ export function DocsPage({ path }: { path: string }) {
  * no page owns this location - but a folder might (bare `/docs` resolves to the MAIN
  * entry's root folder; no page can own it, so that route skips by-path entirely and
  * passes `url` explicitly). The location is matched VERBATIM against the tree entries'
- * folder `url`s (the server stays the single URL authority; nothing is slugified here),
- * with ONE legacy retry: an intercepted in-content legacy href (`/docs/guides`) whose
- * first segment names no served entry retries under main and, on a hit, replaces the URL
- * to the folder's canonical `url` - preserving the reload-free SPA invariant a native
- * navigation (letting the server 301 fire) would break. A README-preference child renders
- * at the folder URL; otherwise the generated listing. On the splat route by-path ran
- * FIRST, so a page owning the URL always shadows the folder view (the page-shadows-folder
- * ordering, consistent with ADR-0002).
+ * folder `url`s (the server stays the single URL authority; nothing is slugified here) and
+ * nothing else: a location no entry owns is not-found here, the same answer the server gives
+ * a tail whose first segment names no root. A README-preference child renders at the folder
+ * URL; otherwise the generated listing. On the splat route by-path ran FIRST, so a page owning
+ * the URL always shadows the folder view (the page-shadows-folder ordering, consistent with
+ * ADR-0002).
  */
 export function FolderLanding({ url }: { url?: string }) {
-  const router = useRouter();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tree = useQuery(treeQuery);
 
   const target = url ?? pathname;
   const resolved = tree.data ? resolveLanding(tree.data.roots, target) : null;
-  useEffect(() => {
-    // The retry-hit canonicalization (the DocsPage replace idiom): only while the address bar
-    // still shows the legacy target it was resolved for.
-    if (resolved?.replaceTo && pathname === target) {
-      router.history.replace(resolved.replaceTo + window.location.search + window.location.hash);
-    }
-  }, [resolved?.replaceTo, pathname, target, router]);
 
   if (tree.isPending) return <PagePending />;
   if (tree.isError) return <PageError error={tree.error} />;
@@ -135,28 +125,21 @@ export function FolderLanding({ url }: { url?: string }) {
 
 /**
  * The ONE folder-landing resolver: bare `/docs` is the MAIN entry ("main" is the reserved D1
- * literal, the one legal client-side root name); everything else matches entries' folder `url`s
- * verbatim, then retries a legacy tail under main. The retry's known-root set is the tree entries
- * themselves - which are now REGISTRY-backed, so they list every CONFIGURED root (each carrying an
- * `available` flag), not just the served ones. That is what makes the first-segment exclusion below
- * COMPLETE: the client's known-root set is exactly the server's, so a legacy-tail retry can never
- * resurrect `/docs/{extra}/x` as one of main's folders while the server reads the same URL as the
- * extra root's space. The C3 divergence window this comment used to describe is closed structurally,
- * not merely narrowed. `replaceTo` carries the canonical url for the caller's history.replace.
- * `/docs/nope` misses the retry too - no loop.
+ * literal, the one legal client-side root name); every other location matches the entries' folder
+ * `url`s verbatim, and a miss is a miss.
+ *
+ * There is deliberately no fallback that re-reads a rootless tail under the primary. The server
+ * answers `/docs/{not-a-root}/...` with 404, so a client that resolved it would disagree with the
+ * address it is standing on - and worse, it would silently REBIND: registering a root named after
+ * one of the primary's top-level folders moves that URL from the folder to the new root's landing,
+ * with nothing announcing the move.
  */
-function resolveLanding(roots: RootTree[], target: string): (FolderEntry & { replaceTo?: string }) | null {
+function resolveLanding(roots: RootTree[], target: string): FolderEntry | null {
   if (target === "/docs") {
     const main = mainEntry(roots);
     return main ? { root: "main", available: main.available, folder: main.tree } : null;
   }
-  const entry = folderByUrl(roots, target);
-  if (entry) return entry;
-  const tail = target.startsWith("/docs/") ? target.slice("/docs/".length) : null;
-  const first = tail?.split("/")[0];
-  if (!tail || !first || roots.some((e) => e.root === first)) return null;
-  const retried = folderByUrl(roots, `/docs/main/${tail}`);
-  return retried?.folder.url ? { ...retried, replaceTo: retried.folder.url } : null;
+  return folderByUrl(roots, target);
 }
 
 /**

@@ -132,7 +132,7 @@ describe("Breadcrumbs", () => {
 
   it("roots the trail in THIS page's root, linking to that root's own url - never back to /docs", () => {
     // The crumb was hardcoded `{ label: "docs", url: "/docs" }`. On an extra root that named the wrong
-    // tree AND, because `/docs` legacy-redirects to main, quietly walked the reader into a DIFFERENT
+    // tree AND, because bare `/docs` resolves to the primary, quietly walked the reader into a DIFFERENT
     // root's copy of the docs. The negative assertion is the load-bearing one.
     const { container } = renderCrumbs("runbooks/deploy.md", "Extra Deploy", "extra");
     const crumb = container.querySelector("a")!;

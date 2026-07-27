@@ -470,21 +470,22 @@ describe("folder landing views (ADR-0003)", () => {
     expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
   });
 
-  it("an intercepted LEGACY folder link renders the main entry's landing and replaces the URL (C3 retry)", async () => {
-    // An in-content legacy href like /docs/guides is router-intercepted (lib/links.ts), by-path
-    // 404s (folders aren't in by-path space), and the verbatim url match misses the reshaped
-    // /docs/main/guides node. The resolver retries under main and history.replace's to the
-    // canonical folder url - reload-free, no server 301.
+  it("a rootless folder tail is NOT resolved under the primary - NotFound, at the address that was asked for", async () => {
+    // The fixture is the dangerous one: `main` holds a top-level `guides/`, so resolving /docs/guides
+    // under the primary would render it. The client must not, because the server does not - /docs/guides
+    // names no root and answers 404 with the shell body. A client-side retry also silently REBINDS the
+    // URL the day a root named `guides` is registered, which is exactly what the deleted boot refusal
+    // and shadow warning existed to announce.
     stubNotFound();
-    const legacyTree = tree([pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide")]);
-    const { history, view } = renderAt("/docs/guides", legacyTree);
+    const shadowingTree = tree([pageNode(PAGE_ID, "guides/deploy-guide.md", "Deploy Guide", "/docs/main/guides/deploy-guide")]);
+    const { history, view } = renderAt("/docs/guides", shadowingTree);
 
-    await waitFor(() => expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull());
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/guides"));
-    expect(view.container.querySelector("[data-pb-not-found]")).toBeNull();
+    await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-folder]")).toBeNull();
+    expect(history.location.pathname).toBe("/docs/guides"); // no rewrite: the address stays what was asked for
   });
 
-  it("a LEGACY tail whose main retry also misses stays NotFound - /docs/nope, no retry loop", async () => {
+  it("a rootless tail matching nothing at all stays NotFound - /docs/nope", async () => {
     stubNotFound();
     const { view } = renderAt("/docs/nope", tree([]));
     await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
