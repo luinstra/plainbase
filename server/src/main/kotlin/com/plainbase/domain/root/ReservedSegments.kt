@@ -2,9 +2,11 @@ package com.plainbase.domain.root
 
 /**
  * The top-level segments a root may not take, checked at REGISTRATION - config load, `root add`, and the
- * `RootsConfig` snapshot constructor - and never inside [RootName.of]. A name that was legal when it was
- * written stays parseable forever; only registering a NEW root can be refused. [RootName]'s KDoc carries the
- * full argument for the split.
+ * `RootsConfig` snapshot constructor - and never inside [RootName.of]. A word added here can only refuse a NEW
+ * registration; it never makes an already-persisted name unparseable. Tightening [RootName]'s SHAPE does exactly
+ * that, and this release did tighten it, which is the asymmetry the split turns on rather than a promise it
+ * breaks: a shape change is paid once, by a reindex, while a growing word list would re-break installs forever.
+ * [RootName]'s KDoc carries the full argument.
  *
  * Reservation is UNCONDITIONAL. Every auth, session, setup and admin surface in the binary is registered
  * conditionally on `auth.mode`, so a mode-aware list would let an `auth.mode=off` install take `session` and
@@ -28,7 +30,8 @@ object ReservedSegments {
      * length of 2, and `RootNameTest` pins that.
      */
     val words: Set<String> = setOf(
-        // Live server top-level routes, plus the two dot-free directories of the embedded frontend bundle.
+        // Live server top-level routes, plus the embedded frontend bundle's own directories - which
+        // `FrontendBundleTest` reads from the SERVED tree, so a new one that nothing here reserves goes red.
         "api", "assets", "browse", "fonts", "healthz", "p",
         // Live SPA top-level routes.
         "admin", "new", "review",

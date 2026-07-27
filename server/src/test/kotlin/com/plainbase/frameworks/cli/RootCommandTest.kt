@@ -141,6 +141,22 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("a reserved name already in roots.conf makes even `root remove` exit 1 - the refusal message says so") {
+        // The loader's message tells the operator to edit the declaring file BECAUSE this command cannot dig them
+        // out: every verb LOADS the config first, and a reserved name is a load failure rather than a gate one -
+        // the opposite of T-CLI-12 below, where a config that loads but would not serve is warned about and the
+        // verb proceeds. Without this row that sentence is prose nothing could contradict.
+        world(rootsConf = """roots { api { path = "/roots/api" } }""") { w ->
+            val before = Files.readAllBytes(w.rootsConf)
+            val err = captureStderr { w.root("remove", "api") shouldBe 1 }
+            err shouldContain "'api' is a reserved segment"
+            err shouldContain "plainbase root remove cannot run while the config is refused"
+            withClue("and the file the operator is told to edit is byte-identical - the CLI did not half-help") {
+                Files.readAllBytes(w.rootsConf) shouldBe before
+            }
+        }
+    }
+
     test("root add's invalid-name refusal quotes the grammar the loader enforces") {
         // The one gate on this copy of the regex text. Three other copies of it are hand-maintained and
         // unasserted; this is the operator's first encounter with the rule, so it is the one worth pinning.

@@ -59,9 +59,10 @@ fun Route.docsRoutes(ctx: RouteContext) {
         val raw = call.rawPathAfter("/docs/")
         // An undecodable tail can never name content - no first segment to make a root decision on;
         // serve the shell exactly as before the root grammar existed. Note this answers 200 while the
-        // no-such-root arm below answers 404, on the same "no root decision" premise: an undecodable tail
-        // is a MALFORMED request rather than an unregistered root, so it keeps its pre-grammar answer.
-        // The two invert deliberately in the flip commit; until then the asymmetry is intentional.
+        // no-such-root arm below answers 404, on the same "no root decision" premise. They differ on WHY
+        // the decision is missing: an undecodable tail is a MALFORMED request, which this surface has always
+        // answered with the shell, while an unregistered first segment is a well-formed address for a root
+        // that is not there. Both halves are pinned in `RootUrlGrammarTest`.
         val path = raw?.let(::decodedTreePath) ?: return@get call.respondSpaShell()
         // The root decision stays OUTSIDE the wrap: it is pure config topology, calls no facade, and can throw
         // nothing. No root named means no page addressed - the shell body at 404, never a guess at the primary.

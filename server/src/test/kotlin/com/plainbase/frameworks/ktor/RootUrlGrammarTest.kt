@@ -113,8 +113,8 @@ class RootUrlGrammarTest : FunSpec({
     test("an EXTRA registry root is never treated as a legacy segment: its URL space misses cleanly (D12/D-C3-4)") {
         // A registry with a validated-but-unserved extra root: /docs/extra/... must scope to that
         // root and MISS (shell / 404) - a REGISTERED root's URL space answers a miss under itself,
-        // never the no-root answer. The shadow consequence is D3(b)'s accepted residual: a MAIN page
-        // at path extra/shadowed.md is unreachable via its legacy form (the segment names the root).
+        // never the no-root answer. Note what registering `extra` does NOT do to main's own page at
+        // extra/shadowed.md: nothing. Its address was always /docs/main/extra/shadowed.
         withTempTree(seed = { root ->
             writePage(root, "guides/page.md", "---\ntitle: Page\n---\n\n# Page\n")
             writePage(root, "extra/shadowed.md", "---\ntitle: Shadowed\n---\n\n# Shadowed\n")
@@ -135,8 +135,8 @@ class RootUrlGrammarTest : FunSpec({
                         client.get("/api/v1/pages/by-path/extra/anything").status shouldBe HttpStatusCode.NotFound
                         client.get("/assets/extra/anything.png").status shouldBe HttpStatusCode.NotFound
 
-                        // The accepted D3(b) shadow: the main page at extra/shadowed resolves ONLY
-                        // through its root-qualified form now.
+                        // And it resolves through its own root-qualified form, unaffected by the root
+                        // whose name its first path segment happens to match.
                         client.get("/api/v1/pages/by-path/main/extra/shadowed").status shouldBe HttpStatusCode.OK
                         client.get("/api/v1/pages/by-path/extra/shadowed").status shouldBe HttpStatusCode.NotFound
                     }

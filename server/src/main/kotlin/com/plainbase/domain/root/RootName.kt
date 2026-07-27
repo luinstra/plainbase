@@ -42,13 +42,14 @@ value class RootName private constructor(val value: String) {
         private const val MAX_LENGTH = 32
 
         /**
-         * Letter-leading, no trailing hyphen, no doubled hyphen. The text of this rule is repeated in five
-         * operator-facing messages (this file's [require], `PlainbaseConfig.parseRoot`, the
-         * `auth.agentDirectCommit.roots` refusal, and `root add`/`root remove`) plus one doc page: they are
-         * different frames with different key names, so they are hand-maintained copies rather than one
-         * awkward shared string. Three of them are asserted by tests; changing the rule means changing all of
-         * them. The doc page is the one copy that is currently BEHIND (it still prints the older, looser
-         * `[a-z0-9][a-z0-9-]*`), because it moves with the operator-doc pass rather than with this type.
+         * Letter-leading, no trailing hyphen, no doubled hyphen. This pattern and its 2-32 bound are spelled out
+         * again in eight hand-maintained places: five operator-facing messages ([require] here,
+         * `PlainbaseConfig.parseRoot`, the `auth.agentDirectCommit.roots` refusal, and `root add`/`root remove`)
+         * and three doc copies (`docs/configuration.md`'s shape paragraph AND its boot-validation bullets, plus
+         * ADR-0011's URL-grammar supersession note). Different frames with different key names, so they are copies
+         * rather than one awkward shared string. Three of the five MESSAGES are asserted by tests (`RootNameTest`,
+         * `RootsConfigTest`, `RootCommandTest`); nothing gates the three doc copies. Changing the rule means editing
+         * all eight by hand, plus the prose above and `RootNameTest`'s own restatement of the pattern.
          */
         private val SLUG = Regex("[a-z][a-z0-9]*(-[a-z0-9]+)*")
 

@@ -18,8 +18,8 @@ import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 
 /**
- * §A4 alias/redirect semantics over HTTP: move aliases (301, one hop from a canonical-era alias;
- * a LEGACY-prefix hit chains two hops since C3, ADR-0011 D3), `redirect_from` (301, incl. the
+ * §A4 alias/redirect semantics over HTTP: move aliases (301, always one hop - an alias lives under a
+ * root, and a tail that names no root never reaches one), `redirect_from` (301, incl. the
  * collision-loser permalink fallback), and `/browse/{file-path}` (302, decode-once + NFC) -
  * including the encoded-space and unicode filename rows.
  */

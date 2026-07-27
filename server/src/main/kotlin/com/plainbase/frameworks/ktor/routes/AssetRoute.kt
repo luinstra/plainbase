@@ -84,8 +84,11 @@ fun Route.assetRoute(ctx: RouteContext) {
             // ALWAYS the embedded bytes - a content asset shadowing a bundle name can never be served -
             // and checked on the FULL tail BEFORE the root split: the shell's absolute
             // `/assets/index-<hash>.js` references must keep resolving with zero hops and zero root
-            // semantics. No collision is possible: a root name cannot contain a dot (the RootName
-            // grammar), a bundle file name always does.
+            // semantics. A SINGLE-segment tail cannot collide: a root name carries no dot (the RootName
+            // grammar) and a bundle file name always does. That argument does NOT extend to a nested tail,
+            // because the check runs on the whole thing: a `static/assets/img/x.png` would answer
+            // `/assets/img/x.png` from the bundle even for a registered root named `img`. Vite's output is
+            // flat today, so that is latent, and `FrontendBundleTest` is the falsifier that keeps it so.
             val bundled = staticResourceBytes(decoded.value)
             if (bundled != null) {
                 call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
