@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -9,12 +8,10 @@ import io.ktor.server.routing.get
 
 /**
  * `GET /browse/{root}/{file-path}` (§A4 + C3): the file-path-exact lookup for tools. A tail whose
- * first segment names a known registry root scopes the remainder to that root; otherwise the WHOLE
- * tail is a legacy main-relative FILE path and RESOLVES under main directly (D-C3-3: an API
- * surface never pays a redirect hop for legacy input - the 302 target is already canonical). The
- * file path (e.g. `guides/deploy-guide.md`) is percent-decoded once and NFC-normalized (both via
- * the chunk 1.5 primitives inside [decodedTreePath]) → **302** to the page's current canonical
- * `/docs/{root}/...` URL.
+ * first segment names a known registry root scopes the remainder to that root; any other tail
+ * addresses no root and therefore no file → **404**. The file path (e.g. `guides/deploy-guide.md`)
+ * is percent-decoded once and NFC-normalized (both via the chunk 1.5 primitives inside
+ * [decodedTreePath]) → **302** to the page's current canonical `/docs/{root}/...` URL.
  *
  * A path-space collision loser has no canonical URL; its permalink is the page's one durable URL,
  * so the 302 targets `/p/{root}/{id}` instead — same contract (a redirect to where the page lives now).
@@ -37,8 +34,10 @@ fun Route.browseRedirectRoute(ctx: RouteContext) {
                 )
             val decoded = decodedTreePath(raw)
                 ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
-            val (root, path) = splitRootTail(decoded, ctx.roots) ?: (RootName.MAIN to decoded)
-            // A bare known root names no file - the same malformed-input arm as a bare mount point.
+            // A first segment naming no registered root names no file: a 404 miss, not a guess at the
+            // primary. A BARE known root keeps its 400 - that tail is malformed rather than absent.
+            val (root, path) = splitRootTail(decoded, ctx.roots)
+                ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such page file: ${decoded.value}")
             if (path == null) {
                 return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid file path: '$raw'")
             }

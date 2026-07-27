@@ -45,7 +45,7 @@ class MoveFileIntegrationTest : FunSpec({
                 restTest(root) { harness ->
                     val client = restClient()
 
-                    val before = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/guides/portable").bodyAsText()).jsonObject
+                    val before = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/guides/portable").bodyAsText()).jsonObject
                     val id = before.getValue("id").jsonPrimitive.content
                     val markdownBefore = before.getValue("markdown").jsonPrimitive.content
                     val permalink = "/p/$id"
@@ -63,7 +63,7 @@ class MoveFileIntegrationTest : FunSpec({
                     val landing = client.get("/docs/main/manuals/portable")
                     landing.status shouldBe HttpStatusCode.OK
                     landing.bodyAsText() shouldContain "<div id=\"root\">"
-                    val after = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/manuals/portable").bodyAsText()).jsonObject
+                    val after = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/manuals/portable").bodyAsText()).jsonObject
                     after.getValue("id").jsonPrimitive.content shouldBe id
                     after.getValue("markdown").jsonPrimitive.content shouldBe markdownBefore
 

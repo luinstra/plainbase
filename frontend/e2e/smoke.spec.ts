@@ -44,24 +44,23 @@ test("an alias URL 301s server-side to the canonical /docs URL", async ({ page }
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 });
 
-test("a LEGACY rootless /docs URL 301s to /docs/main/... (query preserved); a legacy alias chains two hops", async ({ page, request }) => {
-  // Cold load on the pre-C3 URL shape: the browser lands on the root-qualified canonical.
-  await page.goto("/docs/guides/deploy-guide");
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
-  await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
+test("a rootless /docs URL is 404 carrying the shell body: the root segment is required", async ({ request }) => {
+  // The pre-C3 URL shape names no root in its first segment, so it addresses no page. The BODY is
+  // still the shell (this is a browser navigation and the SPA owns not-found); the status is honest.
+  const rootless = await request.get("/docs/guides/deploy-guide", { maxRedirects: 0 });
+  expect(rootless.status()).toBe(404);
+  expect(rootless.headers()["content-type"]).toContain("text/html");
 
-  // The raw hop, pinned without following: 301 + Location built from the raw tail + query intact.
-  const hop = await request.get("/docs/guides/deploy-guide?mode=edit", { maxRedirects: 0 });
-  expect(hop.status()).toBe(301);
-  expect(hop.headers()["location"]).toBe("/docs/main/guides/deploy-guide?mode=edit");
+  const withQuery = await request.get("/docs/guides/deploy-guide?mode=edit", { maxRedirects: 0 });
+  expect(withQuery.status()).toBe(404);
 
-  // A LEGACY alias chains two hops (legacy-prefix 301, then the alias 301) to the same terminal.
-  await page.goto("/docs/old/deployment");
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  // An alias is registered UNDER a root, so a rootless alias URL reaches no alias registry either.
+  const alias = await request.get("/docs/old/deployment", { maxRedirects: 0 });
+  expect(alias.status()).toBe(404);
 });
 
 test("a bare /p/{id} permalink 302s server-side to the canonical path (stale slug tolerated)", async ({ page, request }) => {
-  const byPath = await request.get("/api/v1/pages/by-path/guides/deploy-guide");
+  const byPath = await request.get("/api/v1/pages/by-path/main/guides/deploy-guide");
   expect(byPath.ok()).toBe(true);
   const { id } = (await byPath.json()) as { id: string };
 

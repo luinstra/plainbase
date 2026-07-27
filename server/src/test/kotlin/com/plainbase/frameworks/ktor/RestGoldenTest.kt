@@ -96,7 +96,7 @@ class RestGoldenTest : FunSpec({
 
     test("GET /api/v1/pages/by-path/{path} returns the IDENTICAL shape and values as by-id") {
         goldenTest {
-            val byPath = client.get("/api/v1/pages/by-path/guides/deploy-guide").jsonBody()
+            val byPath = client.get("/api/v1/pages/by-path/main/guides/deploy-guide").jsonBody()
             val byId = client.get("/api/v1/pages/$deployGuideId").jsonBody()
 
             byPath shouldBe byId
@@ -168,7 +168,7 @@ class RestGoldenTest : FunSpec({
             Json.parseToJsonElement(unknown.bodyAsText()) shouldBe RestGolden.load("error-page-not-found.json")
 
             // Unknown by-path -> 404 page_not_found.
-            val unknownPath = client.get("/api/v1/pages/by-path/no/such/page")
+            val unknownPath = client.get("/api/v1/pages/by-path/main/no/such/page")
             unknownPath.status shouldBe HttpStatusCode.NotFound
             Json.parseToJsonElement(unknownPath.bodyAsText()) shouldBe RestGolden.load("error-by-path-not-found.json")
 

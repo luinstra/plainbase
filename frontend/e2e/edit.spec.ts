@@ -86,7 +86,7 @@ test("edit a metadata field via the rail form: save persists, the read view's ra
 
 test("a concurrent edit shows the content_changed conflict and keeps the buffer", async ({ page, request }) => {
   // Resolve the page id + its current content_hash (the GET ETag IS the accepted If-Match).
-  const byPath = await request.get("/api/v1/pages/by-path/guides/deploy-guide");
+  const byPath = await request.get("/api/v1/pages/by-path/main/guides/deploy-guide");
   expect(byPath.ok()).toBe(true);
   const { id, markdown } = (await byPath.json()) as { id: string; markdown: string };
   const get = await request.get(`/api/v1/pages/${id}`);

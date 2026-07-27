@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.RootUnavailable
 import com.plainbase.frameworks.ktor.RouteContext
 import io.ktor.server.routing.Route
@@ -11,15 +10,13 @@ import io.ktor.server.routing.get
  * routing-matrix order (root split, then alias check, strictly before the shell - one handler, so
  * the order is structural).
  *
- *  - A tail whose first decoded segment is NOT a known registry root is a LEGACY main-relative
- *    path (ADR-0011 D3, unconditional): **301** to `/docs/main/{tail}` (the ORIGINAL raw tail, so
- *    percent-encoding survives; query preserved).
+ *  - A tail whose first decoded segment is NOT a known registry root addresses no root, and there is
+ *    no such thing as a page outside a root: **404** carrying the shell BODY (the address is still a
+ *    browser navigation, so the SPA renders the not-found view; the status stays honest).
  *  - An alias hit under a known root (move aliases recorded by the indexer + `redirect_from`
  *    registrations) → **301** to the page's CURRENT canonical `/docs/{root}/...` URL - or, when
  *    the target is a path-space collision loser (`url = null`), to its `/p/{root}/{id}` permalink: the
- *    same fallback `/browse` uses, because the permalink IS the loser's one durable URL. One hop
- *    from a canonical-era alias; a LEGACY-prefix hit chains two hops (the legacy 301 above, then
- *    the alias 301 - ADR-0011 D3, accepted).
+ *    same fallback `/browse` uses, because the permalink IS the loser's one durable URL. Always one hop.
  *  - Everything else - canonical page URLs, bare `/docs/{root}`, unknown paths, undecodable ones,
  *    and pages under a root that is NOT SERVING - serves the SPA shell (**200**, per the matrix: the
  *    SPA fetches via `by-path` and owns its own not-found AND its own root-outage UI).
@@ -40,7 +37,7 @@ import io.ktor.server.routing.get
  * .resolveDocsRedirect] returns the target only when there IS a live alias AND the principal may read it; on no
  * alias OR a deny it returns null and we fall through to the PUBLIC SPA-shell arm, so unauthenticated SPA
  * navigation still loads the shell and a denied caller cannot tell an alias exists (no 301 existence-leak). The
- * legacy 301 is PRE-gate and leak-free: the root decision is config topology only (registry names, operator
+ * no-root 404 is PRE-gate and leak-free: the root decision is config topology only (registry names, operator
  * config), never content existence, and fires uniformly for every non-root first segment.
  *
  * An insecure-transport credential is the ONE exception to "fall through to the shell": it is REFUSED (421) via
@@ -61,11 +58,14 @@ fun Route.docsRoutes(ctx: RouteContext) {
         }
         val raw = call.rawPathAfter("/docs/")
         // An undecodable tail can never name content - no first segment to make a root decision on;
-        // serve the shell exactly as before the root grammar existed.
+        // serve the shell exactly as before the root grammar existed. Note this answers 200 while the
+        // no-such-root arm below answers 404, on the same "no root decision" premise: an undecodable tail
+        // is a MALFORMED request rather than an unregistered root, so it keeps its pre-grammar answer.
+        // The two invert deliberately in the flip commit; until then the asymmetry is intentional.
         val path = raw?.let(::decodedTreePath) ?: return@get call.respondSpaShell()
-        // The legacy 301 stays OUTSIDE the wrap: it is pure config topology, calls no facade, and can throw nothing.
-        val (root, remainder) = splitRootTail(path, ctx.roots)
-            ?: return@get call.respondRedirectPreservingQuery("/docs/${RootName.MAIN}/$raw", permanent = true)
+        // The root decision stays OUTSIDE the wrap: it is pure config topology, calls no facade, and can throw
+        // nothing. No root named means no page addressed - the shell body at 404, never a guess at the primary.
+        val (root, remainder) = splitRootTail(path, ctx.roots) ?: return@get call.respondShellNotFound()
         // The alias arm stays wrapped: `guarded {}` is the one facade-exception mapping site, and a handler with no
         // wrap would surface a facade throw as a 500. What it does NOT do here is answer a downed root with JSON -
         // the facade's availability gate fires before the alias lookup for EVERY page URL under the root, so that

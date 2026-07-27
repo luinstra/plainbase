@@ -127,7 +127,7 @@ T=$(jq -re '.csrf_token' "$tmp/b2-2.json")
 pass "B2 happy proxy session -> 200 + Secure pb_proxy_csrf"
 
 # B2-3. Write WITHOUT the double-submit -> 403 csrf_failed (alice is admin; the GET is 200).
-code=$(curl -s -o "$tmp/page.json" -w '%{http_code}' "${trio[@]}" "$B2_BASE/api/v1/pages/by-path/guides/deploy-guide")
+code=$(curl -s -o "$tmp/page.json" -w '%{http_code}' "${trio[@]}" "$B2_BASE/api/v1/pages/by-path/main/guides/deploy-guide")
 expect_status 200 "$code" "B2 GET by-path (proxy admin)"
 PAGE_ID=$(jq -re '.id' "$tmp/page.json")
 CONTENT_HASH=$(jq -re '.content_hash' "$tmp/page.json")
@@ -151,7 +151,7 @@ expect_status 200 "$code" "B2 PUT with double-submit + forwarded-host Origin"
 pass "B2 write with double-submit + X-Forwarded-Host-matched Origin -> 200"
 
 # B2-5. Cross-origin -> 403 cross_origin (fresh If-Match from a re-GET — B2-4 changed the hash).
-code=$(curl -s -o "$tmp/page2.json" -w '%{http_code}' "${trio[@]}" "$B2_BASE/api/v1/pages/by-path/guides/deploy-guide")
+code=$(curl -s -o "$tmp/page2.json" -w '%{http_code}' "${trio[@]}" "$B2_BASE/api/v1/pages/by-path/main/guides/deploy-guide")
 expect_status 200 "$code" "B2 re-GET by-path"
 CONTENT_HASH=$(jq -re '.content_hash' "$tmp/page2.json")
 code=$(jq -rj '.markdown + "\nEvil edit.\n"' "$tmp/page2.json" \

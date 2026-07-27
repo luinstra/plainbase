@@ -63,10 +63,10 @@ class AuthMatrixTest : FunSpec({
 
     test("anonymous is 401 on every gated route (no existence oracle: a read/redirect, not a 404)") {
         withApp(role = null) { app ->
-            app.client.get("/api/v1/pages/by-path/doc").status shouldBe HttpStatusCode.Unauthorized
+            app.client.get("/api/v1/pages/by-path/main/doc").status shouldBe HttpStatusCode.Unauthorized
             app.client.get("/api/v1/tree").status shouldBe HttpStatusCode.Unauthorized
             app.client.get("/api/v1/search?q=body").status shouldBe HttpStatusCode.Unauthorized
-            app.client.get("/browse/doc.md").status shouldBe HttpStatusCode.Unauthorized
+            app.client.get("/browse/main/doc.md").status shouldBe HttpStatusCode.Unauthorized
             app.client.get("/assets/main/x.bin").status shouldBe HttpStatusCode.Unauthorized
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.Unauthorized
         }
@@ -74,7 +74,7 @@ class AuthMatrixTest : FunSpec({
 
     test("viewer: 200 on reads, 403 on writes and manage") {
         withApp(role = Role.VIEWER) { app ->
-            app.client.get("/api/v1/pages/by-path/doc").status shouldBe HttpStatusCode.OK
+            app.client.get("/api/v1/pages/by-path/main/doc").status shouldBe HttpStatusCode.OK
             app.client.get("/api/v1/tree").status shouldBe HttpStatusCode.OK
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.Forbidden
             app.client.post("/api/v1/pages") {
@@ -86,7 +86,7 @@ class AuthMatrixTest : FunSpec({
 
     test("editor: 200 on reads + create, 403 on manage") {
         withApp(role = Role.EDITOR) { app ->
-            app.client.get("/api/v1/pages/by-path/doc").status shouldBe HttpStatusCode.OK
+            app.client.get("/api/v1/pages/by-path/main/doc").status shouldBe HttpStatusCode.OK
             app.client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
                 setBody("""{"root":"main","title":"New Editor Page"}""")
@@ -97,7 +97,7 @@ class AuthMatrixTest : FunSpec({
 
     test("admin: 200 everywhere incl. manage") {
         withApp(role = Role.ADMIN) { app ->
-            app.client.get("/api/v1/pages/by-path/doc").status shouldBe HttpStatusCode.OK
+            app.client.get("/api/v1/pages/by-path/main/doc").status shouldBe HttpStatusCode.OK
             app.client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.OK
         }
     }
@@ -167,7 +167,7 @@ class AuthMatrixTest : FunSpec({
                 )
                 testApplication {
                     application { plainbaseModule(ctx) }
-                    val read: HttpResponse = client.get("/api/v1/pages/by-path/doc") {
+                    val read: HttpResponse = client.get("/api/v1/pages/by-path/main/doc") {
                         header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
                     }
                     read.status shouldBe HttpStatusCode.OK
@@ -197,13 +197,13 @@ class AuthMatrixTest : FunSpec({
                 )
                 testApplication {
                     application { plainbaseModule(ctx) }
-                    client.get("/api/v1/pages/by-path/doc") {
+                    client.get("/api/v1/pages/by-path/main/doc") {
                         header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
                     }.status shouldBe HttpStatusCode.OK
 
                     harness.apiTokens.revoke(minted.id)
 
-                    client.get("/api/v1/pages/by-path/doc") {
+                    client.get("/api/v1/pages/by-path/main/doc") {
                         header(HttpHeaders.Authorization, "Bearer ${minted.plaintext}")
                     }.status shouldBe HttpStatusCode.Unauthorized
                 }

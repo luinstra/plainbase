@@ -48,7 +48,7 @@ class WriteRouteCreateNativeTest {
                 assertNotNull(body["content_hash"]?.jsonPrimitive?.content)
 
                 // The page is reachable at the §A4 path (the create indexed it via rebuild()).
-                val got = client.get("/api/v1/pages/by-path/guides/native-create")
+                val got = client.get("/api/v1/pages/by-path/main/guides/native-create")
                 assertEquals(HttpStatusCode.OK, got.status)
                 val page = Json.parseToJsonElement(got.bodyAsText()).jsonObject
                 assertEquals("guides/native-create.md", page["path"]?.jsonPrimitive?.content)

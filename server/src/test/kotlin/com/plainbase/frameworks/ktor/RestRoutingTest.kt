@@ -127,7 +127,7 @@ class RestRoutingTest : FunSpec({
             response.status shouldBe HttpStatusCode.OK
             response.bodyAsText() shouldContain "<div id=\"root\">"
             // Unknown paths under a known root serve the shell too - in-app not-found is the SPA's
-            // job (§A4 matrix); a rootless unknown path 301s first (RootUrlGrammarTest owns that).
+            // job (§A4 matrix); a rootless tail now 404s instead (RootUrlGrammarTest owns that).
             client.get("/docs/main/no/such/page").status shouldBe HttpStatusCode.OK
         }
     }
@@ -135,16 +135,18 @@ class RestRoutingTest : FunSpec({
     test("by-path resolves canonical AND alias paths; the alias response carries the CURRENT canonical url") {
         restTest(Fixtures.demoDocs, seed) {
             // deploy-guide.md declares redirect_from: [/old/deployment.md] -> alias `old/deployment`.
-            val aliased = client.get("/api/v1/pages/by-path/old/deployment")
+            val aliased = client.get("/api/v1/pages/by-path/main/old/deployment")
             aliased.status shouldBe HttpStatusCode.OK
             val body = Json.parseToJsonElement(aliased.bodyAsText()).jsonObject
             body.getValue("id").jsonPrimitive.content shouldBe deployGuideId
             body.getValue("url").jsonPrimitive.content shouldBe "/docs/main/guides/deploy-guide"
 
-            // Both the root-qualified and the legacy rootless tail resolve (D-C3-3).
+            // The root segment is REQUIRED: the same tail without it names no page. This is the
+            // second in-file falsifier for the by-path fallback's death, and it is what makes
+            // deleting the shadow machinery safe (nothing else observes that ordering).
             client.get("/api/v1/pages/by-path/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
-            client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.OK
-            client.get("/api/v1/pages/by-path/no/such/page").status shouldBe HttpStatusCode.NotFound
+            client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.NotFound
+            client.get("/api/v1/pages/by-path/main/no/such/page").status shouldBe HttpStatusCode.NotFound
         }
     }
 
@@ -193,7 +195,7 @@ class RestRoutingTest : FunSpec({
                 api.getValue("url") shouldBe JsonNull
 
                 // /browse of the loser's FILE path redirects to the permalink — its one durable URL.
-                val browse = client.get("/browse/a-b.md")
+                val browse = client.get("/browse/main/a-b.md")
                 browse.status shouldBe HttpStatusCode.Found
                 browse.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}"
 

@@ -50,6 +50,21 @@ class ShellSecurityHeadersTest : FunSpec({
         }
     }
 
+    test("the 404-with-shell-body answer carries the same headers as the 200 shell") {
+        restTest(Fixtures.demoDocs) {
+            // A tail naming no registered root answers 404 with the shell BODY, so it is a document
+            // the browser renders, and the plugin gates on content type alone, never on status. A
+            // shell served without its CSP is the C1a stored-XSS surface reopening on a silent path.
+            // `restClient()` (not the default `client`) because that one FOLLOWS redirects, which
+            // would let any 404-shell at the end of a chain satisfy this row instead of the arm named.
+            val response = restClient().get("/docs/guides/deploy-guide")
+            response.status shouldBe HttpStatusCode.NotFound
+            assertFullShellCsp(response.headers["Content-Security-Policy"])
+            response.headers["Referrer-Policy"] shouldBe "strict-origin-when-cross-origin"
+            response.headers["X-Content-Type-Options"] shouldBe "nosniff"
+        }
+    }
+
     test("the script-src hash equals a fresh sha256 of the served shell's inline block (not a constant)") {
         restTest(Fixtures.demoDocs) {
             val csp = client.get("/docs/main/anything").headers["Content-Security-Policy"]

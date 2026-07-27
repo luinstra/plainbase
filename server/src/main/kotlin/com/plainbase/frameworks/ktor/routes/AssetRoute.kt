@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -13,9 +12,9 @@ import io.ktor.server.routing.get
 /**
  * `GET /assets/{root}/{path}` (§A4 + C3): serves any non-`.md`, non-ignored file from the content
  * tree, plus the SPA's own embedded bundle under `static/assets/`. The root grammar mirrors
- * `/docs` (ADR-0011 D3): a first segment naming a known registry root scopes the remainder; any
- * other tail is a legacy main-relative asset path and 301s to `/assets/main/{tail}`, query
- * preserved. The bundle check stays FIRST and root-BLIND on the full tail (see below).
+ * `/docs`: a first segment naming a known registry root scopes the remainder; any other tail
+ * addresses no root and therefore no asset, and 404s. The bundle check stays FIRST and root-BLIND
+ * on the full tail (see below).
  *
  * Security path (frozen, chunk 1.5 rules): the RAW url tail → `PercentCoding.decodeOnce` (the one
  * decoder; `%2F`, malformed escapes, invalid UTF-8 all rejected) → `TreePath` (NFC; traversal and
@@ -93,12 +92,11 @@ fun Route.assetRoute(ctx: RouteContext) {
                 call.respondBytes(bundled, assetContentType(decoded.name))
                 return@guarded
             }
-            // The C3 root grammar, mirroring /docs: a non-root first segment is a legacy
-            // main-relative asset path (301, raw tail so encoding survives, query preserved;
-            // pre-gate is leak-free - the root decision is config topology only). A bare known
-            // root names no asset.
+            // The root grammar, mirroring /docs: a first segment that names no registered root names
+            // no asset either, and a bare known root names none. Both are the same 404 - refusing to
+            // guess a root is config topology only, so it stays leak-free.
             val (root, path) = splitRootTail(decoded, ctx.roots)
-                ?: return@guarded call.respondRedirectPreservingQuery("/assets/${RootName.MAIN}/$raw", permanent = true)
+                ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${decoded.value}")
             if (path == null) {
                 return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${decoded.value}")
             }

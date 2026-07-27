@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
@@ -21,7 +20,7 @@ import io.ktor.server.routing.route
  *  - `GET /api/v1/pages/by-path/{path}` — identical shape; `{path}` is the URL-slugified
  *    `/docs/`-relative form INCLUDING the root segment (`main/guides/deploy-guide`), percent-decoded
  *    ONCE (PB-LINK-1), matched case-sensitively against canonical paths first, then the alias
- *    registry. A legacy rootless tail resolves under main (C3, D-C3-3).
+ *    registry. The root segment is REQUIRED: a rootless tail names no page → 404 `page_not_found`.
  *  - `GET /api/v1/pages/{id}/html` — sanitized HTML + the document-order `headings` array.
  *  - `GET /api/v1/pages/{id}/validate-links` — the page's broken links + anchors (PB-READ-2, frozen).
  *  - `GET /api/v1/pages/{id}/metadata` — the server-derived metadata projection (PB-READ-2, frozen).
@@ -57,8 +56,10 @@ private fun Route.byPathRoute(ctx: RouteContext) {
                 )
             val decoded = decodedTreePath(raw)
                 ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_PATH, "Not a valid page path: '$raw'")
-            val (root, path) = splitRootTail(decoded, ctx.roots) ?: (RootName.MAIN to decoded)
-            val payload = path?.let { ctx.read.pageByUrlPath(principal, root, it) }
+            // Three ways to address nothing, one answer: no root in the first segment, no remainder after
+            // it, or no page there. A tail that names no root is NOT resolved under the primary.
+            val payload = splitRootTail(decoded, ctx.roots)
+                ?.let { (root, path) -> path?.let { ctx.read.pageByUrlPath(principal, root, it) } }
                 ?: return@guarded call.respondError(
                     HttpStatusCode.NotFound,
                     ErrorCodes.PAGE_NOT_FOUND,

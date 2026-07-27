@@ -39,9 +39,12 @@ class ProposalRouteTest : FunSpec({
     val json = ContentType.Application.Json
     suspend fun HttpResponse.body(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject
 
-    /** Reads an existing page's id + content_hash via the REST read path (the edit base the agent proposes against). */
+    /**
+     * Reads an existing page's id + content_hash via the REST read path (the edit base the agent proposes
+     * against). [slug] is root-relative; `by-path` needs the root segment, and these fixtures are single-root.
+     */
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.page(slug: String): Pair<String, String> {
-        val body = client.get("/api/v1/pages/by-path/$slug").body()
+        val body = client.get("/api/v1/pages/by-path/main/$slug").body()
         return body.getValue("id").jsonPrimitive.content to body.getValue("content_hash").jsonPrimitive.content
     }
 

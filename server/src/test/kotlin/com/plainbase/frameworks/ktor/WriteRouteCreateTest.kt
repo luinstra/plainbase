@@ -324,7 +324,7 @@ class WriteRouteCreateTest : FunSpec({
             java.nio.file.Files.write(tree.resolve("residue.md"), ByteArray(0))
             writeRestTest(tree, idProvider = idProvider()) { harness ->
                 // (b) The rebuild at harness init did NOT fail; the residue is a legitimately-indexed page.
-                val read = client.get("/api/v1/pages/by-path/residue")
+                val read = client.get("/api/v1/pages/by-path/main/residue")
                 read.status shouldBe HttpStatusCode.OK
                 read.obj().getValue("path").jsonPrimitive.content shouldBe "residue.md"
 
@@ -705,7 +705,7 @@ class WriteRouteCreateTest : FunSpec({
                 countFiles(harness.root) shouldBe before // nothing written (no foo.md)
 
                 // The existing page is NOT displaced — it still answers at /docs/foo.
-                val owner = client.get("/api/v1/pages/by-path/foo")
+                val owner = client.get("/api/v1/pages/by-path/main/foo")
                 owner.status shouldBe HttpStatusCode.OK
                 owner.obj().getValue("path").jsonPrimitive.content shouldBe "old.md"
 
@@ -807,7 +807,7 @@ class WriteRouteCreateTest : FunSpec({
                     countFiles(harness.root) shouldBe before // nothing written
 
                     // The existing page keeps its canonical URL — never displaced by the (rejected) create.
-                    val owner = client.get("/api/v1/pages/by-path/foo/old")
+                    val owner = client.get("/api/v1/pages/by-path/main/foo/old")
                     owner.status shouldBe HttpStatusCode.OK
                     owner.obj().getValue("path").jsonPrimitive.content shouldBe "foo/old.md"
                 }
@@ -841,7 +841,7 @@ class WriteRouteCreateTest : FunSpec({
                 countFiles(harness.root) shouldBe before // nothing written
 
                 // The alias is intact: /docs/bar still resolves to home.md.
-                val alias = client.get("/api/v1/pages/by-path/bar")
+                val alias = client.get("/api/v1/pages/by-path/main/bar")
                 alias.status shouldBe HttpStatusCode.OK
                 alias.obj().getValue("path").jsonPrimitive.content shouldBe "home.md"
             }

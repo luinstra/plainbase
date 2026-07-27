@@ -84,7 +84,7 @@ class ReadAuthzRouteTest : FunSpec({
     }
 
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.docId(): String =
-        Json.parseToJsonElement(client.get("/api/v1/pages/by-path/doc").bodyAsText())
+        Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/doc").bodyAsText())
             .jsonObject.getValue("id").jsonPrimitive.content
 
     test("enforced permalink auth defers registered and unregistered root lookup until after checkRead") {
