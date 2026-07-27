@@ -91,6 +91,20 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
+    test("the tree's `primary` flag is the REGISTRY's primary, never the list's first entry") {
+        // Declared extra-FIRST on purpose. D7 order is the operator's, so `roots[0]` is not the primary, and this is
+        // the only row in the tree that separates the three wrong implementations from the right one: a constant
+        // `true` reads ["true","true"], a constant `false` reads ["false","false"], and a `roots[0]` proxy reads
+        // ["true","false"]. The single-root goldens cannot see the constant-`true` or `roots[0]` arms, which is why
+        // this row exists; a constant `false` they DO catch, since `golden/rest/tree.json` now pins `"primary": true`.
+        twoRoots { main, extra ->
+            multiRootTest(listOf(testRoot("extra", extra), testRoot("main", main))) { _ ->
+                treeRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("extra", "main")
+                treeRoots().map { it.jsonObject.getValue("primary").jsonPrimitive.content } shouldContainExactly listOf("false", "true")
+            }
+        }
+    }
+
     // ---- the mid-run vanish: skip, carry, mark - and DELETE NOTHING -------------------------------
 
     test("an extra root vanishing mid-run is marked, its section is CARRIED, and no durable row is deleted for it") {

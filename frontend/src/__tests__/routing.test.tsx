@@ -59,7 +59,7 @@ function htmlResponse(id: string, url: string | null, title: string, root = "mai
   };
 }
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 // A root-level README child — the fixture-backed smoke suite can't isolate readme-only at
 // the root (demo-docs carries an index.md too), so the readme branch is mocked here.
@@ -69,6 +69,7 @@ const rootReadmeTree: TreeResponse = {
       root: "main",
       available: true,
       editable: true,
+      primary: true,
       tree: {
         type: "folder",
         name: "",
@@ -97,6 +98,7 @@ function hubEntry(root: string, id: string): TreeResponse["roots"][number] {
     root,
     available: true,
     editable: true,
+    primary: root === "main",
     tree: {
       type: "folder",
       name: "",

@@ -22,8 +22,8 @@ const HANDBOOK_PERMALINK = `/p/handbook/${PAGE_ID}`;
 
 const tree: TreeResponse = {
   roots: [
-    { root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
-    { root: "handbook", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
+    { root: "handbook", available: true, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
   ],
 };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };

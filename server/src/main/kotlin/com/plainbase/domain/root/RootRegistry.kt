@@ -27,12 +27,33 @@ class RootRegistry private constructor(
      * [roots], where primary sits wherever config declared it. Exists so the per-root wiring folds over EXTRAS
      * and primary's entry is constructed explicitly, instead of a fold re-selecting primary by name (the C4
      * HistoryModule bug: primary's arm short-circuited to a single that had drifted mode-blind).
+     *
+     * Partitions through [isPrimary] so this file compares primary's name in exactly ONE place. Safe from an
+     * initializer: [isPrimary] reads only [primary], a constructor property.
      */
-    val extras: List<Root> = roots.filter { it.name != primary.name }
+    val extras: List<Root> = roots.filterNot(::isPrimary)
 
     private val rootsByName: Map<RootName, Root> = roots.associateBy { it.name }
 
     fun byName(name: RootName): Root? = rootsByName[name]
+
+    /**
+     * Whether [root] is the primary, ANSWERED BY THE MODEL. Expects a member of [roots]: the check is by NAME,
+     * so a `Root` built outside this registry and named like the primary answers true. Comparing names rather
+     * than instances is deliberate, since [Root] is a data class and `===` would pin callers to the snapshot's
+     * object identity for no gain.
+     *
+     * Exists for the wire projection (`TreeJsonCache` emits `RootTreeDto.primary`), which must report
+     * primary-ness and cannot use the remedy `RootWiringArchitectureTest`'s Tier 1 prescribes: `listOf(primary)
+     * + extras` reorders the roots and Tier 3 bans it. So the projection asks the model instead.
+     *
+     * **This does NOT make the Tier-1 ban self-enforcing, and an earlier draft of this KDoc claimed it did.**
+     * The ban survives because those regexes require a QUALIFIED `x.primary.name` receiver, which the
+     * unqualified comparison here (and in [extras], which predates it) never had. What DOES constrain this
+     * method is that its call sites are ledgered by `RootWiringArchitectureTest`, because a per-root fold
+     * branching on it would re-spell the C4 bug in a shape Tier 1 cannot see.
+     */
+    fun isPrimary(root: Root): Boolean = root.name == primary.name
 
     /**
      * [name]'s D7 rank in [roots] (-1 when unregistered): the deterministic order SOURCE precedence

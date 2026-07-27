@@ -60,7 +60,16 @@ class TreeJsonCache(
                     // `editable` is pure CONFIG (the registry's, not the availability holder's): a root that is down
                     // is still a read-only or a writable root, and conflating the two would tell the SPA that every
                     // unmounted disk had become editable.
-                    RootTreeDto(root = root.name.value, available = serving, editable = root.editable, tree = tree.toDto())
+                    RootTreeDto(
+                        root = root.name.value,
+                        available = serving,
+                        editable = root.editable,
+                        // The REGISTRY decides, never the list position: D7 order is config's, so primary can sit anywhere.
+                        // Asked, not re-derived - `root.name == registry.primary.name` here is the exact shape
+                        // RootWiringArchitectureTest's Tier 1 bans, and that ban keeps zero exemptions.
+                        primary = registry.isPrimary(root),
+                        tree = tree.toDto(),
+                    )
                 },
             ),
         )

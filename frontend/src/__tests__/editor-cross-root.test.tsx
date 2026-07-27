@@ -32,6 +32,7 @@ const twoRoots: TreeResponse = {
     root,
     available: true,
     editable: true,
+    primary: root === "main",
     tree: { type: "folder", name: "", title: null, description: null, path: "", url: `/docs/${root}`, page_count: 0, children: [] },
   })),
 };

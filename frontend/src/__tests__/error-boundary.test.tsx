@@ -27,7 +27,7 @@ vi.mock("../components/PageView", async (importOriginal) => {
   };
 });
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 const ANON_SESSION = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
 
 function renderAt(initialPath: string) {

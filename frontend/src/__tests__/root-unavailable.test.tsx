@@ -25,13 +25,13 @@ const PATH = "main/guides/deploy-guide";
 const PAGE_URL = "/docs/main/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 /** The tree a down root actually ships: LISTED (it is configured) with an EMPTY subtree - so nothing under
  *  `/docs/handbook` can be found by folder lookup, and only the root url space still names it. */
 const outageTree: TreeResponse = {
   roots: [
     ...emptyTree.roots,
-    { root: "handbook", available: false, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "handbook", available: false, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
   ],
 };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };

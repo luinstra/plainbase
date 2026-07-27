@@ -292,7 +292,7 @@ data class TreeResponse(val roots: List<RootTreeDto>)
 
 /**
  * One root's tree entry: the validated root-name slug, whether it is currently SERVING, whether it accepts
- * WRITES, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
+ * WRITES, whether it is the PRIMARY, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
  * interface so the polymorphic serializer emits the `type` discriminator on the root exactly like on every child
  * (the pre-C3 TreeResponse rule, unchanged).
  *
@@ -307,9 +307,14 @@ data class TreeResponse(val roots: List<RootTreeDto>)
  * add` defaults an extra root to `editable = false`, which makes that the DEFAULT experience of a CLI-added root,
  * not an exotic one. Config, not authorization: it says what the TOPOLOGY allows, never what this principal may do
  * (the 403 remains the authority, and the client's buffer-preserving 403 path remains the backstop).
+ *
+ * [primary] flags the reserved primary root (ADR-0011 D1). It is on the wire because the primary is NOT
+ * `roots[0]`: D7 order is the operator's config order, so it sits wherever config declared it, and a client
+ * deriving it positionally is wrong on any install that declared its primary second. Exactly one entry carries
+ * `true`, guaranteed by `RootRegistry`'s construction-time resolution rather than by a search here.
  */
 @Serializable
-data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val tree: TreeNodeDto)
+data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val primary: Boolean, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable

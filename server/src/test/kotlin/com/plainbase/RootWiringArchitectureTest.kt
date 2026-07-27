@@ -102,12 +102,43 @@ class RootWiringArchitectureTest : FunSpec({
             val code = stripComments(file.readText())
             registryPrimaryComparisons.flatMap { pattern -> pattern.findAll(code).map { it.value } }
                 .map {
-                    "${mainRoot.relativize(file)}: '$it' re-derives primary inside a consumer. Take primary from " +
-                        "`registry.primary` and fold `registry.extras` - a map arm that short-circuits the primary root by name is " +
-                        "the C4 HistoryModule bug, where the primary root silently ignored its own `history` knob."
+                    "${mainRoot.relativize(file)}: '$it' re-derives primary inside a consumer. A map arm that " +
+                        "short-circuits the primary root by name is the C4 HistoryModule bug, where the primary root " +
+                        "silently ignored its own `history` knob. For WIRING, take primary from `registry.primary` and " +
+                        "fold `registry.extras`. For an order-preserving PROJECTION, that advice does not apply (it " +
+                        "yields `listOf(primary) + extras`, which Tier 3 below bans): ask `registry.isPrimary(root)`, " +
+                        "which is ledgered by the next test."
                 }
         }
         violations.shouldBeEmpty()
+    }
+
+    // `isPrimary` answers the Tier-1 question through the MODEL, which is legitimate for a projection and is why
+    // TreeJsonCache may emit `RootTreeDto.primary`. But it is also a per-root boolean, so `if (registry.isPrimary(root))
+    // ... else ...` re-spells the C4 arm in a shape Tier 1 cannot see: its regexes need a qualified `.primary.name`
+    // receiver and this call has none. Two review seats filed that as blocking. The capability therefore carries the
+    // same LEDGER discipline as the Tier-2 constant: allowed where recorded, at an exact count, and a new caller has to
+    // come here and say why. The DEFINITION is excluded - only call sites are counted.
+    val isPrimaryCallSiteLedger = mapOf("TreeJsonCache.kt" to 1)
+    val isPrimaryCall = Regex("""\bisPrimary\s*\(""")
+    val isPrimaryDefinition = Regex("""fun\s+isPrimary\s*\(""")
+
+    test("every `registry.isPrimary(...)` call site is ledgered: the projection may ask, a per-root fold may not") {
+        val counts = files.associate { file ->
+            val code = stripComments(file.readText())
+            file.name to isPrimaryCall.findAll(code).count() - isPrimaryDefinition.findAll(code).count()
+        }.filterValues { it > 0 }
+
+        withClue(
+            "asking the model is fine for a PROJECTION that must emit primary-ness. It is NOT fine for a per-root " +
+                "fold: `if (registry.isPrimary(root)) ... else ...` is the C4 HistoryModule arm wearing a different " +
+                "spelling, and Tier 1 cannot see it. A new call site must be added here with a reason.",
+        ) {
+            (counts.keys - isPrimaryCallSiteLedger.keys).shouldBeEmpty()
+            isPrimaryCallSiteLedger.filter { (file, expected) -> counts.getOrDefault(file, 0) != expected }
+                .map { (file, expected) -> "$file: ${counts.getOrDefault(file, 0)} call(s), ledger says $expected" }
+                .shouldBeEmpty()
+        }
     }
 
     // TIER 3 - the banned HOIST (multi-root C5, D-C5-4). `listOf(primary) + extras` forces primary to rank 0, silently

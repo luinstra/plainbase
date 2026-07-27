@@ -9,7 +9,7 @@ import { createAppRouter } from "../router";
 
 const MEETING_BODY = PAGE_TEMPLATES.find((t) => t.id === "meeting")!.body;
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W6 new-page creation (D-2 acceptance #4). `POST /api/v1/pages` returns the minted id + the
@@ -234,6 +234,7 @@ describe("W6 new-page creation", () => {
           root: "extra",
           available: true,
           editable: true,
+          primary: false,
           tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/extra", page_count: 1, children: [] },
         },
       ],

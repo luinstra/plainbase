@@ -21,8 +21,8 @@ const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 /** `main` (editable, as every legacy install runs) + `handbook` (read-only, as `root add` produces). */
 const tree: TreeResponse = {
   roots: [
-    { root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
-    { root: "handbook", available: true, editable: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
+    { root: "handbook", available: true, editable: false, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
   ],
 };
 

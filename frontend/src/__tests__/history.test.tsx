@@ -7,7 +7,7 @@ import type { CommitDto, PageResponse, TreeResponse } from "../api/types";
 import { MAX_DIFF_RENDER_CHARS } from "../lib/unifiedDiff";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
 
 /**
  * W7 history UI. The AFFORDANCE tests render the READ view and assert ONLY on `PageResponse.commit`,
