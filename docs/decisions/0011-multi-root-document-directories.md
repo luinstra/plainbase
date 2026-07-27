@@ -1,8 +1,9 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted, SUPERSEDED IN PART by
-  [ADR-0012](0012-per-root-page-identity.md) (see the superseding note directly below). D1-D18 were
-  frozen at C4 merge; the later C5 chunk did re-open D2 and D17.
+- **Status:** Accepted, SUPERSEDED IN PART twice - by
+  [ADR-0012](0012-per-root-page-identity.md) on page identity, and by the URL-grammar change recorded
+  in the second note below on D3 (see both notes directly below). D1-D18 were frozen at C4 merge; the
+  later C5 chunk re-opened D2 and D17, and the URL-grammar work re-opened D3.
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -35,6 +36,41 @@ the original reasoning stays legible; where the frozen text and this note disagr
 Authority: the C5 commits on `multi-root` (`d934220` plus its four follow-ups, PR #14). The
 replacement decision record is [ADR-0012](0012-per-root-page-identity.md); read it for current
 behavior, and this note only as the in-place warning on D2 and D17.
+
+## Superseded in part: the URL grammar has no rootless fallback (2026-07-26)
+
+**D3's legacy 301 is gone, and so is every piece of machinery that existed to make it safe.** A URL whose
+first segment does not name a REGISTERED root addresses nothing and is answered as missing: 404 with the
+SPA shell body on `/docs`, 404 on `/assets` and `/browse`, `page_not_found` on `by-path`. The one
+exception is the SPA's own embedded bundle, which `/assets` serves from the root-BLIND bundle-wins check
+that precedes the root parse (C1a item 1) - `RootUrlGrammarTest` pins that half alongside the 404s. It is
+never reinterpreted as a path under the primary. Read every "legacy tail", "two-hop chain" and
+"`/docs/{path}` -> 301" statement below as the C3 design, not as today's. Alias redirects are untouched:
+a moved page, or one carrying `redirect_from`, still 301s WITHIN its root, one hop.
+
+Three of D3's recorded consequences go with it, because each existed only to contain the fallback:
+
+- **D3(a) and the reserved-`main` boot refusal are deleted.** A top-level `main` entry in the primary
+  root was ambiguous only against a rootless `/docs/main/...` link. With no rootless URLs it serves at
+  `/docs/main/main/...`, and nothing refuses, warns, or needs renaming.
+- **D3(b)'s residual runtime shadow no longer exists, and neither does D-C5-6's split of the shadow check
+  between `root add` and boot** (the `--force` override, the boot WARN, and the shared `topLevelIndex`
+  both were computed from). Registering a root cannot change what an existing URL resolves to, so there
+  is nothing left to detect: each root's URL space is its own.
+- **What replaces them is a reservation on root NAMES, checked at REGISTRATION** - the product's own
+  top-level segments, the `pb-`/`plainbase-` prefixes and the `v[0-9]+` shape, over a tightened name
+  grammar (`[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2-32 chars). It refuses operator CONFIG, never author content,
+  which is why it can fail closed without bricking a restart.
+
+The cost is stated rather than absorbed: **every circulating v0.1.0 deep link now 404s.** Avoiding exactly
+that was D3's purpose, and the trade is deliberate - an unconditional grammar with no reinterpretation, in
+exchange for link rot at one upgrade boundary, mitigable at a reverse proxy. The "URL shape changes for
+every existing link (`/docs/{path}` -> 301)" trade-off recorded in Consequences below understates it for
+the same reason.
+
+Authority: the URL-grammar commits on `url-grammar-top-level-roots` (`ab7b025` through `6671077`), whose
+tests are `RootUrlGrammarTest` and `RestRedirectTest`. The operator-facing half is
+[`docs/operating-plainbase.md`](../operating-plainbase.md).
 
 ## Context
 

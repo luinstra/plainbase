@@ -83,39 +83,39 @@ migration, platform support), [operating-plainbase.md](operating-plainbase.md#ba
 object-mode backup guidance, and [ADR-0010](decisions/0010-object-storage-backend.md) for the design
 record.
 
-## `main` is a reserved URL segment - in EVERY install
+## Root names are top-level URL segments
 
-**This applies whether or not you configure roots at all.** Page URLs are `/docs/{root}/{path}`, and
-`main` is the name of the root your `CONTENT_DIR` becomes. So a top-level URL segment `main` inside
-that tree is ambiguous with the root segment itself, and **`serve` refuses to start** while one
-exists:
+Page URLs are `/docs/{root}/{path}`, so a root's name IS a top-level URL segment on this server. Two
+rules follow from that - one on the SHAPE of a name, one on the segments the product already owns or
+expects to grow into - and each is a refusal naming the offending root, at boot and at `plainbase root
+add` alike.
 
-```
-serve: REFUSING TO SERVE: the main root contains top-level URL segment 'main' - since multi-root
-(ADR-0011 D1/D3) 'main' is the RESERVED root segment, so an old /docs/main/... deep link is
-indistinguishable from a root-qualified URL and would silently re-resolve to the wrong page.
-Colliding entries: main/
-```
+**The shape.** A root name is a lowercase slug - `[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2 to 32 characters:
+letter-leading, digits and hyphens after it, no doubled or trailing hyphen, no dots or underscores. It
+also may not parse as a page id (a 32-hex or UUID string), which is what keeps `/p/{root}/{id}` from
+being ambiguous with the bare `/p/{id}` permalink.
 
-It is the **top-level segment** that is reserved, not the word: any of these trips it, and only in
-the main root (an extra root's `main/` folder is harmless - its URLs are `/docs/{extra}/main/...`).
+**The reserved segments.** No root may be named:
 
-- a top-level directory `main/` (or `Main/`, or anything else that slugifies to `main`),
-- a top-level page file `main.md` (its URL is `/docs/main/main`),
-- a top-level page whose frontmatter says `slug: main`,
-- a top-level folder whose `_folder.yaml` says `slug: main`,
-- a top-level asset path under `main/` (assets mirror the URL grammar).
+- one of Plainbase's own top-level URLs, live or foreseeable - `api`, `assets`, `browse`, `healthz`,
+  `p`, `fonts`, the SPA's `admin`, `new` and `review`, and the auth/ops/discovery vocabulary
+  (`login`, `search`, `session`, `settings`, `static`, `metrics`, `well-known` and the rest);
+  `ReservedSegments.kt` holds the list in full and it is deliberately generous, because growing it later
+  would boot-refuse an install that had already taken the new word;
+- anything beginning `pb-` or `plainbase-`, or the bare stems `pb` and `plainbase`;
+- a `v` followed by digits and nothing else (`v1`, `v2`, `v10`), which keeps the API-version namespace
+  free without enumerating it. `v2beta` and `v1alpha1` are legal names and are NOT reserved.
 
-Nested ones are fine: `guides/main/` is `/docs/main/guides/main/...`, unambiguous.
+Corpus vocabulary is not reserved: `guides`, `notes`, `handbook`, `changelog`, `team` are all fine, and
+so is `docs`. The rule fires wherever a root is registered - `plainbase.conf`, `DATA_DIR/roots.conf`, and
+`plainbase root add`, which refuses before it writes anything (see
+[the CLI](#the-cli-and-the-two-files) below). A reserved name already sitting in a config file makes that
+config unloadable, so `plainbase root remove` cannot dig you out either: edit the file that declares it.
 
-**The remedy is to rename the offending entry** - the directory, or the `slug:` that mints the
-segment - so no top-level URL segment is `main`. There is no config key to disable this: the
-reservation is deterministic, and a fresh corpus is refused exactly like an upgraded one.
-**Renaming permanently forfeits any circulating `/docs/main/...` deep links into that entry** (and
-their recorded aliases): after the rename those old links answer not-found instead of redirecting.
-A separate rule governs the names you may give extra roots. Plainbase reserves a set of top-level
-segments for its own URLs, and no root may take one, whether you declare it in `plainbase.conf` or
-add it with `plainbase root add` (see [the CLI](#the-cli-and-the-two-files) below).
+**Nothing in your CONTENT is reserved.** A top-level `main/` directory in the primary root, a `main.md`,
+a `slug: main` - all harmless. They serve at `/docs/main/main/...`, which is unambiguous because a URL
+carrying no root segment addresses nothing at all. An earlier revision of this feature refused to boot on
+that shape; it no longer does, and there is nothing to rename.
 
 ## Multiple document roots - the `roots {}` block
 
@@ -231,9 +231,11 @@ default, and what every config without a `roots {}` block produces) is compatibl
 Validation at boot (each failure is an actionable `serve:` refusal naming the offending root):
 
 - a root named `main` is **required** (it is the reserved primary);
-- names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars), and may **not** be page-id-shaped
-  (a 32-hex string a page id could parse) - such a name is a boot **refusal**, since `/p/{root}/{id}`
-  must never be ambiguous with the bare `/p/{id}` permalink;
+- names are lowercase slugs (`[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2-32 chars), may **not** be page-id-shaped
+  (a 32-hex string a page id could parse), and may not take a reserved segment (`api`, `assets`, `new`,
+  the `pb-`/`plainbase-` prefixes, the `v[0-9]+` version shape, and the rest of the list). Each is a boot
+  **refusal**; the full rule is in
+  [Root names are top-level URL segments](#root-names-are-top-level-url-segments) above;
 - `main`'s path must exist and be a **readable and searchable** (`r-x`) directory - a missing or
   unreadable `main` is a boot **refusal**, never a degraded 503 root (see
   [When a root is not there](#when-a-root-is-not-there) below). The identical rule applies to
@@ -349,9 +351,8 @@ Rules:
 ## When a root is not there
 
 **`main` is the exception, and it is not a small one: a `main` that is not there at boot REFUSES to
-start.** There is no degraded mode for it - main is the root the whole URL grammar, the SPA shell and
-every legacy redirect are anchored on, so `serve` fails closed instead of coming up with an empty
-corpus:
+start.** There is no degraded mode for it - main is the root the whole URL grammar and the SPA shell are
+anchored on, so `serve` fails closed instead of coming up with an empty corpus:
 
 ```
 serve: roots.main.path does not exist or is not a directory: /srv/docs

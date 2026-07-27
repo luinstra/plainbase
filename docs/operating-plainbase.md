@@ -9,76 +9,81 @@ For **single-sign-on behind a reverse proxy** (`auth.mode=proxy`), see
 [`deploy/reverse-proxy-sso.md`](deploy/reverse-proxy-sso.md) and the standalone Caddy + oauth2-proxy
 reference stack under `deploy/proxy/`.
 
-## Upgrading from v0.1.0: page URLs move, and one corpus shape refuses to boot
+## Upgrading from v0.1.0: every circulating `/docs`, `/assets` and `/browse` URL breaks
 
 **Read this before upgrading a running install, even if you never intend to configure a second root.**
 Multi-root ([ADR-0011](decisions/0011-multi-root-document-directories.md)) changed the URL grammar for
-every install: your `CONTENT_DIR` is now a root, its name is `main`, and page URLs carry it.
+every install: your `CONTENT_DIR` is now a root, its name is `main`, and **every PATH url that addresses
+a page carries the root name**. Id-addressed surfaces are the exception, and the table below says which.
 
 ```
-/docs/welcome            →  /docs/main/welcome            301 (permanent), query preserved
-/docs/guides/deploy      →  /docs/main/guides/deploy      301
-/assets/img/logo.png     →  /assets/main/img/logo.png     301
+/docs/welcome              →  /docs/main/welcome
+/docs/guides/deploy        →  /docs/main/guides/deploy
+/assets/img/logo.png       →  /assets/main/img/logo.png
+/browse/guides/deploy.md   →  /browse/main/guides/deploy.md
 ```
 
-**1. Every circulating `/docs/...` link becomes a redirect, not a break.** The old shape keeps
-working: any first segment under `/docs/` that does not name a configured root is treated as a legacy
-main-relative path and **301**s to its canonical `/docs/main/...` form, preserving the query string.
-Bookmarks, wiki links, chat links and search-engine results all still land on the page. What changes
-is the URL your users end up on, what they copy out of the address bar, and what any link-checker or
-analytics you run now reports as moved. A legacy link that *also* hits a `redirect_from` alias chains
-two hops (legacy 301, then the alias 301) - accepted, and still lands.
+**1. The old URLs 404. They are not redirected.** This is the single largest operator-visible effect of
+the upgrade, and no setting softens it. There is no rootless shape: a first segment that does not name a
+configured root names no root, and there is no such thing as a page outside a root, so the address is
+answered as missing rather than guessed at under `main`.
 
-**No agent/API surface pays a legacy redirect hop**, deliberately: `GET /api/v1/pages/by-path/{path}`
-and `GET /browse/{path}` both resolve a legacy tail under `main` directly. `by-path` answers the page
-itself (200, never a 301), and its `url` field carries the new canonical form. `/browse` is a lookup
-that has always answered a redirect - it still does, and the **302 it issues already points at the
-canonical `/docs/main/...` URL**, so a legacy `/browse/...` costs one hop, not two. The canonical
-permalink is now the rooted `/p/{root}/{id}`; the bare `/p/{id}` still resolves (302 to the owning
-root, or 300 Multiple Choices when several roots hold the id).
+| A v0.1.0 URL | Now answers |
+|---|---|
+| `/docs/...` | **404**, carrying the SPA shell body - the tab shows the not-found view, not raw JSON |
+| `/assets/...` | **404** |
+| `/browse/...` | **404** (the root-qualified form still **302**s to the canonical page URL, query preserved) |
+| `GET /api/v1/pages/by-path/...` | **404** `page_not_found` |
+| `/p/{id}` | **unchanged** - still resolves (302 to the owning root, or 300 Multiple Choices when several roots hold the id) |
 
-**2. A corpus with a top-level `main` entry will REFUSE to boot.** `main` is now a reserved URL
-segment, so a `content/main/` directory (or a top-level `main.md`, or a `slug: main`) makes an old
-`/docs/main/...` link indistinguishable from a root-qualified URL. `serve` exits 1 rather than
-silently re-resolve those links to the wrong page. **This is the one upgrade that can turn a working
-server into a failed start, so check for it first:**
+Bookmarks, wiki links, chat links and search-engine results into your docs break at once. Two things do
+NOT: **permalinks**, whose canonical form is now the rooted `/p/{root}/{id}` while the bare `/p/{id}`
+keeps resolving, and every **agent citation**, which is id-based and never carried a URL. Redirect
+aliases still work WITHIN a root - a page that moves, or one carrying `redirect_from`, still 301s from
+its old root-qualified URL to its current one, one hop.
 
-```
-# Top-level entries whose NAME mints the segment - any case, file or directory (an asset directory
-# counts; `Main/` and `MAIN.md` slugify to `main` exactly like `main/` does).
-find "$CONTENT_DIR" -maxdepth 1 \( -iname 'main' -o -iname 'main.md' \)
+**A 404 is not the worst case: a later `root add` can turn a dead link into the WRONG page.** A root's
+name IS the first segment of every URL inside it, so registering a root called `guides` - a perfectly
+legal name, since corpus vocabulary is not reserved - makes every circulating `/docs/guides/...` link
+resolve again, this time against whatever page sits at that path in the NEW root. The natural migration
+is the dangerous one: lift `content/guides/` out of `main` into its own root and the old tails match real
+files there, so the reader gets a confident 200 on a page nobody redirected them to. Nothing detects it -
+the name is legal, the address is well-formed, and the grammar resolved it exactly as specified. **So
+decide the fate of the old links before you name a root after a folder that used to sit at the top of
+`main`**, not after. This holds with or without a reverse proxy; if you run the rewrite rule below, the
+new name has to join its exclusion list too, or those links are sent to `/docs/main/guides/...` instead,
+where the content no longer is.
 
-# Any `slug:` override that mints it - quoted or bare, any case, frontmatter or _folder.yaml. A
-# folder whose `_folder.yaml` says `slug: main` is the shape a naive check misses: the override moves
-# it out of the URL space its directory name lives in, so the search above cannot see it at all.
-grep -rEil "^slug:[[:space:]]*['\"]?main['\"]?[[:space:]]*$" "$CONTENT_DIR" \
-  --include='*.md' --include='_folder.yaml'
-```
+If circulating links matter to you, the mitigation belongs at your reverse proxy rather than in
+Plainbase: rewrite a `/docs/{tail}` whose first segment is NOT one of your root names to
+`/docs/main/{tail}`, and the old shape keeps working for exactly as long as you keep the rule. Exclude
+the root names explicitly - a blanket rewrite turns a correct `/docs/main/welcome` into
+`/docs/main/main/welcome` - and re-check that exclusion list every time you add a root. Put the rule in
+place before the upgrade window and no reader meets the break at all.
 
-Both over-report (only a TOP-LEVEL segment is reserved - a nested `guides/main/` is fine), and that is
-the right direction for a pre-check to err in. **But a clean result does not prove a clean upgrade**,
-because the rule is not about spelling: it is about what a name SLUGIFIES to, and that equivalence
-class has no regex. A `slug:` with a trailing comment, a directory whose punctuation falls away in
-slugification - a grep only ever finds the spellings you thought to write down.
+**`/browse/` takes the identical rule. `/assets/` needs one more exclusion, or the SPA stops loading.**
+The app's own JavaScript and CSS are served from `/assets/index-<hash>.js` and `/assets/index-<hash>.css`,
+and Plainbase answers those from its embedded bundle in a check that runs BEFORE it looks at the first
+segment for a root name. Rewritten to `/assets/main/index-<hash>.js`, that check no longer matches, the
+request falls through to a content-asset lookup under `main`, and the browser gets a 404 for the script
+that boots the whole interface - a **401** if `auth.mode` is enforced, because that same check is what
+makes the bundle public to a visitor who has not signed in, so the login page cannot load either.
+Excluding root names does not save you: `index-abc123.js` is not a root name. **The discriminator is the dot** - the bundle emits flat `index-<hash>.js`/`.css` files and no root
+name may contain a dot - so the safe rule is *rewrite `/assets/{tail}` only when the first segment is
+dot-free and is not a root name*. The cost is that an asset that sat at the very top of your tree (`/assets/logo.png`) is not
+rewritten and stays broken; anything inside a folder, which is the normal case, is covered. Keying on the
+dot rather than on the file names also survives the next release, whose bundle hashes will differ.
 
-**So check the OUTCOME, not the precondition: boot the new binary and read what it says.** It costs
-one command, it answers the actual question, and it is the check to trust:
+**2. A top-level `main` entry in your CONTENT is harmless, and needs no pre-check.** An earlier revision
+of this feature refused to boot on a `content/main/` directory (or a top-level `main.md`, or a
+`slug: main`), because it made an old rootless `/docs/main/...` link indistinguishable from a
+root-qualified one. With rootless URLs gone there is nothing left to confuse it with: `content/main/x.md`
+serves at `/docs/main/main/x` and `serve` starts normally. Nothing needs renaming, and renaming on its
+account would break links for no reason.
 
-```
-# A scratch DATA_DIR and a spare port. The new binary reads your real content, builds its index, and
-# either serves or refuses. It writes nothing into CONTENT_DIR (only `adopt --write-ids` ever does)
-# and nothing into your real DATA_DIR, so the install still running is undisturbed. A v0.1.0 install
-# has no `roots {}` block yet, so the scratch boot sees the very topology your upgrade will.
-CONTENT_DIR="$CONTENT_DIR" DATA_DIR="$(mktemp -d)" PLAINBASE_PORT=8099 plainbase serve
-```
-
-It either comes up - the corpus is clean, stop it and upgrade for real - or it exits 1 with
-`REFUSING TO SERVE: ... Colliding entries: ...`, which names every offending entry it found. **That
-list is the remedy list.** The greps above only tell you where to start looking.
-
-The remedy is to rename the offending entry; there is no config key to disable the reservation. The
-full rule (every shape that trips it, and the deep-link consequence of renaming) is in
-[Configuration: `main` is a reserved URL segment](configuration.md#main-is-a-reserved-url-segment---in-every-install).
+What DOES refuse at boot is a reserved **root name** - a name you gave a root in `plainbase.conf` or with
+`plainbase root add`, never anything in your content tree. The full rule is in
+[Configuration: root names are top-level URL segments](configuration.md#root-names-are-top-level-url-segments).
 
 **Upgrading to per-root identity (schema v17): stop the old binary FIRST.** This release rewrites
 `id_map` to `UNIQUE(id, root)`. A pre-v17 binary does not understand the new constraint and runs its
@@ -205,8 +210,8 @@ serve: roots.main.path does not exist or is not a directory: /srv/docs
 serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
 ```
 
-Main is the root the URL grammar, the SPA shell and every legacy redirect are anchored on, so `serve`
-fails closed rather than come up serving an empty corpus. The same refusal covers a main it cannot
+Main is the root the URL grammar and the SPA shell are anchored on, so `serve` fails closed rather than
+come up serving an empty corpus. The same refusal covers a main it cannot
 read and traverse (`... is not readable/searchable: /srv/docs`). **So unmounting the volume that
 holds `main` does not buy you a degraded server with 503s - it buys you no server.** Restore the path
 or the permissions, then start. (Main vanishing while the server is already *running* is different:
