@@ -112,10 +112,9 @@ so is `docs`. The rule fires wherever a root is registered - `plainbase.conf`, `
 [the CLI](#the-cli-and-the-two-files) below). A reserved name already sitting in a config file makes that
 config unloadable, so `plainbase root remove` cannot dig you out either: edit the file that declares it.
 
-**Nothing in your CONTENT is reserved.** A top-level `main/` directory in the primary root, a `main.md`,
-a `slug: main` - all harmless. They serve at `/docs/main/main/...`, which is unambiguous because a URL
-carrying no root segment addresses nothing at all. An earlier revision of this feature refused to boot on
-that shape; it no longer does, and there is nothing to rename.
+**Nothing in your CONTENT is reserved.** The rule above governs the names you give ROOTS, and nothing
+else. A top-level `main/` directory in the primary root, a `main.md`, a `slug: main` are all ordinary
+content: they serve at `/docs/main/main/...`, under the root segment like everything else.
 
 ## Multiple document roots - the `roots {}` block
 

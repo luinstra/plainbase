@@ -55,22 +55,20 @@ Three of D3's recorded consequences go with it, because each existed only to con
   `/docs/main/main/...`, and nothing refuses, warns, or needs renaming.
 - **D3(b)'s residual runtime shadow no longer exists, and neither does D-C5-6's split of the shadow check
   between `root add` and boot** (the `--force` override, the boot WARN, and the shared `topLevelIndex`
-  both were computed from). Registering a root cannot change what an existing URL resolves to, so there
-  is nothing left to detect: each root's URL space is its own.
+  both were computed from). Registering a root cannot change what a ROOT-QUALIFIED URL resolves to, so
+  there is nothing left to detect: each root's URL space is its own.
 - **What replaces them is a reservation on root NAMES, checked at REGISTRATION** - the product's own
   top-level segments, the `pb-`/`plainbase-` prefixes and the `v[0-9]+` shape, over a tightened name
   grammar (`[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2-32 chars). It refuses operator CONFIG, never author content,
   which is why it can fail closed without bricking a restart.
 
-The cost is stated rather than absorbed: **every circulating v0.1.0 deep link now 404s.** Avoiding exactly
-that was D3's purpose, and the trade is deliberate - an unconditional grammar with no reinterpretation, in
-exchange for link rot at one upgrade boundary, mitigable at a reverse proxy. The "URL shape changes for
-every existing link (`/docs/{path}` -> 301)" trade-off recorded in Consequences below understates it for
-the same reason.
+D3 existed to keep circulating links working across the upgrade. Plainbase is pre-1.0 with no install
+base, so there is nothing to keep working and the trade costs nothing.
 
-Authority: the URL-grammar commits on `url-grammar-top-level-roots` (`ab7b025` through `6671077`), whose
-tests are `RootUrlGrammarTest` and `RestRedirectTest`. The operator-facing half is
-[`docs/operating-plainbase.md`](../operating-plainbase.md).
+Authority: the URL-grammar commits on `url-grammar-top-level-roots` (`ab7b025` through `992b2de`). The
+routing half is pinned by `RootUrlGrammarTest`, `RestRedirectTest` and
+`frontend/src/__tests__/folder-landing.test.tsx`; the name-reservation half by `RootNameTest`,
+`ReservedSegmentsTest`, `RootCommandTest` and `FrontendBundleTest`.
 
 ## Context
 
