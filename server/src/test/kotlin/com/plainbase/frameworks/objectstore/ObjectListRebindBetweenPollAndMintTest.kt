@@ -71,8 +71,8 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             // the latch records the new binding, and `onIdentityRebind` breaks the epoch, which revokes the token. It
             // lands AFTER the listing was taken and BEFORE the mint reads its observation stamp, which is the window
             // this source cannot close by ordering.
-            BindingLatch(world.topology).observe(RootName.MAIN, elsewhere)
-            world.retirements.revoke(RootName.MAIN)
+            BindingLatch(world.topology).observe(RootName.PRIMARY, elsewhere)
+            world.retirements.revoke(RootName.PRIMARY)
 
             world.builder().rebuild()
 

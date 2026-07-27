@@ -51,7 +51,7 @@ fun Route.previewRoute(ctx: RouteContext) {
             val root = call.request.queryParameters["root"]?.let { raw ->
                 RootName.registered(raw, ctx.roots)
                     ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "Unknown root: '$raw'")
-            } ?: RootName.MAIN
+            } ?: RootName.PRIMARY
 
             // (4) Single-renderer reuse against the current published snapshot (READ-ONLY, read-gated).
             val rendered = ctx.read.preview(principal, root, sourcePath, bytes)

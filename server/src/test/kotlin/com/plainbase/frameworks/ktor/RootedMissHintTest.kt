@@ -20,7 +20,7 @@ import java.nio.file.Path
 class RootedMissHintTest : FunSpec({
 
     val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val notes = RootName.require("notes")
     val other = RootName.require("other")
     val gone = TreePath.require("gone.md")

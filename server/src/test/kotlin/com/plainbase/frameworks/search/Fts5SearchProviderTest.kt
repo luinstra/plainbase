@@ -114,15 +114,15 @@ class Fts5SearchProviderTest : FunSpec({
             val two = pageDocuments(2, contentHash = "sha256:v2")
             provider.index(listOf(one, two))
             provider.indexedState().mapValues { it.value.contentHash } shouldBe
-                mapOf(rooted(1, RootName.MAIN) to "sha256:v1", rooted(2, RootName.MAIN) to "sha256:v2")
+                mapOf(rooted(1, RootName.PRIMARY) to "sha256:v1", rooted(2, RootName.PRIMARY) to "sha256:v2")
 
             provider.index(listOf(pageDocuments(1, contentHash = "sha256:v1b", path = "moved/page-1.md")))
-            val state = provider.indexedState().getValue(rooted(1, RootName.MAIN))
+            val state = provider.indexedState().getValue(rooted(1, RootName.PRIMARY))
             state.contentHash shouldBe "sha256:v1b"
             state.path.value shouldBe "moved/page-1.md"
 
-            provider.delete(listOf(rooted(2, RootName.MAIN)))
-            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.MAIN))
+            provider.delete(listOf(rooted(2, RootName.PRIMARY)))
+            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.PRIMARY))
         }
     }
 
@@ -145,7 +145,7 @@ class Fts5SearchProviderTest : FunSpec({
             provider.index(listOf(pageDocuments(1, preamble = "unique marker", sections = listOf("h" to "日本語ガイド"))))
             provider.search(query("unique")).total shouldBe 1L
             provider.search(query("ガイド")).total shouldBe 1L // trigram fallback leg
-            provider.delete(listOf(rooted(1, RootName.MAIN)))
+            provider.delete(listOf(rooted(1, RootName.PRIMARY)))
             provider.search(query("unique")).total shouldBe 0L
             provider.search(query("ガイド")).total shouldBe 0L
             provider.indexedState() shouldBe emptyMap()
@@ -157,7 +157,7 @@ class Fts5SearchProviderTest : FunSpec({
             val extraRoot = RootName.require("extra")
             val mainDocs = pageDocuments(
                 1,
-                root = RootName.MAIN,
+                root = RootName.PRIMARY,
                 preamble = "shared",
                 sections = listOf("s1" to "shared one", "s2" to "shared two"),
             )
@@ -172,8 +172,8 @@ class Fts5SearchProviderTest : FunSpec({
             // Indexing extraDocs then deletes mainDocs's just-inserted rows for id 1 before inserting its own, so
             // one page survives: total 3L not 6L and a single key. Rooted PK + rooted deletePage green it.
             provider.search(query("shared")).total shouldBe 6L
-            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.MAIN), rooted(1, extraRoot))
-            provider.search(query("one")).hits.single().root shouldBe RootName.MAIN
+            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.PRIMARY), rooted(1, extraRoot))
+            provider.search(query("one")).hits.single().root shouldBe RootName.PRIMARY
             provider.search(query("three")).hits.single().root shouldBe extraRoot
         }
     }
@@ -183,11 +183,11 @@ class Fts5SearchProviderTest : FunSpec({
             val extraRoot = RootName.require("extra")
             provider.rebuild(
                 sequenceOf(
-                    pageDocuments(1, root = RootName.MAIN, preamble = "carry probe"),
+                    pageDocuments(1, root = RootName.PRIMARY, preamble = "carry probe"),
                     pageDocuments(1, root = extraRoot, preamble = "carry probe"),
                 ),
             )
-            provider.rebuild(emptySequence(), retired = setOf(rooted(1, RootName.MAIN)))
+            provider.rebuild(emptySequence(), retired = setOf(rooted(1, RootName.PRIMARY)))
             // RED (back-out): kept -> bare `page_id NOT IN (?)` binding it.id. retired={(main,1)} collapses to
             // page_id IN (X), so NOT IN drops BOTH (main,1) and (extra,1) -> total 0L. Tuple-rooting kept greens it.
             provider.indexedState().keys shouldBe setOf(rooted(1, extraRoot))
@@ -201,13 +201,13 @@ class Fts5SearchProviderTest : FunSpec({
             val extraRoot = RootName.require("extra")
             provider.rebuild(sequenceOf(pageDocuments(1, root = extraRoot, preamble = "supersede probe")))
             // retired = emptySet(), NOT null: null skips carryUnretired entirely, which would make this a false green.
-            provider.rebuild(sequenceOf(pageDocuments(1, root = RootName.MAIN, preamble = "supersede probe")), retired = emptySet())
+            provider.rebuild(sequenceOf(pageDocuments(1, root = RootName.PRIMARY, preamble = "supersede probe")), retired = emptySet())
             // RED (back-out): notSuperseded -> bare `page_id NOT IN (SELECT page_id ... generation = ?)`. The fresh
             // main row's page_id X is in the subselect, so (extra,X) is NOT carried and drops -> total 1L. Tuple
             // -rooting notSuperseded greens it (this is the silent cross-root data-loss branch).
-            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.MAIN), rooted(1, extraRoot))
+            provider.indexedState().keys shouldBe setOf(rooted(1, RootName.PRIMARY), rooted(1, extraRoot))
             provider.search(query("supersede")).total shouldBe 2L
-            provider.search(query("supersede")).hits.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, extraRoot)
+            provider.search(query("supersede")).hits.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, extraRoot)
         }
     }
 
@@ -219,16 +219,16 @@ class Fts5SearchProviderTest : FunSpec({
             // so the score parity is by construction and the RED is deterministic on any machine.
             provider.index(
                 listOf(
-                    pageDocuments(1, root = RootName.MAIN, title = "Twin", preamble = "twin tiebreak"),
+                    pageDocuments(1, root = RootName.PRIMARY, title = "Twin", preamble = "twin tiebreak"),
                     pageDocuments(2, root = extraRoot, title = "Twin", preamble = "twin tiebreak"),
                 ),
             )
             // RED (back-out): ORDER BY -> score DESC, d.page_id, d.heading_id. Equal score + different page_ids
             // sorts by page_id -> [main(1), extra(2)] -> roots [MAIN, extra], failing shouldBe [extra, MAIN].
             // "extra" < "main" lexically, so adding d.root ahead of d.page_id greens it.
-            provider.search(query("twin", limit = 2)).hits.map { it.root } shouldBe listOf(extraRoot, RootName.MAIN)
+            provider.search(query("twin", limit = 2)).hits.map { it.root } shouldBe listOf(extraRoot, RootName.PRIMARY)
             provider.search(query("twin", limit = 1, offset = 0)).hits.map { it.root } shouldBe listOf(extraRoot)
-            provider.search(query("twin", limit = 1, offset = 1)).hits.map { it.root } shouldBe listOf(RootName.MAIN)
+            provider.search(query("twin", limit = 1, offset = 1)).hits.map { it.root } shouldBe listOf(RootName.PRIMARY)
         }
     }
 

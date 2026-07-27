@@ -50,7 +50,7 @@ class IndexBuilderHistoryCoherenceTest : FunSpec({
                 })
                 val v2 = "---\ntitle: Page\n---\n\n# Page\n\nversion two.\n"
                 val baseHash = h.builder.current.pageAt(before.rooted)!!.contentHash
-                val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, RootName.MAIN, tree, baseHash, v2.toByteArray()))
+                val outcome = pipeline.write(grantForTests(), WriteIntent(before.id, RootName.PRIMARY, tree, baseHash, v2.toByteArray()))
                 outcome.shouldBeWritten()
 
                 val newSha = exec.run(listOf("rev-parse", "HEAD")).stdoutText.trim()

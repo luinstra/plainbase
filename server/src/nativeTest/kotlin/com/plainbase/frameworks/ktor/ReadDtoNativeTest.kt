@@ -58,7 +58,7 @@ class ReadDtoNativeTest {
         // The emission proof (R8): the ONE definition of a permalink is rooted (per-root identity, C5). Backing
         // `Permalink.of` out to the bare `/p/{id}` form reds BOTH assertions; the hand-built literal above does not.
         val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-        assertEquals("/p/main/${id.value}", Permalink.of(RootName.MAIN, id))
-        assertEquals("/p/main/${id.value}", RootedPageId(RootName.MAIN, id).permalink)
+        assertEquals("/p/main/${id.value}", Permalink.of(RootName.PRIMARY, id))
+        assertEquals("/p/main/${id.value}", RootedPageId(RootName.PRIMARY, id).permalink)
     }
 }

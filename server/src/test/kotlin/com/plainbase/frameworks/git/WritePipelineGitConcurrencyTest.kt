@@ -47,8 +47,8 @@ class WritePipelineGitConcurrencyTest : FunSpec({
 
                 val newA = "---\ntitle: A\n---\n\n# A edited\n".toByteArray()
                 val newB = "---\ntitle: B\n---\n\n# B edited\n".toByteArray()
-                val intentA = WriteIntent(idA, RootName.MAIN, TreePath.require(pageA), citations.contentHash(seedA), newA)
-                val intentB = WriteIntent(idB, RootName.MAIN, TreePath.require(pageB), citations.contentHash(seedB), newB)
+                val intentA = WriteIntent(idA, RootName.PRIMARY, TreePath.require(pageA), citations.contentHash(seedA), newA)
+                val intentB = WriteIntent(idB, RootName.PRIMARY, TreePath.require(pageB), citations.contentHash(seedB), newB)
 
                 val go = CountDownLatch(1)
                 val threads = listOf(intentA, intentB).map { intent ->

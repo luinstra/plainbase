@@ -38,7 +38,7 @@ class MultiWatcherNativeTest {
             // rebuild is a whole-corpus pass and needs no idea which tree woke it.
             val seen = ConcurrentHashMap.newKeySet<RootName>()
             val both = CountDownLatch(2)
-            val watchers = listOf(RootName.MAIN to a, RootName.require("extra") to b).map { (root, dir) ->
+            val watchers = listOf(RootName.PRIMARY to a, RootName.require("extra") to b).map { (root, dir) ->
                 LocalContentStore(dir).watch(
                     onChange = {
                         if (seen.add(root)) both.countDown()

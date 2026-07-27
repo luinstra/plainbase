@@ -34,7 +34,7 @@ import java.nio.file.Path
  *
  * The two ways to break it, both of which an earlier revision of this design actually wrote:
  *
- *  - **Hoisting main** (`listOf(main) + extras`) forces main to rank 0, demoting every root an operator
+ *  - **Hoisting primary** (`listOf(primary) + extras`) forces primary to rank 0, demoting every root an operator
  *    deliberately declared ahead of it. Someone who wrote `roots { zeta {…} main {…} }` - zeta first, because
  *    zeta's copy is the one that should be read first - would have had zeta demoted by a CLI change that never
  *    touched zeta, silently re-ordering precedence they set on purpose.
@@ -70,9 +70,10 @@ class RootRankStabilityTest : FunSpec({
         RootRegistry.of(PlainbaseConfig.fromEnvAndFile(env).roots.list).rank(RootName.require(name))
 
     test("(a) main keeps its DECLARED rank when roots.conf extras merge - it is NEVER hoisted to 0") {
-        // The assertion this whole decision exists for. It goes RED under `listOf(main) + declaredExtras +
-        // managedExtras`, which yields [main, zeta, alpha] and rank 0 - and so do RootsConfigTest's and
-        // RootRegistryTest's shipped `rank(MAIN) shouldBe 1` pins, which is the safety net doing its job.
+        // The assertion this whole decision exists for. It goes RED under `listOf(primary) + declaredExtras +
+        // managedExtras`, which yields [main, zeta, alpha] and rank 0.
+        // The shipped order pin in RootsConfigTest (`list.map { it.name.value } shouldBe listOf("zeta", "main", "alpha")`)
+        // goes RED under the hoist, which is the safety net doing its job.
         withFiles(
             plainbaseConf = """
                 roots {
@@ -83,7 +84,7 @@ class RootRankStabilityTest : FunSpec({
             rootsConf = """roots { alpha { path = "/roots/a" } }""",
         ) { env ->
             namesOf(env) shouldBe listOf("zeta", "main", "alpha")
-            rankOf(env, "main") shouldBe 1 // NOT 0. `main` is a typed ACCESSOR, never a promotion.
+            rankOf(env, "main") shouldBe 1 // NOT 0. `primary` is a typed ACCESSOR, never a promotion.
             rankOf(env, "zeta") shouldBe 0
         }
     }

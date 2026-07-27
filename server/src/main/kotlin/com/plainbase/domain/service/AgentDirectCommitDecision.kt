@@ -143,11 +143,11 @@ class CommitGlob private constructor(private val segments: List<String>, val roo
          * normalizes to zero segments is REJECTED. Each surviving segment is NFC-normalized (so an operator's NFD-form
          * glob matches the always-NFC [TreePath.value]); the wildcard metacharacters stay literal in the segment.
          *
-         * [root] is the root the DECLARING config key names, defaulted to [RootName.MAIN] - so the grammar, the
+         * [root] is the root the DECLARING config key names, defaulted to [RootName.PRIMARY] - so the grammar, the
          * matcher and every pre-C4 call site are byte-identical, and an existing `globs` list keeps meaning
          * exactly what it means today.
          */
-        fun parse(raw: String, root: RootName = RootName.MAIN): CommitGlob {
+        fun parse(raw: String, root: RootName = RootName.PRIMARY): CommitGlob {
             require(raw.isNotBlank()) { "agentDirectCommit glob must not be blank: '$raw'" }
             val parts = raw.removePrefix("/").split("/").toMutableList()
             if (parts.size > 1 && parts.last().isEmpty()) parts.removeAt(parts.lastIndex) // a single trailing '/'

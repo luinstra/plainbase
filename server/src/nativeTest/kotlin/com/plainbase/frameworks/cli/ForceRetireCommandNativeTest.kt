@@ -45,7 +45,7 @@ class ForceRetireCommandNativeTest {
             val config = PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0).copy(
                 roots = RootsConfig.of(
                     list = listOf(
-                        Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = HistoryMode.OFF),
+                        Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF),
                         Root(extra, RootBackend.Local(extraDir), editable = true, history = HistoryMode.OFF),
                     ),
                     origin = RootsOrigin.EXPLICIT,

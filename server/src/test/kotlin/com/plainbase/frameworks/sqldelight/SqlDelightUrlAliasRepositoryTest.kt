@@ -29,7 +29,7 @@ class SqlDelightUrlAliasRepositoryTest : FunSpec({
             block(SqlDelightUrlAliasRepository(db), SqlDelightIdMapRepository(db), driver)
         }
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val otherId = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")

@@ -94,8 +94,12 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             val history = historyFactory(root)
             IndexHarness(root, contentStore = store, history = history).use { harness ->
                 history.prepare()
-                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("docs/in.md")), PageId.require(inId), materialized = false)
-                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("notes/out.md")), PageId.require(outId), materialized = false)
+                harness.idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("docs/in.md")), PageId.require(inId), materialized = false)
+                harness.idMap.bind(
+                    RootedPath(RootName.PRIMARY, TreePath.require("notes/out.md")),
+                    PageId.require(outId),
+                    materialized = false,
+                )
                 harness.builder.rebuild()
                 val resolved: Principal = when {
                     seedAgentMode != null -> Principal.Agent(harness.apiTokens.mint(label = "ci", mode = seedAgentMode).id)
@@ -327,7 +331,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             // Retire an id by displacement (the detachedTombstone idiom, here under REGISTERED main): bind it, then
             // bind a DIFFERENT id at the SAME rooted path - the first id is now tombstoned with NO live binding.
             val retired = "0190aaaa-bbbb-7ccc-8ddd-0000000000fe"
-            val gone = RootedPath(RootName.MAIN, TreePath.require("notes/gone.md"))
+            val gone = RootedPath(RootName.PRIMARY, TreePath.require("notes/gone.md"))
             harness.idMap.bind(gone, PageId.require(retired), materialized = false)
             harness.idMap.bind(gone, PageId.require("0190aaaa-bbbb-7ccc-8ddd-0000000000fd"), materialized = false)
             val resp = app.client.put("/api/v1/pages/$retired") {

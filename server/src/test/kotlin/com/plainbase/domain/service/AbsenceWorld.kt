@@ -143,7 +143,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         idMap: IdMapRepository = this.idMap,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
-            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), mainHistory),
+            IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), mainHistory),
             IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, extraHistory),
         ),
         frontmatterParser = FrontmatterReader(),

@@ -54,13 +54,14 @@ class IndexBuilderCheckpointTest : FunSpec({
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val materializedPage = "---\nid: ${pageId.value}\ntitle: Start\n---\n\n# Start\n"
 
-    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+    fun rooted(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
     test("a MATERIALIZED page moved while the server was down records its alias from the checkpoint; the old URL 301s") {
         withTempTree(seed = { root -> writePage(root, "docs/start.md", materializedPage) }) { root ->
             RestartableHarness(root).use { harness ->
                 harness.startProcess().builder.rebuild()
-                harness.checkpoints.load() shouldContainExactly mapOf(RootedPageId(RootName.MAIN, pageId) to TreePath.require("docs/start"))
+                harness.checkpoints.load() shouldContainExactly
+                    mapOf(RootedPageId(RootName.PRIMARY, pageId) to TreePath.require("docs/start"))
 
                 // Server down: the page moves on disk before the next process's first rebuild.
                 Files.createDirectories(root.resolve("archive"))
@@ -68,8 +69,8 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val restarted = harness.startProcess()
                 val snapshot = restarted.builder.rebuild()
-                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
-                harness.aliases.find(rooted("docs/start")) shouldBe RootedPageId(RootName.MAIN, pageId)
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/archive/start"
+                harness.aliases.find(rooted("docs/start")) shouldBe RootedPageId(RootName.PRIMARY, pageId)
 
                 // The acceptance criterion's wire half: the OLD canonical URL answers 301 → new.
                 testApplication {
@@ -109,7 +110,7 @@ class IndexBuilderCheckpointTest : FunSpec({
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
                 // index correctness never depends on it
-                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")).shouldBeNull() // the missed alias, exactly as Phase 1
             }
         }
@@ -127,7 +128,7 @@ class IndexBuilderCheckpointTest : FunSpec({
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
 
                 val snapshot = harness.startProcess().builder.rebuild() // must not throw
-                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.aliases.find(rooted("docs/start")).shouldBeNull()
             }
         }
@@ -181,7 +182,7 @@ private class RestartableHarness(private val root: Path) : AutoCloseable {
         val availability = RootAvailability(kotlin.time.Clock.System)
         val idMap = SqlDelightIdMapRepository(database)
         val builder = IndexBuilder(
-            sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+            sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
             availability = availability,
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },

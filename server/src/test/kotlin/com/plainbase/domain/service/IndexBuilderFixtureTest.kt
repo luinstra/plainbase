@@ -31,7 +31,7 @@ import io.kotest.matchers.shouldBe
  */
 class IndexBuilderFixtureTest : FunSpec({
 
-    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+    fun rooted(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
     test("golden URL set: the complete fixture page->url map matches §A4 construction") {
         IndexHarness(Fixtures.demoDocs).use { harness ->
@@ -161,7 +161,7 @@ class IndexBuilderFixtureTest : FunSpec({
                 val carried = harness.builder.rebuild()
 
                 carried.pages shouldBe first.pages
-                harness.availability.current().isAvailable(RootName.MAIN) shouldBe false
+                harness.availability.current().isAvailable(RootName.PRIMARY) shouldBe false
             }
         }
     }

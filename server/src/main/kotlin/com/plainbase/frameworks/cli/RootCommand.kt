@@ -171,8 +171,8 @@ object RootCommand {
         // the LOWEST index wins, so a newcomer always ranks last and can never outrank an incumbent. `root add`
         // is an operator convenience and it must not silently re-order roots that were already serving. (Since
         // per-root identity, ADR-0012, it could not take an id from an incumbent in any case - the same id under
-        // two roots is two pages.) Never rebuild the list as `listOf(main) + extras + new`: that hoist forces
-        // main to rank 0 and re-orders every other root.
+        // two roots is two pages.) Never rebuild the list as `listOf(primary) + extras + new`: that hoist forces
+        // primary to rank 0 and re-orders every other root.
         val hocon = gate(config, env, "add", managed + newRoot, output) ?: return 1
         // An add always leaves at least one managed root, so the delete arm `remove` needs cannot arise here.
         ManagedRootsFile.writeAtomically(config.managedRootsPath, requireNotNull(hocon.text))
@@ -300,8 +300,8 @@ object RootCommand {
     private fun provenanceOf(config: PlainbaseConfig, root: Root): String = when {
         root.name in config.roots.managed -> PlainbaseConfig.MANAGED_ROOTS_FILE
         // The only root that is neither CLI-managed nor hand-declared is a SYNTHESIZED main - an absent `roots {}`
-        // block contributes nothing else - so `mainDeclared` already answers this and no main-by-name test is needed.
-        !config.roots.mainDeclared -> "CONTENT_DIR"
+        // block contributes nothing else - so `primaryDeclared` already answers this and no primary-by-name test is needed.
+        !config.roots.primaryDeclared -> "CONTENT_DIR"
         else -> "plainbase.conf"
     }
 
@@ -390,12 +390,12 @@ object RootCommand {
             "list" -> if (argv.size == 1) RootArgs.List else usage(output)
             else -> usage(output)
         } ?: return null
-        // D-C5-2, and it is the ONE main-by-name comparison in this file (ledgered in RootWiringArchitectureTest).
+        // D-C5-2, and it is the ONE primary-by-name comparison in this file (ledgered in RootWiringArchitectureTest).
         // Main's protection is STRUCTURAL everywhere else - no code path here can write main's name into any file
         // - but argv is TEXT, and text cannot be made to fail typecheck. So it needs a runtime refusal, here, once,
         // shared by both mutating verbs.
         val mutating = request as? RootArgs.Mutating
-        if (mutating != null && mutating.name == RootName.MAIN) {
+        if (mutating != null && mutating.name == RootName.PRIMARY) {
             output.error(
                 "root: 'main' is never CLI-managed. Its directory comes from CONTENT_DIR, or from a roots {} block you " +
                     "wrote yourself in plainbase.conf - freezing the CONTENT_DIR value one command happened to see " +

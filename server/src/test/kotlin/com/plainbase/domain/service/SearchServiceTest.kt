@@ -26,7 +26,7 @@ import io.mockk.mockk
  */
 class SearchServiceTest : FunSpec({
 
-    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0, root: RootName = RootName.MAIN) =
+    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0, root: RootName = RootName.PRIMARY) =
         SearchHit(pageId = pageId, root = root, headingId = headingId, snippet = "…body…", highlights = emptyList(), score = score)
 
     fun providerReturning(vararg hits: SearchHit): SearchProvider = mockk {
@@ -64,7 +64,7 @@ class SearchServiceTest : FunSpec({
                 // No rebuild: an unavailable root's section is CARRIED FORWARD, so the page is still in `byRootedId` and the
                 // engine still returns it. The liveness filter is the ONLY thing standing between a downed root and a
                 // live search result served from its stale index rows.
-                harness.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+                harness.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
 
                 val payload = resultsOf(service.search("shared"))
                 payload.hits shouldBe emptyList()

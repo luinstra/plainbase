@@ -28,7 +28,7 @@ class RootedPermalinkMatrixTest : FunSpec({
     val retiredMainId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
     val retiredDetachedId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
     val absentId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5d"
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
 
     fun oneRoot(block: (Path) -> Unit) {
         val parent = Files.createTempDirectory("pb-permalink-matrix")

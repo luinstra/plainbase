@@ -367,7 +367,13 @@ object NativeSpike {
             path = treePath,
             status = "active",
         )
-        return PageDocuments(pageId = pageId, contentHash = contentHash, root = RootName.MAIN, path = treePath, sections = listOf(section))
+        return PageDocuments(
+            pageId = pageId,
+            contentHash = contentHash,
+            root = RootName.PRIMARY,
+            path = treePath,
+            sections = listOf(section),
+        )
     }
 
     // ---- 5. flexmark ---------------------------------------------------------------------

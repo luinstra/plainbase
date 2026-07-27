@@ -89,7 +89,7 @@ fun withRestServices(
                 val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
                 val builder = IndexBuilder(
-                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+                    sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),

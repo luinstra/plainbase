@@ -33,11 +33,11 @@ import java.nio.file.Files
 class IndexBuilderRescanTest : FunSpec({
 
     val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-    val mainPage = RootedPageId(RootName.MAIN, pageId)
+    val mainPage = RootedPageId(RootName.PRIMARY, pageId)
 
     fun pageWithId(title: String) = "---\nid: ${pageId.value}\ntitle: $title\n---\n\n# $title\n"
 
-    fun rooted(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+    fun rooted(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
     test("slug collision: raw-byte-order winner owns the path; loser is id-only with a persisted issue") {
         withTempTree(seed = { root ->
@@ -56,10 +56,10 @@ class IndexBuilderRescanTest : FunSpec({
                 // The loser remains fully resolvable by id; emitted links go to its permalink (§A4).
                 snapshot.pageAt(loser.rooted)!! shouldBe loser
                 snapshot.byUrlPath[rooted("a-b")] shouldBe winner
-                snapshot.view(RootName.MAIN).pageUrl(loser.path) shouldBe "/p/main/${loser.id.value}"
+                snapshot.view(RootName.PRIMARY).pageUrl(loser.path) shouldBe "/p/main/${loser.id.value}"
 
                 harness.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>() shouldContainExactly listOf(
-                    IdentityIssue.PathSlugCollision(root = RootName.MAIN, keptPath = winner.path, loserPath = loser.path),
+                    IdentityIssue.PathSlugCollision(root = RootName.PRIMARY, keptPath = winner.path, loserPath = loser.path),
                 )
             }
         }
@@ -84,19 +84,19 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "docs/start.md", pageWithId("Start"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/docs/start"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/docs/start"
 
                 // Move 1: docs/start.md -> archive/start.md (the id travels in the frontmatter).
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("docs/start.md"), root.resolve("archive/start.md"))
                 val afterFirst = harness.builder.rebuild()
-                afterFirst.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
+                afterFirst.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/archive/start"
                 harness.registry.all() shouldContainExactly mapOf(rooted("docs/start") to mainPage)
 
                 // Move 2: the chain collapses — BOTH old paths map straight to the id, one hop each.
                 Files.createDirectories(root.resolve("attic"))
                 Files.move(root.resolve("archive/start.md"), root.resolve("attic/start.md"))
-                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/attic/start"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/attic/start"
                 harness.registry.all() shouldContainExactly mapOf(
                     rooted("docs/start") to mainPage,
                     rooted("archive/start") to mainPage,
@@ -120,7 +120,7 @@ class IndexBuilderRescanTest : FunSpec({
                 writePage(root, "docs/start.md", "---\ntitle: New Start\n---\n\n# New Start\n")
 
                 val snapshot = harness.builder.rebuild()
-                snapshot.pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/archive/start"
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/archive/start"
                 snapshot.byUrlPath.getValue(rooted("docs/start")).id shouldNotBe pageId
                 harness.registry.find(rooted("docs/start")).shouldBeNull()
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
@@ -167,7 +167,7 @@ class IndexBuilderRescanTest : FunSpec({
                 warned.formattedMessage shouldContain "copy.md reassigned"
 
                 // The incumbent keeps the id and its permalink; the paste reassigns and is reported.
-                snapshot.pageAt(RootedPageId(RootName.MAIN, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
                 val copyId = harness.idMap.find(rooted("copy.md")).shouldNotBeNull().id
                 copyId shouldNotBe assigned
                 val issue = harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single()
@@ -177,7 +177,7 @@ class IndexBuilderRescanTest : FunSpec({
                 // RESCAN STABILITY: the steady state is stable, not oscillating. copy.md keeps its reassigned id
                 // even though its file still asserts the other one, so the divergence is untidy, not harmful.
                 val again = harness.builder.rebuild()
-                again.pageAt(RootedPageId(RootName.MAIN, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
+                again.pageAt(RootedPageId(RootName.PRIMARY, assigned)).shouldNotBeNull().path shouldBe TreePath.require("original.md")
                 harness.idMap.find(rooted("copy.md")).shouldNotBeNull().id shouldBe copyId
                 harness.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>() shouldHaveSize 1
             }
@@ -205,7 +205,7 @@ class IndexBuilderRescanTest : FunSpec({
                 snapshot.byPath.getValue(rooted("b.md")).id shouldNotBe pageId // b.md did NOT get to take X
                 // X is retired at the path that abandoned it, so /p/{root}/{X} answers 410 rather than silently
                 // resolving to b.md - the same "a dead link announces itself" rule the tombstone reservation exists for.
-                harness.idMap.retiredAt(RootName.MAIN, pageId).shouldNotBeNull().path shouldBe rooted("a.md")
+                harness.idMap.retiredAt(RootName.PRIMARY, pageId).shouldNotBeNull().path shouldBe rooted("a.md")
                 // The contest IS reported, naming both paths. Note the wording is imprecise in this one corpus:
                 // "kept by a.md" was true at resolve time, but a.md then re-identified to Y, so in the end NOBODY
                 // holds X. It is not backwards - b.md really did lose - and the operator still gets both paths and
@@ -223,9 +223,9 @@ class IndexBuilderRescanTest : FunSpec({
             writePage(root, "guide.md", pageWithId("Guide"))
         }) { root ->
             IndexHarness(root).use { harness ->
-                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/guide"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/guide"
                 writePage(root, "guide.md", "---\nid: ${pageId.value}\ntitle: Guide\nslug: handbook\n---\n\n# Guide\n")
-                harness.builder.rebuild().pageAt(RootedPageId(RootName.MAIN, pageId))!!.url shouldBe "/docs/main/handbook"
+                harness.builder.rebuild().pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.url shouldBe "/docs/main/handbook"
                 harness.registry.find(rooted("guide")) shouldBe mainPage
             }
         }
@@ -278,9 +278,9 @@ class IndexBuilderRescanTest : FunSpec({
             IndexHarness(root).use { harness ->
                 val first = harness.builder.rebuild()
                 val id = first.byPath.getValue(rooted("guide.md")).id
-                harness.registry.find(rooted("old/guide")) shouldBe RootedPageId(RootName.MAIN, id)
+                harness.registry.find(rooted("old/guide")) shouldBe RootedPageId(RootName.PRIMARY, id)
                 harness.builder.rebuild() // idempotent across rescans
-                harness.registry.find(rooted("old/guide")) shouldBe RootedPageId(RootName.MAIN, id)
+                harness.registry.find(rooted("old/guide")) shouldBe RootedPageId(RootName.PRIMARY, id)
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>() shouldBe emptyList()
             }
         }
@@ -297,7 +297,7 @@ class IndexBuilderRescanTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
-                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.MAIN, incumbentId)
+                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.PRIMARY, incumbentId)
 
                 // A DIFFERENT page now declares the SAME redirect_from path: the incumbent keeps the alias, and the
                 // conflict message names the incumbent by its BARE id - a RootedPageId interpolation would leak the
@@ -305,7 +305,7 @@ class IndexBuilderRescanTest : FunSpec({
                 writePage(root, "latecomer.md", "---\ntitle: Latecomer\nredirect_from: [/shared]\n---\n\n# Latecomer\n")
                 harness.builder.rebuild()
 
-                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.MAIN, incumbentId)
+                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.PRIMARY, incumbentId)
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
                     .single { it.path == TreePath.require("shared") }
                     .message shouldBe "redirect_from of latecomer.md ignored: already an alias of page $incumbentId"
@@ -322,7 +322,7 @@ class IndexBuilderRescanTest : FunSpec({
                 val snapshot = harness.builder.rebuild()
                 val alpha = snapshot.byPath.getValue(rooted("alpha.md"))
 
-                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.MAIN, alpha.id)
+                harness.registry.find(rooted("shared")) shouldBe RootedPageId(RootName.PRIMARY, alpha.id)
                 harness.idMap.issues().filterIsInstance<IdentityIssue.RedirectConflict>()
                     .single { it.path == TreePath.require("shared") }
                     .message shouldBe

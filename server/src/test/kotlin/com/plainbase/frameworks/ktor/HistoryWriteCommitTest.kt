@@ -48,7 +48,7 @@ class HistoryWriteCommitTest : FunSpec({
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("guides/deploy-guide.md")),
             PageId.require(deployGuideId),
             materialized = false,
         )

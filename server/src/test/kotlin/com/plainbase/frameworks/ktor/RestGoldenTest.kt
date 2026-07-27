@@ -38,11 +38,11 @@ class RestGoldenTest : FunSpec({
     val welcomeId = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("guides/deploy-guide.md")),
             PageId.require(deployGuideId),
             materialized = false,
         )
-        idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
+        idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
     }
     val deployGuideHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("guides/deploy-guide.md"))
     val welcomeHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("index.md"))

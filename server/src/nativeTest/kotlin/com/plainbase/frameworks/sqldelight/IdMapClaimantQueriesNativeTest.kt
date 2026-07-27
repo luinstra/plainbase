@@ -32,21 +32,21 @@ class IdMapClaimantQueriesNativeTest {
         try {
             DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                val path = RootedPath(RootName.MAIN, TreePath.require("guides/a.md"))
+                val path = RootedPath(RootName.PRIMARY, TreePath.require("guides/a.md"))
                 val displaced = PageId.require("01010101-0101-0101-0101-010101010101")
                 val successor = PageId.require("02020202-0202-0202-0202-020202020202")
                 val unknown = PageId.require("03030303-0303-0303-0303-030303030303")
 
                 repo.bind(path, displaced, materialized = true)
-                assertEquals(listOf(RootName.MAIN), repo.rootsHoldingId(displaced))
+                assertEquals(listOf(RootName.PRIMARY), repo.rootsHoldingId(displaced))
                 assertEquals(emptyList(), repo.retiredRootsHoldingId(displaced))
-                assertNull(repo.retiredAt(RootName.MAIN, displaced))
+                assertNull(repo.retiredAt(RootName.PRIMARY, displaced))
 
                 repo.bind(path, successor, materialized = true) // displaces + tombstones `displaced`
-                assertEquals(listOf(RootName.MAIN), repo.rootsHoldingId(successor))
+                assertEquals(listOf(RootName.PRIMARY), repo.rootsHoldingId(successor))
                 assertEquals(emptyList(), repo.rootsHoldingId(displaced))
-                assertEquals(listOf(RootName.MAIN), repo.retiredRootsHoldingId(displaced))
-                val tombstone = assertNotNull(repo.retiredAt(RootName.MAIN, displaced))
+                assertEquals(listOf(RootName.PRIMARY), repo.retiredRootsHoldingId(displaced))
+                val tombstone = assertNotNull(repo.retiredAt(RootName.PRIMARY, displaced))
                 assertEquals(displaced, tombstone.id)
                 assertEquals(path, tombstone.path)
                 // The (root, id) key is exact: the tombstone does not answer under a root that never held it.
@@ -54,7 +54,7 @@ class IdMapClaimantQueriesNativeTest {
 
                 assertEquals(emptyList(), repo.rootsHoldingId(unknown))
                 assertEquals(emptyList(), repo.retiredRootsHoldingId(unknown))
-                assertNull(repo.retiredAt(RootName.MAIN, unknown))
+                assertNull(repo.retiredAt(RootName.PRIMARY, unknown))
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -69,7 +69,7 @@ class IdMapClaimantQueriesNativeTest {
                 val db = DatabaseFactory.createDatabase(driver)
                 val repo = SqlDelightIdMapRepository(db)
                 val extra = RootName.require("extra")
-                val pA = RootedPath(RootName.MAIN, TreePath.require("guides/a.md"))
+                val pA = RootedPath(RootName.PRIMARY, TreePath.require("guides/a.md"))
                 val pB = RootedPath(extra, TreePath.require("notes/b.md"))
                 val x = PageId.require("01010101-0101-0101-0101-010101010101")
                 val y1 = PageId.require("02020202-0202-0202-0202-020202020202")
@@ -78,12 +78,12 @@ class IdMapClaimantQueriesNativeTest {
                 // X lives in BOTH roots - rootsHoldingId returns both (a state UNIQUE(id) made unreachable).
                 repo.bind(pA, x, materialized = false)
                 repo.bind(pB, x, materialized = false)
-                assertEquals(setOf(RootName.MAIN, extra), repo.rootsHoldingId(x).toSet())
+                assertEquals(setOf(RootName.PRIMARY, extra), repo.rootsHoldingId(x).toSet())
 
                 // Displace X in BOTH roots - two tombstones for one id; the list-shaped queries return both.
                 repo.bind(pA, y1, materialized = false)
                 repo.bind(pB, y2, materialized = false)
-                assertEquals(setOf(RootName.MAIN, extra), repo.retiredRootsHoldingId(x).toSet())
+                assertEquals(setOf(RootName.PRIMARY, extra), repo.retiredRootsHoldingId(x).toSet())
                 assertEquals(2, db.idMapQueries.selectRetiredRowsById(x).executeAsList().size)
             }
         } finally {

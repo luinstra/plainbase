@@ -19,7 +19,7 @@ import io.kotest.matchers.shouldBe
 
 class SqlDelightRootTopologyRepositoryTest : FunSpec({
 
-    val root = RootName.MAIN
+    val root = RootName.PRIMARY
     val binding = RootBinding("https://objects.example|handbook|")
     val id = PageId.require("01900000-0000-7000-9000-0000000000d1")
     val ref = BindingRef(TreePath.require("guides/deploy.md"), id)

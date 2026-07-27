@@ -21,7 +21,7 @@ import kotlin.concurrent.thread
  */
 class WritePipelineConcurrencyTest : FunSpec({
 
-    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+    fun mainPath(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
     fun seedTwo(root: Path) {
         writePage(root, "a.md", "---\ntitle: A\n---\n\n# A\n\nbody a.\n")
@@ -43,11 +43,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val outB = AtomicReference<WriteOutcome>()
                 val ta = thread {
                     start.await()
-                    outA.set(pipeline.write(grantForTests(), WriteIntent(pageA.id, RootName.MAIN, pageA.path, pageA.contentHash, saveA)))
+                    outA.set(pipeline.write(grantForTests(), WriteIntent(pageA.id, RootName.PRIMARY, pageA.path, pageA.contentHash, saveA)))
                 }
                 val tb = thread {
                     start.await()
-                    outB.set(pipeline.write(grantForTests(), WriteIntent(pageB.id, RootName.MAIN, pageB.path, pageB.contentHash, saveB)))
+                    outB.set(pipeline.write(grantForTests(), WriteIntent(pageB.id, RootName.PRIMARY, pageB.path, pageB.contentHash, saveB)))
                 }
                 start.countDown()
                 ta.join(10_000)
@@ -76,11 +76,11 @@ class WritePipelineConcurrencyTest : FunSpec({
                 val out2 = AtomicReference<WriteOutcome>()
                 val t1 = thread {
                     start.await()
-                    out1.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, baseHash, save1)))
+                    out1.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, baseHash, save1)))
                 }
                 val t2 = thread {
                     start.await()
-                    out2.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, baseHash, save2)))
+                    out2.set(pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, baseHash, save2)))
                 }
                 start.countDown()
                 t1.join(10_000)

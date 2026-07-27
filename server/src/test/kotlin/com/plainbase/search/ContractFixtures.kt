@@ -18,7 +18,7 @@ import com.plainbase.domain.search.SectionDocument
 fun pageId(n: Int): PageId = PageId.require("0197bbbb-0000-7000-8000-%012x".format(n))
 
 /** The rooted key for page [n] under [root] (default MAIN) - the shape `indexedState()` returns. */
-fun rooted(n: Int, root: RootName = RootName.MAIN) = RootedPageId(root, pageId(n))
+fun rooted(n: Int, root: RootName = RootName.PRIMARY) = RootedPageId(root, pageId(n))
 
 /** One page whose sections are (headingId to body) pairs after the page-level document. */
 fun page(
@@ -26,7 +26,7 @@ fun page(
     path: String = "docs/page-$n.md",
     title: String = "Page $n",
     contentHash: String = "sha256:$n",
-    root: RootName = RootName.MAIN,
+    root: RootName = RootName.PRIMARY,
     tags: List<String> = emptyList(),
     aliases: List<String> = emptyList(),
     owner: String? = null,

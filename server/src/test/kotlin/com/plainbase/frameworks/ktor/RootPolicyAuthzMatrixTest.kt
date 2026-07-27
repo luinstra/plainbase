@@ -229,7 +229,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
         withRoots(
             Principal.Anonymous,
             agentMode = AgentMode.COMMIT,
-            globs = listOf(CommitGlob.parse("notes/**", RootName.MAIN)),
+            globs = listOf(CommitGlob.parse("notes/**", RootName.PRIMARY)),
         ) { harness ->
             val rollback = page(harness, "open", "notes/rollback.md")
             withClue("a glob declared for main authorizes NOTHING in another root") {

@@ -22,7 +22,7 @@ import io.kotest.matchers.shouldBe
  */
 class BindingVisibilityTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val gone = RootName.require("gone")
     val page = TreePath.require("guides/a.md")

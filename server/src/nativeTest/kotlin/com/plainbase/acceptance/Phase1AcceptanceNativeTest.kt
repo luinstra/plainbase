@@ -66,12 +66,12 @@ class Phase1AcceptanceNativeTest {
 
             // Warm-vs-fresh (the chunk-3 criterion's shape): one renderer accumulates the whole
             // tree while a fresh instance renders each page cold — byte-identical HTML required.
-            val warm = FlexmarkRenderer(snapshot.view(RootName.MAIN))
+            val warm = FlexmarkRenderer(snapshot.view(RootName.PRIMARY))
             for (page in snapshot.pages) {
                 val bytes = assertNotNull(store.read(page.path), "fixture page vanished: ${page.path.value}")
                 assertEquals(
                     warm.render(page.path, bytes).html,
-                    FlexmarkRenderer(snapshot.view(RootName.MAIN)).render(page.path, bytes).html,
+                    FlexmarkRenderer(snapshot.view(RootName.PRIMARY)).render(page.path, bytes).html,
                     "non-deterministic render for ${page.path.value}",
                 )
             }
@@ -82,7 +82,7 @@ class Phase1AcceptanceNativeTest {
         val database = DatabaseFactory.createDatabase(driver)
         val registry = RootRegistry.of(listOf(localRoot("main", fixturesRoot())))
         return IndexBuilder(
-            sources = listOf(IndexBuilder.Source(registry.main, store, NoOpHistoryProvider)),
+            sources = listOf(IndexBuilder.Source(registry.primary, store, NoOpHistoryProvider)),
             frontmatterParser = FrontmatterReader(),
             rendererFactory = { view -> FlexmarkRenderer(view) },
             identity = PageIdentityService(UuidV7IdProvider()),

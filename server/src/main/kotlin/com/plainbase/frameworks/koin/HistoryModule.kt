@@ -64,7 +64,7 @@ val historyModule = module {
     // ObjectContentStore (C5) - both resolve their store ON CALL (commit time), never at wiring time.
     single<HistoryProvider> {
         val config = get<PlainbaseConfig>()
-        val main = get<RootRegistry>().main
+        val main = get<RootRegistry>().primary
         val repoPath: (TreePath) -> String = { path ->
             if (config.storage.backend == StorageBackend.LOCAL) {
                 get<LocalContentStore>().resolveRepoRelativePath(path)
@@ -99,7 +99,7 @@ val historyModule = module {
     // resolving unchanged, and the two can never disagree. One instance, two keys: the alias idiom `ContentModule`
     // already uses for the backend-selected `ContentStore`.
     //
-    // Nothing re-selects main by NAME inside the fold, which sees ONLY extras. That short-circuit is the C4 bug
+    // Nothing re-selects primary by NAME inside the fold, which sees ONLY extras. That short-circuit is the C4 bug
     // shape: a map arm routing main back to a single that had drifted mode-blind, so `history = off` still committed
     // and `history = native` skipped the strict guard. `RootWiringArchitectureTest` pins it out.
     single {
@@ -107,7 +107,7 @@ val historyModule = module {
         val registry = get<RootRegistry>()
         val stores = get<RootStores>()
         HistoryProviders(
-            mapOf(registry.main.name to get<HistoryProvider>()) +
+            mapOf(registry.primary.name to get<HistoryProvider>()) +
                 registry.extras.associate { root -> root.name to extraHistoryProvider(config, root, stores) },
         )
     }
@@ -170,8 +170,8 @@ private fun autoHistoryProvider(config: PlainbaseConfig, repoPath: (TreePath) ->
  */
 class HistoryProviders(private val byRoot: Map<RootName, HistoryProvider>) {
 
-    /** Main's provider — the one every main-only consumer (the capability flag, the object-mode warning) wants. */
-    val main: HistoryProvider get() = get(RootName.MAIN)
+    /** Primary provider - the one every primary-only consumer (the capability flag, the object-mode warning) wants. */
+    val primary: HistoryProvider get() = get(RootName.PRIMARY)
 
     operator fun get(root: RootName): HistoryProvider = requireNotNull(byRoot[root]) {
         "no history provider for root '$root': a per-root lookup ran on an unregistered root"

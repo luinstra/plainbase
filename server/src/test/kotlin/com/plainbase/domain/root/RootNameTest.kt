@@ -54,12 +54,12 @@ class RootNameTest : FunSpec({
         val failure = shouldThrow<IllegalArgumentException> { RootName.require("Not-Valid") }
         failure.message shouldContain "Not-Valid"
         failure.message shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
-        RootName.require("main") shouldBe RootName.MAIN
+        RootName.require("main") shouldBe RootName.PRIMARY
     }
 
-    test("MAIN is the reserved primary") {
-        RootName.MAIN.value shouldBe "main"
-        RootName.of("main") shouldBe RootName.MAIN
+    test("PRIMARY is the reserved primary") {
+        RootName.PRIMARY.value shouldBe "main"
+        RootName.of("main") shouldBe RootName.PRIMARY
     }
 
     test("of never accepts a string the slug rule rejects (property)") {

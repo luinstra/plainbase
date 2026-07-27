@@ -108,7 +108,7 @@ class IndexHarness(
 
     /** The builder's sources, kept so [writePipeline] can resolve a store per root without a second wiring. */
     private val sourceList: List<IndexBuilder.Source> =
-        sources ?: listOf(IndexBuilder.Source(rootRegistry.main, contentStore, history))
+        sources ?: listOf(IndexBuilder.Source(rootRegistry.primary, contentStore, history))
 
     /** The per-root store lookup the C4 write path takes — over the SAME sources the builder scans. */
     val stores: (RootName) -> ContentStore = { name ->
@@ -175,7 +175,7 @@ class IndexHarness(
         WritePipeline(
             // A [store] override stands in for MAIN's tree (the failing/wrapping stand-in case); every other root
             // resolves through the harness's own sources, so a multi-root pipeline writes into the right disk.
-            stores = { name -> if (store != null && name == rootRegistry.main.name) store else stores(name) },
+            stores = { name -> if (store != null && name == rootRegistry.primary.name) store else stores(name) },
             indexBuilder = builder,
             citations = citations,
             frontmatterParser = frontmatter,

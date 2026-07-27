@@ -35,7 +35,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
     val dupId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val id = PageId.require(dupId)
     val notes = RootName.require("notes")
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
 
     fun oneRoot(block: (Path) -> Unit) {
         val parent = Files.createTempDirectory("pb-authdefer")

@@ -39,7 +39,7 @@ class ForceRetireCommandTest : FunSpec({
             block(
                 base.copy(
                     roots = RootsConfig.of(
-                        list = listOf(Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)),
+                        list = listOf(Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)),
                         origin = RootsOrigin.EXPLICIT,
                     ),
                 ),
@@ -52,7 +52,7 @@ class ForceRetireCommandTest : FunSpec({
     fun seedBinding(config: PlainbaseConfig, rel: String) {
         DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
             SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                .bind(RootedPath(RootName.MAIN, TreePath.require(rel)), PageId.require(id), materialized = false)
+                .bind(RootedPath(RootName.PRIMARY, TreePath.require(rel)), PageId.require(id), materialized = false)
         }
     }
 
@@ -117,7 +117,7 @@ class ForceRetireCommandTest : FunSpec({
 
                 DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                     SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                        .bindingInRoot(RootName.MAIN, PageId.require(id)).shouldNotBeNull()
+                        .bindingInRoot(RootName.PRIMARY, PageId.require(id)).shouldNotBeNull()
                 }
             }
 
@@ -132,7 +132,7 @@ class ForceRetireCommandTest : FunSpec({
         try {
             val content = Files.createDirectories(data.resolve("content"))
             val extraContent = Files.createDirectories(data.resolve("extra"))
-            val main = Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)
+            val main = Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)
             val extra = Root(RootName.require("extra"), RootBackend.Local(extraContent), editable = true, history = HistoryMode.OFF)
             val base = PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0)
             // The snapshot the command started with: `extra` is still registered.

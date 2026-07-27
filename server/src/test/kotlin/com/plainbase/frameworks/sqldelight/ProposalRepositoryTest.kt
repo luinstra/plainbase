@@ -26,7 +26,7 @@ class ProposalRepositoryTest : FunSpec({
         idCounter: Int,
         createdAt: Instant,
         op: ProposalOperation = ProposalOperation.EDIT,
-        root: RootName = RootName.MAIN,
+        root: RootName = RootName.PRIMARY,
     ): ProposalRow = ProposalRow(
         id = ProposalId.require("01900000-0000-7000-9000-%012d".format(idCounter)),
         operation = op,

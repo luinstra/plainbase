@@ -113,11 +113,11 @@ class RootsValidationTest : FunSpec({
         }
     }
 
-    test("synthesized wiring seam: the registry's main resolves to contentDir for a legacy config") {
+    test("synthesized wiring seam: the registry's primary resolves to contentDir for a legacy config") {
         withBase { base ->
             val content = Files.createDirectories(base.resolve("content"))
             val config = legacyConfig(dataDir = base.resolve("data"), contentDir = content)
-            RootRegistry.of(config.roots.list).main.localPath shouldBe content
+            RootRegistry.of(config.roots.list).primary.localPath shouldBe content
             config.mainContentRoot() shouldBe content
         }
     }

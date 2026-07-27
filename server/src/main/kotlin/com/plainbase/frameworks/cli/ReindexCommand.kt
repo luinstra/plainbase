@@ -215,9 +215,9 @@ object ReindexCommand {
         val stores = LinkedHashMap<RootName, ContentStore>()
         runCatching {
             // Main is explicit (it rides the backend-selected store); the fold sees ONLY extras, never re-selecting
-            // main by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
+            // primary by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
             // disappearance test drives, so dropping it here would disarm that test for main's own tree, silently.
-            stores[registry.main.name] = decorate(registry.main.name, mainStore(config, database))
+            stores[registry.primary.name] = decorate(registry.primary.name, mainStore(config, database))
             registry.extras.forEach { root ->
                 val store = LocalContentStore(
                     root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
@@ -256,7 +256,7 @@ object ReindexCommand {
                 config,
                 IgnoreRules(),
                 dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
-                isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
+                isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
             )
             runCatching {
                 hybrid.hydrate()

@@ -33,10 +33,10 @@ value class RootName private constructor(val value: String) {
     companion object {
 
         /**
-         * The reserved, REQUIRED primary root (ADR-0011 D1): config validation demands it, the CLI
+         * The reserved, REQUIRED primary root (`RootName.PRIMARY`, ADR-0011 D1): config validation demands it, the CLI
          * refuses to remove or rename it, so `root = 'main'` migration stamps are safe forever.
          */
-        val MAIN: RootName = RootName("main")
+        val PRIMARY: RootName = RootName("main")
 
         private const val MIN_LENGTH = 2
         private const val MAX_LENGTH = 32

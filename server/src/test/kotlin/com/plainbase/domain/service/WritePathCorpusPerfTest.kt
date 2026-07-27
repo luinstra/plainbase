@@ -80,14 +80,14 @@ class WritePathCorpusPerfTest : FunSpec({
                     // so the materialized frontmatter — id included — never changes and classifyEdit stays green).
                     val target = TreePath.require("section-00/page-000.md")
                     val saveTimes = (0 until 20).map { round ->
-                        val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
+                        val current = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, target))
                         val bytes = (current.markdown + "\nsave round $round.\n").toByteArray()
                         val outcome: WriteOutcome
                         val millis = measureTimeMillis {
                             outcome =
                                 pipeline.write(
                                     grantForTests(),
-                                    WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, bytes),
+                                    WriteIntent(current.id, RootName.PRIMARY, current.path, current.contentHash, bytes),
                                 )
                         }
                         outcome.shouldBeInstanceOf<WriteOutcome.Written>()
@@ -97,7 +97,7 @@ class WritePathCorpusPerfTest : FunSpec({
                     // (c) Save-blocked-by-create: thread A creates; once A is inside its rebuild's scan (the
                     // IndexBuilderConcurrencyTest gating idiom, latch-armed so the earlier passes don't trip it),
                     // the save below blocks on the shared pipeline monitor for the create's remainder.
-                    val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
+                    val current = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, target))
                     val blockedBytes = (current.markdown + "\nblocked save.\n").toByteArray()
                     armed.set(true)
                     val createResult = AtomicReference<Result<WriteOutcome>>()
@@ -108,7 +108,7 @@ class WritePathCorpusPerfTest : FunSpec({
                                 val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
                                 pipeline.create(
                                     createGrantForTests(),
-                                    CreateIntent(pageId, RootName.MAIN, TreePath.require("perf-blocked/created.md"), bytes),
+                                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("perf-blocked/created.md"), bytes),
                                 )
                             },
                         )
@@ -119,7 +119,7 @@ class WritePathCorpusPerfTest : FunSpec({
                         blockedOutcome =
                             pipeline.write(
                                 grantForTests(),
-                                WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, blockedBytes),
+                                WriteIntent(current.id, RootName.PRIMARY, current.path, current.contentHash, blockedBytes),
                             )
                     }
                     // The blocked-save number only means anything if the create it blocked on genuinely
@@ -211,7 +211,7 @@ class WritePathCorpusPerfTest : FunSpec({
                             val outcome = harness.writePipeline()
                                 .create(
                                     createGrantForTests(),
-                                    CreateIntent(pageId, RootName.MAIN, TreePath.require("section-00/created.md"), bytes),
+                                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("section-00/created.md"), bytes),
                                 )
                             outcome.shouldBeInstanceOf<WriteOutcome.Written>()
 
@@ -243,7 +243,7 @@ private fun timedCreate(pipeline: WritePipeline, path: String): Long {
     val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
     val outcome: WriteOutcome
     val millis = measureTimeMillis {
-        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require(path), bytes))
+        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.PRIMARY, TreePath.require(path), bytes))
     }
     outcome.shouldBeInstanceOf<WriteOutcome.Written>()
     return millis

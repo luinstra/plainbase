@@ -6,7 +6,7 @@ import io.kotest.matchers.shouldBe
 /** The D15 verdict table (ADR-0011): Clean / partial-detached WARN / all-detached FATAL. */
 class DetachedRootsTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val gone = RootName.require("gone")
 

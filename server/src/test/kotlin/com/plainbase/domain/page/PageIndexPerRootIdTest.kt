@@ -44,19 +44,19 @@ class PageIndexPerRootIdTest : FunSpec({
     test("the SAME id in two DIFFERENT roots constructs, and pageAt returns each root's own page") {
         val index = PageIndex(
             listOf(
-                section(RootName.MAIN, page(x, RootName.MAIN, "guides/a.md")),
+                section(RootName.PRIMARY, page(x, RootName.PRIMARY, "guides/a.md")),
                 section(extra, page(x, extra, "notes/b.md")),
             ),
         )
 
-        index.pageAt(RootedPageId(RootName.MAIN, x)).shouldNotBeNull().path shouldBe TreePath.require("guides/a.md")
+        index.pageAt(RootedPageId(RootName.PRIMARY, x)).shouldNotBeNull().path shouldBe TreePath.require("guides/a.md")
         index.pageAt(RootedPageId(extra, x)).shouldNotBeNull().path shouldBe TreePath.require("notes/b.md")
         index.pageAt(RootedPageId(RootName.require("ghost"), x)).shouldBeNull() // a root nobody indexed
     }
 
     test("the SAME id twice in ONE root still throws - the per-root byRootedId uniqueness check") {
         val failure = shouldThrow<IllegalStateException> {
-            PageIndex(listOf(section(RootName.MAIN, page(x, RootName.MAIN, "guides/a.md"), page(x, RootName.MAIN, "guides/b.md"))))
+            PageIndex(listOf(section(RootName.PRIMARY, page(x, RootName.PRIMARY, "guides/a.md"), page(x, RootName.PRIMARY, "guides/b.md"))))
         }
         failure.message.shouldNotBeNull() shouldContain "duplicate (root, page id)"
     }

@@ -38,7 +38,7 @@ class DualRootIdentitySurvivalTest {
     fun `a cross-root duplicate id survives displacement and reclaim in-image`() {
         val dir = Files.createTempDirectory("pb-native-survival")
         try {
-            val main = RootName.MAIN
+            val main = RootName.PRIMARY
             val extra = RootName.require("extra")
             val pA = TreePath.require("guides/a.md")
             val pB = TreePath.require("notes/b.md")

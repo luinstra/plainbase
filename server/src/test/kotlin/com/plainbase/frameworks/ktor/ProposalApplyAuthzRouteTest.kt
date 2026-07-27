@@ -369,7 +369,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Files.write(root.resolve("guides/doc.md"), Files.readAllBytes(root.resolve("doc.md")))
                     Files.delete(root.resolve("doc.md"))
                     harness.builder.rebuild()
-                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(movableId)))!!.path shouldBe
+                    harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(movableId)))!!.path shouldBe
                         TreePath.require("guides/doc.md")
                     val resp = client.post("/api/v1/changes/$proposalId/approve")
                     withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
@@ -604,7 +604,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "Landed", null, "# body\n")
             val degraded = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/landed.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/landed.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
@@ -620,7 +620,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "OffMode", null, "# body\n")
             val degraded = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/offmode.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/offmode.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
@@ -649,7 +649,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "Direct", null, "# body\n")
             val outcome = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/direct.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/direct.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             outcome.shouldBeInstanceOf<CreateOutcome.DirectCreated>()
@@ -675,7 +675,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             // Agent proposes a create (the facade mints + patches the id); ADMIN approves.
             facade.propose(
                 agent,
-                ProposeCommand.Create(RootName.MAIN, TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"),
+                ProposeCommand.Create(RootName.PRIMARY, TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"),
             )
             val pid = harness.proposalRepository.all().single().id
             facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()

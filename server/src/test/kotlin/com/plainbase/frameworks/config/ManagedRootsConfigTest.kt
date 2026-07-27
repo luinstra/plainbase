@@ -34,10 +34,10 @@ class ManagedRootsConfigTest : FunSpec({
             val roots = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots
             roots.origin shouldBe RootsOrigin.EXPLICIT
             roots.list.map { it.name.value } shouldBe listOf("main", "notes")
-            roots.main.localPath shouldBe Path.of("/roots/docs")
+            roots.primary.localPath shouldBe Path.of("/roots/docs")
             // main was NOT hand-declared: it came from CONTENT_DIR. That distinction is what stops the
             // "CONTENT_DIR is ignored" warning from being a lie (T-CFG-9).
-            roots.mainDeclared shouldBe false
+            roots.primaryDeclared shouldBe false
             roots.managed.map { it.value } shouldBe listOf("notes")
             roots.extras.single().editable shouldBe true
         }
@@ -64,7 +64,7 @@ class ManagedRootsConfigTest : FunSpec({
             val roots = PlainbaseConfig.fromEnvAndFile(env).roots
             roots.list.map { it.name.value } shouldBe listOf("main", "hand", "cli")
             roots.managed.map { it.value } shouldBe listOf("cli")
-            roots.mainDeclared shouldBe true
+            roots.primaryDeclared shouldBe true
         }
     }
 
@@ -186,7 +186,7 @@ class ManagedRootsConfigTest : FunSpec({
     context("T-CFG-9 - the 'CONTENT_DIR is ignored' warning must not become a LIE") {
 
         test("a roots.conf-only topology does NOT warn: CONTENT_DIR is exactly where main's path comes from") {
-            // Gating this on EXPLICIT rather than on mainDeclared would tell a docker/systemd operator their
+            // Gating this on EXPLICIT rather than on primaryDeclared would tell a docker/systemd operator their
             // CONTENT_DIR is ignored while it is still authoritative - and the natural remedy (delete the
             // "ignored" env var) silently repoints main at ./content.
             withFiles(rootsConf = """roots { notes { path = "/roots/notes" } }""") { env ->

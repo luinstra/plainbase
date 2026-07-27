@@ -52,7 +52,7 @@ class SearchGoldenTest : FunSpec({
     val runbookId = "0197c4f0-3d2e-7a18-9b6c-5e4f3a2b1c0d"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("infra/incident-runbook.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("infra/incident-runbook.md")),
             PageId.require(runbookId),
             materialized = false,
         )

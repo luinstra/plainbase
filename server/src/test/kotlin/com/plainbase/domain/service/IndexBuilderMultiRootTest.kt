@@ -55,7 +55,7 @@ class IndexBuilderMultiRootTest : FunSpec({
         withTrees { mainDir, extraDir ->
             val registry = mainFirst(mainDir, extraDir)
             World(registry).use { world ->
-                val source = IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider)
+                val source = IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), NoOpHistoryProvider)
 
                 val failure = shouldThrow<IllegalArgumentException> {
                     world.builder(listOf(source, source))
@@ -89,12 +89,13 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
                 // No UNIQUE(id) crash; the id lives in BOTH roots, each at its own path, neither reassigned.
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
+                    TreePath.require("guides/page.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
 
                 // Rescan stability: the next rebuild keeps each root's id, no churn.
                 val again = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
-                again.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
+                again.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
                 again.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/page.md")
             }
         }
@@ -108,12 +109,14 @@ class IndexBuilderMultiRootTest : FunSpec({
             // Whichever root is seated first, per-root identity leaves BOTH pages holding the id at their own paths.
             World(mainFirst(mainDir, extraDir)).use { world ->
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("a/main-copy.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
+                    TreePath.require("a/main-copy.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("b/extra-copy.md")
             }
             World(extraFirst(mainDir, extraDir)).use { world ->
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("a/main-copy.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
+                    TreePath.require("a/main-copy.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("b/extra-copy.md")
             }
         }
@@ -127,10 +130,10 @@ class IndexBuilderMultiRootTest : FunSpec({
                 // A REFUSAL of a foreign-root bind would trip the resolver's `check(outcome is Bound)` and throw here.
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("notes/copy.md")
-                world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
-                    RootedPath(RootName.MAIN, TreePath.require("guides/doc.md"))
+                world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("guides/doc.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe RootedPath(EXTRA, TreePath.require("notes/copy.md"))
             }
         }
@@ -147,10 +150,10 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
-                world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
-                    RootedPath(RootName.MAIN, TreePath.require("guides/doc.md"))
+                world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("guides/doc.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe RootedPath(EXTRA, TreePath.require("guides/doc.md"))
             }
         }
@@ -170,7 +173,7 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/orphan.md")
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe orphan
             }
@@ -186,7 +189,7 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/doc.md")
             }
         }
@@ -205,22 +208,22 @@ class IndexBuilderMultiRootTest : FunSpec({
             writePage(mainDir, "guides/a.md", identified(contested))
             writePage(mainDir, "guides/b.md", identified(contested))
             writePage(extraDir, "mirror/holder.md", identified(mapped))
-            val loser = RootedPath(RootName.MAIN, TreePath.require("guides/b.md"))
+            val loser = RootedPath(RootName.PRIMARY, TreePath.require("guides/b.md"))
             World(extraFirst(mainDir, extraDir)).use { world ->
                 world.idMap.bind(loser, mapped, materialized = false)
 
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild() // must NOT throw
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/a.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/a.md")
                 // `mapped` now lives in BOTH roots, each at its own path - the per-root reuse the old contest forbade.
-                snapshot.pageAt(RootedPageId(RootName.MAIN, mapped)).shouldNotBeNull().path shouldBe TreePath.require("guides/b.md")
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, mapped)).shouldNotBeNull().path shouldBe TreePath.require("guides/b.md")
                 snapshot.pageAt(RootedPageId(EXTRA, mapped)).shouldNotBeNull().path shouldBe TreePath.require("mirror/holder.md")
                 snapshot.pages.map { it.rooted }.toSet() shouldHaveSize snapshot.pages.size
                 // Reassigned for the reason it actually lost: the copied frontmatter id, in its own root.
                 world.idMap.issues().filterIsInstance<IdentityIssue.DuplicateId>().single() shouldBe
                     IdentityIssue.DuplicateId(
                         id = contested,
-                        root = RootName.MAIN,
+                        root = RootName.PRIMARY,
                         keptPath = TreePath.require("guides/a.md"),
                         reassignedPath = loser.path,
                     )
@@ -236,13 +239,13 @@ class IndexBuilderMultiRootTest : FunSpec({
             writePage(extraDir, "mirror/holder.md", identified(mapped))
             writePage(extraDir, "mirror/winner.md", identified(contested))
             writePage(mainDir, "guides/claimant.md", identified(contested))
-            val loser = RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
+            val loser = RootedPath(RootName.PRIMARY, TreePath.require("guides/claimant.md"))
             World(extraFirst(mainDir, extraDir)).use { world ->
                 world.idMap.bind(loser, mapped, materialized = false)
 
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild() // must NOT throw
 
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/winner.md")
                 snapshot.pageAt(RootedPageId(EXTRA, mapped)).shouldNotBeNull().path shouldBe TreePath.require("mirror/holder.md")
@@ -262,7 +265,7 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 // main keeps its frontmatter id (root-scoped - extra's binding is invisible to it), and extra's
                 // durable binding is not touched by a pass that never scanned it.
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe foreign // the unscanned binding SURVIVES
             }
@@ -284,10 +287,11 @@ class IndexBuilderMultiRootTest : FunSpec({
                 // The full pass sees both roots - and since a cross-root duplicate is no longer a contest, BOTH keep
                 // the id under their own binding, neither reassigned, no issue.
                 val full = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
-                full.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/claimant.md")
+                full.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
+                    TreePath.require("guides/claimant.md")
                 full.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
-                world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
-                    RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
+                world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("guides/claimant.md"))
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe foreign
             }
         }
@@ -319,12 +323,13 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bindingInRoot(EXTRA, contested)?.path shouldBe foreign // durable identity intact through the outage
                 // carried
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md") // live
 
                 // ...and the scheduler/rescan paths keep working: a repeat rebuild neither throws nor churns identity.
                 val again = builder.rebuild()
-                again.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe TreePath.require("guides/claimant.md")
+                again.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
+                    TreePath.require("guides/claimant.md")
                 again.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
             }
         }
@@ -349,7 +354,7 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val snapshot = builder.rebuild() // must NOT throw
 
                 // The scanned side keeps the id; the carried down-root page keeps ITS copy of the id - both survive.
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
                 snapshot.section(EXTRA).pages.map { it.path.value } shouldContainExactlyInAnyOrder
@@ -371,8 +376,8 @@ class IndexBuilderMultiRootTest : FunSpec({
 
                 world.builder(mainOnlySource(world.registry, mainDir)).rebuild()
 
-                world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
-                    RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
+                world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("guides/claimant.md"))
                 world.idMap.bindingInRoot(RootName.require("ghost"), contested)?.path shouldBe ghost // the foreign row SURVIVES
                 world.idMap.issues().shouldBeEmpty() // "no issue" in the name, pinned over EVERY kind rather than one
             }
@@ -388,12 +393,12 @@ class IndexBuilderMultiRootTest : FunSpec({
                 world.idMap.bind(RootedPath(EXTRA, TreePath.require("mirror/page.md")), contested, materialized = true)
                 val mainOnly = RootRegistry.of(listOf(localRoot("main", mainDir)))
                 world.builder(mainOnlySource(mainOnly, mainDir), registry = mainOnly).rebuild()
-                world.idMap.bindingInRoot(RootName.MAIN, contested)?.path shouldBe
-                    RootedPath(RootName.MAIN, TreePath.require("guides/claimant.md"))
+                world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
+                    RootedPath(RootName.PRIMARY, TreePath.require("guides/claimant.md"))
 
                 // Re-adding extra restores its page under its OWN root: per-root identity, both keep the id, no contest.
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
-                snapshot.pageAt(RootedPageId(RootName.MAIN, contested)).shouldNotBeNull().path shouldBe
+                snapshot.pageAt(RootedPageId(RootName.PRIMARY, contested)).shouldNotBeNull().path shouldBe
                     TreePath.require("guides/claimant.md")
                 snapshot.pageAt(RootedPageId(EXTRA, contested)).shouldNotBeNull().path shouldBe TreePath.require("mirror/page.md")
             }
@@ -409,7 +414,7 @@ class IndexBuilderMultiRootTest : FunSpec({
             World(mainFirst(mainDir, extraDir)).use { world ->
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
-                val mainSetup = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/setup.md")))
+                val mainSetup = snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("guides/setup.md")))
                 val extraSetup = snapshot.byPath.getValue(RootedPath(EXTRA, TreePath.require("guides/setup.md")))
                 mainSetup.urlPath.shouldNotBeNull()
                 extraSetup.urlPath.shouldNotBeNull()
@@ -418,9 +423,9 @@ class IndexBuilderMultiRootTest : FunSpec({
                 mainSetup.url shouldBe "/docs/main/guides/setup"
                 extraSetup.url shouldBe "/docs/extra/guides/setup"
 
-                val mainClash = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("guides/zz-clash.md")))
+                val mainClash = snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("guides/zz-clash.md")))
                 mainClash.urlPath.shouldBeNull() // the within-root loser (raw-byte-order winner keeps it)
-                world.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>().single().root shouldBe RootName.MAIN
+                world.idMap.issues().filterIsInstance<IdentityIssue.PathSlugCollision>().single().root shouldBe RootName.PRIMARY
             }
         }
     }
@@ -432,7 +437,7 @@ class IndexBuilderMultiRootTest : FunSpec({
             World(mainFirst(mainDir, extraDir)).use { world ->
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
                 val probe = TreePath.require("docs/page.md")
-                snapshot.view(RootName.MAIN).caseInsensitiveMatches(probe) shouldBe listOf(TreePath.require("Docs/Page.md"))
+                snapshot.view(RootName.PRIMARY).caseInsensitiveMatches(probe) shouldBe listOf(TreePath.require("Docs/Page.md"))
                 snapshot.view(EXTRA).caseInsensitiveMatches(probe).shouldBeEmpty()
             }
         }
@@ -453,7 +458,7 @@ class IndexBuilderMultiRootTest : FunSpec({
                 builder.rebuild()
 
                 world.aliasRegistry.find(RootedPath(EXTRA, TreePath.require("notes/origin"))).shouldBeNull()
-                world.aliasRegistry.find(RootedPath(RootName.MAIN, TreePath.require("notes/origin"))).shouldBeNull()
+                world.aliasRegistry.find(RootedPath(RootName.PRIMARY, TreePath.require("notes/origin"))).shouldBeNull()
             }
         }
     }
@@ -504,7 +509,7 @@ class IndexBuilderMultiRootTest : FunSpec({
                 val snapshot = world.builder(bothSources(world.registry, mainDir, extraDir)).rebuild()
 
                 val broken = LinkChecker().check(snapshot).broken
-                broken.single().page shouldBe RootedPath(RootName.MAIN, TreePath.require("guides/g.md"))
+                broken.single().page shouldBe RootedPath(RootName.PRIMARY, TreePath.require("guides/g.md"))
                 broken.filter { it.page == RootedPath(EXTRA, TreePath.require("guides/g.md")) }.shouldBeEmpty()
             }
         }
@@ -520,10 +525,10 @@ private fun extraFirst(mainDir: Path, extraDir: Path): RootRegistry =
     RootRegistry.of(listOf(localRoot("extra", extraDir), localRoot("main", mainDir)))
 
 private fun mainOnlySource(registry: RootRegistry, mainDir: Path): List<IndexBuilder.Source> =
-    listOf(IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider))
+    listOf(IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), NoOpHistoryProvider))
 
 private fun bothSources(registry: RootRegistry, mainDir: Path, extraDir: Path): List<IndexBuilder.Source> = listOf(
-    IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
+    IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), NoOpHistoryProvider),
     IndexBuilder.Source(requireNotNull(registry.byName(EXTRA)), LocalContentStore(extraDir), NoOpHistoryProvider),
 )
 

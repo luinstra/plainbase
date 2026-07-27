@@ -124,7 +124,7 @@ data class PlainbaseConfig(
         // Object mode IGNORES CONTENT_DIR (Q10 - the bucket is the authority), but the local mirror/CLI seams
         // still need a defined Path, so the legacy field is what it returns.
         if (storage.backend == StorageBackend.OBJECT) return contentDir
-        if (roots.origin == RootsOrigin.EXPLICIT) return requireNotNull(roots.main.localPath)
+        if (roots.origin == RootsOrigin.EXPLICIT) return requireNotNull(roots.primary.localPath)
         return contentDir
     }
 
@@ -192,7 +192,7 @@ data class PlainbaseConfig(
                 MainFault.NOT_TRAVERSABLE ->
                     "CONTENT_DIR is not readable/searchable: $contentDir (fix its permissions so the server can serve it)"
             }
-            add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
+            add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.PRIMARY), message))
         }
         val declared = contentDir.toAbsolutePath().normalize()
         dataDirFault(declared, comparableRootPath(declared))?.let { fault ->
@@ -206,7 +206,7 @@ data class PlainbaseConfig(
                         "($declared): declare CONTENT_DIR and DATA_DIR through consistent paths so the app-state " +
                         "exclusion can apply"
             }
-            add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(RootName.MAIN), message))
+            add(BootRefusal(BootRefusal.Kind.ROOT_VS_DATA_DIR, setOf(RootName.PRIMARY), message))
         }
     }
 
@@ -232,8 +232,8 @@ data class PlainbaseConfig(
      * field one caller reads.)
      */
     private fun explicitRootRefusals(): List<BootRefusal> = buildList {
-        val mainPath = requireNotNull(roots.main.localPath) // parse rejects non-local backends in an explicit block
-        fun mainUnusable(message: String) = add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.MAIN), message))
+        val mainPath = requireNotNull(roots.primary.localPath) // parse rejects non-local backends in an explicit block
+        fun mainUnusable(message: String) = add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.PRIMARY), message))
         val fault = mainFault(mainPath)
         when (fault) {
             MainFault.NOT_A_DIRECTORY -> mainUnusable("roots.main.path does not exist or is not a directory: $mainPath")
@@ -244,7 +244,7 @@ data class PlainbaseConfig(
         }
         val canonical = roots.list.map { root ->
             val declared = requireNotNull(root.localPath)
-            val comparable = if (root.name == RootName.MAIN) {
+            val comparable = if (root.name == RootName.PRIMARY) {
                 try {
                     declared.toRealPath()
                 } catch (e: IOException) {
@@ -394,7 +394,7 @@ data class PlainbaseConfig(
         // topology is EXPLICIT with main SYNTHESIZED from contentDir, so CONTENT_DIR is the very thing main's
         // path comes from - telling a docker/systemd operator it is ignored would be a LIE whose natural
         // remedy (delete the "ignored" env var) silently repoints main at ./content.
-        if (roots.mainDeclared && contentDirSource != ConfigSource.DEFAULT) {
+        if (roots.primaryDeclared && contentDirSource != ConfigSource.DEFAULT) {
             add(
                 "roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via ${contentDirSource.name.lowercase()}) " +
                     "is ignored - main's path comes from roots.main.path",
@@ -471,7 +471,7 @@ data class PlainbaseConfig(
     /** Every root carrying at least one direct-commit glob, across BOTH homes (main's own key + the per-root block). */
     private fun globbedRoots(): Set<RootName> =
         buildSet {
-            if (auth.agentDirectCommitGlobs.isNotEmpty()) add(RootName.MAIN)
+            if (auth.agentDirectCommitGlobs.isNotEmpty()) add(RootName.PRIMARY)
             auth.agentDirectCommitGlobsByRoot.forEach { (root, globs) -> if (globs.isNotEmpty()) add(root) }
         }
 
@@ -552,7 +552,7 @@ data class PlainbaseConfig(
      * pattern declared for main authorizes nothing in an extra root and vice versa.
      */
     fun agentDirectCommitGlobs(): List<CommitGlob> =
-        auth.agentDirectCommitGlobs.map { CommitGlob.parse(it, RootName.MAIN) } +
+        auth.agentDirectCommitGlobs.map { CommitGlob.parse(it, RootName.PRIMARY) } +
             auth.agentDirectCommitGlobsByRoot.flatMap { (root, globs) -> globs.map { CommitGlob.parse(it, root) } }
 
     /**
@@ -560,7 +560,7 @@ data class PlainbaseConfig(
      * otherwise (object mode ignores it, but the mirror/CLI seams still need a defined Path).
      * Identical to contentDir for every legacy (synthesized) config.
      */
-    fun mainContentRoot(): Path = roots.main.localPath ?: contentDir
+    fun mainContentRoot(): Path = roots.primary.localPath ?: contentDir
 
     companion object {
         // C5 item 8: self-report tracks the release tag (root build.gradle.kts `-PreleaseVersion` ->
@@ -992,11 +992,11 @@ data class PlainbaseConfig(
             // operator block - only the machine file is allowed to omit main, and D-C5-3's synthesis is what
             // makes a roots.conf-only topology legal.
             if (declaredPresent) {
-                require(declared.any { it.name == RootName.MAIN }) {
-                    "roots {} must declare a root named '${RootName.MAIN}' (the required, reserved primary): roots.main { path = ... }"
+                require(declared.any { it.name == RootName.PRIMARY }) {
+                    "roots {} must declare a root named '${RootName.PRIMARY}' (the required, reserved primary): roots.main { path = ... }"
                 }
             }
-            require(managedRoots.none { it.name == RootName.MAIN }) {
+            require(managedRoots.none { it.name == RootName.PRIMARY }) {
                 "$MANAGED_ROOTS_FILE must not declare 'main': main's directory comes from CONTENT_DIR, or from a roots {} " +
                     "block you wrote yourself in plainbase.conf. `plainbase root` never manages main."
             }
@@ -1014,18 +1014,18 @@ data class PlainbaseConfig(
             // NEVER hoisted. Rank decides SOURCE precedence, lowest index first (read by IndexBuilder, AdoptionPass
             // and PageRootResolver's candidate order); since
             // per-root identity (ADR-0012) it no longer decides which root's page keeps a permalink, because both
-            // roots keep their own. It is still an operator-visible ordering contract: `listOf(main) + extras` would
-            // force main to rank 0 and silently re-order every other root, with no error and no log line. An
+            // roots keep their own. It is still an operator-visible ordering contract: `listOf(primary) + extras` would
+            // force primary to rank 0 and silently re-order every other root, with no error and no log line. An
             // operator who deliberately declared `roots { zeta {…} main {…} }` would have had zeta demoted by a CLI
             // change that never touched zeta. When no block was written, the synthesized main is the SOLE file-1
             // entry and so ranks first by arithmetic, not by policy - which is byte-identical legacy behavior.
-            val fromDeclaredFile = if (declaredPresent) declared else listOf(RootsConfig.synthesized(contentDir, storage).main)
+            val fromDeclaredFile = if (declaredPresent) declared else listOf(RootsConfig.synthesized(contentDir, storage).primary)
             return RootsConfig.of(
                 list = fromDeclaredFile + managedRoots,
                 origin = RootsOrigin.EXPLICIT,
                 // Gates the CONTENT_DIR-is-ignored warning: under a roots.conf-only topology main is SYNTHESIZED
                 // FROM contentDir, so that warning would be a lie (D-C5-3 consequence 2).
-                mainDeclared = declaredPresent,
+                primaryDeclared = declaredPresent,
                 // Provenance, captured at the ONE moment both files are in hand - which is the only moment they
                 // ever are. A caller that re-reads roots.conf to answer "where did this root come from" is making a
                 // SECOND observation of a file `root add` replaces atomically, and two observations are not one
@@ -1092,7 +1092,7 @@ data class PlainbaseConfig(
             // so a typo'd empty path would silently serve/index the CWD.
             val raw = entry.stringOrNull("path")?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("roots.$key.path is required and must be a non-blank directory path")
-            val isMain = name == RootName.MAIN
+            val isMain = name == RootName.PRIMARY
             val history = parseHistoryMode("roots.$key.history", entry.stringOrNull("history"))
                 ?: if (isMain) HistoryMode.AUTO else HistoryMode.OFF
             // AUTO on an EXTRA is a boot error (ADR-0011 D4). Auto's semantics - detect a repo, maybe `git init` one,
@@ -1124,7 +1124,7 @@ data class PlainbaseConfig(
          * inside that arm. So this can only fire on a config that explicitly declares main's history non-auto.
          */
         private fun requireCoherentMainHistory(roots: RootsConfig, gitEnabled: Boolean?) {
-            val main = roots.main
+            val main = roots.primary
             require(!(main.history == HistoryMode.NATIVE && gitEnabled == false)) {
                 "roots.main.history = native and git.enabled = false contradict each other: one claims main's git " +
                     "repository, the other turns git off. Set exactly one of them."
@@ -1290,16 +1290,16 @@ data class PlainbaseConfig(
         private fun mainDirectCommitGlobs(env: Map<String, String>, file: Config): List<String> {
             val fromEnv = env["PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"]?.toCommaList()
             val fromFile = file.stringListOrNull("auth.agentDirectCommit.globs")
-            val fromBlock = file.stringListOrNull("auth.agentDirectCommit.roots.${RootName.MAIN}")
+            val fromBlock = file.stringListOrNull("auth.agentDirectCommit.roots.${RootName.PRIMARY}")
             if (fromBlock != null) {
                 require(fromEnv == null) {
-                    "auth.agentDirectCommit.roots.${RootName.MAIN} and PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS both declare " +
+                    "auth.agentDirectCommit.roots.${RootName.PRIMARY} and PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS both declare " +
                         "main's direct-commit globs. Declare main's list ONCE - Plainbase will not guess which of the two " +
                         "you meant, and neither unioning them (which would widen what an agent may commit unreviewed) nor " +
                         "picking a winner (which would drop the other) is safe on an authorization surface."
                 }
                 require(fromFile == null) {
-                    "auth.agentDirectCommit.globs and auth.agentDirectCommit.roots.${RootName.MAIN} both declare main's " +
+                    "auth.agentDirectCommit.globs and auth.agentDirectCommit.roots.${RootName.PRIMARY} both declare main's " +
                         "direct-commit globs. Declare main's list ONCE (see the note on the roots block)."
                 }
                 return fromBlock
@@ -1328,7 +1328,7 @@ data class PlainbaseConfig(
                             "${registered.joinToString(", ") { it.value }}). A direct-commit glob for a root that does not " +
                             "exist authorizes nothing - fix the name, or remove the entry."
                     }
-                    if (name == RootName.MAIN) return@mapNotNull null // owned by mainDirectCommitGlobs
+                    if (name == RootName.PRIMARY) return@mapNotNull null // owned by mainDirectCommitGlobs
                     name to requireParseableGlobs(file.stringListOrNull("auth.agentDirectCommit.roots.$key").orEmpty())
                 }
                 .toMap()
@@ -1476,7 +1476,7 @@ enum class RootsOrigin {
  * The root topology (multi-root C1): every configured root in origin-line-with-name-tiebreak order
  * (ADR-0011 D7 - the order `RootRegistry` preserves and source precedence inherits).
  *
- * [of] takes a DEFENSIVE COPY, the same discipline `RootRegistry.of` has always had: [list], [main] and
+ * [of] takes a DEFENSIVE COPY, the same discipline `RootRegistry.of` has always had: [list], [primary] and
  * [extras] are three views of ONE snapshot and can never disagree, whatever the caller does afterwards with
  * the list it handed in.
  */
@@ -1485,12 +1485,12 @@ data class RootsConfig private constructor(
     val list: List<Root>,
     val origin: RootsOrigin,
     /**
-     * Did main come from a hand-written `roots {}` block? False when it was SYNTHESIZED from CONTENT_DIR -
+     * Did the primary root come from a hand-written `roots {}` block? False when it was SYNTHESIZED from CONTENT_DIR -
      * which a `roots.conf`-only topology is, despite being EXPLICIT (C5 D-C5-3). The distinction is not
      * cosmetic: it is what stops [PlainbaseConfig.rootsWarnings] telling a docker operator their CONTENT_DIR
-     * is ignored while it is still the thing main's path comes from.
+     * is ignored while it is still the thing the primary root's path comes from.
      */
-    val mainDeclared: Boolean,
+    val primaryDeclared: Boolean,
     /**
      * The roots that came from `DATA_DIR/roots.conf` (C5 D-C5-10). Captured HERE, where both files are in
      * hand, because it is the only place they ever are: a caller that re-reads `roots.conf` to answer "where
@@ -1506,22 +1506,22 @@ data class RootsConfig private constructor(
      * D7 order is preserved verbatim (`RootRegistry.rank` inherits it, and rank is source precedence across
      * roots). A typed ACCESSOR, never a promotion.
      */
-    val main: Root = list.first { it.name == RootName.MAIN }
+    val primary: Root = list.first { it.name == RootName.PRIMARY }
 
-    /** Every root except [main], in D7 order. A partition of [list], NOT a reordering. */
-    val extras: List<Root> = list.filter { it.name != RootName.MAIN }
+    /** Every root except [primary], in D7 order. A partition of [list], NOT a reordering. */
+    val extras: List<Root> = list.filter { it.name != RootName.PRIMARY }
 
     companion object {
 
-        /** Snapshots [list] and validates it once, so nothing downstream has to search for main. */
+        /** Snapshots [list] and validates it once, so nothing downstream has to search for the primary root. */
         fun of(
             list: List<Root>,
             origin: RootsOrigin,
-            mainDeclared: Boolean = origin == RootsOrigin.EXPLICIT,
+            primaryDeclared: Boolean = origin == RootsOrigin.EXPLICIT,
             managed: Set<RootName> = emptySet(),
         ): RootsConfig {
             val snapshot = list.toList()
-            require(snapshot.any { it.name == RootName.MAIN }) {
+            require(snapshot.any { it.name == RootName.PRIMARY }) {
                 "no 'main' root in the roots list (parse and synthesis both guarantee one; a directly-constructed " +
                     "RootsConfig must include it)"
             }
@@ -1532,7 +1532,7 @@ data class RootsConfig private constructor(
             require(duplicates.isEmpty()) { "duplicate root name(s): ${duplicates.joinToString(", ") { it.value }}" }
             val reserved = snapshot.map { it.name }.filter(ReservedSegments::isReserved)
             require(reserved.isEmpty()) { "reserved root name(s): ${reserved.joinToString(", ") { it.value }}" }
-            return RootsConfig(snapshot, origin, mainDeclared, managed)
+            return RootsConfig(snapshot, origin, primaryDeclared, managed)
         }
 
         /**
@@ -1547,7 +1547,7 @@ data class RootsConfig private constructor(
                 StorageBackend.OBJECT -> RootBackend.Object(storage.bucket.orEmpty(), storage.prefix)
             }
             return of(
-                list = listOf(Root(name = RootName.MAIN, backend = backend, editable = true, history = HistoryMode.AUTO)),
+                list = listOf(Root(name = RootName.PRIMARY, backend = backend, editable = true, history = HistoryMode.AUTO)),
                 origin = RootsOrigin.SYNTHESIZED,
             )
         }

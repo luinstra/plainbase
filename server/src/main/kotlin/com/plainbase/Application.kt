@@ -383,7 +383,7 @@ private fun hydrateObjectMode(
 
     // Record the binding before the first LIST; an untrusted binding gets a mirror derived from this bucket.
     val objectStore = koin.get<ObjectContentStore>()
-    if (koin.get<BindingLatch>().observe(koin.get<RootRegistry>().main.name, objectStore.binding) != BindingStatus.TRUSTED) {
+    if (koin.get<BindingLatch>().observe(koin.get<RootRegistry>().primary.name, objectStore.binding) != BindingStatus.TRUSTED) {
         objectStore.rebind()
     }
     runCatching {

@@ -48,7 +48,7 @@ class BootGateTest : FunSpec({
             val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/nope/not/here"))
             val refusal = config.bootRefusals().single()
             refusal.kind shouldBe BootRefusal.Kind.MAIN_UNUSABLE
-            refusal.roots shouldBe setOf(RootName.MAIN)
+            refusal.roots shouldBe setOf(RootName.PRIMARY)
             // Message EQUALITY, not similarity: a paraphrase would mean somebody re-implemented something.
             refusal.message shouldBe shouldThrow<IllegalArgumentException> { config.requireContentDir() }.message
         }
@@ -69,7 +69,7 @@ class BootGateTest : FunSpec({
                 val refusal = PlainbaseConfig.fromEnvAndFile(env).bootRefusals().single()
                 refusal.kind shouldBe BootRefusal.Kind.ROOT_PAIR
                 // Keyed by the PAIR, so a pre-existing violation between (a, b) cannot mask a new one on (a, c).
-                refusal.roots shouldBe setOf(RootName.MAIN, RootName.require("inner"))
+                refusal.roots shouldBe setOf(RootName.PRIMARY, RootName.require("inner"))
                 refusal.message shouldContain "nested inside"
             }
         } finally {
@@ -175,7 +175,7 @@ class BootGateTest : FunSpec({
 
             withClue("equal KEYS: the diff must see one unchanged fault, not a new one") {
                 legacyRefusal.key shouldBe explicitRefusal.key
-                legacyRefusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.MAIN))
+                legacyRefusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.PRIMARY))
             }
             withClue("DIFFERENT prose: this is what proves a message diff would have called it new") {
                 legacyRefusal.message shouldNotBe explicitRefusal.message
@@ -213,7 +213,7 @@ class BootGateTest : FunSpec({
 
             withClue("equal KEYS: one unchanged fault, so `root add` warns and proceeds instead of taking a hostage") {
                 legacyRefusal.key shouldBe explicitRefusal.key
-                legacyRefusal.key shouldBe (BootRefusal.Kind.MAIN_UNUSABLE to setOf(RootName.MAIN))
+                legacyRefusal.key shouldBe (BootRefusal.Kind.MAIN_UNUSABLE to setOf(RootName.PRIMARY))
             }
             withClue("DIFFERENT prose: each arm still names the key the operator actually wrote") {
                 legacyRefusal.message shouldContain "CONTENT_DIR is not readable/searchable"

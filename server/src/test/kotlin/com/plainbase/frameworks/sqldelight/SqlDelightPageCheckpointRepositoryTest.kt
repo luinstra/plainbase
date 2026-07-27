@@ -22,7 +22,7 @@ import io.kotest.matchers.shouldBe
  */
 class SqlDelightPageCheckpointRepositoryTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val idA = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val idB = PageId.require("f47ac10b-58cc-4372-a567-0e02b2c3d479")

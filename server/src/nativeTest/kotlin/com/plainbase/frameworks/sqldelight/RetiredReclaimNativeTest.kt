@@ -22,18 +22,18 @@ class RetiredReclaimNativeTest {
         try {
             DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                val path = RootedPath(RootName.MAIN, TreePath.require("doc.md"))
+                val path = RootedPath(RootName.PRIMARY, TreePath.require("doc.md"))
                 val retired = PageId.require("01010101-0101-0101-0101-010101010101")
                 val successor = PageId.require("02020202-0202-0202-0202-020202020202")
 
                 assertEquals(BindOutcome.Bound, repo.bind(path, retired, materialized = true))
                 assertEquals(BindOutcome.Bound, repo.bind(path, successor, materialized = true))
-                assertNotNull(repo.retiredAt(RootName.MAIN, retired))
+                assertNotNull(repo.retiredAt(RootName.PRIMARY, retired))
                 assertEquals(emptyList(), repo.rootsHoldingId(retired))
 
                 assertEquals(BindOutcome.Bound, repo.bind(path, retired, materialized = true))
-                assertNull(repo.retiredAt(RootName.MAIN, retired))
-                assertEquals(listOf(RootName.MAIN), repo.rootsHoldingId(retired))
+                assertNull(repo.retiredAt(RootName.PRIMARY, retired))
+                assertEquals(listOf(RootName.PRIMARY), repo.rootsHoldingId(retired))
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }

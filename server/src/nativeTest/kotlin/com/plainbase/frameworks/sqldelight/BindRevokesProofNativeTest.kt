@@ -42,7 +42,7 @@ class BindRevokesProofNativeTest {
                 val idMap = SqlDelightIdMapRepository(db)
                 val retirements = SqlDelightRetirementRepository(db)
 
-                val root = RootName.MAIN
+                val root = RootName.PRIMARY
                 val path = RootedPath(root, TreePath.require("guides/deploy.md"))
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
 

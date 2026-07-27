@@ -74,7 +74,7 @@ val contentModule = module {
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
-        val main = get<RootRegistry>().main
+        val main = get<RootRegistry>().primary
         // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
         // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
         // and its writes would re-trigger every rebuild.
@@ -99,13 +99,13 @@ val contentModule = module {
         val availability = get<RootAvailability>()
         val ignoreRules = get<IgnoreRules>()
         // Main rides the backend-selected store (object mode included), taken EXPLICITLY - the fold sees ONLY extras,
-        // never re-selecting main by name (the C4 HistoryModule bug shape; `RootWiringArchitectureTest` pins it out).
+        // never re-selecting primary by name (the C4 HistoryModule bug shape; `RootWiringArchitectureTest` pins it out).
         // Extras are LOCAL-only in v1 (D10 keeps object mode single-root), and they inherit main's DATA_DIR exclusion
         // so a legally-nested data dir is never walked as content.
-        RootStores(
-            mapOf(registry.main.name to get<ContentStore>()) +
-                registry.extras.associate { root ->
-                    root.name to LocalContentStore(
+            RootStores(
+                mapOf(registry.primary.name to get<ContentStore>()) +
+                    registry.extras.associate { root ->
+                        root.name to LocalContentStore(
                         root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
                         ignoreRules = ignoreRules,
                         exclusions = listOf(config.dataDir),
@@ -123,7 +123,7 @@ val contentModule = module {
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
-        val main = get<RootRegistry>().main.name
+        val main = get<RootRegistry>().primary.name
         ObjectContentStoreFactory.build(
             config,
             ignoreRules = get(),
@@ -131,7 +131,7 @@ val contentModule = module {
             // wants bare TreePaths of the main mirror.
             dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
             // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
-            isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
+            isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
             // C3: the pagination boundary. Read FRESH before each LIST (never captured here), so a page created while
             // a LIST paginates is not in the generation's rows and can never be covered by its proof. The binding_epoch
             // is co-read HERE (revoke-before-stamp, C5), and FIRST: a bind landing between it and the row read advances

@@ -470,7 +470,7 @@ class RootCommandTest : FunSpec({
     }
 
     test("T-CLI-9b: a SYNTHESIZED main is reported as coming from CONTENT_DIR, not from plainbase.conf") {
-        // Provenance is a pure function of the ONE snapshot the loader built - `mainDeclared` + `managed` - never a
+        // Provenance is a pure function of the ONE snapshot the loader built - `primaryDeclared` + `managed` - never a
         // second parse of roots.conf and never a path comparison. There is exactly ONE read, which is the whole
         // reason `list` is safe without a lock.
         world(rootsConf = """roots { notes { path = "/roots/notes" } }""") { w ->

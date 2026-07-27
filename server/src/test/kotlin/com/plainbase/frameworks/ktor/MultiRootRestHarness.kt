@@ -124,7 +124,7 @@ class MultiRootRestHarness(
     }
 
     val index = IndexHarness(
-        root = requireNotNull(registry.main.localPath),
+        root = requireNotNull(registry.primary.localPath),
         rootRegistry = registry,
         availability = availability,
         sources = roots.map { IndexBuilder.Source(it, storesByRoot.getValue(it.name), NoOpHistoryProvider) },

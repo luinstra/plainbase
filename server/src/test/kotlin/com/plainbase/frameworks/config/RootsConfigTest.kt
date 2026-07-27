@@ -61,7 +61,7 @@ class RootsConfigTest : FunSpec({
                 ),
                 Root(RootName.require("notes"), RootBackend.Local(Path.of("/roots/notes")), editable = true, history = HistoryMode.OFF),
             )
-            roots.main shouldBe roots.list.first()
+            roots.primary shouldBe roots.list.first()
         }
     }
 
@@ -266,7 +266,7 @@ class RootsConfigTest : FunSpec({
 
     test("a contentDir-only config synthesizes main identically via env and via the file key") {
         val expectedRoot = { dir: Path ->
-            listOf(Root(RootName.MAIN, RootBackend.Local(dir), editable = true, history = HistoryMode.AUTO))
+            listOf(Root(RootName.PRIMARY, RootBackend.Local(dir), editable = true, history = HistoryMode.AUTO))
         }
         withDataDir(conf = null) { env ->
             val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs"))
@@ -306,8 +306,8 @@ class RootsConfigTest : FunSpec({
             ),
         )
         config.roots.origin shouldBe RootsOrigin.SYNTHESIZED
-        config.roots.main.backend shouldBe RootBackend.Object(bucket = "docs", prefix = "corp")
-        config.roots.main.localPath shouldBe null
+        config.roots.primary.backend shouldBe RootBackend.Object(bucket = "docs", prefix = "corp")
+        config.roots.primary.localPath shouldBe null
         config.mainContentRoot() shouldBe config.contentDir
     }
 
@@ -339,13 +339,13 @@ class RootsConfigTest : FunSpec({
 
     // --- the canonical snapshot ----------------------------------------------------------------------
 
-    test("of() snapshots the caller's list: mutating it afterwards cannot desync list, main or extras") {
+    test("of() snapshots the caller's list: mutating it afterwards cannot desync list, primary or extras") {
         val declared = mutableListOf(root("zeta"), root("main"))
         val roots = RootsConfig.of(list = declared, origin = RootsOrigin.EXPLICIT)
         declared.add(root("alpha"))
         declared.removeAt(0)
         roots.list.map { it.name.value } shouldBe listOf("zeta", "main")
-        roots.main.name shouldBe RootName.MAIN
+        roots.primary.name shouldBe RootName.PRIMARY
         roots.extras.map { it.name.value } shouldBe listOf("zeta")
     }
 

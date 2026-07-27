@@ -77,7 +77,7 @@ class RestRedirectTest : FunSpec({
         }) { root ->
             restTest(root) { harness ->
                 val client = restClient()
-                val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a-b.md")))
+                val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("a-b.md")))
 
                 val response = client.get("/docs/main/old/loser")
                 response.status shouldBe HttpStatusCode.MovedPermanently

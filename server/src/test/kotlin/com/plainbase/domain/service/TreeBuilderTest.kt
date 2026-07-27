@@ -21,7 +21,7 @@ import io.kotest.matchers.shouldBe
 class TreeBuilderTest : FunSpec({
 
     fun <T> withFixtureTree(block: (TreeNode.Folder) -> T): T =
-        IndexHarness(Fixtures.demoDocs).use { harness -> block(TreeBuilder.build(harness.builder.rebuild(), RootName.MAIN)) }
+        IndexHarness(Fixtures.demoDocs).use { harness -> block(TreeBuilder.build(harness.builder.rebuild(), RootName.PRIMARY)) }
 
     test("tree shape golden: types, membership, and field values (incl. url) match") {
         withFixtureTree { root ->
@@ -96,7 +96,7 @@ class TreeBuilderTest : FunSpec({
             writePage(root, "extras.md", "---\ntitle: Extras\nowner: alice\ntags: [a, b]\nreview: pending\n---\n# Extras\n")
         }) { root ->
             IndexHarness(root).use { harness ->
-                val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.MAIN)
+                val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.PRIMARY)
                 val pages = tree.children.filterIsInstance<TreeNode.Page>().associateBy { it.path.name }
                 pages.getValue("valid.md").updated shouldBe "2026-05-30"
                 pages.getValue("absent.md").updated.shouldBeNull()
@@ -126,7 +126,7 @@ class TreeBuilderTest : FunSpec({
             writePage(root, "a-b/deep/page.md", "# Loser\n")
         }) { root ->
             IndexHarness(root).use { harness ->
-                val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.MAIN)
+                val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.PRIMARY)
                 val folders = tree.children.filterIsInstance<TreeNode.Folder>().associateBy { it.name }
                 folders.getValue("café notes").url shouldBe "/docs/main/caf%C3%A9-notes"
                 folders.getValue("a b").url shouldBe "/docs/main/a-b"

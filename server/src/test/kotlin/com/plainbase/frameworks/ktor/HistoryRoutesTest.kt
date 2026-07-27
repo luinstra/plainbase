@@ -36,7 +36,7 @@ class HistoryRoutesTest : FunSpec({
     val pagePath = "notes/page.md"
     val seed: (
         IdMapRepository,
-    ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
+    ) -> Unit = { it.bind(RootedPath(RootName.PRIMARY, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
 
     /** A temp content tree with one page file, cleaned up after [block]. */
     fun withTree(block: (Path) -> Unit) {

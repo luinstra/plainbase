@@ -305,14 +305,14 @@ class ObjectContentStoreOracleTest : FunSpec({
  * the local oracle's patched bytes be compared page-for-page (UUIDv7 randomness would defeat equality).
  */
 private fun adoptionPass(store: ContentStore, idMap: IdMapRepository) = AdoptionPass(
-    sources = listOf(AdoptionPass.Source(RootName.MAIN, store)),
+    sources = listOf(AdoptionPass.Source(RootName.PRIMARY, store)),
     idMap = idMap,
     identity = PageIdentityService(TestIdProvider()),
     patcher = FrontmatterPatcher(),
     rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
     citations = CitationFactory(),
     rootRank = { 0 },
-    registeredRoots = setOf(RootName.MAIN),
+    registeredRoots = setOf(RootName.PRIMARY),
 )
 
 /** An in-memory SQLDelight-backed [IdMapRepository] scoped to [block] (the AdoptionPassTest idiom). */

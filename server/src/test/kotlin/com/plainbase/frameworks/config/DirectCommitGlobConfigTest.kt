@@ -56,7 +56,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
 
             withClue("the pattern did NOT move: it still authorizes the colon-bearing FOLDER in MAIN") {
-                globs.single().root shouldBe RootName.MAIN
+                globs.single().root shouldBe RootName.PRIMARY
                 globs.single().matches(TreePath.require("archive:2024/plan.md")).shouldBeTrue()
             }
             withClue("and it grants NOTHING inside the `archive` ROOT - the escalation an in-string grammar would have created") {
@@ -82,7 +82,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             """.trimIndent(),
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
-            globs.map { it.root } shouldContainExactly listOf(RootName.MAIN, RootName.MAIN)
+            globs.map { it.root } shouldContainExactly listOf(RootName.PRIMARY, RootName.PRIMARY)
             globs[0].matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs[1].matches(TreePath.require("guides/a.md")).shouldBeTrue()
         }
@@ -96,7 +96,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             """.trimIndent(),
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("notes/a.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
         }
     }
@@ -110,7 +110,7 @@ class DirectCommitGlobConfigTest : FunSpec({
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
 
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
         }
     }
@@ -126,7 +126,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             val globs = config.agentDirectCommitGlobs()
 
             withClue("env-wins over the FILE key, exactly as it always has") {
-                globs.single { it.root == RootName.MAIN }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
+                globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
             }
             withClue("extras are FILE-ONLY by construction (there is no env path to a roots block at all), so the block survives") {
                 globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
@@ -176,7 +176,7 @@ class DirectCommitGlobConfigTest : FunSpec({
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
                 .agentDirectCommitGlobs()
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
         }
     }
 

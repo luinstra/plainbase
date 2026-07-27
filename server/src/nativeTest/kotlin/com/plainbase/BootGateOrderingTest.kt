@@ -66,7 +66,7 @@ class BootGateOrderingTest {
 
             // Registry (rank) order, which is the order `serve()` replays them in.
             assertEquals(
-                listOf(RootName.MAIN, RootName.require("absent"), RootName.require("claimed")),
+                listOf(RootName.PRIMARY, RootName.require("absent"), RootName.require("claimed")),
                 gate.verdicts.map { it.root },
                 "the verdicts must come back in RANK order, or replaying them cannot reproduce today's boot output",
             )

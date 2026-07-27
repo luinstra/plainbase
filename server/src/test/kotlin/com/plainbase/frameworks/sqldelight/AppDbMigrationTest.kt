@@ -62,16 +62,16 @@ class AppDbMigrationTest : FunSpec({
                 // The tables are live, not just present: rows round-trip through the typed layer.
                 val db = DatabaseFactory.createDatabase(driver)
                 val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-                db.pageCheckpointQueries.insertRow(id, RootName.MAIN, TreePath.require("docs/start"))
+                db.pageCheckpointQueries.insertRow(id, RootName.PRIMARY, TreePath.require("docs/start"))
                 val row = db.pageCheckpointQueries.selectAll().executeAsOne()
                 row.id shouldBe id
-                row.root shouldBe RootName.MAIN
+                row.root shouldBe RootName.PRIMARY
                 row.url_path?.value shouldBe "docs/start"
 
-                db.dirtyPageQueries.upsert(id, RootName.MAIN, TreePath.require("docs/start"), "sha256:abc", "WRITING")
+                db.dirtyPageQueries.upsert(id, RootName.PRIMARY, TreePath.require("docs/start"), "sha256:abc", "WRITING")
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
                 dirty.id shouldBe id
-                dirty.root shouldBe RootName.MAIN
+                dirty.root shouldBe RootName.PRIMARY
                 dirty.path.value shouldBe "docs/start"
                 dirty.stage shouldBe "WRITING"
 
@@ -136,7 +136,7 @@ class AppDbMigrationTest : FunSpec({
                     diffArtifact = "", status = "PENDING", authorIssuer = "agent", authorExternalId = "00ff",
                     authorLabel = "ci", approverIssuer = null, approverExternalId = null, decisionComment = null,
                     createdAt = 0, decidedAt = null, appliedCommit = null, statusReason = null,
-                    root = RootName.MAIN,
+                    root = RootName.PRIMARY,
                 )
                 db.proposalsQueries.selectById(proposalId).executeAsOne().status shouldBe "PENDING"
             }
@@ -218,25 +218,25 @@ class AppDbMigrationTest : FunSpec({
                 val pageId = PageId.require("01010101-0101-0101-0101-010101010101")
 
                 val binding = db.idMapQueries.selectAllBindings().executeAsOne()
-                binding.root shouldBe RootName.MAIN
+                binding.root shouldBe RootName.PRIMARY
                 binding.path.value shouldBe "guides/a.md"
                 binding.id shouldBe pageId
 
                 val alias = db.idMapQueries.selectAllAliases().executeAsOne()
-                alias.root shouldBe RootName.MAIN
+                alias.root shouldBe RootName.PRIMARY
                 alias.path.value shouldBe "guides/old"
 
                 // Decodes through the repository's per-kind mapping: root stamped, other_root the sentinel.
                 SqlDelightIdMapRepository(db).issues() shouldContainExactly
-                    listOf(IdentityIssue.PatchRefused(RootName.MAIN, TreePath.require("guides/a.md"), "reason"))
+                    listOf(IdentityIssue.PatchRefused(RootName.PRIMARY, TreePath.require("guides/a.md"), "reason"))
                 driver.queryLong("SELECT count(*) FROM identity_issue WHERE other_root = ''") shouldBe 1L
 
                 val checkpoint = db.pageCheckpointQueries.selectAll().executeAsOne()
-                checkpoint.root shouldBe RootName.MAIN
+                checkpoint.root shouldBe RootName.PRIMARY
                 checkpoint.url_path?.value shouldBe "guides/a"
 
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
-                dirty.root shouldBe RootName.MAIN
+                dirty.root shouldBe RootName.PRIMARY
                 dirty.path.value shouldBe "guides/a.md"
 
                 // `root` is a TYPED RootName as of C4 (D18 threads it end to end); the v10 rows still migrate to the
@@ -244,7 +244,7 @@ class AppDbMigrationTest : FunSpec({
                 db.proposalsQueries.selectById(
                     com.plainbase.domain.page.ProposalId.require("03030303-0303-0303-0303-030303030303"),
                 ) { _, _, _, _, _, _, _, _, status, _, _, _, _, _, _, _, _, _, _, root -> status to root }
-                    .executeAsOne() shouldBe ("PENDING" to RootName.MAIN)
+                    .executeAsOne() shouldBe ("PENDING" to RootName.PRIMARY)
 
                 // The composite PK is live (same relative path under another root inserts cleanly)...
                 db.idMapQueries.upsertBinding(
@@ -264,7 +264,7 @@ class AppDbMigrationTest : FunSpec({
                 // ...but re-claiming it under its OWN root at a new path still throws - one id per root.
                 shouldThrowAny {
                     db.idMapQueries.upsertBinding(
-                        root = RootName.MAIN,
+                        root = RootName.PRIMARY,
                         path = TreePath.require("guides/copy2.md"),
                         id = pageId,
                         materialized = false,
@@ -347,17 +347,17 @@ class AppDbMigrationTest : FunSpec({
 
                 // (i) every seeded row survives the rebuild.
                 val dirty = db.dirtyPageQueries.selectAll().executeAsOne()
-                dirty.root shouldBe RootName.MAIN
+                dirty.root shouldBe RootName.PRIMARY
                 dirty.path.value shouldBe "guides/a.md"
-                db.pageCheckpointQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
+                db.pageCheckpointQueries.selectAll().executeAsOne().root shouldBe RootName.PRIMARY
                 db.idMapQueries.selectAllRetired().executeAsList().map { it.root }
-                    .shouldContainExactlyInAnyOrder(RootName.MAIN, RootName.require("extra"))
+                    .shouldContainExactlyInAnyOrder(RootName.PRIMARY, RootName.require("extra"))
 
                 // (iii) each alias's target_root is DERIVED from its id's real root, never blanket 'main'.
                 val aliases = SqlDelightUrlAliasRepository(db)
-                aliases.find(RootedPath(RootName.MAIN, TreePath.require("old"))) shouldBe
+                aliases.find(RootedPath(RootName.PRIMARY, TreePath.require("old"))) shouldBe
                     RootedPageId(RootName.require("extra"), PageId.require("03030303-0303-0303-0303-030303030303"))
-                aliases.find(RootedPath(RootName.MAIN, TreePath.require("older"))) shouldBe
+                aliases.find(RootedPath(RootName.PRIMARY, TreePath.require("older"))) shouldBe
                     RootedPageId(RootName.require("extra"), PageId.require("04040404-0404-0404-0404-040404040404"))
             }
 
@@ -434,7 +434,7 @@ class AppDbMigrationTest : FunSpec({
                 driver.queryLong("PRAGMA user_version") shouldBe 18L
                 val id = PageId.require("05050505-0505-0505-0505-050505050505")
                 // The row survives and is reachable through the C4 index-served retired-claimant SELECT.
-                db.idMapQueries.selectRetiredRootsHoldingId(id).executeAsList().shouldContainExactly(listOf(RootName.MAIN))
+                db.idMapQueries.selectRetiredRootsHoldingId(id).executeAsList().shouldContainExactly(listOf(RootName.PRIMARY))
             }
 
             DriverManager.getConnection("jdbc:sqlite:$dbPath").use { raw ->
@@ -472,7 +472,7 @@ class AppDbMigrationTest : FunSpec({
                 driver.queryLong("PRAGMA user_version") shouldBe 18L
                 val x = PageId.require("07070707-0707-0707-0707-070707070707")
                 // The pre-flip row survives the id_map rebuild under its own (root, path).
-                db.idMapQueries.selectRootsHoldingId(x).executeAsList().shouldContainExactly(listOf(RootName.MAIN))
+                db.idMapQueries.selectRootsHoldingId(x).executeAsList().shouldContainExactly(listOf(RootName.PRIMARY))
                 // The flip's headline: the SAME id inserts under a DIFFERENT root (UNIQUE(id, root)).
                 db.idMapQueries.upsertBinding(
                     root = RootName.require("extra"),
@@ -481,7 +481,7 @@ class AppDbMigrationTest : FunSpec({
                     materialized = false,
                 )
                 db.idMapQueries.selectRootsHoldingId(x).executeAsList()
-                    .shouldContainExactlyInAnyOrder(RootName.MAIN, RootName.require("extra"))
+                    .shouldContainExactlyInAnyOrder(RootName.PRIMARY, RootName.require("extra"))
             }
         } finally {
             dir.toFile().deleteRecursively()
@@ -505,12 +505,12 @@ class AppDbMigrationTest : FunSpec({
                 val db = DatabaseFactory.createDatabase(driver)
                 driver.queryLong("PRAGMA user_version") shouldBe 18L
 
-                val before = db.rootObservationQueries.selectObservationAndEpoch(RootName.MAIN).executeAsOne()
+                val before = db.rootObservationQueries.selectObservationAndEpoch(RootName.PRIMARY).executeAsOne()
                 before.observation_id shouldBe 5L
                 before.binding_epoch shouldBe 0L // back-filled by the DEFAULT, the observation token untouched
 
-                db.rootObservationQueries.incrementBindingEpoch(RootName.MAIN)
-                val after = db.rootObservationQueries.selectObservationAndEpoch(RootName.MAIN).executeAsOne()
+                db.rootObservationQueries.incrementBindingEpoch(RootName.PRIMARY)
+                val after = db.rootObservationQueries.selectObservationAndEpoch(RootName.PRIMARY).executeAsOne()
                 after.observation_id shouldBe 5L // orthogonal: the increment moves ONLY binding_epoch
                 after.binding_epoch shouldBe 1L
             }
@@ -582,8 +582,8 @@ class AppDbMigrationTest : FunSpec({
             DatabaseFactory.createDriver(dbPath).use { driver ->
                 val db = DatabaseFactory.createDatabase(driver)
                 driver.queryLong("PRAGMA user_version") shouldBe 18L
-                db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.MAIN
-                db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.MAIN
+                db.idMapQueries.selectAllBindings().executeAsOne().root shouldBe RootName.PRIMARY
+                db.dirtyPageQueries.selectAll().executeAsOne().root shouldBe RootName.PRIMARY
             }
         } finally {
             dir.toFile().deleteRecursively()
@@ -622,7 +622,7 @@ class AppDbMigrationTest : FunSpec({
                 val retirements = SqlDelightRetirementRepository(db)
                 val limbo = RootLimbo()
                 val builder = IndexBuilder(
-                    sources = listOf(IndexBuilder.Source(registry.main, LocalContentStore(contentDir), BaselineHistory)),
+                    sources = listOf(IndexBuilder.Source(registry.primary, LocalContentStore(contentDir), BaselineHistory)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
@@ -632,17 +632,17 @@ class AppDbMigrationTest : FunSpec({
                     checkpoint = SqlDelightPageCheckpointRepository(db),
                     citations = CitationFactory(),
                     rootRank = registry::rank,
-                    registeredRoots = setOf(RootName.MAIN),
+                    registeredRoots = setOf(RootName.PRIMARY),
                     retirements = retirements,
                     limbo = limbo,
                 )
 
                 val snapshot = builder.rebuild()
 
-                snapshot.byPath.getValue(RootedPath(RootName.MAIN, path)).id shouldBe id // witnessed, identity stable
+                snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, path)).id shouldBe id // witnessed, identity stable
                 idMap.retiredBindings().shouldBeEmpty() // zero proofs minted: a healthy upgrade reaps nothing
-                limbo.count(RootName.MAIN) shouldBe 0
-                retirements.gitHead(RootName.MAIN) shouldBe "baseline-head" // the checkpoint records a baseline
+                limbo.count(RootName.PRIMARY) shouldBe 0
+                retirements.gitHead(RootName.PRIMARY) shouldBe "baseline-head" // the checkpoint records a baseline
             }
         } finally {
             dir.toFile().deleteRecursively()

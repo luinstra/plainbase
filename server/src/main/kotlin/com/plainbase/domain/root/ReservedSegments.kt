@@ -25,7 +25,7 @@ object ReservedSegments {
 
     /**
      * `docs` is deliberately absent: it BECOMES the primary root's own name when the primary is renamed off
-     * [RootName.MAIN], and reserving it would then boot-refuse the required primary on every install. `p` is here
+     * [RootName.PRIMARY], and reserving it would then boot-refuse the required primary on every install. `p` is here
      * as belt and braces only - what actually reserves the single-character namespace is [RootName]'s minimum
      * length of 2, and `RootNameTest` pins that.
      */

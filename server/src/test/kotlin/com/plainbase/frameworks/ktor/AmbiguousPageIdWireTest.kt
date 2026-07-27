@@ -53,7 +53,7 @@ class AmbiguousPageIdWireTest : FunSpec({
 
     val dupId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val id = PageId.require(dupId)
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val notes = RootName.require("notes")
 
     fun twoRoots(block: (Path, Path) -> Unit) {

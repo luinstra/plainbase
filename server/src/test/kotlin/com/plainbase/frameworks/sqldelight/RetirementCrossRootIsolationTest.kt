@@ -31,7 +31,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  */
 class RetirementCrossRootIsolationTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val x = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val mainPath = RootedPath(main, TreePath.require("notes/x.md"))

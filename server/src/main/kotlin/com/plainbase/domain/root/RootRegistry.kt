@@ -16,19 +16,19 @@ class RootRegistry private constructor(
     /**
      * The reserved primary root. A construction-time GUARANTEE, not a runtime search: [of] resolves and
      * validates it once, over the same snapshot [roots] holds. NOT necessarily `roots[0]` - D7 order is
-     * preserved verbatim and main sits wherever config declared it, because [rank] (source precedence
+     * preserved verbatim and primary sits wherever config declared it, because [rank] (source precedence
      * across roots) reads that order.
      */
-    val main: Root,
+    val primary: Root,
 ) {
 
     /**
-     * Every root except [main], in D7 order. A partition of [roots], NOT a reordering: [rank] still reads
-     * [roots], where main sits wherever config declared it. Exists so the per-root wiring folds over EXTRAS
-     * and main's entry is constructed explicitly, instead of a fold re-selecting main by name (the C4
-     * HistoryModule bug: main's arm short-circuited to a single that had drifted mode-blind).
+     * Every root except [primary], in D7 order. A partition of [roots], NOT a reordering: [rank] still reads
+     * [roots], where primary sits wherever config declared it. Exists so the per-root wiring folds over EXTRAS
+     * and primary's entry is constructed explicitly, instead of a fold re-selecting primary by name (the C4
+     * HistoryModule bug: primary's arm short-circuited to a single that had drifted mode-blind).
      */
-    val extras: List<Root> = roots.filter { it.name != main.name }
+    val extras: List<Root> = roots.filter { it.name != primary.name }
 
     private val rootsByName: Map<RootName, Root> = roots.associateBy { it.name }
 
@@ -46,7 +46,7 @@ class RootRegistry private constructor(
     companion object {
 
         /**
-         * Builds a registry over a defensive copy of [roots], validated once: [main] is resolved HERE, so
+         * Builds a registry over a defensive copy of [roots], validated once: [primary] is resolved HERE, so
          * every accessor downstream reads one canonical snapshot. The distinct-names check is defense for
          * programmatic construction only - HOCON merges duplicate keys field-wise at parse, so the
          * config path can never produce duplicates.
@@ -55,10 +55,10 @@ class RootRegistry private constructor(
             val snapshot = roots.toList()
             val duplicates = snapshot.groupBy { it.name }.filterValues { it.size > 1 }.keys
             require(duplicates.isEmpty()) { "duplicate root name(s): ${duplicates.joinToString(", ") { it.value }}" }
-            val main = requireNotNull(snapshot.firstOrNull { it.name == RootName.MAIN }) {
-                "a root named '${RootName.MAIN}' is required (the reserved primary)"
+            val primary = requireNotNull(snapshot.firstOrNull { it.name == RootName.PRIMARY }) {
+                "a root named '${RootName.PRIMARY}' is required (the reserved primary)"
             }
-            return RootRegistry(snapshot, main)
+            return RootRegistry(snapshot, primary)
         }
     }
 }

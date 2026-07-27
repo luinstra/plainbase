@@ -135,13 +135,13 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
             // materialized frontmatter (id included) never changes and classifyEdit stays green.
             val target = TreePath.require("section-00/page-000.md")
             val saves = (0 until 20).map { round ->
-                val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
+                val current = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, target))
                 val bytes = (current.markdown + "\nsave round $round.\n").toByteArray()
                 val outcome: WriteOutcome
                 val millis = measureTimeMillis {
                     outcome = pipeline.write(
                         grantForTests(),
-                        WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, bytes),
+                        WriteIntent(current.id, RootName.PRIMARY, current.path, current.contentHash, bytes),
                     )
                 }
                 outcome.shouldBeInstanceOf<WriteOutcome.Written>()
@@ -203,7 +203,7 @@ private fun timedCreate(pipeline: WritePipeline, path: String): Long {
     val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
     val outcome: WriteOutcome
     val millis = measureTimeMillis {
-        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require(path), bytes))
+        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.PRIMARY, TreePath.require(path), bytes))
     }
     outcome.shouldBeInstanceOf<WriteOutcome.Written>()
     return millis

@@ -42,13 +42,13 @@ class SearchIndexerTest : FunSpec({
     val idB = PageId.require("0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01")
     val idC = PageId.require("0197c2d1-6f3b-7c45-8d2e-3a7b9f5c8e02")
 
-    fun rooted(id: PageId, root: RootName = RootName.MAIN) = RootedPageId(root, id)
+    fun rooted(id: PageId, root: RootName = RootName.PRIMARY) = RootedPageId(root, id)
 
     fun hash(seed: Char) = "sha256:" + seed.toString().repeat(64)
 
     fun page(id: PageId, path: String, contentHash: String) = IndexedPage(
         id = id,
-        root = RootName.MAIN,
+        root = RootName.PRIMARY,
         path = TreePath.require(path),
         slug = "p",
         urlPath = TreePath.require(path.removeSuffix(".md")),
@@ -64,7 +64,7 @@ class SearchIndexerTest : FunSpec({
         sections = listOf(RenderedSection(null, "body")),
     )
 
-    fun snapshot(vararg pages: IndexedPage) = PageIndex(listOf(RootSection(RootName.MAIN, pages.toList(), emptyList(), emptySet())))
+    fun snapshot(vararg pages: IndexedPage) = PageIndex(listOf(RootSection(RootName.PRIMARY, pages.toList(), emptyList(), emptySet())))
 
     fun state(page: IndexedPage) = PageSearchState(contentHash = page.contentHash, path = page.path)
 
@@ -127,7 +127,7 @@ class SearchIndexerTest : FunSpec({
 
         val indexed = slot<List<PageDocuments>>()
         verify(exactly = 1) { provider.index(capture(indexed)) }
-        indexed.captured.single().root shouldBe RootName.MAIN
+        indexed.captured.single().root shouldBe RootName.PRIMARY
     }
 
     test("root rides the split documents: every PageDocuments carries its page's root") {

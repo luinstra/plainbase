@@ -164,7 +164,7 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 val after = snapshot.section(extra).pages.map { it.rooted }
 
                 withClue("this pass never rebuilt anything, so nothing below tells a carry from a no-op") {
-                    snapshot.byPath.containsKey(RootedPath(RootName.MAIN, TreePath.require("guides/rollout.md"))) shouldBe true
+                    snapshot.byPath.containsKey(RootedPath(RootName.PRIMARY, TreePath.require("guides/rollout.md"))) shouldBe true
                 }
                 withClue("'extra' was not carried: only a carry can publish notes/keep.md, whose file is gone from disk") {
                     snapshot.pageAt(keptId)?.path shouldBe keep.path

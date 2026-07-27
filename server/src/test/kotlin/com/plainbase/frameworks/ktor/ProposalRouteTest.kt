@@ -423,10 +423,10 @@ class ProposalRouteTest : FunSpec({
                 harness.retirements.applyProofs(
                     listOf(
                         AbsenceProof(
-                            root = RootName.MAIN,
+                            root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
-                            observationId = harness.retirements.observation(RootName.MAIN),
-                            bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
+                            observationId = harness.retirements.observation(RootName.PRIMARY),
+                            bindingEpoch = harness.retirements.bindingEpoch(RootName.PRIMARY),
                             covers = setOf(BindingRef(TreePath.require("doc.md"), PageId.require(id))),
                         ),
                     ),

@@ -105,7 +105,7 @@ class RootDeleteAuthorityTest : FunSpec({
                 failing.armed = true
                 val second = builder.rebuild() // must NOT throw
 
-                second.section(RootName.MAIN).pages.map { it.path.value } shouldContainExactly listOf("guides/deploy.md")
+                second.section(RootName.PRIMARY).pages.map { it.path.value } shouldContainExactly listOf("guides/deploy.md")
                 withClue("the failed root keeps its last-good section: nothing is deleted for it") {
                     second.section(extra).pages.map { it.path.value } shouldContainExactly listOf("notes/rollback.md")
                 }
@@ -162,7 +162,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     down?.cause shouldBe UnavailableCause.CORPUS_MISSING
                 }
                 withClue("the other roots are untouched - one broken mount is not a corpus-wide outage") {
-                    cold.current.section(RootName.MAIN).pages.map { it.path.value } shouldContainExactly listOf("guides/deploy.md")
+                    cold.current.section(RootName.PRIMARY).pages.map { it.path.value } shouldContainExactly listOf("guides/deploy.md")
                 }
             }
         }
@@ -228,13 +228,13 @@ class RootDeleteAuthorityTest : FunSpec({
                     world.availability.current().unavailable.getValue(extra).cause shouldBe UnavailableCause.CORPUS_MISSING
                 }
                 withClue("main's arrival KEEPS the id it carries - a legal per-root duplicate, not a move of extra's page") {
-                    snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))).id shouldBe moved
+                    snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("notes/arrived.md"))).id shouldBe moved
                 }
                 withClue("extra's binding is neither exonerated nor reaped - BOTH roots hold the id, extra's in limbo") {
-                    world.idMap.rootsHoldingId(moved).toSet() shouldBe setOf(RootName.MAIN, extra)
+                    world.idMap.rootsHoldingId(moved).toSet() shouldBe setOf(RootName.PRIMARY, extra)
                     world.idMap.bindingInRoot(extra, moved)?.path shouldBe RootedPath(extra, TreePath.require("notes/rollback.md"))
-                    world.idMap.bindingInRoot(RootName.MAIN, moved)?.path shouldBe
-                        RootedPath(RootName.MAIN, TreePath.require("notes/arrived.md"))
+                    world.idMap.bindingInRoot(RootName.PRIMARY, moved)?.path shouldBe
+                        RootedPath(RootName.PRIMARY, TreePath.require("notes/arrived.md"))
                 }
             }
         }
@@ -285,7 +285,7 @@ class RootDeleteAuthorityTest : FunSpec({
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
                 withClue("and the swap still re-derived everything it DID scan") {
-                    world.engine.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, extra)
+                    world.engine.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, extra)
                 }
             }
         }
@@ -361,7 +361,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         searchIndexer: SearchIndexer? = null,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
-            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), NoOpHistoryProvider),
+            IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), NoOpHistoryProvider),
             IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, NoOpHistoryProvider),
         ),
         frontmatterParser = FrontmatterReader(),

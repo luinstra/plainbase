@@ -17,7 +17,7 @@ import kotlin.io.path.name
  * chunk-2 PB-LINK-1 golden test and the contract-smoke spike. It implements §A4 canonical-URL
  * construction (the job that becomes chunk 5's `CanonicalUrlBuilder`) so the resolver can emit the
  * `/docs/{root}/...` URLs the golden table predicts - without depending on chunk 5. Root-qualified
- * since multi-root C3 (as [RootName.MAIN], the fixture tree's root), matching production emission
+ * since multi-root C3 (as [RootName.PRIMARY], the fixture tree's root), matching production emission
  * so the golden pins the LIVE URL contract, never the pre-C3 one.
  *
  * Page slug = frontmatter `slug:` if present, else the filename stem, both passed through
@@ -64,7 +64,7 @@ class FixtureIndexStub(root: Path) : PageIndexView {
         pageUrls[page.value] ?: error("pageUrl called on a non-page path: ${page.value}")
 
     override fun assetUrl(asset: TreePath): String =
-        "/assets/" + RootName.MAIN.value + "/" + PercentCoding.encodePath(asset.value)
+        "/assets/" + RootName.PRIMARY.value + "/" + PercentCoding.encodePath(asset.value)
 
     override fun caseInsensitiveMatches(path: TreePath): List<TreePath> {
         val target = path.value.lowercase()
@@ -84,7 +84,7 @@ class FixtureIndexStub(root: Path) : PageIndexView {
         val slugged = dirSegments.map { HeadingSlugger.slugify(it, HeadingSlugger.FOLDER_FALLBACK) } +
             HeadingSlugger.slugify(pageSlugSource, HeadingSlugger.PAGE_FALLBACK)
         // Unicode slugs are percent-encoded on the wire; the root slug is URL-safe by construction (§A4/§A2).
-        return "/docs/" + RootName.MAIN.value + "/" + slugged.joinToString("/") { PercentCoding.encodeSegment(it) }
+        return "/docs/" + RootName.PRIMARY.value + "/" + slugged.joinToString("/") { PercentCoding.encodeSegment(it) }
     }
 
     /**

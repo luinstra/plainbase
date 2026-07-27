@@ -138,7 +138,7 @@ class PageIndex(sections: List<RootSection>) {
         val EMPTY: PageIndex = PageIndex(emptyList())
 
         /** [view]'s unknown-root answer: a [SectionView] over nothing (root-independent lookups). */
-        private val EMPTY_VIEW: PageIndexView = SectionView(RootSection(RootName.MAIN, emptyList(), emptyList(), emptySet()))
+        private val EMPTY_VIEW: PageIndexView = SectionView(RootSection(RootName.PRIMARY, emptyList(), emptyList(), emptySet()))
     }
 }
 

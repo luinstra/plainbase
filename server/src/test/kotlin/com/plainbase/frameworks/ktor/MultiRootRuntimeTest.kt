@@ -441,7 +441,7 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.idMapOnly("extra", "notes/rollback.md", pageId)
                 harness.boot()
 
-                withClue("nothing to watch") { harness.watched shouldContainExactly listOf(RootName.MAIN) }
+                withClue("nothing to watch") { harness.watched shouldContainExactly listOf(RootName.PRIMARY) }
                 harness.availability.current().unavailable.getValue(RootName.require("extra")).cause shouldBe
                     UnavailableCause.MISSING_AT_BOOT
 
@@ -498,7 +498,7 @@ class MultiRootRuntimeTest : FunSpec({
                 // being down must not resurrect the row into a 503 or a redirect-to-nowhere: the row's root is only a
                 // CLAIM about where the target lives, and only a target that still durably binds there earns the 503.
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/dead")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/dead")),
                     RootedPageId(RootName.require("extra"), deadId),
                 )
                 io.ktor.server.testing.testApplication {
@@ -525,7 +525,7 @@ class MultiRootRuntimeTest : FunSpec({
                 harness.idMapOnly("extra", "notes/live.md", liveId)
                 harness.boot()
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/live")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/live")),
                     RootedPageId(RootName.require("extra"), liveId),
                 )
                 io.ktor.server.testing.testApplication {
@@ -559,7 +559,7 @@ class MultiRootRuntimeTest : FunSpec({
                 // is the retryable 503 `absence_unverified`, NOT the plain 404 this arm used to fall through to.
                 harness.idMapOnly("extra", "notes/limbo.md", limboId)
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/limbo")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/limbo")),
                     RootedPageId(RootName.require("extra"), limboId),
                 )
                 io.ktor.server.testing.testApplication {
@@ -715,7 +715,7 @@ class MultiRootRuntimeTest : FunSpec({
             // as the route used to - tells a client "no history here" for a page whose history the server is holding
             // in the very same response, and would tell it the opposite lie in the mirrored config.
             val perRoot: (RootName) -> com.plainbase.domain.history.HistoryProvider = { root ->
-                if (root == RootName.MAIN) NoOpHistoryProvider else EnabledStubHistory
+                if (root == RootName.PRIMARY) NoOpHistoryProvider else EnabledStubHistory
             }
             multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), histories = perRoot) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
@@ -769,7 +769,7 @@ class MultiRootRuntimeTest : FunSpec({
                 Files.createDirectories(main.resolve("notes"))
                 Files.writeString(main.resolve("notes/rollback.md"), body)
                 harness.builder.rebuild()
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull() // main holds its own copy...
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, id)).shouldNotBeNull() // main holds its own copy...
                 harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull() // ...extra keeps its own
 
                 val approved = client.post("/api/v1/changes/$proposalId/approve")

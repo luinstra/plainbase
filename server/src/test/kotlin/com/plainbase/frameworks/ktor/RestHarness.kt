@@ -165,7 +165,7 @@ fun IndexHarness.testRouteContext(
     // elsewhere (an extra root with no declared history records nothing, exactly as production wires it) - unless
     // the test declares the whole per-root map itself.
     val histories: (com.plainbase.domain.root.RootName) -> HistoryProvider =
-        historiesByRoot ?: { if (it == rootRegistry.main.name) history else NoOpHistoryProvider }
+        historiesByRoot ?: { if (it == rootRegistry.primary.name) history else NoOpHistoryProvider }
     val proposalReader =
         com.plainbase.frameworks.ktor.IndexProposalBaseReader(indexBuilder = builder, stores = stores, absence = absence)
     val proposalService = com.plainbase.domain.service.ProposalService(

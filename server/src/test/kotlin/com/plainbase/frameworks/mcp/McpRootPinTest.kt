@@ -44,7 +44,7 @@ class McpRootPinTest : FunSpec({
     }
 
     test("a FAKE-ambiguous bare read answers the ambiguous_page_id body with one candidate per holding root") {
-        val roots = listOf(RootName.MAIN, RootName.require("notes"))
+        val roots = listOf(RootName.PRIMARY, RootName.require("notes"))
         McpHarness(ambiguousRoots = roots).use { harness ->
             harness.session(harness.readOnlyBearer) { client ->
                 val res = client.call("read_page", mapOf("id" to harness.seedPageId))
@@ -66,7 +66,7 @@ class McpRootPinTest : FunSpec({
     }
 
     test("a bare read with a LIVE claimant AND a foreign TOMBSTONE -> ambiguous_page_id with the STATUS-NEUTRAL retired note, no 410") {
-        McpHarness(ambiguousRoots = listOf(RootName.MAIN), retiredRoots = listOf(RootName.require("notes"))).use { harness ->
+        McpHarness(ambiguousRoots = listOf(RootName.PRIMARY), retiredRoots = listOf(RootName.require("notes"))).use { harness ->
             harness.session(harness.readOnlyBearer) { client ->
                 val res = client.call("read_page", mapOf("id" to harness.seedPageId))
                 res.isErr() shouldBe true

@@ -68,7 +68,7 @@ class PreviewRouteTest : FunSpec({
             Files.write(tree.resolve("parity.md"), original.toByteArray())
             val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
                 idMap.bind(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, com.plainbase.domain.content.TreePath.require("parity.md")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, com.plainbase.domain.content.TreePath.require("parity.md")),
                     com.plainbase.domain.page.PageId.require(pageId),
                     materialized = true,
                 )
@@ -95,7 +95,7 @@ class PreviewRouteTest : FunSpec({
         val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
                 com.plainbase.domain.root.RootedPath(
-                    RootName.MAIN,
+                    RootName.PRIMARY,
                     com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
                 ),
                 com.plainbase.domain.page.PageId.require(pageId),
@@ -140,7 +140,7 @@ class PreviewRouteTest : FunSpec({
         val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
                 com.plainbase.domain.root.RootedPath(
-                    RootName.MAIN,
+                    RootName.PRIMARY,
                     com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
                 ),
                 com.plainbase.domain.page.PageId.require(pageId),
