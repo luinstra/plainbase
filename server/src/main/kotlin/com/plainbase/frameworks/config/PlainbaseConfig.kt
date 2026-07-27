@@ -1074,8 +1074,11 @@ data class PlainbaseConfig(
             // by creating a top-level folder. Both HOCON files funnel through here, so there is no second check.
             if (ReservedSegments.isReserved(name)) {
                 throw IllegalArgumentException(
+                    // Not "rename this root" alone: `root remove` takes the lock and then reloads the config, so it
+                    // hits this same refusal and exits 1. The only way out is the file that declares the root.
                     "roots.$key: '$key' is a reserved segment - Plainbase owns that top-level URL, or expects to. " +
-                        "Rename this root.",
+                        "Rename this root by editing the file that declares it (plainbase.conf, or " +
+                        "DATA_DIR/roots.conf); plainbase root remove cannot run while the config is refused.",
                 )
             }
             val entry = (value as? ConfigObject)?.toConfig()

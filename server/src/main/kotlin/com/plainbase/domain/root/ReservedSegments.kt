@@ -10,18 +10,22 @@ package com.plainbase.domain.root
  * conditionally on `auth.mode`, so a mode-aware list would let an `auth.mode=off` install take `session` and
  * then break the day the operator switches to builtin.
  *
- * The list only buys pretty names. The real reservoir is the [RootName] SHAPE, which is infinite and needs no
- * enumeration: a future global surface either nests under an already-reserved aggregator (`/admin`, `/api`,
- * `/auth`, `/settings`) or takes a shape no root name can have. That matters because the list has a one-way
- * ratchet on it from the first real install: growing it boot-refuses an install whose root already took the
- * new word, so it effectively freezes at 1.0 and today's generosity is the whole mechanism.
+ * The WORD list only buys pretty names. The real reservoir is SHAPE, which is infinite and needs no enumeration:
+ * a future global surface either nests under an already-reserved aggregator (`/admin`, `/api`, `/auth`,
+ * `/settings`) or takes a shape that never reaches a root. Most of that reservoir is [RootName]'s own grammar
+ * (dots, underscores, digit-leading, single-character); the two [prefixes] and [VERSION] are the shapes that
+ * parse as legal names and are refused here instead. That split matters because the word list has a one-way
+ * ratchet on it from the first real install: growing it boot-refuses an install whose root already took the new
+ * word, so it effectively freezes at 1.0 and today's generosity is the whole mechanism. The shape rules carry the
+ * same ratchet, which is why they are broad now.
  */
 object ReservedSegments {
 
     /**
-     * `docs` is deliberately absent: it is the primary root's own name, so reserving it would boot-refuse the
-     * required primary on every install. `p` is here as belt and braces only - what actually reserves the
-     * single-character namespace is [RootName]'s minimum length of 2, and `RootNameTest` pins that.
+     * `docs` is deliberately absent: it BECOMES the primary root's own name when the primary is renamed off
+     * [RootName.MAIN], and reserving it would then boot-refuse the required primary on every install. `p` is here
+     * as belt and braces only - what actually reserves the single-character namespace is [RootName]'s minimum
+     * length of 2, and `RootNameTest` pins that.
      */
     val words: Set<String> = setOf(
         // Live server top-level routes, plus the two dot-free directories of the embedded frontend bundle.
@@ -42,5 +46,17 @@ object ReservedSegments {
     /** Namespaces the product can grow into without touching [words] again. Their stems are reserved too. */
     val prefixes: List<String> = listOf("pb-", "plainbase-")
 
-    fun isReserved(name: RootName): Boolean = name.value in words || prefixes.any { name.value.startsWith(it) }
+    /**
+     * The API-version SHAPE: a `v` followed by digits and NOTHING else, so `v1` through `v999` and every longer
+     * digit run are closed at once, with no enumeration and no [words] growth. Deliberately bounded: `v2beta`,
+     * `v2-beta` and `v1alpha1` are legal root names and are NOT reserved. Say that plainly rather than claiming
+     * every version spelling, which is the false-comment shape this rule was added to remove.
+     *
+     * Loosening a reservation later is additive and breaks nothing; tightening one boot-refuses an install that
+     * already took the name, so this is claimed now rather than argued about later.
+     */
+    private val VERSION = Regex("v[0-9]+")
+
+    fun isReserved(name: RootName): Boolean =
+        name.value in words || prefixes.any { name.value.startsWith(it) } || VERSION.matches(name.value)
 }

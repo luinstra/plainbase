@@ -10,18 +10,20 @@ import com.plainbase.domain.page.PageId
  * URL segment with no encoding concerns. A root name also cannot parse as a [PageId], which keeps the shared
  * `/p/{segments...}` dispatcher unambiguous between bare page ids and rooted permalinks. The shape is also an
  * infinite reservoir the product can build in: a dotted, underscored, digit-leading or single-character
- * segment can never be a root name, so `/favicon.ico`, `/_internal`, `/v2` and `/p` are reserved forever with
- * no list to maintain.
+ * segment can never be a root name, so `/favicon.ico`, `/_internal` and `/p` are reserved forever with no list
+ * to maintain. `/v2` is NOT one of them - it is a perfectly legal slug, closed instead by [ReservedSegments]'s
+ * `v[0-9]+` rule, which is a shape too and so needs no list either.
  *
  * A tight slug is NOT the same thing as an inert HOCON key, and the difference is a real bug we shipped
  * into review: `include` satisfies this regex and is also a HOCON directive. The writer therefore QUOTES
  * the key (`ManagedRootsFile.serialize`) rather than the name banning a reserved word, because the ban
  * list is the format's, it can grow, and it is not this type's business to track it.
  *
- * [ReservedSegments] is the same argument applied to the product's own word list, and it is why the SHAPE
- * rules live here while the WORDS do not: the shape is fixed at 1.0 and a name it invalidates is paid for
- * once, by a reindex, while a growing word list would turn every future addition into a database that looks
- * corrupt on an install nobody can tell to reindex.
+ * [ReservedSegments] is the same argument applied to the product's own word list, and it is why the rules
+ * that make a name UNPARSEABLE live here while the rules that only refuse a NEW registration (the word list,
+ * the `pb-`/`plainbase-` prefixes, and the `v[0-9]+` version shape) live there. A shape THIS type rejects is
+ * paid for once, by a reindex, while a growing registration refusal would turn every future addition into a
+ * database that looks corrupt on an install nobody can tell to reindex.
  */
 @JvmInline
 value class RootName private constructor(val value: String) {
@@ -45,7 +47,8 @@ value class RootName private constructor(val value: String) {
          * `auth.agentDirectCommit.roots` refusal, and `root add`/`root remove`) plus one doc page: they are
          * different frames with different key names, so they are hand-maintained copies rather than one
          * awkward shared string. Three of them are asserted by tests; changing the rule means changing all of
-         * them.
+         * them. The doc page is the one copy that is currently BEHIND (it still prints the older, looser
+         * `[a-z0-9][a-z0-9-]*`), because it moves with the operator-doc pass rather than with this type.
          */
         private val SLUG = Regex("[a-z][a-z0-9]*(-[a-z0-9]+)*")
 

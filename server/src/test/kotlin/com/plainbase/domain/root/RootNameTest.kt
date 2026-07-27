@@ -39,7 +39,9 @@ class RootNameTest : FunSpec({
             "a".repeat(33), // over the length cap
             "a", // single character
             "0", // single character AND digit-leading
-            "9lives", // digit-leading, so no `v1`/`v2` API spelling and no bare year can name a root
+            // Digit-leading, so no bare year can name a root. The `v1`/`v2` API spellings are NOT covered here:
+            // they are legal slugs, and ReservedSegments refuses them at registration instead.
+            "9lives",
             "p", // the mechanism that reserves the single-character namespace, /p/{id} included
             "a-", // trailing hyphen
             "a--b", // doubled hyphen
