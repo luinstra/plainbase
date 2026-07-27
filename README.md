@@ -5,6 +5,8 @@
 
 _Internal docs humans enjoy and agents can actually work with._
 
+[![Coverage Status](https://coveralls.io/repos/github/luinstra/plainbase/badge.svg)](https://coveralls.io/github/luinstra/plainbase)
+
 Plainbase is a self-hosted docs workspace built AI-native from the first
 commit: the same single binary that serves the web UI is an
 [MCP server](docs/connect-your-agent.md) your agents connect to directly.
