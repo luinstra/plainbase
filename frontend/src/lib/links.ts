@@ -10,11 +10,14 @@ import { rootEntryOfUrl } from "./tree";
  * downloads, new-tab/modified clicks, same-page `#fragment` jumps, and percent-encoded
  * permalinks — keeps native behavior.
  *
+ * When `roots` is undefined (tree pending or permanently failed), no root-content href is internal and clicks
+ * fall back to full-page navigation.
+ *
  * Returns the SPA-internal href (pathname + search + hash) to navigate to, or null when
  * the browser should handle the click.
  */
 
-export function interceptableHref(event: MouseEvent, roots?: RootTree[]): string | null {
+export function interceptableHref(event: MouseEvent, roots: RootTree[] | undefined): string | null {
   if (event.defaultPrevented || event.button !== 0) return null;
   if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
 

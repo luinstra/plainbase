@@ -3,7 +3,7 @@ import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
 
 /**
- * Link-interception policy: internal `/docs` + `/p` + bare `/` anchors go through the SPA router;
+ * Link-interception policy: tree-owned root URLs, `/p` permalinks, and bare `/` anchors go through the SPA router;
  * external links, assets, downloads, modified clicks, and same-page fragments stay native.
  */
 
@@ -12,18 +12,30 @@ const roots: RootTree[] = [
   { root: "extra", available: true, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/extra", page_count: 0, children: [] } },
 ];
 
-function clickOn(html: string, init: MouseEventInit = {}, loadedRoots: RootTree[] | undefined = roots): string | null {
+const defaultRoots = Symbol("default roots");
+const noRoots = Symbol("no roots");
+
+function clickOn(
+  html: string,
+  init: MouseEventInit = {},
+  loadedRoots: RootTree[] | undefined | typeof defaultRoots | typeof noRoots = defaultRoots,
+): string | null {
+  const rootsForClick = loadedRoots === defaultRoots ? roots : loadedRoots === noRoots ? undefined : loadedRoots;
   document.body.innerHTML = html;
   const anchor = document.querySelector("a")!;
   let captured: string | null = null;
   const listener = (event: MouseEvent) => {
-    captured = interceptableHref(event, loadedRoots);
+    captured = interceptableHref(event, rootsForClick);
     event.preventDefault(); // jsdom must never actually navigate
   };
   document.addEventListener("click", listener);
   anchor.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
   document.removeEventListener("click", listener);
   return captured;
+}
+
+function clickWithoutRoots(html: string, init: MouseEventInit = {}): string | null {
+  return clickOn(html, init, noRoots);
 }
 
 afterEach(() => {
@@ -38,6 +50,10 @@ describe("interceptableHref", () => {
   it("intercepts a registered root URL but leaves an unknown first segment native", () => {
     expect(clickOn('<a href="/extra/notes/y">extra</a>')).toBe("/extra/notes/y");
     expect(clickOn('<a href="/nope/notes/y">unknown</a>')).toBeNull();
+  });
+
+  it("leaves root-content links native while the tree is unavailable", () => {
+    expect(clickWithoutRoots('<a href="/docs/guides/deploy-guide">docs</a>')).toBeNull();
   });
 
   it("intercepts permalink /p links", () => {
