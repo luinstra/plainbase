@@ -80,7 +80,7 @@ wait_healthy "$B1_BASE"
 # B1-1. No credential -> served (the gate never fires without a credential).
 code=$(curl -s -o /dev/null -w '%{http_code}' "$B1_BASE/healthz")
 expect_status 200 "$code" "B1 anonymous /healthz"
-curl -fsS "$B1_BASE/" | grep -q '<div id="root">' || fail "B1 anonymous / : SPA shell not served"
+curl -fsSL "$B1_BASE/" | grep -q '<div id="root">' || fail "B1 anonymous / : SPA shell not served"
 pass "B1 anonymous healthz + SPA shell -> 200"
 
 # B1-2. A credential over the insecure non-loopback transport -> 421 transport_insecure. A
