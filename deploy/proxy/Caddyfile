@@ -27,6 +27,27 @@ docs.example.com {
 		forward_auth oauth2-proxy:4180 {
 			uri /oauth2/auth
 			copy_headers X-Auth-Request-User X-Auth-Request-Preferred-Username
+
+			# WITHOUT this block nobody can ever sign in. `forward_auth` handles ONLY 2xx
+			# (`caddy adapt` shows a single handle_response matching `status_code: [2]`), and
+			# Caddy copies any unmatched status straight to the client. oauth2-proxy answers
+			# /oauth2/auth with 401 when the request carries no session, so an unauthenticated
+			# reader would get a bare 401 body and the /oauth2/* flow above would never be
+			# entered - the endpoints exist, but nothing sends anyone to them.
+			#
+			# `start` redirects to the IdP immediately; `sign_in` would add an interstitial
+			# button page this single-provider stack does not need. `rd` is RELATIVE because
+			# oauth2-proxy only accepts an absolute target that matches --whitelist-domain,
+			# which this stack deliberately does not set.
+			#
+			# KNOWN EDGE: an original query string rides into `rd` unescaped, so a deep link
+			# like /docs/x?mode=edit returns to /docs/x after login. Caddy has no placeholder
+			# escape for this; the trade is a lost query param, never a wrong destination,
+			# because oauth2-proxy rejects an `rd` that is not a relative path.
+			@unauthenticated status 401
+			handle_response @unauthenticated {
+				redir * /oauth2/start?rd={http.request.uri}
+			}
 		}
 		reverse_proxy plainbase:8080 {
 			header_up -X-Forwarded-User
