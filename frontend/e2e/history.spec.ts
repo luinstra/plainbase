@@ -13,13 +13,14 @@ import { expect, test } from "@playwright/test";
 // A page NO other smoke spec mutates (edit.spec.ts owns deploy-guide; smoke.spec.ts only navigates to
 // getting-started). An isolated page keeps this spec's baseline-empty → grows-after-save flow clean,
 // regardless of test ordering on the shared git-on server.
-const PATH = "/docs/main/guides/getting-started";
+const PATH = "/docs/guides/getting-started";
 
 test("editing a page grows its history without a server restart", async ({ page }) => {
   const marker = `e2e history ${Date.now()}`;
 
   // 1. Baseline history is EMPTY — the repo is `git init`ed, not seeded (MF-4): git_enabled:true but no commits.
-  await page.goto(`${PATH}?mode=history`);
+  const baselineHistoryResponse = await page.goto(`${PATH}?mode=history`);
+  expect(baselineHistoryResponse?.status()).toBe(200);
   await expect(page.locator("[data-pb-history]")).toBeVisible();
   // The git-off copy must NOT show (Git is forced on); the empty state OR zero commit rows is the baseline.
   await expect(page.locator("[data-pb-history-disabled]")).toHaveCount(0);
@@ -27,7 +28,8 @@ test("editing a page grows its history without a server restart", async ({ page 
   await expect(page.locator("[data-pb-commit]")).toHaveCount(0);
 
   // 2. Edit + save (reuse edit.spec.ts's steps). The save commits → the first commit is created.
-  await page.goto(`${PATH}?mode=edit`);
+  const editResponse = await page.goto(`${PATH}?mode=edit`);
+  expect(editResponse?.status()).toBe(200);
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
   const content = page.locator("[data-pb-codemirror] .cm-content");
   await content.click();
@@ -43,12 +45,14 @@ test("editing a page grows its history without a server restart", async ({ page 
 
   // 3a. The history GREW — at least one commit row now exists where there was none (the same running
   // server now reports the first commit; no restart).
-  await page.goto(`${PATH}?mode=history`);
+  const updatedHistoryResponse = await page.goto(`${PATH}?mode=history`);
+  expect(updatedHistoryResponse?.status()).toBe(200);
   await expect(page.locator("[data-pb-history]")).toBeVisible();
   await expect(page.locator("[data-pb-commit]").first()).toBeVisible();
   await expect(page.locator("[data-pb-history-empty]")).toHaveCount(0);
 
   // 3b. The read view reflects the edited content (the watcher reindexed; the UI shows it).
-  await page.goto(PATH);
+  const readResponse = await page.goto(PATH);
+  expect(readResponse?.status()).toBe(200);
   await expect(page.locator(".pb-prose")).toContainText(marker);
 });

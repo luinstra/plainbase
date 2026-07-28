@@ -9,8 +9,8 @@ import { expect, test, type Page } from "@playwright/test";
  * diff (hljs `dangerouslySetInnerHTML`) all load.
  *
  * Isolation: uses the `scratch/` docs no mutating spec owns (edit.spec.ts owns deploy-guide; history.spec.ts
- * owns getting-started). The read-only legs use `/docs/main/scratch/todo`; the diff leg (the one place a Save is
- * required) is isolated to `/docs/main/scratch/ideas`.
+ * owns getting-started). The read-only legs use `/docs/scratch/todo`; the diff leg (the one place a Save is
+ * required) is isolated to `/docs/scratch/ideas`.
  */
 
 type Violation = { violatedDirective: string; blockedURI: string };
@@ -29,7 +29,8 @@ const readViolations = (page: Page): Promise<Violation[]> =>
   page.evaluate(() => (window as unknown as { __cspViolations: Violation[] }).__cspViolations);
 
 test("the shell navigation response carries the hash-pinned, unsafe-inline-styled CSP", async ({ page }) => {
-  const response = await page.goto("/docs/main/scratch/todo");
+  const response = await page.goto("/docs/scratch/todo");
+  expect(response?.status()).toBe(200);
   const csp = response?.headers()["content-security-policy"] ?? "";
   expect(csp).toContain("style-src 'self' 'unsafe-inline'");
   expect(csp).toMatch(/script-src 'self' 'sha256-/);
@@ -37,7 +38,8 @@ test("the shell navigation response carries the hash-pinned, unsafe-inline-style
 
 test("editor + Prose + an external https image render under the real CSP with no violation", async ({ page }) => {
   await captureViolations(page);
-  await page.goto("/docs/main/scratch/todo?mode=edit");
+  const response = await page.goto("/docs/scratch/todo?mode=edit");
+  expect(response?.status()).toBe(200);
 
   // CodeMirror mounts under the real CSP (style-mod injects its runtime <style> via style-src 'unsafe-inline').
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
@@ -65,10 +67,11 @@ test("the History diff renders under the real CSP with no violation", async ({ p
   await captureViolations(page);
 
   // Two commits on an isolated page — the .smoke-content repo is git-init'd with no seed, so each save commits.
-  await makeCommit(page, "/docs/main/scratch/ideas", `csp diff one ${Date.now()}`);
-  await makeCommit(page, "/docs/main/scratch/ideas", `csp diff two ${Date.now()}`);
+  await makeCommit(page, "/docs/scratch/ideas", `csp diff one ${Date.now()}`);
+  await makeCommit(page, "/docs/scratch/ideas", `csp diff two ${Date.now()}`);
 
-  await page.goto("/docs/main/scratch/ideas?mode=history");
+  const response = await page.goto("/docs/scratch/ideas?mode=history");
+  expect(response?.status()).toBe(200);
   await expect(page.locator("[data-pb-history]")).toBeVisible();
   const commitButtons = page.locator("[data-pb-commit] button");
   await expect(async () => expect(await commitButtons.count()).toBeGreaterThanOrEqual(2)).toPass();
@@ -84,7 +87,8 @@ test("the History diff renders under the real CSP with no violation", async ({ p
 
 /** One edit+save cycle on [path] (each save commits on the git-on smoke server). Mirrors history.spec.ts. */
 async function makeCommit(page: Page, path: string, marker: string): Promise<void> {
-  await page.goto(`${path}?mode=edit`);
+  const response = await page.goto(`${path}?mode=edit`);
+  expect(response?.status()).toBe(200);
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
   const content = page.locator("[data-pb-codemirror] .cm-content");
   await content.click();

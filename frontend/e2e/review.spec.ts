@@ -36,7 +36,7 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
   const { csrf_token: csrf } = (await consume.json()) as { csrf_token: string };
 
   // 2. As the agent: read a fixture page, then propose an edit against its current hash.
-  const readA = await request.get("/api/v1/pages/by-path/main/guides/deploy-guide", { headers: agentAuth });
+  const readA = await request.get("/api/v1/pages/by-path/docs/guides/deploy-guide", { headers: agentAuth });
   expect(readA.ok()).toBe(true);
   const pageA = (await readA.json()) as { id: string; content_hash: string; markdown: string };
   const markerA = `proposed-by-agent-${stamp}`;
@@ -48,11 +48,13 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
   const changeA = ((await proposeA.json()) as { id: string }).id;
 
   // 3. As the reviewer (browser): the queue lists the pending change; open it, see the diff, approve.
-  await page.goto("/review");
+  const reviewResponse = await page.goto("/review");
+  expect(reviewResponse?.status()).toBe(200);
   await expect(page.locator("[data-pb-review-nav]")).toBeVisible(); // the session-gated chrome link
   await expect(page.locator(`[data-pb-review-row]`).first()).toBeVisible();
 
-  await page.goto(`/review/${changeA}`);
+  const detailResponseA = await page.goto(`/review/${changeA}`);
+  expect(detailResponseA?.status()).toBe(200);
   await expect(page.locator("[data-pb-diff]")).toBeVisible();
   await expect(page.locator("[data-pb-review-rationale]")).toContainText("tighten the guide");
   const approve = page.locator("[data-pb-review-approve]");
@@ -63,7 +65,7 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
 
   // 4. Drift scenario: propose against a SECOND page, then mutate that page out-of-band so the PENDING
   // proposal's base goes stale → the detail must show the banner and disable approval.
-  const readB = await request.get("/api/v1/pages/by-path/main/guides/editor", { headers: agentAuth });
+  const readB = await request.get("/api/v1/pages/by-path/docs/guides/editor", { headers: agentAuth });
   expect(readB.ok()).toBe(true);
   const pageB = (await readB.json()) as { id: string; content_hash: string; markdown: string };
   const proposeB = await request.post("/api/v1/changes", {
@@ -80,7 +82,8 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
   });
   expect(drift.ok()).toBe(true);
 
-  await page.goto(`/review/${changeB}`);
+  const detailResponseB = await page.goto(`/review/${changeB}`);
+  expect(detailResponseB?.status()).toBe(200);
   await expect(page.locator("[data-pb-review-drift-banner]")).toBeVisible();
   await expect(page.locator("[data-pb-review-approve]")).toBeDisabled();
 });

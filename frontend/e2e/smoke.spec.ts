@@ -6,19 +6,20 @@ import { expectNoReload, plantNoReloadMarker } from "./helpers";
  * serving fixtures/demo-docs. Each test maps to a plan criterion (plan lines 626-630).
  */
 
-test("sidebar links are /docs URLs from the tree; clicking navigates without reload", async ({ page }) => {
-  await page.goto("/docs/main/welcome");
+test("sidebar links are root-qualified URLs from the tree; clicking navigates without reload", async ({ page }) => {
+  const response = await page.goto("/docs/welcome");
+  expect(response?.status()).toBe(200);
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   const sidebar = page.locator(".pb-sidebar");
   await expect(sidebar).toBeVisible();
   const hrefs = await sidebar.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(30); // the whole fixture tree is in the nav
-  for (const href of hrefs) expect(href).toMatch(/^\/(docs($|\/)|p\/)/); // tree urls verbatim (incl. bare /docs home); losers via /p/{root}/{id}
+  for (const href of hrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/))/); // tree urls verbatim (incl. bare /docs home); losers via /p/docs/{id}
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Deploy Guide" }).click();
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   await expectNoReload(page);
 
@@ -29,73 +30,124 @@ test("sidebar links are /docs URLs from the tree; clicking navigates without rel
 });
 
 test("internal links inside server-rendered HTML navigate via the SPA router", async ({ page }) => {
-  await page.goto("/docs/main/welcome");
+  await page.goto("/docs/welcome");
   await plantNoReloadMarker(page);
   await page.locator(".pb-prose").getByRole("link", { name: "Getting Started guide" }).click();
-  await expect(page).toHaveURL("/docs/main/guides/getting-started");
+  await expect(page).toHaveURL("/docs/guides/getting-started");
   await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
   await expectNoReload(page);
 });
 
-test("an alias URL 301s server-side to the canonical /docs URL", async ({ page }) => {
+// The exact 301 and its Location are pinned by the no-follow row below; `goto` resolves with the
+// first NON-redirect response, so this row can only observe where the browser LANDS.
+test("an alias URL follows through to the canonical /docs page and its content", async ({ page }) => {
   // guides/deploy-guide.md declares redirect_from: [/old/deployment.md]
-  await page.goto("/docs/main/old/deployment");
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  const response = await page.goto("/docs/old/deployment");
+  expect(response?.status()).toBe(200);
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 });
 
-test("a rootless /docs URL is 404 carrying the shell body: the root segment is required", async ({ request }) => {
-  // The pre-C3 URL shape names no root in its first segment, so it addresses no page. The BODY is
-  // still the shell (this is a browser navigation and the SPA owns not-found); the status is honest.
-  const rootless = await request.get("/docs/guides/deploy-guide", { maxRedirects: 0 });
-  expect(rootless.status()).toBe(404);
-  expect(rootless.headers()["content-type"]).toContain("text/html");
+test("the alias URL answers 301 with the canonical Location", async ({ request }) => {
+  const response = await request.get("/docs/old/deployment", { maxRedirects: 0 });
+  expect(response.status()).toBe(301);
+  expect(response.headers()["location"]).toBe("/docs/guides/deploy-guide");
+});
 
-  const withQuery = await request.get("/docs/guides/deploy-guide?mode=edit", { maxRedirects: 0 });
+test("a primary /docs URL serves content after the URL flip", async ({ page }) => {
+  const response = await page.goto("/docs/guides/deploy-guide");
+  expect(response?.status()).toBe(200);
+  await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
+});
+
+test("a missing page beneath a registered root answers 200 and renders the SPA NotFound view", async ({ page }) => {
+  const response = await page.goto("/docs/nope/never-existed");
+  expect(response?.status()).toBe(200);
+  await expect(page.locator("[data-pb-not-found]")).toBeVisible();
+  await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
+  await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
+});
+
+test("an UNKNOWN ROOT returns HTTP 404 with the SPA shell and NotFound view", async ({ page, request }) => {
+  const response = await page.goto("/nope/guides/deploy-guide");
+  expect(response?.status()).toBe(404);
+  await expect(page.locator("[data-pb-not-found]")).toBeVisible();
+  await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
+  await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
+
+  const withQuery = await request.get("/nope/guides/deploy-guide?mode=edit", { maxRedirects: 0 });
   expect(withQuery.status()).toBe(404);
 
-  // An alias is registered UNDER a root, so a rootless alias URL reaches no alias registry either.
-  const alias = await request.get("/docs/old/deployment", { maxRedirects: 0 });
+  // An alias is registered under a root, so an unknown-root alias reaches no alias registry either.
+  const alias = await request.get("/nope/old/deployment", { maxRedirects: 0 });
   expect(alias.status()).toBe(404);
 });
 
-test("a bare /p/{id} permalink 302s server-side to the canonical path (stale slug tolerated)", async ({ page, request }) => {
-  const byPath = await request.get("/api/v1/pages/by-path/main/guides/deploy-guide");
+test("a bare permalink answers 302 with the canonical Location", async ({ request }) => {
+  const byPath = await request.get("/api/v1/pages/by-path/docs/guides/deploy-guide");
   expect(byPath.ok()).toBe(true);
   const { id } = (await byPath.json()) as { id: string };
 
-  await page.goto(`/p/${id}`);
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  for (const address of [`/p/${id}`, `/p/${id}/some-stale-slug`]) {
+    const response = await request.get(address, { maxRedirects: 0 });
+    expect(response.status()).toBe(302);
+    expect(response.headers()["location"]).toBe("/docs/guides/deploy-guide");
+  }
+});
+
+// Same split as the alias rows: the exact 302 and its Location are pinned above by the no-follow
+// row, and this one observes only the canonical page the browser ends up on.
+test("a bare /p/{id} permalink follows through to the canonical page (stale slug tolerated)", async ({ page, request }) => {
+  const byPath = await request.get("/api/v1/pages/by-path/docs/guides/deploy-guide");
+  expect(byPath.ok()).toBe(true);
+  const { id } = (await byPath.json()) as { id: string };
+
+  const canonicalResponse = await page.goto(`/p/${id}`);
+  expect(canonicalResponse?.status()).toBe(200);
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 
-  await page.goto(`/p/${id}/some-stale-slug`);
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  const staleSlugResponse = await page.goto(`/p/${id}/some-stale-slug`);
+  expect(staleSlugResponse?.status()).toBe(200);
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
+});
+
+test("the bare /docs/ URL answers 200 and renders the primary root folder landing", async ({ page }) => {
+  const response = await page.goto("/docs/");
+  expect(response?.status()).toBe(200);
+  // demo-docs has an authored root index, so its folder landing is PageContent rather than the generated
+  // listing. The reading rail and the landing page heading are the positive markers for that branch.
+  await expect(page.locator("[data-pb-rail]")).toBeVisible();
+  await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
+  await expect(page.locator("[data-pb-not-found]")).toHaveCount(0);
+  await expect(page.locator("[data-pb-editor]")).toHaveCount(0);
 });
 
 test("a folder URL renders the generated landing view; breadcrumbs link back to it", async ({ page }) => {
   // fixtures/demo-docs has no README/index children inside folders, so smoke exercises
   // the listing fallback; the README-preference path is covered by the unit suite.
-  await page.goto("/docs/main/guides");
+  const folderResponse = await page.goto("/docs/guides");
+  expect(folderResponse?.status()).toBe(200);
   const listing = page.locator("[data-pb-folder]");
   await expect(listing).toBeVisible();
   await expect(listing.locator("h1")).toHaveText("Guides"); // _folder.yaml title
-  await expect(listing.locator('a[href="/docs/main/guides/advanced"]')).toBeVisible(); // subfolder link
+  await expect(listing.locator('a[href="/docs/guides/advanced"]')).toBeVisible(); // subfolder link
 
   await plantNoReloadMarker(page);
   await listing.getByRole("link", { name: "Deploy Guide" }).click();
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   await expectNoReload(page);
 
   // The breadcrumb ancestor is now a link back to the folder landing (ADR-0003).
   await page.locator(".pb-breadcrumbs").getByRole("link", { name: "Guides" }).click();
-  await expect(page).toHaveURL("/docs/main/guides");
+  await expect(page).toHaveURL("/docs/guides");
   await expect(page.locator("[data-pb-folder]")).toBeVisible();
   await expectNoReload(page);
 });
 
 test("sidebar folder labels navigate to the landing view; the chevron still collapses", async ({ page }) => {
-  await page.goto("/docs/main/welcome");
+  await page.goto("/docs/welcome");
   const sidebar = page.locator(".pb-sidebar");
 
   await sidebar.getByRole("button", { name: "Collapse Guides" }).click();
@@ -105,7 +157,7 @@ test("sidebar folder labels navigate to the landing view; the chevron still coll
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Guides", exact: true }).click();
-  await expect(page).toHaveURL("/docs/main/guides");
+  await expect(page).toHaveURL("/docs/guides");
   await expect(page.locator("[data-pb-folder]")).toBeVisible();
   await expectNoReload(page);
 });
@@ -118,7 +170,8 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   const dir = `runbooks-${stamp}`;
   const sectionTitle = `Runbooks ${stamp}`;
 
-  await page.goto("/new");
+  const response = await page.goto("/new");
+  expect(response?.status()).toBe(200);
   await expect(page.locator("[data-pb-new-page-form]")).toBeVisible();
   await page.locator("[data-pb-new-section]").check();
   await page.locator("[data-pb-new-folder]").fill(dir);
@@ -126,7 +179,7 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   await page.locator("[data-pb-new-create]").click();
 
   // The index page's own url (/docs/<dir>/index) canonicalizes to the folder landing (/docs/<dir>).
-  await expect(page).toHaveURL(`/docs/main/${dir}`);
+  await expect(page).toHaveURL(`/docs/${dir}`);
   // REPLACE semantics: the folder landing IS the index page view (rail present), NOT the generated
   // listing — neither the listing container nor the generated-folder heading appear.
   await expect(page.locator("[data-pb-rail]")).toBeVisible();
@@ -134,19 +187,13 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
   await expect(page.locator(".pb-breadcrumbs")).toContainText(sectionTitle);
   // The sidebar gains the new section as a folder row labelled by the index page's title (folderTitle).
-  await expect(page.locator(`.pb-sidebar a[href="/docs/main/${dir}"]`)).toHaveText(sectionTitle);
-});
-
-test("an unknown path serves the shell and the SPA renders the 404 view", async ({ page }) => {
-  const response = await page.goto("/docs/main/nope/never-existed");
-  expect(response?.status()).toBe(200); // shell, per the routing matrix
-  await expect(page.locator("[data-pb-not-found]")).toBeVisible();
-  await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
+  await expect(page.locator(`.pb-sidebar a[href="/docs/${dir}"]`)).toHaveText(sectionTitle);
 });
 
 test("a deep link with #fragment scrolls to the anchor", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/main/guides/deploy-guide#rollback");
+  const response = await page.goto("/docs/guides/deploy-guide#rollback");
+  expect(response?.status()).toBe(200);
   const heading = page.locator("#rollback");
   await expect(heading).toBeInViewport();
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
@@ -154,7 +201,7 @@ test("a deep link with #fragment scrolls to the anchor", async ({ page }) => {
 
 test("dark-mode toggle swaps data-theme, restyles via tokens, and persists", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/docs/main/welcome");
+  await page.goto("/docs/welcome");
   const html = page.locator("html");
   await expect(html).not.toHaveAttribute("data-theme", "dark");
   const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -169,25 +216,28 @@ test("dark-mode toggle swaps data-theme, restyles via tokens, and persists", asy
 });
 
 test("code blocks are highlighted client-side", async ({ page }) => {
-  await page.goto("/docs/main/infra/terraform");
+  const response = await page.goto("/docs/infra/terraform");
+  expect(response?.status()).toBe(200);
   const code = page.locator('.pb-prose pre code[class*="language-"]');
   await expect(code).toHaveClass(/hljs/);
 });
 
 test("broken links carry the server marker and the broken-link token color", async ({ page }) => {
-  await page.goto("/docs/main/notes/broken-links");
+  const response = await page.goto("/docs/notes/broken-links");
+  expect(response?.status()).toBe(200);
   const broken = page.locator('[data-pb-link-error="broken_missing"]').first();
   await expect(broken).toBeVisible();
   const [brokenColor, liveColor] = await page.evaluate(() => {
     const brokenEl = document.querySelector('[data-pb-link-error="broken_missing"]')!;
-    const liveEl = document.querySelector('.pb-prose a[href^="/docs/main/"]')!;
+    const liveEl = document.querySelector('.pb-prose a[href^="/docs/"]')!;
     return [getComputedStyle(brokenEl).color, getComputedStyle(liveEl).color];
   });
   expect(brokenColor).not.toBe(liveColor); // styled via --pb-link-broken, distinct from live links
 });
 
 test("the root path lands on the root folder landing at /docs", async ({ page }) => {
-  await page.goto("/");
+  const response = await page.goto("/");
+  expect(response?.status()).toBe(200);
   await expect(page).toHaveURL("/docs");
   // demo-docs has BOTH index.md and README.md at the root — index wins, so the root
   // landing renders the welcome page's content at /docs (the listing branch is unit-covered).
@@ -196,7 +246,7 @@ test("the root path lands on the root folder landing at /docs", async ({ page })
   // A child link inside the landing content navigates via the SPA router.
   await plantNoReloadMarker(page);
   await page.locator(".pb-prose").getByRole("link", { name: "Getting Started guide" }).click();
-  await expect(page).toHaveURL("/docs/main/guides/getting-started");
+  await expect(page).toHaveURL("/docs/guides/getting-started");
   await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
   await expectNoReload(page);
 });
