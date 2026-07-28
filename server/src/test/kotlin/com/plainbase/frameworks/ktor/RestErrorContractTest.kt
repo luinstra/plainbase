@@ -1,7 +1,13 @@
 package com.plainbase.frameworks.ktor
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.plainbase.frameworks.filesystem.Fixtures
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -21,6 +27,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.Logger.ROOT_LOGGER_NAME
+import org.slf4j.LoggerFactory
 import java.net.Socket
 
 /**
@@ -95,13 +103,11 @@ class RestErrorContractTest : FunSpec({
         // serving coroutine and reaches the `exception<Throwable>` catch-all. A route that throws is
         // the honest stand-in: the catch-all is the code under test, not CIO.
         //
-        // This pins the TRAP, not the log fix. Treating cancellation as "control flow, so answer
-        // NOTHING" looks right and is worse: a StatusPages handler that writes no response hands the
-        // call to Ktor's own error page, which renders the exception and a full STACK TRACE onto the
-        // wire. That inverts §A4 (details go to the log, never the wire) while looking like a tidy-up.
-        // Whether the catch-all logs cancellation at DEBUG rather than ERROR is deliberately UNGATED:
-        // there is no log-capture harness in this tree, and inventing one to observe a severity would
-        // be a gate built for its own sake.
+        // This pins the TRAP: treating cancellation as "control flow, so answer NOTHING" looks right
+        // and is worse, because a StatusPages handler that writes no response hands the call to Ktor's
+        // own error page, which renders the exception and a full STACK TRACE onto the wire. That
+        // inverts §A4 (details go to the log, never the wire) while looking like a tidy-up. The log
+        // SEVERITY is a separate contract and has its own row below.
         RestHarness(Fixtures.demoDocs).use { harness ->
             testApplication {
                 application {
@@ -114,6 +120,42 @@ class RestErrorContractTest : FunSpec({
                 body shouldContain "\"code\":\"internal_error\""
                 body shouldNotContain "CancellationException" // the leak: Ktor's dev page renders the cause
                 body shouldNotContain "Stack Trace"
+            }
+        }
+    }
+
+    test("a cancelled call logs NO operator ERROR, while a genuine failure still does") {
+        // The severity half of the cancellation contract. A client hanging up is the expected end of an
+        // SSE session, and agents connect and disconnect constantly, so logging it at ERROR buries real
+        // failures. `plainbase spike` is where that was visible (`ERROR unhandled error serving
+        // /api/v1/mcp` over a PASSING check), but the spike is not a gate, so this pins it.
+        //
+        // The `/__boom-probe` half is the ANTI-VACUITY check and is not decoration: asserting only the
+        // ABSENCE of an ERROR would pass just as happily against a detached appender, a renamed logger,
+        // or a message that no longer matches. One arm proves capture works; the other proves the demotion.
+        RestHarness(Fixtures.demoDocs).use { harness ->
+            val root = LoggerFactory.getLogger(ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                testApplication {
+                    application {
+                        plainbaseModule(harness.services)
+                        routing {
+                            get("/__cancelled-probe2") { throw CancellationException("client disconnected") }
+                            get("/__boom-probe") { throw IllegalStateException("a genuine fault") }
+                        }
+                    }
+                    client.get("/__cancelled-probe2")
+                    fun errorsMentioning(uri: String) = appender.list
+                        .filter { it.level == Level.ERROR && it.formattedMessage.contains(uri) }
+
+                    errorsMentioning("/__cancelled-probe2").shouldBeEmpty()
+                    client.get("/__boom-probe")
+                    errorsMentioning("/__boom-probe").shouldNotBeEmpty()
+                }
+            } finally {
+                root.detachAppender(appender)
             }
         }
     }

@@ -116,9 +116,9 @@ fun Route.plainbaseMcp(ctx: RouteContext) {
                 // This covers ONLY the cancellation that arrives THROUGH this `try`. It is not the whole story and
                 // used to claim to be: a child coroutine the MCP SDK starts lazily cancels on its own path, reaches
                 // the app-level StatusPages instead, and `plainbase spike` logged `ERROR unhandled error serving
-                // /api/v1/mcp` over a PASSING check for exactly that reason. The general guard is the
-                // `exception<CancellationException>` arm in [plainbaseModule]; this one just keeps the common case
-                // from travelling that far.
+                // /api/v1/mcp` over a PASSING check for exactly that reason. The general guard is the cancellation
+                // branch inside [plainbaseModule]'s `exception<Throwable>` catch-all, which demotes the severity
+                // while still answering the frozen envelope; this one just keeps the common case from getting there.
             } finally {
                 transports.remove(transport.sessionId)
             }

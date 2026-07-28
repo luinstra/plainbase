@@ -154,7 +154,10 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         // because agents connect and disconnect constantly and it buries genuine failures.
         exception<Throwable> { call, cause ->
             if (cause is CancellationException) {
-                logger.debug { "client disconnected while serving ${call.request.local.uri}" }
+                // "cancelled", not "client disconnected": a hang-up is the common source, but this type
+                // also covers timeouts and shutdown cancellation, and the log should not name a cause
+                // it cannot actually distinguish.
+                logger.debug { "call cancelled while serving ${call.request.local.uri}" }
             } else {
                 logger.error(cause) { "unhandled error serving ${call.request.local.uri}" }
             }

@@ -35,18 +35,24 @@ docs.example.com {
 			# reader would get a bare 401 body and the /oauth2/* flow above would never be
 			# entered - the endpoints exist, but nothing sends anyone to them.
 			#
-			# `start` redirects to the IdP immediately; `sign_in` would add an interstitial
-			# button page this single-provider stack does not need. `rd` is RELATIVE because
-			# oauth2-proxy only accepts an absolute target that matches --whitelist-domain,
-			# which this stack deliberately does not set.
+			# `start` is oauth2-proxy's own entry into the OIDC flow, and it is the direct one:
+			# `sign_in` would reach the same place here (the compose stack sets
+			# --skip-provider-button=true, under which 7.6's SignIn delegates straight to
+			# OAuthStart), so `start` is preferred for being explicit, not for skipping a page.
+			# `rd` is RELATIVE because oauth2-proxy only accepts an absolute target matching
+			# --whitelist-domain, which this stack deliberately does not set.
 			#
-			# KNOWN EDGE: an original query string rides into `rd` unescaped, so a deep link
-			# like /docs/x?mode=edit returns to /docs/x after login. Caddy has no placeholder
-			# escape for this; the trade is a lost query param, never a wrong destination,
-			# because oauth2-proxy rejects an `rd` that is not a relative path.
+			# `uri_escaped`, NOT `uri`: the return address is a query VALUE, so it has to be
+			# percent-encoded or its own separators leak into the outer query. A `?` alone is
+			# survivable, but an `&` is not - `/docs/x?a=1&b=2` would hand `b=2` to
+			# /oauth2/start as a sibling parameter, and oauth2-proxy reads start-query values
+			# as provider login overrides. Caddy 2.11 added this placeholder for exactly this
+			# case; verified at runtime against the pinned image (v2.11.4), where it renders
+			# `%2Fdocs%2Fx%3Fa%3D1%26b%3D2`. Note an UNKNOWN placeholder would adapt cleanly
+			# and ship as a literal string, so `caddy adapt` cannot vouch for this line.
 			@unauthenticated status 401
 			handle_response @unauthenticated {
-				redir * /oauth2/start?rd={http.request.uri}
+				redir * /oauth2/start?rd={http.request.uri_escaped}
 			}
 		}
 		reverse_proxy plainbase:8080 {
