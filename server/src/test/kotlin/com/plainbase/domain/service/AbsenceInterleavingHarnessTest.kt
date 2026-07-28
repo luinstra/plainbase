@@ -89,7 +89,7 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 // reason both are here: an early break stops EPOCH from minting, so only GIT can exercise the windows
                 // where the observation STAMP - rather than the absent epoch - is the only thing standing in the way.
                 val git = MovingHistory(deletes = source == Authority.GIT)
-                if (source == Authority.EPOCH) world.observe("main", "extra")
+                if (source == Authority.EPOCH) world.observe("docs", "extra")
                 val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git)
                     .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
 

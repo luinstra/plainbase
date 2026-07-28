@@ -91,7 +91,7 @@ class ReindexCommandTest : FunSpec({
         withTwoRootTree { config, _ ->
             val out = captureStdout { runReindex(emptyList(), config) shouldBe 0 }
             out.lineSequence().toList() shouldContain
-                "reindex: rebuilt the search index for 3 page(s) across 2 roots: main (2), handbook (1)"
+                "reindex: rebuilt the search index for 3 page(s) across 2 roots: docs (2), handbook (1)"
 
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
@@ -153,7 +153,7 @@ class ReindexCommandTest : FunSpec({
             // be dropped without any other test noticing, since the test above only ever drives it through an EXTRA.
             // Undecorated, main's store would be the real one: nothing vanishes, and this run returns 0.
             val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(RootName.PRIMARY)) shouldBe 1 }
-            err shouldContain "root 'main' went away while it was being indexed"
+            err shouldContain "root 'docs' went away while it was being indexed"
             err shouldContain "nothing was written"
 
             SearchDb(config.searchDatabasePath).use { db ->

@@ -50,7 +50,7 @@ class WritePipelineNativeTest {
                 val citations = CitationFactory()
                 val idMap = SqlDelightIdMapRepository(database)
                 val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
-                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(kotlin.time.Clock.System)
                 val builder = IndexBuilder(
                     sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),

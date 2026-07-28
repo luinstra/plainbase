@@ -33,7 +33,7 @@ class ManagedRootsConfigTest : FunSpec({
         withFiles(rootsConf = """roots { notes { path = "/roots/notes", editable = true, history = off } }""") { env ->
             val roots = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/docs")).roots
             roots.origin shouldBe RootsOrigin.EXPLICIT
-            roots.list.map { it.name.value } shouldBe listOf("main", "notes")
+            roots.list.map { it.name.value } shouldBe listOf("docs", "notes")
             roots.primary.localPath shouldBe Path.of("/roots/docs")
             // main was NOT hand-declared: it came from CONTENT_DIR. That distinction is what stops the
             // "CONTENT_DIR is ignored" warning from being a lie (T-CFG-9).
@@ -55,14 +55,14 @@ class ManagedRootsConfigTest : FunSpec({
             // line would order alphabetically (`hand` before `main`) - correct, and beside the point here.
             plainbaseConf = """
                 roots {
-                  main { path = "/roots/m" }
+                  docs { path = "/roots/m" }
                   hand { path = "/roots/h" }
                 }
             """.trimIndent(),
             rootsConf = """roots { cli { path = "/roots/c" } }""",
         ) { env ->
             val roots = PlainbaseConfig.fromEnvAndFile(env).roots
-            roots.list.map { it.name.value } shouldBe listOf("main", "hand", "cli")
+            roots.list.map { it.name.value } shouldBe listOf("docs", "hand", "cli")
             roots.managed.map { it.value } shouldBe listOf("cli")
             roots.primaryDeclared shouldBe true
         }
@@ -72,7 +72,7 @@ class ManagedRootsConfigTest : FunSpec({
 
     test("T-CFG-2: a root declared in BOTH files is a boot error naming both files and the root") {
         withFiles(
-            plainbaseConf = """roots { main { path = "/roots/m" }, notes { path = "/roots/hand-notes" } }""",
+            plainbaseConf = """roots { docs { path = "/roots/m" }, notes { path = "/roots/hand-notes" } }""",
             rootsConf = """roots { notes { path = "/roots/cli-notes" } }""",
         ) { env ->
             val failure = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
@@ -85,10 +85,10 @@ class ManagedRootsConfigTest : FunSpec({
         }
     }
 
-    test("T-CFG-3: roots.conf declaring main is a boot error naming the file") {
-        withFiles(rootsConf = """roots { main { path = "/roots/m" } }""") { env ->
+    test("T-CFG-3: roots.conf declaring docs is a boot error naming the file") {
+        withFiles(rootsConf = """roots { docs { path = "/roots/m" } }""") { env ->
             shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
-                .message shouldContain "roots.conf must not declare 'main'"
+                .message shouldContain "roots.conf must not declare 'docs'"
         }
     }
 
@@ -102,7 +102,7 @@ class ManagedRootsConfigTest : FunSpec({
             // mode - dropping a refusal that fires today.
             withFiles(plainbaseConf = "roots {}") { env ->
                 shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
-                    .message shouldContain "must declare a root named 'main'"
+                    .message shouldContain "must declare a root named 'docs'"
             }
         }
 
@@ -196,9 +196,9 @@ class ManagedRootsConfigTest : FunSpec({
             }
         }
 
-        test("a hand-declared roots.main DOES warn - CONTENT_DIR really is ignored there") {
+        test("a hand-declared roots.docs DOES warn - CONTENT_DIR really is ignored there") {
             withFiles(
-                plainbaseConf = """roots { main { path = "/roots/m" } }""",
+                plainbaseConf = """roots { docs { path = "/roots/m" } }""",
                 rootsConf = """roots { notes { path = "/roots/notes" } }""",
             ) { env ->
                 val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/roots/legacy"))

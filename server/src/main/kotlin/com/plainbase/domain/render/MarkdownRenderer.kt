@@ -28,7 +28,7 @@ interface MarkdownRenderer {
 /**
  * The frozen-shape product of rendering a page (§A4 `/html` payload feeds off this):
  *  - [html] — body HTML, raw HTML escaped (§C3), anchor ids from PB-SLUG-1, hrefs/srcs rewritten
- *    per PB-LINK-1 (resolved → `/docs`/`/assets` URL; broken/blocked → inert, see [links]);
+ *    per PB-LINK-1 (resolved → `/{root}`/`/assets` URL; broken/blocked → inert, see [links]);
  *  - [headings] — document order, each carrying its allocated id, level, and §A1 text;
  *  - [links] — every link/image occurrence as a [PageLink] (raw target, text, resolved outcome) —
  *    the link-checker's input (chunk 8);

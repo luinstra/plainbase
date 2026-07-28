@@ -397,9 +397,9 @@ object RootCommand {
         val mutating = request as? RootArgs.Mutating
         if (mutating != null && mutating.name == RootName.PRIMARY) {
             output.error(
-                "root: 'main' is never CLI-managed. Its directory comes from CONTENT_DIR, or from a roots {} block you " +
+                "root: 'docs' is never CLI-managed. Its directory comes from CONTENT_DIR, or from a roots {} block you " +
                     "wrote yourself in plainbase.conf - freezing the CONTENT_DIR value one command happened to see " +
-                    "would silently repoint main on every container that boots with a different one.",
+                    "would silently repoint docs on every container that boots with a different one.",
             )
             return null
         }

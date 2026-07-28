@@ -34,9 +34,9 @@ value class RootName private constructor(val value: String) {
 
         /**
          * The reserved, REQUIRED primary root (`RootName.PRIMARY`, ADR-0011 D1): config validation demands it, the CLI
-         * refuses to remove or rename it, so `root = 'main'` migration stamps are safe forever.
+         * refuses to remove or rename it, and `main` is reserved so no live root can bind over its migration stamps.
          */
-        val PRIMARY: RootName = RootName("main")
+        val PRIMARY: RootName = RootName("docs")
 
         private const val MIN_LENGTH = 2
         private const val MAX_LENGTH = 32

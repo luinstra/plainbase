@@ -49,7 +49,7 @@ class EpochMintRestoreRaceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                     .rebuild().byPath.getValue(rollback).id // the OPENING scan witnesses it
 
@@ -81,7 +81,7 @@ class EpochMintRestoreRaceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                     .rebuild().byPath.getValue(rollback).id // the OPENING scan witnesses it
 

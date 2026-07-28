@@ -54,7 +54,7 @@ class BareArmFailClosedTest : FunSpec({
 
     test("R31: a SINGLE registered tombstone (no live) -> bare /p 410, bare REST read 404, bare propose StaleBase") {
         failClosed { harness ->
-            registeredTombstone(harness, "main", "guides/gone.md", id)
+            registeredTombstone(harness, "docs", "guides/gone.md", id)
 
             withClue("purely-retired resolves None; the permalink splits it to 410 naming the last-known path") {
                 val res = noRedirect.get("/p/$x")
@@ -79,14 +79,14 @@ class BareArmFailClosedTest : FunSpec({
         failClosed { harness ->
             // notes is rank 0 but sorts AFTER main. Seed main FIRST so raw insertion order [main, notes] differs from
             // BOTH the D7 rank order AND lexical - the candidate list must follow rank, not insertion or name.
-            registeredTombstone(harness, "main", "m/gone.md", id)
+            registeredTombstone(harness, "docs", "m/gone.md", id)
             registeredTombstone(harness, "notes", "n/gone.md", id)
 
             val res = noRedirect.get("/p/$x")
             res.status shouldBe HttpStatusCode.MultipleChoices
             res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
-            res.candidateRoots() shouldContainExactly listOf("notes", "main") // D7 registry rank, NOT lexical
-            res.candidateUrls() shouldContainExactly listOf("/p/notes/$x", "/p/main/$x")
+            res.candidateRoots() shouldContainExactly listOf("notes", "docs") // D7 registry rank, NOT lexical
+            res.candidateUrls() shouldContainExactly listOf("/p/notes/$x", "/p/docs/$x")
         }
     }
 
@@ -94,13 +94,13 @@ class BareArmFailClosedTest : FunSpec({
 
     test("R20/R21/R22/R22b: live in notes + a registered tombstone in main -> the fail-closed MIXED arms") {
         failClosed(seedNotesLive = true) { harness ->
-            registeredTombstone(harness, "main", "m/gone.md", id)
+            registeredTombstone(harness, "docs", "m/gone.md", id)
 
             withClue("R20 - bare /p is 300 (both candidates, D7 rank), STATUS-NEUTRAL mixed message, NO 410 claim, no-store") {
                 val res = noRedirect.get("/p/$x")
                 res.status shouldBe HttpStatusCode.MultipleChoices
                 res.headers[HttpHeaders.CacheControl] shouldBe "no-store"
-                res.candidateRoots() shouldContainExactly listOf("notes", "main")
+                res.candidateRoots() shouldContainExactly listOf("notes", "docs")
                 val message = res.errorMessage()
                 message shouldContain "some candidate roots have retired this id"
                 message shouldNotContain "410" // status-neutral: the permalink 300 makes no cross-surface status claim
@@ -109,7 +109,7 @@ class BareArmFailClosedTest : FunSpec({
                 val res = client.get("/api/v1/pages/$x")
                 res.status shouldBe HttpStatusCode.Conflict
                 res.errorCode() shouldBe "ambiguous_page_id"
-                res.candidateRoots() shouldContainExactly listOf("notes", "main")
+                res.candidateRoots() shouldContainExactly listOf("notes", "docs")
             }
             withClue("R22 - a bare WRITE is 409 ambiguous_page_id; the SAME PUT pinned to notes still resolves its root") {
                 val bare = client.put("/api/v1/pages/$x") {
@@ -161,7 +161,7 @@ private fun failClosed(
             val page = notesDir.resolve("live.md")
             Files.writeString(page, "---\nid: 0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a\ntitle: Live\n---\n\n# Live\n\nbody.\n")
         }
-        multiRootTest(listOf(testRoot("notes", notesDir), testRoot("main", mainDir))) { harness -> block(harness) }
+        multiRootTest(listOf(testRoot("notes", notesDir), testRoot("docs", mainDir))) { harness -> block(harness) }
     } finally {
         parent.toFile().deleteRecursively()
     }

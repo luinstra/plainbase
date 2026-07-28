@@ -19,7 +19,7 @@ import com.plainbase.domain.root.RootedPath
  * Lookup semantics (frozen):
  *  - [pageAt] — the exact (root, id) identity in the snapshot; a shape-valid unknown id is the
  *    caller's `page_not_found`.
- *  - [byUrlPath] - the *decoded, NFC* ROOT-relative slug path (the tail after `/docs/{root}/`,
+ *  - [byUrlPath] - the *decoded, NFC* ROOT-relative slug path (the tail after `/{root}/`,
  *    C3; the route parses the root segment off first), matched case-sensitively
  *    against canonical paths first, then the alias registry; an alias hit returns the page whose
  *    payload carries the CURRENT canonical `url`, so clients self-correct (§A4).

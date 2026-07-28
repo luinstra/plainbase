@@ -55,9 +55,9 @@ class MultiRootCorpusPerfTest : FunSpec({
     test("1,000 pages in 1 root vs 3: rebuild / create / render (ratios recorded, the 1-root literals gated)") {
         // Contiguous slices, so every page's generated sibling link resolves exactly as it does in the 1-root
         // corpus: the two shapes render the same work, not merely the same page count.
-        val single = measure(listOf("main" to (0 until 1000)))
-        val singleAgain = measure(listOf("main" to (0 until 1000)))
-        val triple = measure(listOf("main" to (0 until 334), "extra" to (334 until 667), "archive" to (667 until 1000)))
+        val single = measure(listOf("docs" to (0 until 1000)))
+        val singleAgain = measure(listOf("docs" to (0 until 1000)))
+        val triple = measure(listOf("docs" to (0 until 334), "extra" to (334 until 667), "archive" to (667 until 1000)))
 
         report("rebuild median ms", single.rebuildMedian, singleAgain.rebuildMedian, triple.rebuildMedian)
         report("create median ms", single.createMedian, singleAgain.createMedian, triple.createMedian)

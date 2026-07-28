@@ -2,9 +2,11 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.RootName
+import com.plainbase.frameworks.ktor.routes.FrontendBundle
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.shouldBe
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -15,7 +17,7 @@ import java.nio.file.Path
  * actually served; `processResources` depends on `copyFrontend`, so it is staged before any test runs.
  *
  * RESERVATION, at the top level. [ReservedSegments] claims the product owns the top-level URLs it serves,
- * and the bundle is served wholesale from `staticResources("/", "static")`, so a new directory there is a
+ * and the bundle's classpath tree is exposed through explicit server routes, so a new directory there is a
  * live route from the moment it is staged. Candidates go through [RootName.of] and then the whole
  * [ReservedSegments.isReserved] predicate rather than [ReservedSegments.words]: an entry no root could be
  * NAMED after (`favicon.svg`, `_app`, a single character) is unshadowable by construction, while `v2` and
@@ -48,6 +50,38 @@ class FrontendBundleTest : FunSpec({
             offenders.map { (name, _) -> name }.shouldBeEmpty()
         }
     }
+
+    test("H2: the FrontendBundle ledger and the served tree name exactly the same top-level entries") {
+        // DISTINCT from the reservation row above, and the difference IS the trap that makes one list get
+        // written from the other: drop `favicon.svg` from `FrontendBundle.files` and the reservation row
+        // stays GREEN, because `favicon.svg` is dotted, cannot parse as a RootName, and is correctly ABSENT
+        // from the reserved set - while the favicon 404s in production. Only this equality observes that.
+        //
+        // `.toSet()` is LOAD-BEARING. `files + directories` is a `List<String>` and `bundleTopLevel()` is a
+        // `Set<String>`; `AbstractList.equals` is false against any non-List, so written without it this
+        // COMPILES (both are `Collection<String>`), is ALWAYS false, and every back-out below stops proving
+        // anything. Confirm it passes on the untouched tree before trusting a single one of them.
+        val ledgered = (FrontendBundle.files + FrontendBundle.directories + FrontendBundle.ownedElsewhere.keys).toSet()
+        withClue("the ledger and the served bundle disagree; a route is missing or a ledger entry is stale") {
+            ledgered shouldBe bundleTopLevel()
+        }
+    }
+
+    test("every FrontendBundle.directories entry is FLAT: its route matches exactly ONE path segment") {
+        // `get("/{dir}/{file}")` matches one segment, so a nested `/fonts/sub/x.woff2` falls past it to the
+        // root wildcard and 404s in production while H2 above stays green, because the NAME `fonts` is still
+        // ledgered and still on the tree. This half has NO source back-out: its RED is environmental,
+        // arriving the day somebody adds `frontend/public/fonts/sub/`. Section 8 registers it as ungated
+        // rather than dressing it as a proven falsifier.
+        FrontendBundle.directories.forEach { dir ->
+            val nested = Files.list(bundleDir().resolve(dir)).use { stream ->
+                stream.filter { !Files.isRegularFile(it) }.map { it.fileName.toString() }.toList()
+            }
+            withClue("$dir/ holds a subdirectory, which the one-segment route cannot reach") {
+                nested.shouldBeEmpty()
+            }
+        }
+    }
 })
 
 /**
@@ -58,7 +92,7 @@ class FrontendBundleTest : FunSpec({
  * against an empty decoy. Enumerating ALL of them and demanding exactly one closes that; the `index.html`
  * check then catches an unstaged or half-copied bundle.
  */
-private fun bundleDir(): Path {
+internal fun bundleDir(): Path {
     val found = FrontendBundleTest::class.java.classLoader.getResources("static").toList()
     check(found.size == 1) {
         "expected exactly one static/ on the test classpath, found ${found.size}: $found - " +
@@ -71,8 +105,8 @@ private fun bundleDir(): Path {
     return dir
 }
 
-/** The bundle's top-level entry names - what `staticResources("/", "static")` serves directly under `/`. */
-private fun bundleTopLevel(): Set<String> =
+/** The bundle's top-level entry names, exposed directly under the server's root URL surface. */
+internal fun bundleTopLevel(): Set<String> =
     Files.list(bundleDir()).use { stream -> stream.map { it.fileName.toString() }.toList() }.toSet()
 
 /** The entries under `static/assets/`, where Vite emits its hashed js/css, as name-to-path pairs. */

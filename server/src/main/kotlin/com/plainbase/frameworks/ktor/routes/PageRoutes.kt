@@ -18,7 +18,7 @@ import io.ktor.server.routing.route
  *  - `GET /api/v1/pages/{id}` — full page payload; the `{id}` parameter accepts any case under the
  *    canonical-shape rule, responses always carry lowercase.
  *  - `GET /api/v1/pages/by-path/{path}` — identical shape; `{path}` is the URL-slugified
- *    `/docs/`-relative form INCLUDING the root segment (`main/guides/deploy-guide`), percent-decoded
+ *    `/{root}/`-relative form INCLUDING the root segment (`docs/guides/deploy-guide`), percent-decoded
  *    ONCE (PB-LINK-1), matched case-sensitively against canonical paths first, then the alias
  *    registry. The root segment is REQUIRED: a rootless tail names no page → 404 `page_not_found`.
  *  - `GET /api/v1/pages/{id}/html` — sanitized HTML + the document-order `headings` array.

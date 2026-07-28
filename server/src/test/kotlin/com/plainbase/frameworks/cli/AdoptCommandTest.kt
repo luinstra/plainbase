@@ -216,7 +216,7 @@ class AdoptCommandTest : FunSpec({
             val out = captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
             withClue("each root gets its own named section - the same page path can exist in two of them") {
-                out shouldContain "adopt: root 'main': 3 page(s)"
+                out shouldContain "adopt: root 'docs': 3 page(s)"
                 out shouldContain "adopt: root 'handbook': 1 page(s)"
             }
             withClue("THE point: the extra root's identity now lives in the tree itself, so a lost DATA_DIR cannot take it") {

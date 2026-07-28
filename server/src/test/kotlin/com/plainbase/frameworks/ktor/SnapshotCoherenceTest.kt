@@ -38,7 +38,7 @@ class SnapshotCoherenceTest : FunSpec({
 
         withTempTree(seed = { root -> writePage(root, "coherent.md", original) }) { root ->
             restTest(root) {
-                val id = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/coherent").bodyAsText())
+                val id = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/docs/coherent").bodyAsText())
                     .jsonObject.string("id")
 
                 // Edit the file on disk AFTER the snapshot published.

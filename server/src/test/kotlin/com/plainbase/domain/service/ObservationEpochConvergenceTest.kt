@@ -42,7 +42,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val id = builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id // the OPENING scan: it witnesses the page
 
@@ -72,7 +72,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             repeat(20) { i -> writePage(extraDir, "h/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val corpus = world.builder(mainDir, world.extraStore(extraDir), world.indexer).rebuild()
                     .section(extra).pages.map { it.id }
 
@@ -84,7 +84,7 @@ class ObservationEpochConvergenceTest : FunSpec({
                 Files.createDirectories(extraDir)
                 repeat(3) { i -> writePage(extraDir, "decoy-$i.md", "# Decoy $i\n\nbody\n") }
                 world.restart()
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
 
                 val cold = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
                 cold.rebuild()
@@ -107,7 +107,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             repeat(20) { i -> writePage(extraDir, "h/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 // ONE store for the process's life, exactly as production holds it - which is what lets the liveness
                 // probe compare the tree it BOUND to against the tree that is there now. Nothing is faked here: the
                 // break comes out of `rootLivenessProbe`'s own rebind arm, through the store's `onIdentityRebind`.
@@ -146,7 +146,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             repeat(20) { i -> writePage(extraDir, "h/page-$i.md", "# Page $i\n\nbody\n") }
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 builder.rebuild() // the epoch witnesses all 20
 
@@ -175,7 +175,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val id = builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id
 
@@ -201,7 +201,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val real = LocalContentStore(extraDir)
                 world.builder(mainDir, real, world.indexer).rebuild() // the epoch witnesses the page, honestly
 
@@ -224,7 +224,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", page)
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
                 builder.rebuild()
 
@@ -247,7 +247,7 @@ class ObservationEpochConvergenceTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n") // no `id:` - the id lives ONLY in id_map
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
                 val id = builder.rebuild().byPath.getValue(RootedPath(extra, rollback)).id
 

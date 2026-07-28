@@ -1,7 +1,7 @@
 {
   "roots": [
     {
-      "root": "main",
+      "root": "docs",
       "available": true,
       "editable": true,
       "primary": true,
@@ -11,7 +11,7 @@
         "title": null,
         "description": null,
         "path": "",
-        "url": "/docs/main",
+        "url": "/docs",
         "page_count": 2,
         "children": [
           {
@@ -20,7 +20,7 @@
             "title": "API Reference",
             "description": null,
             "path": "api",
-            "url": "/docs/main/api",
+            "url": "/docs/api",
             "page_count": 6,
             "children": [
               {
@@ -29,7 +29,7 @@
                 "title": "Authentication",
                 "slug": "authentication",
                 "path": "api/authentication.md",
-                "url": "/docs/main/api/authentication",
+                "url": "/docs/api/authentication",
                 "status": "active",
                 "updated": null
               },
@@ -39,7 +39,7 @@
                 "title": "Changelog Policy",
                 "slug": "changelog-policy",
                 "path": "api/changelog-policy.md",
-                "url": "/docs/main/api/changelog-policy",
+                "url": "/docs/api/changelog-policy",
                 "status": "active",
                 "updated": null
               },
@@ -49,7 +49,7 @@
                 "title": "API Errors",
                 "slug": "errors",
                 "path": "api/errors.md",
-                "url": "/docs/main/api/errors",
+                "url": "/docs/api/errors",
                 "status": "active",
                 "updated": null
               },
@@ -59,7 +59,7 @@
                 "title": "MCP Server",
                 "slug": "mcp",
                 "path": "api/mcp.md",
-                "url": "/docs/main/api/mcp",
+                "url": "/docs/api/mcp",
                 "status": "active",
                 "updated": null
               },
@@ -69,7 +69,7 @@
                 "title": "API Overview",
                 "slug": "api-overview",
                 "path": "api/overview.md",
-                "url": "/docs/main/api/api-overview",
+                "url": "/docs/api/api-overview",
                 "status": "active",
                 "updated": "2026-05-30"
               },
@@ -79,7 +79,7 @@
                 "title": "REST API",
                 "slug": "rest",
                 "path": "api/rest.md",
-                "url": "/docs/main/api/rest",
+                "url": "/docs/api/rest",
                 "status": "active",
                 "updated": null
               }
@@ -91,7 +91,7 @@
             "title": null,
             "description": null,
             "path": "changelog",
-            "url": "/docs/main/changelog",
+            "url": "/docs/changelog",
             "page_count": 3,
             "children": [
               {
@@ -100,7 +100,7 @@
                 "title": "Changelog 2026-01",
                 "slug": "2026-01",
                 "path": "changelog/2026-01.md",
-                "url": "/docs/main/changelog/2026-01",
+                "url": "/docs/changelog/2026-01",
                 "status": "active",
                 "updated": null
               },
@@ -110,7 +110,7 @@
                 "title": "Changelog 2026-02",
                 "slug": "2026-02",
                 "path": "changelog/2026-02.md",
-                "url": "/docs/main/changelog/2026-02",
+                "url": "/docs/changelog/2026-02",
                 "status": "active",
                 "updated": null
               },
@@ -120,7 +120,7 @@
                 "title": "Changelog 2026-03",
                 "slug": "2026-03",
                 "path": "changelog/2026-03.md",
-                "url": "/docs/main/changelog/2026-03",
+                "url": "/docs/changelog/2026-03",
                 "status": "active",
                 "updated": null
               }
@@ -132,7 +132,7 @@
             "title": "Guides",
             "description": "Step-by-step guides for deploying and operating Plainbase.",
             "path": "guides",
-            "url": "/docs/main/guides",
+            "url": "/docs/guides",
             "page_count": 6,
             "children": [
               {
@@ -141,7 +141,7 @@
                 "title": null,
                 "description": null,
                 "path": "guides/advanced",
-                "url": "/docs/main/guides/advanced",
+                "url": "/docs/guides/advanced",
                 "page_count": 3,
                 "children": [
                   {
@@ -150,7 +150,7 @@
                     "title": "Backup and Restore",
                     "slug": "backup-restore",
                     "path": "guides/advanced/backup-restore.md",
-                    "url": "/docs/main/guides/advanced/backup-restore",
+                    "url": "/docs/guides/advanced/backup-restore",
                     "status": "active",
                     "updated": null
                   },
@@ -160,7 +160,7 @@
                     "title": "Scaling",
                     "slug": "scaling",
                     "path": "guides/advanced/scaling.md",
-                    "url": "/docs/main/guides/advanced/scaling",
+                    "url": "/docs/guides/advanced/scaling",
                     "status": "active",
                     "updated": null
                   },
@@ -170,7 +170,7 @@
                     "title": "Performance Tuning",
                     "slug": "tuning",
                     "path": "guides/advanced/tuning.md",
-                    "url": "/docs/main/guides/advanced/tuning",
+                    "url": "/docs/guides/advanced/tuning",
                     "status": "draft",
                     "updated": null
                   }
@@ -182,7 +182,7 @@
                 "title": "Deploy Guide",
                 "slug": "deploy-guide",
                 "path": "guides/deploy-guide.md",
-                "url": "/docs/main/guides/deploy-guide",
+                "url": "/docs/guides/deploy-guide",
                 "status": "active",
                 "updated": null
               },
@@ -192,7 +192,7 @@
                 "title": "Using the Editor",
                 "slug": "editor",
                 "path": "guides/editor.md",
-                "url": "/docs/main/guides/editor",
+                "url": "/docs/guides/editor",
                 "status": "active",
                 "updated": null
               },
@@ -202,7 +202,7 @@
                 "title": "Getting Started",
                 "slug": "getting-started",
                 "path": "guides/getting-started.md",
-                "url": "/docs/main/guides/getting-started",
+                "url": "/docs/guides/getting-started",
                 "status": "active",
                 "updated": null
               },
@@ -212,7 +212,7 @@
                 "title": "Searching the Docs",
                 "slug": "search",
                 "path": "guides/search.md",
-                "url": "/docs/main/guides/search",
+                "url": "/docs/guides/search",
                 "status": "active",
                 "updated": null
               },
@@ -222,7 +222,7 @@
                 "title": "Setup",
                 "slug": "setup",
                 "path": "guides/setup.md",
-                "url": "/docs/main/guides/setup",
+                "url": "/docs/guides/setup",
                 "status": "active",
                 "updated": null
               },
@@ -232,7 +232,7 @@
                 "title": "Writing Style Guide",
                 "slug": "writing-style",
                 "path": "guides/writing-style.md",
-                "url": "/docs/main/guides/writing-style",
+                "url": "/docs/guides/writing-style",
                 "status": "active",
                 "updated": null
               }
@@ -244,7 +244,7 @@
             "title": null,
             "description": null,
             "path": "infra",
-            "url": "/docs/main/infra",
+            "url": "/docs/infra",
             "page_count": 6,
             "children": [
               {
@@ -253,7 +253,7 @@
                 "title": "Incident Runbook",
                 "slug": "incident-runbook",
                 "path": "infra/incident-runbook.md",
-                "url": "/docs/main/infra/incident-runbook",
+                "url": "/docs/infra/incident-runbook",
                 "status": "active",
                 "updated": null
               },
@@ -263,7 +263,7 @@
                 "title": "Kubernetes",
                 "slug": "kubernetes",
                 "path": "infra/kubernetes.md",
-                "url": "/docs/main/infra/kubernetes",
+                "url": "/docs/infra/kubernetes",
                 "status": "active",
                 "updated": null
               },
@@ -273,7 +273,7 @@
                 "title": "Monitoring",
                 "slug": "monitoring",
                 "path": "infra/monitoring.md",
-                "url": "/docs/main/infra/monitoring",
+                "url": "/docs/infra/monitoring",
                 "status": "active",
                 "updated": null
               },
@@ -283,7 +283,7 @@
                 "title": "Networking",
                 "slug": "networking",
                 "path": "infra/networking.md",
-                "url": "/docs/main/infra/networking",
+                "url": "/docs/infra/networking",
                 "status": "active",
                 "updated": null
               },
@@ -293,7 +293,7 @@
                 "title": "Setup",
                 "slug": "setup",
                 "path": "infra/setup.md",
-                "url": "/docs/main/infra/setup",
+                "url": "/docs/infra/setup",
                 "status": "active",
                 "updated": null
               },
@@ -303,7 +303,7 @@
                 "title": "Terraform",
                 "slug": "terraform",
                 "path": "infra/terraform.md",
-                "url": "/docs/main/infra/terraform",
+                "url": "/docs/infra/terraform",
                 "status": "active",
                 "updated": null
               }
@@ -315,7 +315,7 @@
             "title": null,
             "description": null,
             "path": "notes",
-            "url": "/docs/main/notes",
+            "url": "/docs/notes",
             "page_count": 7,
             "children": [
               {
@@ -324,7 +324,7 @@
                 "title": null,
                 "description": null,
                 "path": "notes/deeply",
-                "url": "/docs/main/notes/deeply",
+                "url": "/docs/notes/deeply",
                 "page_count": 0,
                 "children": [
                   {
@@ -333,7 +333,7 @@
                     "title": null,
                     "description": null,
                     "path": "notes/deeply/nested",
-                    "url": "/docs/main/notes/deeply/nested",
+                    "url": "/docs/notes/deeply/nested",
                     "page_count": 0,
                     "children": [
                       {
@@ -342,7 +342,7 @@
                         "title": null,
                         "description": null,
                         "path": "notes/deeply/nested/folder",
-                        "url": "/docs/main/notes/deeply/nested/folder",
+                        "url": "/docs/notes/deeply/nested/folder",
                         "page_count": 1,
                         "children": [
                           {
@@ -351,7 +351,7 @@
                             "title": "Deeply Nested Page",
                             "slug": "treasure",
                             "path": "notes/deeply/nested/folder/treasure.md",
-                            "url": "/docs/main/notes/deeply/nested/folder/treasure",
+                            "url": "/docs/notes/deeply/nested/folder/treasure",
                             "status": "active",
                             "updated": null
                           }
@@ -367,7 +367,7 @@
                 "title": "Broken Links Sample",
                 "slug": "broken-links",
                 "path": "notes/broken-links.md",
-                "url": "/docs/main/notes/broken-links",
+                "url": "/docs/notes/broken-links",
                 "status": "active",
                 "updated": null
               },
@@ -377,7 +377,7 @@
                 "title": "Café Notes",
                 "slug": "café-notes",
                 "path": "notes/café-notes.md",
-                "url": "/docs/main/notes/caf%C3%A9-notes",
+                "url": "/docs/notes/caf%C3%A9-notes",
                 "status": "active",
                 "updated": null
               },
@@ -387,7 +387,7 @@
                 "title": "just-text",
                 "slug": "just-text",
                 "path": "notes/just-text.md",
-                "url": "/docs/main/notes/just-text",
+                "url": "/docs/notes/just-text",
                 "status": "active",
                 "updated": null
               },
@@ -397,7 +397,7 @@
                 "title": "A Page With No Frontmatter",
                 "slug": "no-frontmatter",
                 "path": "notes/no-frontmatter.md",
-                "url": "/docs/main/notes/no-frontmatter",
+                "url": "/docs/notes/no-frontmatter",
                 "status": "active",
                 "updated": null
               },
@@ -407,7 +407,7 @@
                 "title": "Release Notes 2026",
                 "slug": "release-notes-2026",
                 "path": "notes/release notes 2026.md",
-                "url": "/docs/main/notes/release-notes-2026",
+                "url": "/docs/notes/release-notes-2026",
                 "status": "active",
                 "updated": null
               },
@@ -417,7 +417,7 @@
                 "title": "Réunion Notes",
                 "slug": "réunion",
                 "path": "notes/réunion.md",
-                "url": "/docs/main/notes/r%C3%A9union",
+                "url": "/docs/notes/r%C3%A9union",
                 "status": "active",
                 "updated": null
               },
@@ -427,7 +427,7 @@
                 "title": "日本語ガイド",
                 "slug": "日本語ガイド",
                 "path": "notes/日本語ガイド.md",
-                "url": "/docs/main/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
+                "url": "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89",
                 "status": "active",
                 "updated": null
               }
@@ -439,7 +439,7 @@
             "title": null,
             "description": null,
             "path": "scratch",
-            "url": "/docs/main/scratch",
+            "url": "/docs/scratch",
             "page_count": 2,
             "children": [
               {
@@ -448,7 +448,7 @@
                 "title": "Ideas",
                 "slug": "ideas",
                 "path": "scratch/ideas.md",
-                "url": "/docs/main/scratch/ideas",
+                "url": "/docs/scratch/ideas",
                 "status": "draft",
                 "updated": null
               },
@@ -458,7 +458,7 @@
                 "title": "TODO",
                 "slug": "todo",
                 "path": "scratch/todo.md",
-                "url": "/docs/main/scratch/todo",
+                "url": "/docs/scratch/todo",
                 "status": "active",
                 "updated": null
               }
@@ -470,7 +470,7 @@
             "title": null,
             "description": null,
             "path": "team",
-            "url": "/docs/main/team",
+            "url": "/docs/team",
             "page_count": 3,
             "children": [
               {
@@ -479,7 +479,7 @@
                 "title": null,
                 "description": null,
                 "path": "team/meetings",
-                "url": "/docs/main/team/meetings",
+                "url": "/docs/team/meetings",
                 "page_count": 2,
                 "children": [
                   {
@@ -488,7 +488,7 @@
                     "title": "January 2026 Retro",
                     "slug": "2026-01-retro",
                     "path": "team/meetings/2026-01-retro.md",
-                    "url": "/docs/main/team/meetings/2026-01-retro",
+                    "url": "/docs/team/meetings/2026-01-retro",
                     "status": "archived",
                     "updated": null
                   },
@@ -498,7 +498,7 @@
                     "title": "February 2026 Planning",
                     "slug": "2026-02-planning",
                     "path": "team/meetings/2026-02-planning.md",
-                    "url": "/docs/main/team/meetings/2026-02-planning",
+                    "url": "/docs/team/meetings/2026-02-planning",
                     "status": "archived",
                     "updated": null
                   }
@@ -510,7 +510,7 @@
                 "title": "Team Handbook",
                 "slug": "handbook",
                 "path": "team/handbook.md",
-                "url": "/docs/main/team/handbook",
+                "url": "/docs/team/handbook",
                 "status": "active",
                 "updated": null
               },
@@ -520,7 +520,7 @@
                 "title": "Onboarding",
                 "slug": "onboarding",
                 "path": "team/onboarding.md",
-                "url": "/docs/main/team/onboarding",
+                "url": "/docs/team/onboarding",
                 "status": "active",
                 "updated": null
               },
@@ -530,7 +530,7 @@
                 "title": "Roles and Responsibilities",
                 "slug": "roles",
                 "path": "team/roles.md",
-                "url": "/docs/main/team/roles",
+                "url": "/docs/team/roles",
                 "status": "active",
                 "updated": null
               }
@@ -542,7 +542,7 @@
             "title": "About this tree",
             "slug": "readme",
             "path": "README.md",
-            "url": "/docs/main/readme",
+            "url": "/docs/readme",
             "status": "active",
             "updated": null
           },
@@ -552,7 +552,7 @@
             "title": "Welcome to Demo Docs",
             "slug": "welcome",
             "path": "index.md",
-            "url": "/docs/main/welcome",
+            "url": "/docs/welcome",
             "status": "active",
             "updated": null
           }

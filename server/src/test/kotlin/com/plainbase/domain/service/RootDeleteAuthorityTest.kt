@@ -341,7 +341,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
 
-    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
 
     val availability = RootAvailability(Clock.System)
     val idMap = SqlDelightIdMapRepository(database)

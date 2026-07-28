@@ -55,7 +55,7 @@ class BootGateOrderingTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main    { path = "$main" }
+                  docs    { path = "$main" }
                   absent  { path = "$missing" }
                   claimed { path = "$notARepo", history = native }
                 }
@@ -96,7 +96,7 @@ class BootGateOrderingTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main    { path = "$main" }
+                  docs    { path = "$main" }
                   claimed { path = "$notARepo", history = native }
                 }
                 """.trimIndent(),

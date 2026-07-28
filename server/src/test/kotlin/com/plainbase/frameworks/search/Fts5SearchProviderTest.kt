@@ -214,7 +214,7 @@ class Fts5SearchProviderTest : FunSpec({
     test("equal-score cross-root hits order by root before page_id (deterministic tiebreak)") {
         withProvider { provider, _ ->
             val extraRoot = RootName.require("extra")
-            // Page ids arranged OPPOSITE to root order (main->1, extra->2) with every indexed field identical
+            // Page ids arranged OPPOSITE to root order (docs->1, extra->2) with every indexed field identical
             // (title "Twin", same body; the fixture default title "Page $n" would skew the bm25 title weight),
             // so the score parity is by construction and the RED is deterministic on any machine.
             provider.index(
@@ -224,11 +224,11 @@ class Fts5SearchProviderTest : FunSpec({
                 ),
             )
             // RED (back-out): ORDER BY -> score DESC, d.page_id, d.heading_id. Equal score + different page_ids
-            // sorts by page_id -> [main(1), extra(2)] -> roots [MAIN, extra], failing shouldBe [extra, MAIN].
-            // "extra" < "main" lexically, so adding d.root ahead of d.page_id greens it.
-            provider.search(query("twin", limit = 2)).hits.map { it.root } shouldBe listOf(extraRoot, RootName.PRIMARY)
-            provider.search(query("twin", limit = 1, offset = 0)).hits.map { it.root } shouldBe listOf(extraRoot)
-            provider.search(query("twin", limit = 1, offset = 1)).hits.map { it.root } shouldBe listOf(RootName.PRIMARY)
+            // sorts by page_id -> [docs(1), extra(2)] -> roots [docs, extra], failing shouldBe [docs, extra].
+            // "docs" < "extra" lexically, so adding d.root ahead of d.page_id greens it.
+            provider.search(query("twin", limit = 2)).hits.map { it.root } shouldBe listOf(RootName.PRIMARY, extraRoot)
+            provider.search(query("twin", limit = 1, offset = 0)).hits.map { it.root } shouldBe listOf(RootName.PRIMARY)
+            provider.search(query("twin", limit = 1, offset = 1)).hits.map { it.root } shouldBe listOf(extraRoot)
         }
     }
 

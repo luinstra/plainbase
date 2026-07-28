@@ -86,7 +86,7 @@ fun withRestServices(
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
                 val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
-                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
                 val builder = IndexBuilder(
                     sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),

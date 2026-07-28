@@ -80,7 +80,7 @@ class Phase1AcceptanceNativeTest {
 
     private fun builderFor(store: LocalContentStore, driver: SqlDriver): IndexBuilder {
         val database = DatabaseFactory.createDatabase(driver)
-        val registry = RootRegistry.of(listOf(localRoot("main", fixturesRoot())))
+        val registry = RootRegistry.of(listOf(localRoot("docs", fixturesRoot())))
         return IndexBuilder(
             sources = listOf(IndexBuilder.Source(registry.primary, store, NoOpHistoryProvider)),
             frontmatterParser = FrontmatterReader(),

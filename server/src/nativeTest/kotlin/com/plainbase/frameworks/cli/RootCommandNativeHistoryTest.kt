@@ -186,7 +186,7 @@ class RootCommandNativeHistoryTest {
                 "the add should have been WRITTEN: the CLI never made this config less bootable",
             )
             assertContentEquals(
-                listOf("main", "broken", "unrelated"),
+                listOf("docs", "broken", "unrelated"),
                 PlainbaseConfig.fromEnvAndFile(w.env).roots.list.map { it.name.value },
             )
         }

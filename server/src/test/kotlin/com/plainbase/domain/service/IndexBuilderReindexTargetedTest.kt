@@ -126,7 +126,7 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
-    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", root)))
 
     val renders = ConcurrentHashMap<String, Int>()
     val search = CountingSearchProvider()

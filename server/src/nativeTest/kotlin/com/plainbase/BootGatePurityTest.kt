@@ -67,7 +67,7 @@ class BootGatePurityTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main    { path = "$main" }
+                  docs    { path = "$main" }
                   claimed { path = "$claimed", history = native }
                   absent  { path = "$missing" }
                 }

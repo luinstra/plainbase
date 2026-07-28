@@ -117,4 +117,7 @@ class RouteContext(
      * construction-time invariant, independent of the URL grammar: no route derives a root from its absence any more.
      */
     val roots: Set<RootName> = registry.roots.map { it.name }.toSet()
+
+    /** The primary root name used by root-level redirects, read from the registry when the route runs. */
+    val primary: RootName get() = registry.primary.name
 }

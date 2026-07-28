@@ -51,19 +51,19 @@ class RestApiNativeTest {
                 assertEquals(HttpStatusCode.OK, response.status)
                 val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
                 assertEquals(pageId, body["id"]?.jsonPrimitive?.content)
-                assertEquals("/docs/main/guides/native", body["url"]?.jsonPrimitive?.content)
+                assertEquals("/docs/guides/native", body["url"]?.jsonPrimitive?.content)
                 val citation = assertNotNull(body["citation"]?.jsonObject)
                 assertEquals(pageId, citation["page_id"]?.jsonPrimitive?.content)
 
                 // Tree: the sealed polymorphic DTO serializer must survive the closed world (C3 per-root entries).
                 val tree = Json.parseToJsonElement(client.get("/api/v1/tree").bodyAsText()).jsonObject
                 val entry = tree["roots"]?.jsonArray?.single()?.jsonObject
-                assertEquals("main", entry?.get("root")?.jsonPrimitive?.content)
+                assertEquals("docs", entry?.get("root")?.jsonPrimitive?.content)
                 val root = entry?.get("tree")?.jsonObject
                 assertEquals("folder", root?.get("type")?.jsonPrimitive?.content)
                 // Folder nodes carry the additive url prefix (ADR-0003) — natively too.
                 val guides = root?.get("children")?.jsonArray?.first()?.jsonObject
-                assertEquals("/docs/main/guides", guides?.get("url")?.jsonPrimitive?.content)
+                assertEquals("/docs/guides", guides?.get("url")?.jsonPrimitive?.content)
 
                 // chunk-3 `updated` validator runs `LocalDate.parse` HERE, inside the native image:
                 // a valid date round-trips; an impossible one (2026-02-30) is rejected to explicit null.
@@ -84,9 +84,9 @@ class RestApiNativeTest {
                 // Permalink: 302 to the canonical path URL; rescan keeps it live after a rebuild.
                 val permalink = client.get("/p/$pageId")
                 assertEquals(HttpStatusCode.Found, permalink.status)
-                assertEquals("/docs/main/guides/native", permalink.headers[HttpHeaders.Location])
+                assertEquals("/docs/guides/native", permalink.headers[HttpHeaders.Location])
                 assertEquals(HttpStatusCode.OK, client.post("/api/v1/admin/rescan").status)
-                assertEquals("/docs/main/guides/native", client.get("/p/$pageId").headers[HttpHeaders.Location])
+                assertEquals("/docs/guides/native", client.get("/p/$pageId").headers[HttpHeaders.Location])
             }
         }
     }

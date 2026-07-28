@@ -49,7 +49,10 @@ class ReservedSegmentsTest : FunSpec({
 
     test("the primary root's own name is NOT reserved, or every install would boot-refuse it") {
         reserved("docs") shouldBe false
-        reserved("main") shouldBe false
+    }
+
+    test("the former primary name is reserved because migration stamps freeze 'main'") {
+        reserved("main") shouldBe true
     }
 
     test("corpus vocabulary a docs tree plausibly owns stays legal") {

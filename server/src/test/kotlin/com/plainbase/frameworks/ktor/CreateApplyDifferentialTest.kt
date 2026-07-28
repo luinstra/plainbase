@@ -37,7 +37,7 @@ class CreateApplyDifferentialTest : FunSpec({
 
     val json = ContentType.Application.Json
     val createBody =
-        """{"root":"main","folder":"guides","title":"Differential: A/B","slug":"diff-page","body":"# Hello\n\nbody & text > here\n"}"""
+        """{"root":"docs","folder":"guides","title":"Differential: A/B","slug":"diff-page","body":"# Hello\n\nbody & text > here\n"}"""
     val createdPath = TreePath.require("guides/diff-page.md")
 
     fun IndexHarness.contextFor(store: LocalContentStore, principal: Principal, enforced: Boolean) = testRouteContext(

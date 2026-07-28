@@ -24,50 +24,50 @@ class RootRegistryTest : FunSpec({
 
     test("a root named main is required") {
         val failure = shouldThrow<IllegalArgumentException> { RootRegistry.of(listOf(root("extra"))) }
-        failure.message shouldContain "main"
+        failure.message shouldContain "docs"
     }
 
     test("duplicate names are rejected, naming the duplicates") {
         val failure = shouldThrow<IllegalArgumentException> {
-            RootRegistry.of(listOf(root("main"), root("extra"), root("extra")))
+            RootRegistry.of(listOf(root("docs"), root("extra"), root("extra")))
         }
         failure.message shouldContain "duplicate root name"
         failure.message shouldContain "extra"
     }
 
     test("the given order is preserved verbatim and primary resolves") {
-        val given = listOf(root("zeta"), root("main"), root("alpha"))
+        val given = listOf(root("zeta"), root("docs"), root("alpha"))
         val registry = RootRegistry.of(given)
         registry.roots shouldBe given
         registry.primary shouldBe given[1]
     }
 
     test("a caller-held mutable list cannot mutate the registry") {
-        val given = mutableListOf(root("main"), root("extra"))
+        val given = mutableListOf(root("docs"), root("extra"))
         val registry = RootRegistry.of(given)
         given.removeAt(1)
-        registry.roots.map { it.name.value } shouldBe listOf("main", "extra")
+        registry.roots.map { it.name.value } shouldBe listOf("docs", "extra")
     }
 
     test("byName resolves a present root and misses an absent one") {
-        val registry = RootRegistry.of(listOf(root("main"), root("extra")))
+        val registry = RootRegistry.of(listOf(root("docs"), root("extra")))
         registry.byName(RootName.require("extra"))?.name shouldBe RootName.require("extra")
         registry.byName(RootName.require("absent")).shouldBeNull()
     }
 
     test("extras is a partition of roots in D7 order, never a reordering - primary keeps its declared rank") {
-        val registry = RootRegistry.of(listOf(root("zeta"), root("main"), root("alpha")))
+        val registry = RootRegistry.of(listOf(root("zeta"), root("docs"), root("alpha")))
         registry.extras.map { it.name.value } shouldBe listOf("zeta", "alpha")
-        registry.roots.map { it.name.value } shouldBe listOf("zeta", "main", "alpha")
+        registry.roots.map { it.name.value } shouldBe listOf("zeta", "docs", "alpha")
         registry.rank(RootName.PRIMARY) shouldBe 1 // NOT 0: primary is a typed accessor, not a promotion
     }
 
     test("of() snapshots the caller's list: mutating it afterwards cannot desync roots, primary, extras or rank") {
-        val declared = mutableListOf(root("zeta"), root("main"))
+        val declared = mutableListOf(root("zeta"), root("docs"))
         val registry = RootRegistry.of(declared)
         declared.add(root("alpha"))
         declared.removeAt(0)
-        registry.roots.map { it.name.value } shouldBe listOf("zeta", "main")
+        registry.roots.map { it.name.value } shouldBe listOf("zeta", "docs")
         registry.primary.name shouldBe RootName.PRIMARY
         registry.extras.map { it.name.value } shouldBe listOf("zeta")
         registry.rank(RootName.PRIMARY) shouldBe 1

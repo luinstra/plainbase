@@ -51,7 +51,7 @@ class RootCommandTest : FunSpec({
 
             // The loader sees it, which is the only claim that matters.
             val roots = w.config().roots
-            roots.list.map { it.name.value } shouldBe listOf("main", "notes")
+            roots.list.map { it.name.value } shouldBe listOf("docs", "notes")
             roots.managed.map { it.value } shouldBe listOf("notes")
             roots.extras.single().localPath shouldBe extra
         }
@@ -65,7 +65,7 @@ class RootCommandTest : FunSpec({
             host = "127.0.0.1"   # trailing comment
 
             roots {
-              main { path = "MAIN_PLACEHOLDER" }
+              docs { path = "MAIN_PLACEHOLDER" }
             }
         """.trimIndent()
         world { w ->
@@ -82,13 +82,21 @@ class RootCommandTest : FunSpec({
 
     // --- T-CLI-3 / T-CLI-8 / T-CLI-10: the argv grammar, which makes some boot rules UNREACHABLE ---------
 
-    test("T-CLI-3: `root add main` and `root remove main` are USAGE errors (exit 2) - main is never CLI-managed") {
+    test("T-CLI-3: `root add docs` and `root remove docs` are USAGE errors (exit 2) - docs is never CLI-managed") {
         world { w ->
             val err = captureStderr {
-                w.root("add", "main", "/tmp/whatever") shouldBe 2
-                w.root("remove", "main") shouldBe 2
+                w.root("add", "docs", "/tmp/whatever") shouldBe 2
+                w.root("remove", "docs") shouldBe 2
             }
-            err shouldContain "'main' is never CLI-managed"
+            err shouldContain "'docs' is never CLI-managed"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
+    test("T-CLI-3b: `root add main` is a reserved-segment usage error") {
+        world { w ->
+            val err = captureStderr { w.root("add", "main", "/tmp/whatever") shouldBe 2 }
+            err shouldContain "'main' is a reserved segment"
             Files.exists(w.rootsConf) shouldBe false
         }
     }
@@ -202,7 +210,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main  { path = "CONTENT" }
+                  docs  { path = "CONTENT" }
                   notes { path = "/roots/hand-notes" }
                 }
             """.trimIndent(),
@@ -338,7 +346,7 @@ class RootCommandTest : FunSpec({
             captureStdout { w.root("remove", "alpha") shouldBe 0 }
 
             Files.exists(w.rootsConf) shouldBe true
-            w.config().roots.list.map { it.name.value } shouldBe listOf("main", "beta")
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "beta")
         }
     }
 
@@ -371,7 +379,7 @@ class RootCommandTest : FunSpec({
                 w.data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main  { path = "${w.content}" }
+                  docs  { path = "${w.content}" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -386,7 +394,7 @@ class RootCommandTest : FunSpec({
                 err shouldContain "nested inside"
             }
             withClue("and the add SUCCEEDED - the CLI never made this config less bootable") {
-                w.config().roots.list.map { it.name.value } shouldBe listOf("main", "outer", "inner", "notes")
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "outer", "inner", "notes")
             }
         }
     }
@@ -426,7 +434,7 @@ class RootCommandTest : FunSpec({
                 w.data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main  { path = "${w.content}" }
+                  docs  { path = "${w.content}" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -448,7 +456,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main { path = "CONTENT" }
+                  docs { path = "CONTENT" }
                   hand { path = "/roots/hand" }
                 }
             """.trimIndent(),
@@ -541,7 +549,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main { path = "CONTENT" }
+                  docs { path = "CONTENT" }
                   hand { path = "/roots/hand" }
                 }
             """.trimIndent(),
@@ -568,7 +576,7 @@ class RootCommandTest : FunSpec({
             names.forEach { name ->
                 captureStdout { w.root("add", name, Files.createDirectory(w.tmp(name)).toString()) shouldBe 0 }
             }
-            w.config().roots.list.map { it.name.value } shouldBe listOf("main") + names
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs") + names
             names.forEach { name ->
                 w.config().roots.extras.single { it.name.value == name }.localPath shouldBe w.tmp(name)
             }

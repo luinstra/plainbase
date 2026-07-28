@@ -96,7 +96,7 @@ class RestGoldenTest : FunSpec({
 
     test("GET /api/v1/pages/by-path/{path} returns the IDENTICAL shape and values as by-id") {
         goldenTest {
-            val byPath = client.get("/api/v1/pages/by-path/main/guides/deploy-guide").jsonBody()
+            val byPath = client.get("/api/v1/pages/by-path/docs/guides/deploy-guide").jsonBody()
             val byId = client.get("/api/v1/pages/$deployGuideId").jsonBody()
 
             byPath shouldBe byId
@@ -115,8 +115,8 @@ class RestGoldenTest : FunSpec({
             html.shouldNotBeBlank()
             html shouldContain "id=\"deploy-guide\""
             html shouldContain "id=\"prerequisites\""
-            html shouldContain "href=\"/docs/main/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
-            html shouldContain "src=\"/assets/main/infra/assets/diagram.svg\""
+            html shouldContain "href=\"/docs/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
+            html shouldContain "src=\"/assets/docs/infra/assets/diagram.svg\""
 
             val normalized = JsonObject(body + ("html" to JsonPrimitive("{{html}}")))
             normalized shouldBe RestGolden.load("page-html-deploy-guide.json", mapOf("content_hash" to deployGuideHash))
@@ -168,7 +168,7 @@ class RestGoldenTest : FunSpec({
             Json.parseToJsonElement(unknown.bodyAsText()) shouldBe RestGolden.load("error-page-not-found.json")
 
             // Unknown by-path -> 404 page_not_found.
-            val unknownPath = client.get("/api/v1/pages/by-path/main/no/such/page")
+            val unknownPath = client.get("/api/v1/pages/by-path/docs/no/such/page")
             unknownPath.status shouldBe HttpStatusCode.NotFound
             Json.parseToJsonElement(unknownPath.bodyAsText()) shouldBe RestGolden.load("error-by-path-not-found.json")
 

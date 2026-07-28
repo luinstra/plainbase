@@ -79,7 +79,7 @@ class RootPinRestTest : FunSpec({
         twoRoots { mainDir, notesDir ->
             seedWithId(mainDir, "guides/a.md", "A")
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = fakeFactoryResolver(listOf(notes)),
                 absenceFactory = fakeFactoryAbsence(listOf(notes)),
             ) { _ ->
@@ -92,30 +92,30 @@ class RootPinRestTest : FunSpec({
         }
     }
 
-    test("fixture 1 (b): PINNED read ?root=main is 200 coherent-stale - snapshot HIT, no durable check") {
+    test("fixture 1 (b): PINNED read ?root=docs is 200 coherent-stale - snapshot HIT, no durable check") {
         twoRoots { mainDir, notesDir ->
             seedWithId(mainDir, "guides/a.md", "A")
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = fakeFactoryResolver(listOf(notes)),
                 absenceFactory = fakeFactoryAbsence(listOf(notes)),
             ) { _ ->
                 createClient { followRedirects = false }
-                    .get("/api/v1/pages/$dupId?root=main").status shouldBe HttpStatusCode.OK
+                    .get("/api/v1/pages/$dupId?root=docs").status shouldBe HttpStatusCode.OK
             }
         }
     }
 
-    test("fixture 1 (c): PINNED write ?root=main (non-owner) is 404 - durable-validate fails, blind One(main) would 200") {
+    test("fixture 1 (c): PINNED write ?root=docs (non-owner) is 404 - durable-validate fails, blind One(main) would 200") {
         twoRoots { mainDir, notesDir ->
             seedWithId(mainDir, "guides/a.md", "A")
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = fakeFactoryResolver(listOf(notes)),
                 absenceFactory = fakeFactoryAbsence(listOf(notes)),
             ) { harness ->
-                val baseHash = baseHashOf(harness, "main", "guides/a.md")
-                val res = client.put("/api/v1/pages/$dupId?root=main") {
+                val baseHash = baseHashOf(harness, "docs", "guides/a.md")
+                val res = client.put("/api/v1/pages/$dupId?root=docs") {
                     contentType(ContentType.parse("text/markdown"))
                     header(HttpHeaders.IfMatch, "\"$baseHash\"")
                     setBody("---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n")
@@ -135,7 +135,7 @@ class RootPinRestTest : FunSpec({
                 PrincipalExtraction.Resolved(caller)
             }
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 globs = listOf(CommitGlob.parse("guides/**")),
                 enforced = true,
                 extract = extract,
@@ -143,9 +143,9 @@ class RootPinRestTest : FunSpec({
                 absenceFactory = fakeFactoryAbsence(listOf(notes)),
             ) { harness ->
                 caller = Principal.Agent(harness.index.apiTokens.mint(label = "ci", mode = AgentMode.COMMIT).id)
-                val baseHash = baseHashOf(harness, "main", "guides/a.md")
+                val baseHash = baseHashOf(harness, "docs", "guides/a.md")
                 val original = Files.readString(mainDir.resolve("guides/a.md"))
-                val res = client.put("/api/v1/pages/$dupId?root=main") {
+                val res = client.put("/api/v1/pages/$dupId?root=docs") {
                     contentType(ContentType.parse("text/markdown"))
                     header(HttpHeaders.IfMatch, "\"$baseHash\"")
                     setBody("---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n")
@@ -159,16 +159,16 @@ class RootPinRestTest : FunSpec({
 
     // ---- WINDOW FIXTURE 2: page under `notes` in the snapshot + FAKE rootsHoldingId=[main] (durable owner lag) ----
 
-    test("fixture 2 (d): PINNED write ?root=main (durable owner, snapshot lags) is 503 absence_unverified") {
+    test("fixture 2 (d): PINNED write ?root=docs (durable owner, snapshot lags) is 503 absence_unverified") {
         twoRoots { mainDir, notesDir ->
             seedWithId(notesDir, "guides/a.md", "A") // the page is under NOTES in the snapshot
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = fakeFactoryResolver(listOf(main)),
                 absenceFactory = fakeFactoryAbsence(listOf(main)),
             ) { harness ->
                 val baseHash = baseHashOf(harness, "notes", "guides/a.md")
-                val res = client.put("/api/v1/pages/$dupId?root=main") {
+                val res = client.put("/api/v1/pages/$dupId?root=docs") {
                     contentType(ContentType.parse("text/markdown"))
                     header(HttpHeaders.IfMatch, "\"$baseHash\"")
                     setBody("---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n")
@@ -191,7 +191,7 @@ class RootPinRestTest : FunSpec({
             fun racing(idx: com.plainbase.domain.service.IndexHarness): RacingUnbindIdMap =
                 shared ?: RacingUnbindIdMap(idx.idMap, id, main).also { shared = it }
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = { idx -> PageRootResolver(racing(idx), idx.rootRegistry) },
                 absenceFactory = { idx -> AbsenceClassifier(racing(idx)) },
             ) { _ ->
@@ -226,7 +226,7 @@ class RootPinRestTest : FunSpec({
                 PrincipalExtraction.Resolved(caller)
             }
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 globs = listOf(CommitGlob.parse("**")),
                 enforced = true,
                 extract = extract,
@@ -252,7 +252,7 @@ class RootPinRestTest : FunSpec({
 
     // ---- WINDOW FIXTURE 4: the ROOTED-permalink unbind race - bindsLive reads live, the recheck finds it gone ----
 
-    test("fixture 4 (f): a ROOTED GET /p/main/X that LOSES the unbind race is 410 Retired, never 404") {
+    test("fixture 4 (f): a ROOTED GET /p/docs/X that LOSES the unbind race is 410 Retired, never 404") {
         twoRoots { mainDir, notesDir ->
             // Nothing seeded under main: bindsLive (permalinkAt:319) reads X live, the unbind commits, and the
             // requireVerifiedAbsence recheck (:321) finds it gone; the tombstone read (:326) then answers 410. The
@@ -261,13 +261,13 @@ class RootPinRestTest : FunSpec({
             fun racing(idx: com.plainbase.domain.service.IndexHarness): RootedUnbindRaceIdMap =
                 shared ?: RootedUnbindRaceIdMap(idx.idMap, id, main).also { shared = it }
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = { idx -> PageRootResolver(racing(idx), idx.rootRegistry) },
                 absenceFactory = { idx -> AbsenceClassifier(racing(idx)) },
             ) { _ ->
                 // 410 Retired naming the last-known path, NEVER 404. Back-out (collapsing the separate bindsLive gate
                 // into a single first-taken claims snapshot) flips this to 404: verified empirically, see the addendum.
-                createClient { followRedirects = false }.get("/p/main/$dupId").status shouldBe HttpStatusCode.Gone
+                createClient { followRedirects = false }.get("/p/docs/$dupId").status shouldBe HttpStatusCode.Gone
             }
         }
     }
@@ -277,9 +277,9 @@ class RootPinRestTest : FunSpec({
     test("read ?root pins: main->200, notes(non-owner)->404, ghost->404, a/b(malformed)->400") {
         twoRoots { mainDir, notesDir ->
             seedWithId(mainDir, "guides/a.md", "A")
-            multiRootTest(listOf(testRoot("main", mainDir), testRoot("notes", notesDir))) { _ ->
+            multiRootTest(listOf(testRoot("docs", mainDir), testRoot("notes", notesDir))) { _ ->
                 val c = createClient { followRedirects = false }
-                c.get("/api/v1/pages/$dupId?root=main").status shouldBe HttpStatusCode.OK
+                c.get("/api/v1/pages/$dupId?root=docs").status shouldBe HttpStatusCode.OK
                 c.get("/api/v1/pages/$dupId?root=notes").status shouldBe HttpStatusCode.NotFound
                 c.get("/api/v1/pages/$dupId?root=ghost").status shouldBe HttpStatusCode.NotFound
                 c.get("/api/v1/pages/$dupId?root=a/b").status shouldBe HttpStatusCode.BadRequest
@@ -290,11 +290,11 @@ class RootPinRestTest : FunSpec({
     test("a REPEATED ?root is 400 invalid_root - the disambiguation surface never silently picks one of two pins") {
         twoRoots { mainDir, notesDir ->
             seedWithId(mainDir, "guides/a.md", "A")
-            multiRootTest(listOf(testRoot("main", mainDir), testRoot("notes", notesDir))) { _ ->
+            multiRootTest(listOf(testRoot("docs", mainDir), testRoot("notes", notesDir))) { _ ->
                 val c = createClient { followRedirects = false }
                 // Both values are legal slugs and `main` even OWNS the id, so a first-value read answers 200 - which is
                 // exactly the failure: the caller asked for two different roots and we would pick one without saying so.
-                val res = c.get("/api/v1/pages/$dupId?root=main&root=notes")
+                val res = c.get("/api/v1/pages/$dupId?root=docs&root=notes")
                 res.status shouldBe HttpStatusCode.BadRequest
                 res.errorCode() shouldBe "invalid_root"
             }

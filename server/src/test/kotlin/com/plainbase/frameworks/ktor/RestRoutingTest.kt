@@ -50,34 +50,34 @@ class RestRoutingTest : FunSpec({
 
             val bare = client.get("/p/$deployGuideId")
             bare.status shouldBe HttpStatusCode.Found
-            bare.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            bare.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
 
-            val rooted = client.get("/p/main/$deployGuideId")
+            val rooted = client.get("/p/docs/$deployGuideId")
             rooted.status shouldBe HttpStatusCode.Found
-            rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            rooted.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
 
-            val badId = client.get("/p/main/not-a-uuid")
+            val badId = client.get("/p/docs/not-a-uuid")
             badId.status shouldBe HttpStatusCode.BadRequest
             badId.bodyAsText() shouldContain "not-a-uuid"
 
             client.get("/p/$deployGuideId/stale-slug").status shouldBe HttpStatusCode.Found
-            client.get("/p/main/$deployGuideId/stale-slug").status shouldBe HttpStatusCode.Found
+            client.get("/p/docs/$deployGuideId/stale-slug").status shouldBe HttpStatusCode.Found
 
             listOf(
                 "/p/$deployGuideId/",
                 "/p/$deployGuideId//",
                 "/p/$deployGuideId///",
-                "/p/main/$deployGuideId//",
+                "/p/docs/$deployGuideId//",
             ).forEach { path ->
                 val response = client.get(path)
                 response.status shouldBe HttpStatusCode.Found
-                response.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+                response.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
             }
 
             listOf(
-                "/p/main//$deployGuideId",
+                "/p/docs//$deployGuideId",
                 "/p//$deployGuideId",
-                "/p/main/$deployGuideId//extra",
+                "/p/docs/$deployGuideId//extra",
             ).forEach { path ->
                 val response = client.get(path)
                 response.status shouldBe HttpStatusCode.BadRequest
@@ -97,7 +97,7 @@ class RestRoutingTest : FunSpec({
 
             client.get("/p/a3bb189e-8bf9-4888-9912-ace4e6543002").status shouldBe HttpStatusCode.NotFound
             client.get("/p/${deployGuideId.uppercase()}").headers[HttpHeaders.Location] shouldBe
-                "/docs/main/guides/deploy-guide"
+                "/docs/guides/deploy-guide"
 
             listOf("/p", "/p/").forEach { path ->
                 val response = client.get(path)
@@ -111,7 +111,7 @@ class RestRoutingTest : FunSpec({
             deleted.status shouldBe HttpStatusCode.BadRequest
             deleted.errorCode() shouldBe "invalid_root"
 
-            val encodedSlash = client.get("/p/main%2F$deployGuideId")
+            val encodedSlash = client.get("/p/docs%2F$deployGuideId")
             encodedSlash.status shouldBe HttpStatusCode.BadRequest
             encodedSlash.errorCode() shouldBe "invalid_page_id"
 
@@ -121,42 +121,42 @@ class RestRoutingTest : FunSpec({
         }
     }
 
-    test("GET /docs/main/guides/deploy-guide serves the SPA shell with 200 (the SPA fetches via by-path)") {
+    test("GET /docs/guides/deploy-guide serves the SPA shell with 200 (the SPA fetches via by-path)") {
         restTest(Fixtures.demoDocs, seed) {
-            val response = client.get("/docs/main/guides/deploy-guide")
+            val response = client.get("/docs/guides/deploy-guide")
             response.status shouldBe HttpStatusCode.OK
             response.bodyAsText() shouldContain "<div id=\"root\">"
             // Unknown paths under a known root serve the shell too - in-app not-found is the SPA's
             // job (§A4 matrix); a rootless tail now 404s instead (RootUrlGrammarTest owns that).
-            client.get("/docs/main/no/such/page").status shouldBe HttpStatusCode.OK
+            client.get("/docs/no/such/page").status shouldBe HttpStatusCode.OK
         }
     }
 
     test("by-path resolves canonical AND alias paths; the alias response carries the CURRENT canonical url") {
         restTest(Fixtures.demoDocs, seed) {
             // deploy-guide.md declares redirect_from: [/old/deployment.md] -> alias `old/deployment`.
-            val aliased = client.get("/api/v1/pages/by-path/main/old/deployment")
+            val aliased = client.get("/api/v1/pages/by-path/docs/old/deployment")
             aliased.status shouldBe HttpStatusCode.OK
             val body = Json.parseToJsonElement(aliased.bodyAsText()).jsonObject
             body.getValue("id").jsonPrimitive.content shouldBe deployGuideId
-            body.getValue("url").jsonPrimitive.content shouldBe "/docs/main/guides/deploy-guide"
+            body.getValue("url").jsonPrimitive.content shouldBe "/docs/guides/deploy-guide"
 
             // The root segment is REQUIRED: the same tail without it names no page. This is the
             // second in-file falsifier for the by-path fallback's death, which is what made
             // deleting the shadow machinery safe (nothing else observed that ordering).
-            client.get("/api/v1/pages/by-path/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
+            client.get("/api/v1/pages/by-path/docs/guides/deploy-guide").status shouldBe HttpStatusCode.OK
             client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.NotFound
-            client.get("/api/v1/pages/by-path/main/no/such/page").status shouldBe HttpStatusCode.NotFound
+            client.get("/api/v1/pages/by-path/docs/no/such/page").status shouldBe HttpStatusCode.NotFound
         }
     }
 
     test("a folder's URL prefix stays out of by-path space (ADR-0003: landing views are client-rendered)") {
         restTest(Fixtures.demoDocs, seed) {
-            // `guides` is a folder with a tree-node url of /docs/main/guides - but by-path semantics
+            // `guides` is a folder with a tree-node url of /docs/guides - but by-path semantics
             // are unchanged: only PAGES resolve; the SPA's folder landing kicks in on this very 404.
-            client.get("/api/v1/pages/by-path/main/guides").status shouldBe HttpStatusCode.NotFound
+            client.get("/api/v1/pages/by-path/docs/guides").status shouldBe HttpStatusCode.NotFound
             // The routing matrix still serves the shell at the folder URL, like every /docs path.
-            client.get("/docs/main/guides").status shouldBe HttpStatusCode.OK
+            client.get("/docs/guides").status shouldBe HttpStatusCode.OK
         }
     }
 
@@ -195,9 +195,9 @@ class RestRoutingTest : FunSpec({
                 api.getValue("url") shouldBe JsonNull
 
                 // /browse of the loser's FILE path redirects to the permalink — its one durable URL.
-                val browse = client.get("/browse/main/a-b.md")
+                val browse = client.get("/browse/docs/a-b.md")
                 browse.status shouldBe HttpStatusCode.Found
-                browse.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}"
+                browse.headers[HttpHeaders.Location] shouldBe "/p/docs/${loser.id.value}"
 
                 val winner = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("a b.md")))
                 winner.url.shouldNotBeNull()

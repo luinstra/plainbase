@@ -22,7 +22,7 @@ class ProposeCommandParserTest : FunSpec({
 
     fun req(
         operation: String = "edit",
-        root: String? = "main",
+        root: String? = "docs",
         pageId: String? = null,
         baseHash: String? = null,
         targetPath: String? = null,

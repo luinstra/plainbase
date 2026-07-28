@@ -46,7 +46,7 @@ class McpAvailabilityResultTest : FunSpec({
                     mapOf(
                         "operation" to "edit",
                         "page_id" to harness.seedPageId,
-                        "root" to "main",
+                        "root" to "docs",
                         "base_hash" to harness.seedBaseHash,
                         "proposed_content" to "---\ntitle: Doc\n---\n\n# Doc\n\nedited\n",
                         "rationale" to "availability contract",

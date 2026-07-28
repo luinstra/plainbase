@@ -115,7 +115,7 @@ class McpHarness(
             // its claimant list to registered roots: an unregistered candidate is dropped and the Ambiguous arm
             // collapses back to One, so the fake alone cannot pose ambiguity.
             rootRegistry = RootRegistry.of(
-                listOf(localRoot("main", root, editable = editable)) +
+                listOf(localRoot("docs", root, editable = editable)) +
                     (ambiguousRoots + retiredRoots).filter { it != RootName.PRIMARY }.distinct()
                         .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
             ),

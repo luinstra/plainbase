@@ -58,12 +58,12 @@ class EditProposalRootPinTest : FunSpec({
         append(""""base_hash":"$base","proposed_content":"---\nid: $dupId\ntitle: A\n---\n\n# A\n\nedited.\n","rationale":"r"}""")
     }
 
-    test("edit proposal root=main (holds it) proceeds -> 201 Created") {
+    test("edit proposal root=docs (holds it) proceeds -> 201 Created") {
         twoRoots { mainDir, notesDir ->
-            multiRootTest(listOf(testRoot("main", mainDir), testRoot("notes", notesDir))) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir), testRoot("notes", notesDir))) { harness ->
                 val res = client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
-                    setBody(body("main", baseHash(harness)))
+                    setBody(body("docs", baseHash(harness)))
                 }
                 res.status shouldBe HttpStatusCode.Created
             }
@@ -72,7 +72,7 @@ class EditProposalRootPinTest : FunSpec({
 
     test("edit proposal root=notes (does NOT hold the id) -> StaleBase, durable-validated after checkEdit") {
         twoRoots { mainDir, notesDir ->
-            multiRootTest(listOf(testRoot("main", mainDir), testRoot("notes", notesDir))) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir), testRoot("notes", notesDir))) { harness ->
                 val res = client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
                     setBody(body("notes", baseHash(harness)))
@@ -85,7 +85,7 @@ class EditProposalRootPinTest : FunSpec({
 
     test("omitting root resolves id_map-first and proceeds -> 201") {
         twoRoots { mainDir, notesDir ->
-            multiRootTest(listOf(testRoot("main", mainDir), testRoot("notes", notesDir))) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir), testRoot("notes", notesDir))) { harness ->
                 client.post("/api/v1/changes") {
                     contentType(ContentType.Application.Json)
                     setBody(body(null, baseHash(harness)))
@@ -97,7 +97,7 @@ class EditProposalRootPinTest : FunSpec({
     test("a FAKE-ambiguous id with NO root -> 409 ambiguous_page_id") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = { idx ->
                     PageRootResolver(AmbiguousIdMap(idx.idMap, id, liveRoots = listOf(main, notes)), idx.rootRegistry)
                 },

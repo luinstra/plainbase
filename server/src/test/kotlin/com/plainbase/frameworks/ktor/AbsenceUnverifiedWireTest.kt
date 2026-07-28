@@ -145,7 +145,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
                 unavailableNow = { emptySet() },
             )
 
-            val p = c.get("/p/main/$docId")
+            val p = c.get("/p/docs/$docId")
             p.status shouldBe HttpStatusCode.Gone
             p.code() shouldBe "page_retired"
             p.headers[HttpHeaders.CacheControl] shouldBe "no-store"
@@ -156,7 +156,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
             writePage(root, "doc.md", "---\nid: $docId\ntitle: Doc\n---\n\n# Doc\n\nBody.\n")
             harness.builder.rebuild()
 
-            c.get("/p/main/$docId").status shouldBe HttpStatusCode.Found
+            c.get("/p/docs/$docId").status shouldBe HttpStatusCode.Found
         }
     }
 

@@ -49,29 +49,29 @@ class RootedMissHintTest : FunSpec({
         }
 
     test("a rooted miss returns one alternate link for its live holder") {
-        roots(listOf("main", "notes")) { dirs ->
+        roots(listOf("docs", "notes")) { dirs ->
             multiRootTest(
-                listOf(testRoot("main", dirs.getValue("main")), testRoot("notes", dirs.getValue("notes"))),
+                listOf(testRoot("docs", dirs.getValue("docs")), testRoot("notes", dirs.getValue("notes"))),
                 resolverFactory = resolverFor(listOf(main)),
             ) {
                 val response = createClient { followRedirects = false }.get("/p/notes/${id.value}")
                 response.status shouldBe HttpStatusCode.Gone
                 response.headers.getAll(HttpHeaders.Link) shouldContainExactly
-                    listOf("</p/main/${id.value}>; rel=\"alternate\"")
+                    listOf("</p/docs/${id.value}>; rel=\"alternate\"")
                 response.headers[HttpHeaders.CacheControl] shouldBe "no-store"
                 val body = response.bodyAsText()
                 body shouldContain "notes"
                 body shouldContain "gone.md"
-                body shouldNotContain "/p/main"
+                body shouldNotContain "/p/docs"
             }
         }
     }
 
     test("a rooted miss returns rank-ordered alternate links for every live holder") {
-        roots(listOf("main", "notes", "other")) { dirs ->
+        roots(listOf("docs", "notes", "other")) { dirs ->
             multiRootTest(
                 listOf(
-                    testRoot("main", dirs.getValue("main")),
+                    testRoot("docs", dirs.getValue("docs")),
                     testRoot("notes", dirs.getValue("notes")),
                     testRoot("other", dirs.getValue("other")),
                 ),
@@ -80,22 +80,22 @@ class RootedMissHintTest : FunSpec({
                 val response = createClient { followRedirects = false }.get("/p/notes/${id.value}")
                 response.status shouldBe HttpStatusCode.Gone
                 response.headers.getAll(HttpHeaders.Link) shouldContainExactly listOf(
-                    "</p/main/${id.value}>; rel=\"alternate\"",
+                    "</p/docs/${id.value}>; rel=\"alternate\"",
                     "</p/other/${id.value}>; rel=\"alternate\"",
                 )
                 response.headers[HttpHeaders.CacheControl] shouldBe "no-store"
                 val body = response.bodyAsText()
                 body shouldContain "notes"
-                body shouldNotContain "/p/main"
+                body shouldNotContain "/p/docs"
                 body shouldNotContain "/p/other"
             }
         }
     }
 
     test("a hintless rooted miss has no Link header and remains uncacheable") {
-        roots(listOf("main", "notes")) { dirs ->
+        roots(listOf("docs", "notes")) { dirs ->
             multiRootTest(
-                listOf(testRoot("main", dirs.getValue("main")), testRoot("notes", dirs.getValue("notes"))),
+                listOf(testRoot("docs", dirs.getValue("docs")), testRoot("notes", dirs.getValue("notes"))),
                 resolverFactory = resolverFor(emptyList()),
             ) {
                 val response = createClient { followRedirects = false }.get("/p/notes/${id.value}")

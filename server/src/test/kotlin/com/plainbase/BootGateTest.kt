@@ -61,7 +61,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main  { path = "$outer" }
+                  docs  { path = "$outer" }
                   inner { path = "$inner" }
                 }
                 """.trimIndent(),
@@ -83,7 +83,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main { path = "$shared" }
+                  docs { path = "$shared" }
                   twin { path = "$shared" }
                 }
                 """.trimIndent(),
@@ -127,7 +127,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main  { path = "/nope/not/a/directory" }
+                  docs  { path = "/nope/not/a/directory" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -153,7 +153,7 @@ class BootGateTest : FunSpec({
 
     test("T-GATE-3b: the same DATA_DIR fault keeps its KEY across the legacy/explicit arm switch, with DIFFERENT prose") {
         // THE REASON KINDS EXIST. A legacy `DATA_DIR == CONTENT_DIR` says "DATA_DIR and CONTENT_DIR must be
-        // different directories"; the SAME install after one `root add` is EXPLICIT and says "roots.main and
+        // different directories"; the SAME install after one `root add` is EXPLICIT and says "roots.docs and
         // DATA_DIR must be different directories". Same fault, same root, DIFFERENT PROSE - so a diff over
         // messages would call it NEW and refuse an add that introduced nothing, trapping exactly the operator the
         // policy exists to protect. Diff the KEY.
@@ -180,7 +180,7 @@ class BootGateTest : FunSpec({
             withClue("DIFFERENT prose: this is what proves a message diff would have called it new") {
                 legacyRefusal.message shouldNotBe explicitRefusal.message
                 legacyRefusal.message shouldContain "DATA_DIR and CONTENT_DIR"
-                explicitRefusal.message shouldContain "roots.main and DATA_DIR"
+                explicitRefusal.message shouldContain "roots.docs and DATA_DIR"
             }
         } finally {
             Files.walk(data).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -217,7 +217,7 @@ class BootGateTest : FunSpec({
             }
             withClue("DIFFERENT prose: each arm still names the key the operator actually wrote") {
                 legacyRefusal.message shouldContain "CONTENT_DIR is not readable/searchable"
-                explicitRefusal.message shouldContain "roots.main.path is not readable/searchable"
+                explicitRefusal.message shouldContain "roots.docs.path is not readable/searchable"
             }
         } finally {
             Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("rwxr-xr-x"))

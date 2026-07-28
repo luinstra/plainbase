@@ -90,7 +90,7 @@ class HistoryWriteCommitTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, seed, historyFactory = gitFactory()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"guides","title":"Git Created"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Git Created"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val commit = post.json().getValue("commit").jsonPrimitive.content

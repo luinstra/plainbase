@@ -74,19 +74,19 @@ val contentModule = module {
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
-        val main = get<RootRegistry>().primary
+        val primary = get<RootRegistry>().primary
         // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
         // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
         // and its writes would re-trigger every rebuild.
         LocalContentStore(
-            root = requireNotNull(main.localPath),
+            root = requireNotNull(primary.localPath),
             ignoreRules = get(),
             exclusions = listOf(config.dataDir),
-            rootName = main.name,
-            onRootUnavailable = { get<RootAvailability>().markUnavailable(main.name, UnavailableCause.VANISHED) },
+            rootName = primary.name,
+            onRootUnavailable = { get<RootAvailability>().markUnavailable(primary.name, UnavailableCause.VANISHED) },
             // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
             // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
-            onIdentityRebind = { get<ObservationEpoch>().broke(main.name, BreakCause.IDENTITY_REBIND) },
+            onIdentityRebind = { get<ObservationEpoch>().broke(primary.name, BreakCause.IDENTITY_REBIND) },
         )
     }
     // The per-root content trees. Construction for a configured root is ALWAYS allowed and is INERT for a missing
@@ -123,7 +123,7 @@ val contentModule = module {
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
-        val main = get<RootRegistry>().primary.name
+        val primary = get<RootRegistry>().primary.name
         ObjectContentStoreFactory.build(
             config,
             ignoreRules = get(),
@@ -138,8 +138,8 @@ val contentModule = module {
             // the epoch past this value, so the OBJECT_LIST proof stamped from this snapshot fails the two-token compare
             // rather than reaping a binding a restore re-created between this poll and the reap.
             rowsAtStart = {
-                val bindingEpoch = retirements.bindingEpoch(main)
-                val rows = idMap.bindings().filter { it.path.root == main }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+                val bindingEpoch = retirements.bindingEpoch(primary)
+                val rows = idMap.bindings().filter { it.path.root == primary }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
                 RowsAtStart(rows, bindingEpoch)
             },
         )

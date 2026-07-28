@@ -24,10 +24,9 @@ package com.plainbase.domain.root
 object ReservedSegments {
 
     /**
-     * `docs` is deliberately absent: it BECOMES the primary root's own name when the primary is renamed off
-     * [RootName.PRIMARY], and reserving it would then boot-refuse the required primary on every install. `p` is here
-     * as belt and braces only - what actually reserves the single-character namespace is [RootName]'s minimum
-     * length of 2, and `RootNameTest` pins that.
+     * `docs` is the primary root's own name, so reserving it would boot-refuse the required primary on every install.
+     * `p` is here as belt and braces only - what actually reserves the single-character namespace is [RootName]'s
+     * minimum length of 2, and `RootNameTest` pins that.
      */
     val words: Set<String> = setOf(
         // Live server top-level routes, plus the embedded frontend bundle's own directories - which
@@ -37,6 +36,8 @@ object ReservedSegments {
         "admin", "new", "review",
         // Product-owned, and the stems of the prefixes below.
         "pb", "plainbase",
+        // The former primary name is frozen into migration-stamped rows, so no live root may bind over those rows.
+        "main",
         // Foreseeable cross-root auth, admin, ops and discovery surfaces: each reads as a CAPABILITY rather
         // than as content a docs corpus would own, which is why `guides`, `changelog` and `team` are not here.
         "account", "accounts", "auth", "callback", "debug", "embed", "export", "favicon", "feed", "graphql",

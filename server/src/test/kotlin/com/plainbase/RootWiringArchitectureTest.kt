@@ -151,16 +151,15 @@ class RootWiringArchitectureTest : FunSpec({
     // ZERO exemptions: `primary` is a typed ACCESSOR, never a promotion. Matched over COMMENT-STRIPPED code, because the
     // only correct place for this literal is a comment WARNING against it - which the merge in `PlainbaseConfig` and
     // the candidate build in `RootCommand` both carry. A plain grep for the pattern would eat its own teaching.
-    // The three receiver spellings share ONE `,?`, deliberately. Written as three separate alternatives each
+    // The two receiver spellings share ONE `,?`, deliberately. Written as two separate alternatives each
     // carrying its own, the row below would pin the trailing comma for whichever alternative it happened to
-    // exercise and leave the other two free to be narrowed back: `listOf(main,)` escaped exactly that way.
-    // One optional comma means one back-out breaks all three, so one row is a total falsifier.
-    val bannedHoist = Regex("""listOf\(\s*(?:\w+(?:\.\w+)*\.primary|main|primary)\s*,?\s*\)\s*\+""")
+    // exercise and leave the other one free to be narrowed back: `listOf(primary,)` escaped exactly that way.
+    // One optional comma means one back-out breaks both, so one row is a total falsifier.
+    val bannedHoist = Regex("""listOf\(\s*(?:\w+(?:\.\w+)*\.primary|primary)\s*,?\s*\)\s*\+""")
 
     test("the Tier-3 pattern catches the trailing-comma form, for every receiver spelling") {
-        // `main` is not legacy residue: four locals still bind the primary root under that name
-        // (ContentModule, HistoryModule, PlainbaseConfig), so it is the spelling likeliest to appear.
-        listOf("registry.primary", "main", "primary").forEach { receiver ->
+        // The four locals were renamed to `primary` in this commit, so the bare receiver remains covered.
+        listOf("registry.primary", "primary").forEach { receiver ->
             withClue("a hoist through `$receiver` with a trailing comma must not evade the guard") {
                 bannedHoist.containsMatchIn("listOf(\n    $receiver,\n) + extras").shouldBeTrue()
             }

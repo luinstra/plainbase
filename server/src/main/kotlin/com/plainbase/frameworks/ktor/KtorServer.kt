@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
+import com.plainbase.frameworks.ktor.routes.ExtractedPrincipal
 import com.plainbase.frameworks.ktor.routes.adminRoute
 import com.plainbase.frameworks.ktor.routes.adminTokenRoutes
 import com.plainbase.frameworks.ktor.routes.adminUserRoutes
@@ -9,7 +10,7 @@ import com.plainbase.frameworks.ktor.routes.apiFallbackRoute
 import com.plainbase.frameworks.ktor.routes.assetRoute
 import com.plainbase.frameworks.ktor.routes.authRoutes
 import com.plainbase.frameworks.ktor.routes.browseRedirectRoute
-import com.plainbase.frameworks.ktor.routes.docsRoutes
+import com.plainbase.frameworks.ktor.routes.frontendStaticRoutes
 import com.plainbase.frameworks.ktor.routes.healthRoute
 import com.plainbase.frameworks.ktor.routes.historyRoutes
 import com.plainbase.frameworks.ktor.routes.malformedQueryMessage
@@ -18,11 +19,15 @@ import com.plainbase.frameworks.ktor.routes.pageRoutes
 import com.plainbase.frameworks.ktor.routes.pageWriteRoutes
 import com.plainbase.frameworks.ktor.routes.permalinkRoute
 import com.plainbase.frameworks.ktor.routes.previewRoute
+import com.plainbase.frameworks.ktor.routes.principalOrRefuseToShell
 import com.plainbase.frameworks.ktor.routes.proposalRoutes
 import com.plainbase.frameworks.ktor.routes.respondError
+import com.plainbase.frameworks.ktor.routes.respondRedirectPreservingQuery
+import com.plainbase.frameworks.ktor.routes.rootContentRoutes
 import com.plainbase.frameworks.ktor.routes.searchRoute
 import com.plainbase.frameworks.ktor.routes.sessionRoutes
 import com.plainbase.frameworks.ktor.routes.setupRoutes
+import com.plainbase.frameworks.ktor.routes.spaShellRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
 import com.plainbase.frameworks.mcp.plainbaseMcp
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -33,10 +38,10 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
-import io.ktor.server.http.content.staticResources
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
@@ -144,15 +149,12 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
     // SSE — the in-binary MCP transport (P3). Installed ONCE at module scope (the `mcp(Route)` overload asserts it);
     // it touches NO content negotiation, so the app-wide `json()` above is left untouched.
     install(SSE)
-    // C1a: stamp the shell Content-Security-Policy on every text/html response (the SPA shell from BOTH
-    // staticResources and respondSpaShell). Built once from the embedded shell's inline-script hash;
+    // C1a: stamp the shell Content-Security-Policy on every text/html response (the SPA shell from every
+    // bundle and shell route). Built once from the embedded shell's inline-script hash;
     // skipped (with a warning) when no frontend is bundled. Must precede routing so it sees every respond.
     installShellSecurityHeaders()
     routing {
-        // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → /docs SPA shell →
-        // static. Ktor resolves by specificity, and every surface below owns a distinct constant
-        // prefix, so registration order and match order agree; the alias-before-shell ordering is
-        // structural inside docsRoutes.
+        // §A4 routing-matrix order: API → assets → permalinks/aliases/browse → root content and shell.
         healthRoute(ctx)
         // A4a builtin auth surface: registered ONLY in auth.mode=builtin. In OFF (loopback dev) and PROXY
         // (A4b asserts identity via a trusted header) there is no password login, so these routes must be ABSENT
@@ -197,10 +199,19 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         assetRoute(ctx)
         permalinkRoute(ctx)
         browseRedirectRoute(ctx)
-        docsRoutes(ctx)
-        // Built SPA shell, embedded as static resources by the :server build.
-        staticResources("/", "static") {
-            default("index.html")
+        frontendStaticRoutes(ctx)
+        rootContentRoutes(ctx)
+        spaShellRoutes(ctx)
+        // A3's bare arm on the LAST entry point. `RouteSupport`'s A3 contract names redirect arms
+        // explicitly: an insecure-transport credential is REFUSED (421), never silently downgraded to
+        // anonymous and handed a 302. This arm is new in this commit and was the one entry point that
+        // still downgraded, while `/docs`, `/index.html`, `/admin`, `/browse` and `/p` all refused.
+        get("/") root@{
+            if (ctx.principalOrRefuseToShell(call) is ExtractedPrincipal.Refused) return@root
+            // The query rides through, same as every other redirect on this surface: `/?mode=edit` is a
+            // pasted link or a refresh, and dropping the query here would land the SPA in the read view
+            // while the alias and browse hops preserve it. One idiom for every hop.
+            call.respondRedirectPreservingQuery("/${ctx.primary.value}", permanent = false)
         }
     }
 }

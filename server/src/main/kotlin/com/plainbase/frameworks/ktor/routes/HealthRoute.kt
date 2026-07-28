@@ -24,7 +24,7 @@ data class HealthStatus(val status: String, val version: String, val roots: List
  *
  * [reason] is the FIXED cause vocabulary (`missing_at_boot` | `vanished` | `watcher_failed` | `corpus_missing`),
  * never free text: this endpoint is UNAUTHENTICATED, so paths and exception messages stay in the logs. Root NAMES
- * are already public topology (the URL grammar puts them in every `/docs/{root}/...`), and the availability bit is
+ * are already public topology (the URL grammar puts them in every `/{root}/...`), and the availability bit is
  * the same exposure class — accepted, on the record.
  *
  * Unavailability is STICKY UNTIL RESTART: a root whose path comes back stays `available: false` here, because a

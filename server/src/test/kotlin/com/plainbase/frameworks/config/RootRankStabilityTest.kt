@@ -72,19 +72,19 @@ class RootRankStabilityTest : FunSpec({
     test("(a) main keeps its DECLARED rank when roots.conf extras merge - it is NEVER hoisted to 0") {
         // The assertion this whole decision exists for. It goes RED under `listOf(primary) + declaredExtras +
         // managedExtras`, which yields [main, zeta, alpha] and rank 0.
-        // The shipped order pin in RootsConfigTest (`list.map { it.name.value } shouldBe listOf("zeta", "main", "alpha")`)
+        // The shipped order pin in RootsConfigTest (`list.map { it.name.value } shouldBe listOf("zeta", "docs", "alpha")`)
         // goes RED under the hoist, which is the safety net doing its job.
         withFiles(
             plainbaseConf = """
                 roots {
                   zeta { path = "/roots/z" }
-                  main { path = "/roots/m" }
+                  docs { path = "/roots/m" }
                 }
             """.trimIndent(),
             rootsConf = """roots { alpha { path = "/roots/a" } }""",
         ) { env ->
-            namesOf(env) shouldBe listOf("zeta", "main", "alpha")
-            rankOf(env, "main") shouldBe 1 // NOT 0. `primary` is a typed ACCESSOR, never a promotion.
+            namesOf(env) shouldBe listOf("zeta", "docs", "alpha")
+            rankOf(env, "docs") shouldBe 1 // NOT 0. `primary` is a typed ACCESSOR, never a promotion.
             rankOf(env, "zeta") shouldBe 0
         }
     }
@@ -102,7 +102,7 @@ class RootRankStabilityTest : FunSpec({
                 # and another
                 # and another
                 roots {
-                  main  { path = "/roots/m" }
+                  docs  { path = "/roots/m" }
                   zebra { path = "/roots/zebra" }
                 }
             """.trimIndent(),
@@ -112,7 +112,7 @@ class RootRankStabilityTest : FunSpec({
                 }
             """.trimIndent(),
         ) { env ->
-            namesOf(env) shouldBe listOf("main", "zebra", "notes")
+            namesOf(env) shouldBe listOf("docs", "zebra", "notes")
             (rankOf(env, "zebra") < rankOf(env, "notes")) shouldBe true
         }
     }
@@ -123,7 +123,7 @@ class RootRankStabilityTest : FunSpec({
         val declared = """
             roots {
               zeta { path = "/roots/z" }
-              main { path = "/roots/m" }
+              docs { path = "/roots/m" }
             }
         """.trimIndent()
         // Through the REAL writer, not a hand-written file: the ordering guarantee is the writer's ("regenerate in
@@ -135,16 +135,16 @@ class RootRankStabilityTest : FunSpec({
 
         var sequenceBefore: List<String> = emptyList()
         withFiles(declared, before) { env -> sequenceBefore = namesOf(env) }
-        sequenceBefore shouldBe listOf("zeta", "main", "alpha")
+        sequenceBefore shouldBe listOf("zeta", "docs", "alpha")
 
         withFiles(declared, after) { env ->
-            namesOf(env) shouldBe listOf("zeta", "main", "alpha", "aardvark")
+            namesOf(env) shouldBe listOf("zeta", "docs", "alpha", "aardvark")
             // The full ranked sequence of the roots that were ALREADY there, unchanged. The invariant is about
             // every PAIR of survivors, not just the newcomer's position.
             namesOf(env).filter { it in sequenceBefore } shouldBe sequenceBefore
             // And every hand-declared root still outranks every CLI-added one, which is what makes `D ++ M` the
             // rule rather than an accident of this fixture.
-            listOf("zeta", "main").forEach { hand ->
+            listOf("zeta", "docs").forEach { hand ->
                 listOf("alpha", "aardvark").forEach { cli ->
                     (rankOf(env, hand) < rankOf(env, cli)) shouldBe true
                 }
@@ -158,12 +158,12 @@ class RootRankStabilityTest : FunSpec({
         val declared = """
             roots {
               zeta { path = "/roots/z" }
-              main { path = "/roots/m" }
+              docs { path = "/roots/m" }
             }
         """.trimIndent()
         val all = listOf(managedRoot("alpha"), managedRoot("beta"), managedRoot("gamma"))
         withFiles(declared, ManagedRootsFile.serialize(all.filterNot { it.name.value == "beta" })) { env ->
-            namesOf(env) shouldBe listOf("zeta", "main", "alpha", "gamma")
+            namesOf(env) shouldBe listOf("zeta", "docs", "alpha", "gamma")
         }
     }
 
@@ -184,7 +184,7 @@ class RootRankStabilityTest : FunSpec({
             val incumbent = RootName.require("incumbent")
             val newcomer = RootName.require("newcomer")
             val registry = RootRegistry.of(
-                listOf(localRoot("main", mainDir), localRoot("incumbent", incumbentDir), localRoot("newcomer", newcomerDir)),
+                listOf(localRoot("docs", mainDir), localRoot("incumbent", incumbentDir), localRoot("newcomer", newcomerDir)),
             )
             val sources = registry.roots.map { root ->
                 IndexBuilder.Source(root, LocalContentStore(requireNotNull(root.localPath)), NoOpHistoryProvider)
@@ -208,8 +208,8 @@ class RootRankStabilityTest : FunSpec({
         // With no operator block, the synthesized main is the SOLE file-1 entry, so it ranks first because it is
         // the only thing there - which is exactly today's legacy behavior, and the only order that list could have.
         withFiles(plainbaseConf = null, rootsConf = """roots { notes { path = "/roots/n" } }""") { env ->
-            namesOf(env) shouldBe listOf("main", "notes")
-            rankOf(env, "main") shouldBe 0
+            namesOf(env) shouldBe listOf("docs", "notes")
+            rankOf(env, "docs") shouldBe 0
         }
     }
 })

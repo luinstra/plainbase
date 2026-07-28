@@ -44,7 +44,7 @@ class UnreadPageIsNotAbsentTest : FunSpec({
             writePage(extraDir, "notes/rollback.md", "---\nid: ${pinned.value}\n---\n\n# Rollback\n\nbody\n")
 
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val store = UnreadablePage(world.extraStore(extraDir), rollback)
                 val builder = world.builder(mainDir, store, world.indexer)
 

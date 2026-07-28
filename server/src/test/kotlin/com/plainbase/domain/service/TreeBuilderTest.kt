@@ -65,9 +65,9 @@ class TreeBuilderTest : FunSpec({
             for (name in listOf("deeply", "nested", "folder")) {
                 node = node.children.filterIsInstance<TreeNode.Folder>().single { it.name == name }
             }
-            node.url shouldBe "/docs/main/notes/deeply/nested/folder" // the folder's own landing prefix (ADR-0003)
+            node.url shouldBe "/docs/notes/deeply/nested/folder" // the folder's own landing prefix (ADR-0003)
             val treasure = node.children.filterIsInstance<TreeNode.Page>().single()
-            treasure.url shouldBe "/docs/main/notes/deeply/nested/folder/treasure"
+            treasure.url shouldBe "/docs/notes/deeply/nested/folder/treasure"
         }
     }
 
@@ -128,8 +128,8 @@ class TreeBuilderTest : FunSpec({
             IndexHarness(root).use { harness ->
                 val tree = TreeBuilder.build(harness.builder.rebuild(), RootName.PRIMARY)
                 val folders = tree.children.filterIsInstance<TreeNode.Folder>().associateBy { it.name }
-                folders.getValue("café notes").url shouldBe "/docs/main/caf%C3%A9-notes"
-                folders.getValue("a b").url shouldBe "/docs/main/a-b"
+                folders.getValue("café notes").url shouldBe "/docs/caf%C3%A9-notes"
+                folders.getValue("a b").url shouldBe "/docs/a-b"
                 val loser = folders.getValue("a-b")
                 loser.url.shouldBeNull()
                 loser.children.filterIsInstance<TreeNode.Folder>().single().url.shouldBeNull()

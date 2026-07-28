@@ -56,7 +56,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
     val editorBody = "---\ntitle: Rollback\n---\n\n# Rollback\n\nedited by a human.\n"
 
     /**
-     * `main` (editable) + `open` (an editable extra) + `locked` (a NON-editable extra). One fixture, because the
+     * `docs` (the PRIMARY, editable) + `open` (an editable extra) + `locked` (a NON-editable extra). One fixture, because the
      * whole point is the matrix: the same request, varied only by principal and target root.
      */
     fun withRoots(
@@ -75,7 +75,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
             seedPage(open, "notes/rollback.md", "Rollback")
             seedPage(locked, "notes/frozen.md", "Frozen")
             val roots = listOf(
-                testRoot("main", main),
+                testRoot("docs", main),
                 testRoot("open", open, editable = true),
                 testRoot("locked", locked, editable = false),
             )
@@ -222,17 +222,17 @@ class RootPolicyAuthzMatrixTest : FunSpec({
 
     // ---- 7: the glob block is an AUTHORIZATION boundary, not a naming convention ------------------
 
-    test("7. a COMMIT agent: main's glob does NOT authorize an extra root; the same pattern under the extra's key DOES") {
-        // `notes/**` declared for MAIN only. The agent's target is an EXTRA root's `notes/rollback.md` - the same
+    test("7. a COMMIT agent: the PRIMARY's glob does NOT authorize an extra root; the same pattern under the extra's key DOES") {
+        // `notes/**` declared for the PRIMARY only. The agent's target is an EXTRA root's `notes/rollback.md` - the same
         // relative path. If the glob's root were ignored, this would direct-commit, and an operator who wrote one
-        // pattern for main would have silently granted unreviewed agent writes in every root that shares the layout.
+        // pattern for the primary would have silently granted unreviewed agent writes in every root sharing the layout.
         withRoots(
             Principal.Anonymous,
             agentMode = AgentMode.COMMIT,
             globs = listOf(CommitGlob.parse("notes/**", RootName.PRIMARY)),
         ) { harness ->
             val rollback = page(harness, "open", "notes/rollback.md")
-            withClue("a glob declared for main authorizes NOTHING in another root") {
+            withClue("a glob declared for the primary authorizes NOTHING in another root") {
                 edit(rollback.id, rollback.contentHash).status shouldBe HttpStatusCode.Accepted // degraded to a proposal
             }
         }
@@ -309,11 +309,11 @@ class RootPolicyAuthzMatrixTest : FunSpec({
         }
     }
 
-    test("11. anonymous /docs/{unavailable-root}/... still serves the SHELL, never a 503") {
+    test("11. anonymous /{unavailable-root}/... still serves the SHELL, never a 503") {
         withRoots(Principal.Anonymous) { harness ->
             harness.availability.markUnavailable(RootName.require("open"), com.plainbase.domain.root.UnavailableCause.VANISHED)
             withClue("the shell arm is PUBLIC; a 503 here would leak topology, and the deny->null->shell contract must survive") {
-                client.get("/docs/open/notes/rollback").status shouldBe HttpStatusCode.OK
+                client.get("/open/notes/rollback").status shouldBe HttpStatusCode.OK
             }
         }
     }
@@ -323,19 +323,19 @@ class RootPolicyAuthzMatrixTest : FunSpec({
     // passed and the facade's `requireAvailable` fired, so a canonical page URL in a down root answered 503
     // application/json: a bookmark or a refresh rendered `{"error":…}` as literal text in the browser, and the
     // SPA's own full-page outage view (which it renders from the tree's `available:false`, needing no 503 at all)
-    // was unreachable on a cold load - while the bare `/docs/{root}` landing URL of the SAME root served the shell
-    // correctly. `/docs` is the browser surface: its answer is the shell. The honest 503 stays on the API surfaces
+    // was unreachable on a cold load - while the bare `/{root}` landing URL of the SAME root served the shell
+    // correctly. The root-content surface `/{root}/...` is the BROWSER surface: its answer is the shell. The honest 503 stays on the API surfaces
     // the SPA and the agents consume, which rows 9 and 13-17 pin.
 
-    test("11b. an AUTHENTICATED reader gets the SHELL on /docs/{unavailable-root}/{path}, never raw 503 JSON") {
+    test("11b. an AUTHENTICATED reader gets the SHELL on /{unavailable-root}/{path}, never raw 503 JSON") {
         withRoots(human, role = Role.VIEWER) { harness ->
             harness.availability.markUnavailable(RootName.require("open"), UnavailableCause.VANISHED)
 
-            val docs = client.get("/docs/open/notes/rollback")
+            val shell = client.get("/open/notes/rollback")
 
-            docs.status shouldBe HttpStatusCode.OK
+            shell.status shouldBe HttpStatusCode.OK
             withClue("a browser navigating to a page URL must get HTML - the SPA renders the outage from the tree") {
-                docs.headers[HttpHeaders.ContentType] shouldContain "text/html"
+                shell.headers[HttpHeaders.ContentType] shouldContain "text/html"
             }
             withClue("the API surface the SPA fetches from is where the honest 503 belongs, and it is untouched") {
                 client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
@@ -348,10 +348,10 @@ class RootPolicyAuthzMatrixTest : FunSpec({
             harness.availability.markUnavailable(RootName.require("open"), UnavailableCause.VANISHED)
 
             withClue("auth-off Anonymous passes checkRead, so this is the arm the enforced-anonymous row cannot reach") {
-                client.get("/docs/open/notes/rollback").status shouldBe HttpStatusCode.OK
+                client.get("/open/notes/rollback").status shouldBe HttpStatusCode.OK
             }
             withClue("the same root must not show an outage page at one URL and raw JSON one segment deeper") {
-                client.get("/docs/open").status shouldBe HttpStatusCode.OK
+                client.get("/open").status shouldBe HttpStatusCode.OK
             }
             client.get("/api/v1/pages/by-path/open/notes/rollback").status shouldBe HttpStatusCode.ServiceUnavailable
         }
@@ -378,7 +378,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
             val orphan = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b60")
 
             fun boot(principal: Principal, role: Role?, block: suspend io.ktor.server.testing.ApplicationTestBuilder.() -> Unit) {
-                MultiRootRestHarness(listOf(testRoot("main", main), testRoot("away", missing)), enforced = true).use { harness ->
+                MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("away", missing)), enforced = true).use { harness ->
                     harness.idMapOnly("away", "notes/orphan.md", orphan)
                     harness.boot()
                     if (principal is Principal.Human) {
@@ -484,7 +484,7 @@ class RootPolicyAuthzMatrixTest : FunSpec({
                 fun field(name: String) = entry.jsonObject.getValue(name).jsonPrimitive.content
                 field("root") to field("editable")
             }
-            editableByRoot shouldBe mapOf("main" to "true", "open" to "true", "locked" to "false")
+            editableByRoot shouldBe mapOf("docs" to "true", "open" to "true", "locked" to "false")
         }
     }
 })

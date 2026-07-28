@@ -64,7 +64,7 @@ val historyModule = module {
     // ObjectContentStore (C5) - both resolve their store ON CALL (commit time), never at wiring time.
     single<HistoryProvider> {
         val config = get<PlainbaseConfig>()
-        val main = get<RootRegistry>().primary
+        val primary = get<RootRegistry>().primary
         val repoPath: (TreePath) -> String = { path ->
             if (config.storage.backend == StorageBackend.LOCAL) {
                 get<LocalContentStore>().resolveRepoRelativePath(path)
@@ -82,13 +82,13 @@ val historyModule = module {
         // AUTO - which every synthesized (legacy) config produces, object mode included - is EXACTLY today's
         // selectHistoryProvider result, `git.enabled` tri-state and all. A contradiction between the two knobs
         // is already a boot error naming both (PlainbaseConfig.requireCoherentMainHistory), never a silent winner.
-        when (main.history) {
+        when (primary.history) {
             HistoryMode.OFF -> NoOpHistoryProvider
             // A `roots {}` block is LOCAL-only (object + roots{} is refused at parse), and only a roots{} block
             // can set main's mode, so a NATIVE main always has a declared local path.
             HistoryMode.NATIVE -> claimedRootProvider(
                 config = config,
-                root = requireNotNull(main.localPath) { "a native-history root must be local-backed" },
+                root = requireNotNull(primary.localPath) { "a native-history root must be local-backed" },
                 repoPath = repoPath,
             )
             HistoryMode.AUTO -> autoHistoryProvider(config, repoPath, koin = this)

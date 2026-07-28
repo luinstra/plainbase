@@ -124,14 +124,14 @@ class SearchServiceTest : FunSpec({
                 val assembled = resultsOf(SearchService(provider, harness.builder).search("shared")).hits.single()
 
                 assembled.title shouldBe "Alpha Guide"
-                assembled.url shouldBe "/docs/main/alpha"
+                assembled.url shouldBe "/docs/alpha"
                 assembled.headingId shouldBe "wiring"
                 assembled.headingText shouldBe "Wiring"
                 // Ancestor = nearest preceding heading of a LOWER level: the sibling "Deep Dive"
                 // (level 3 under the same H1) must not appear in the trail.
                 assembled.headingPath shouldBe listOf("Alpha", "Setup", "Wiring")
                 assembled.citation.headingId shouldBe "wiring"
-                assembled.citation.uri shouldBe "plainbase://main/${alpha.id.value}#wiring@${alpha.contentHash}"
+                assembled.citation.uri shouldBe "plainbase://docs/${alpha.id.value}#wiring@${alpha.contentHash}"
             }
         }
     }

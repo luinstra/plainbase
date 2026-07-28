@@ -115,7 +115,7 @@ title: X
         test("${surface.label}: an ambiguous id -> 409 ambiguous_page_id naming THIS endpoint's retry urls") {
             twoRoots { mainDir, notesDir ->
                 multiRootTest(
-                    listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                    listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                     resolverFactory = resolverFor(listOf(notes, main), emptyList()),
                     absenceFactory = absenceFor(listOf(notes, main)),
                 ) { _ ->
@@ -130,11 +130,11 @@ title: X
                     body.getValue("message").jsonPrimitive.content shouldContain dupId
                     body.getValue("candidates").jsonArray
                         .map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly
-                        listOf("main", "notes") // D7 rank order
+                        listOf("docs", "notes") // D7 rank order
                     withClue("the retry url must name the endpoint the caller actually hit") {
                         body.getValue("candidates").jsonArray
                             .map { it.jsonObject.getValue("url").jsonPrimitive.content } shouldContainExactly
-                            listOf("${surface.path}${surface.pinSeparator}root=main", "${surface.path}${surface.pinSeparator}root=notes")
+                            listOf("${surface.path}${surface.pinSeparator}root=docs", "${surface.path}${surface.pinSeparator}root=notes")
                     }
                 }
             }
@@ -144,7 +144,7 @@ title: X
     test("the AGENT PUT of an ambiguous id -> 409 - a separate facade arm from the human PUT, so it is pinned separately") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = resolverFor(listOf(notes, main), emptyList()),
                 absenceFactory = absenceFor(listOf(notes, main)),
                 // `save` branches on Principal.Agent BEFORE directSave: the agent arm has its own Ambiguous handling
@@ -165,7 +165,7 @@ title: X
     test("POST /changes edit of an ambiguous id -> 409 naming the BODY field, with NO retry url") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = resolverFor(listOf(notes, main), emptyList()),
                 absenceFactory = absenceFor(listOf(notes, main)),
             ) { _ ->
@@ -192,14 +192,14 @@ title: X
     test("bare permalink /p/{id} of an ambiguous LIVE id -> 300 + one Link per candidate (rank order)") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 resolverFactory = resolverFor(listOf(notes, main), emptyList()),
                 absenceFactory = absenceFor(listOf(notes, main)),
             ) { _ ->
                 val res = createClient { followRedirects = false }.get("/p/$dupId")
                 res.status shouldBe HttpStatusCode.MultipleChoices
                 res.headers.getAll(HttpHeaders.Link) shouldContainExactly listOf(
-                    "</p/main/$dupId>; rel=\"alternate\"",
+                    "</p/docs/$dupId>; rel=\"alternate\"",
                     "</p/notes/$dupId>; rel=\"alternate\"",
                 )
                 withClue("ambiguity is transient, and 300 is heuristically cacheable - no intermediary may keep it") {
@@ -209,7 +209,7 @@ title: X
                 val body = res.errorBody()
                 body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
                 body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("url").jsonPrimitive.content } shouldContainExactly
-                    listOf("/p/main/$dupId", "/p/notes/$dupId")
+                    listOf("/p/docs/$dupId", "/p/notes/$dupId")
             }
         }
     }
@@ -217,7 +217,7 @@ title: X
     test("bare permalink /p/{id} of an ambiguous RETIRED id -> 300 (the tombstone disambiguation)") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 // no live claimant -> two retired claimants -> Ambiguous
                 resolverFactory = resolverFor(emptyList(), listOf(notes, main)),
                 absenceFactory = absenceFor(emptyList()),

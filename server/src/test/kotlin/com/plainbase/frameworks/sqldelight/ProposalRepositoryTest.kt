@@ -56,11 +56,11 @@ class ProposalRepositoryTest : FunSpec({
         }
     }
 
-    test("a fresh insert lands root='main' (the D18 schema DEFAULT stamp; the domain row stays root-blind until C4)") {
+    test("a fresh insert lands the current primary root='docs' (the domain row stays root-blind until C4)") {
         DatabaseFactory.createInMemoryDriver().use { driver ->
             val repo = SqlDelightProposalRepository(DatabaseFactory.createDatabase(driver))
             repo.insert(pending(1, Instant.fromEpochMilliseconds(1_700_000_000_000)))
-            driver.queryLong("SELECT count(*) FROM proposals WHERE root = 'main'") shouldBe 1L
+            driver.queryLong("SELECT count(*) FROM proposals WHERE root = 'docs'") shouldBe 1L
         }
     }
 

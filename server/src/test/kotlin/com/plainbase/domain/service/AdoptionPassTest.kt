@@ -61,7 +61,7 @@ class AdoptionPassTest : FunSpec({
 
             shouldThrow<IllegalArgumentException> {
                 h.pass(extras = listOf(duplicate))
-            }.message shouldContain "duplicate source root(s): main"
+            }.message shouldContain "duplicate source root(s): docs"
         }
     }
 
@@ -308,7 +308,7 @@ class AdoptionPassTest : FunSpec({
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
             h.idMap.bind(EXTRA_PAGE, CONTESTED, materialized = true)
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra))) // main outranks
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", extra))) // main outranks
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
@@ -330,7 +330,7 @@ class AdoptionPassTest : FunSpec({
         withTwoRoots { h, extra ->
             Files.writeString(extra.resolve("shared.md"), "---\nid: ${CONTESTED.value}\n---\nbody\n")
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("docs", h.root))) // extra outranks
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
@@ -350,7 +350,7 @@ class AdoptionPassTest : FunSpec({
             Files.writeString(extra.resolve("shared.md"), "---\ntitle: Shared\n---\nbody\n")
             h.idMap.bind(EXTRA_PAGE, CONTESTED, materialized = false)
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", extra)))
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
@@ -383,7 +383,7 @@ class AdoptionPassTest : FunSpec({
             Files.writeString(h.root.resolve("notes/dup-b.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
             val loser = RootedPath(RootName.PRIMARY, TreePath.require("notes/dup-b.md"))
             h.idMap.bind(loser, MAPPED, materialized = false)
-            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root)))
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("docs", h.root)))
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
@@ -410,7 +410,7 @@ class AdoptionPassTest : FunSpec({
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
             val claimantPath = RootedPath(RootName.PRIMARY, TreePath.require("notes/claimant.md"))
             h.idMap.bind(claimantPath, MAPPED, materialized = false)
-            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("main", h.root))) // extra outranks
+            val registry = RootRegistry.of(listOf(localRoot("extra", extra), localRoot("docs", h.root))) // extra outranks
 
             val plan = h.pass(registry = registry, extras = listOf(source(extra))).run(AdoptionPass.Mode.RECORD)
 
@@ -428,7 +428,7 @@ class AdoptionPassTest : FunSpec({
         withTwoRoots { h, extra ->
             addRefusalPage(h.root)
             Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", extra)))
             fun pass() = h.pass(registry = registry, extras = listOf(source(extra)))
             // RECORD first, so both runs below resolve the SAME ids from the id_map: a freshly minted id
             // differs per run by design, and it is the PATCH, not the mint, that this pins.
@@ -461,7 +461,7 @@ class AdoptionPassTest : FunSpec({
     test("a root that vanishes BETWEEN the plan and the write aborts the run: no file mutated, no partial binding") {
         withTwoRoots { h, extra ->
             Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", extra)))
             val pass = h.pass(registry = registry, extras = listOf(source(extra)))
             val before = checksum(h.root)
 
@@ -482,7 +482,7 @@ class AdoptionPassTest : FunSpec({
     test("a root that vanishes DURING the write loop aborts - it is never RESURRECTED as a partial skeleton tree") {
         withTwoRoots { h, extra ->
             Files.writeString(extra.resolve("onboarding.md"), "---\ntitle: Onboarding\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", extra)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", extra)))
             // The window apply()'s pre-loop re-probe CANNOT close: every root was there when it looked, and one of
             // them goes away while the writes are already running. [VanishingStore] takes the disk out from under
             // the extra root at the instant its first page is written.
@@ -570,7 +570,7 @@ class AdoptionPassTest : FunSpec({
             val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
             h.idMap.bind(foreign, CONTESTED, materialized = true)
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", h.root)))
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.RECORD) // ...and no source for 'extra'
 
@@ -589,7 +589,7 @@ class AdoptionPassTest : FunSpec({
             val foreign = RootedPath(RootName.require("extra"), TreePath.require("mirror/page.md"))
             h.idMap.bind(foreign, CONTESTED, materialized = true)
             Files.writeString(h.root.resolve("notes/claimant.md"), "---\nid: ${CONTESTED.value}\ntitle: x\n---\nbody\n")
-            val registry = RootRegistry.of(listOf(localRoot("main", h.root), localRoot("extra", h.root)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", h.root), localRoot("extra", h.root)))
 
             val plan = h.pass(registry = registry).run(AdoptionPass.Mode.PREVIEW)
 
@@ -683,7 +683,7 @@ private class Harness(val root: Path, val driver: app.cash.sqldelight.db.SqlDriv
      */
     fun pass(
         store: ContentStore = LocalContentStore(root),
-        registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
+        registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", root))),
         extras: List<AdoptionPass.Source> = emptyList(),
         idMap: IdMapRepository = this.idMap,
     ): AdoptionPass =

@@ -11,7 +11,7 @@ import io.ktor.server.routing.get
  * first segment names a known registry root scopes the remainder to that root; any other tail
  * addresses no root and therefore no file → **404**. The file path (e.g. `guides/deploy-guide.md`)
  * is percent-decoded once and NFC-normalized (both via the chunk 1.5 primitives inside
- * [decodedTreePath]) → **302** to the page's current canonical `/docs/{root}/...` URL.
+ * [decodedTreePath]) → **302** to the page's current canonical `/{root}/...` URL.
  *
  * A path-space collision loser has no canonical URL; its permalink is the page's one durable URL,
  * so the 302 targets `/p/{root}/{id}` instead — same contract (a redirect to where the page lives now).

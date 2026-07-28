@@ -16,6 +16,7 @@ import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
+import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.utils.io.ByteReadChannel
@@ -173,11 +174,16 @@ internal data class PinResolved(val root: RootName?)
  * bare-root tail); otherwise null - the tail addresses no root, and therefore no content. One
  * implementation so the docs/assets/by-path/browse grammars can never drift.
  *
- * All four callers answer null the SAME way now: a miss, in each surface's own idiom (`/docs` the
- * shell body at 404, the rest their error envelope). None of them reinterprets the tail as a path
- * under the primary root - a first segment that does not name a root is not a root decision that
- * defaulted, it is the absence of one, and guessing made `/docs/eng/...` mean two different pages
- * depending on whether a root named `eng` happened to be registered.
+ * All four callers answer null the SAME way now: a miss, in each surface's own idiom (the browser
+ * surface the shell body at 404, the rest their error envelope). None of them reinterprets the tail
+ * as a path under the primary root - a first segment that does not name a root is not a root decision
+ * that defaulted, it is the absence of one, and guessing made a tail like `eng/setup` mean two
+ * different pages depending on whether a root named `eng` happened to be registered.
+ *
+ * Since commit 6 the root segment is TOP-LEVEL (`/{root}/...`), so this split is the whole address
+ * grammar rather than the tail of a constant `/docs` prefix. The example above is deliberately written
+ * as a bare tail: `/docs/eng/...` would now read as the PRIMARY root `docs` plus a path `eng/...`,
+ * which is a different (and legitimate) address, not the ambiguity this rule exists to prevent.
  */
 internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName, TreePath?>? {
     val root = RootName.of(path.segments.first())?.takeIf { it in known } ?: return null
@@ -225,6 +231,21 @@ private object SpaShell {
  */
 internal fun staticResourceBytes(relativePath: String): ByteArray? =
     SpaShell::class.java.classLoader.getResourceAsStream("static/assets/$relativePath")?.use { it.readBytes() }
+
+/** Reads a top-level embedded bundle file. This namespace is separate from the asset bundle lookup above. */
+internal fun bundleResourceBytes(relative: String): ByteArray? =
+    SpaShell::class.java.classLoader.getResourceAsStream("static/$relative")?.use { it.readBytes() }
+
+/** Serves a trusted top-level bundle file with its emitted content type and MIME-sniff defense. */
+internal suspend fun ApplicationCall.respondBundleFile(relative: String) {
+    val bytes = bundleResourceBytes(relative)
+    if (bytes == null) {
+        respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "not bundled: $relative")
+    } else {
+        response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+        respondBytes(bytes, assetContentType(relative))
+    }
+}
 
 /**
  * The `Content-Security-Policy` header name (not a named constant in this Ktor). ONE literal, shared by

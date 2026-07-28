@@ -54,7 +54,7 @@ class ProposalApplyRootPinTest : FunSpec({
             Files.createDirectories(mirrorDir.resolve("guides"))
             Files.writeString(mirrorDir.resolve("guides/deploy.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("mirror", mirrorDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("mirror", mirrorDir)))
             val mirror = RootName.require("mirror")
             val mainStore = LocalContentStore(mainDir, rootName = RootName.PRIMARY)
             val mirrorStore = LocalContentStore(mirrorDir, rootName = mirror)
@@ -128,7 +128,7 @@ class ProposalApplyRootPinTest : FunSpec({
             Files.createDirectories(mirrorDir.resolve("guides"))
             Files.writeString(mirrorDir.resolve("guides/deploy.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("mirror", mirrorDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("mirror", mirrorDir)))
             val mirror = RootName.require("mirror")
 
             IndexHarness(

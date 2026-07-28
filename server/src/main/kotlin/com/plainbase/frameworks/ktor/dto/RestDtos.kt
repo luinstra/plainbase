@@ -299,7 +299,7 @@ data class TreeResponse(val roots: List<RootTreeDto>)
  * [available] `false` means the root is configured but not serving: its subtree is EMPTY here (never its stale
  * carried-forward listing) and every read of it answers 503. It is listed rather than omitted so a client can tell
  * "this root is down" from "this root does not exist" - and so the client's known-root set matches the server's,
- * which is what lets it route `/docs/{root}/...` without guessing.
+ * which is what lets it route `/{root}/...` without guessing.
  *
  * [editable] is the root's CONFIGURED write disposition (ADR-0011 `roots.<name>.editable`), and it is on the wire
  * for the same reason [available] is: without it the SPA cannot tell a writable root from a read-only one, so it
@@ -328,7 +328,7 @@ sealed interface TreeNodeDto {
         // provisional (Chunk-3 landing): the `_folder.yaml` plaintext summary; null when absent/blank.
         val description: String?,
         val path: String,
-        /** Additive amendment (ADR-0003): the folder's `/docs` URL prefix; null for a collision-loser subtree. */
+        /** Additive amendment (ADR-0003): the folder's `/{root}` URL prefix; null for a collision-loser subtree. */
         val url: String?,
         // provisional (Chunk-3 landing): page_count is DIRECT child pages only (not recursive).
         @SerialName("page_count") val pageCount: Int,

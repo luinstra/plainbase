@@ -134,7 +134,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
-    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
+    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", root)))
 
     val idMap = SqlDelightIdMapRepository(database)
 

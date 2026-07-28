@@ -368,7 +368,7 @@ class IndexBuilderMultiRootTest : FunSpec({
     test("a live main claim coexists with an UNREGISTERED root's identical-id binding - no supersede, no issue (D2)") {
         withTrees { mainDir, _ ->
             writePage(mainDir, "guides/claimant.md", identified(contested))
-            World(RootRegistry.of(listOf(localRoot("main", mainDir)))).use { world ->
+            World(RootRegistry.of(listOf(localRoot("docs", mainDir)))).use { world ->
                 // A binding under a root nobody registered; main then claims the same id live. Per-root identity means
                 // the two coexist - main never needs to supersede the foreign row, and raises no issue.
                 val ghost = RootedPath(RootName.require("ghost"), TreePath.require("mirror/page.md"))
@@ -391,7 +391,7 @@ class IndexBuilderMultiRootTest : FunSpec({
             World(mainFirst(mainDir, extraDir)).use { world ->
                 // Bound under extra once; then extra leaves the config (detached) while a live main page claims the id.
                 world.idMap.bind(RootedPath(EXTRA, TreePath.require("mirror/page.md")), contested, materialized = true)
-                val mainOnly = RootRegistry.of(listOf(localRoot("main", mainDir)))
+                val mainOnly = RootRegistry.of(listOf(localRoot("docs", mainDir)))
                 world.builder(mainOnlySource(mainOnly, mainDir), registry = mainOnly).rebuild()
                 world.idMap.bindingInRoot(RootName.PRIMARY, contested)?.path shouldBe
                     RootedPath(RootName.PRIMARY, TreePath.require("guides/claimant.md"))
@@ -420,8 +420,8 @@ class IndexBuilderMultiRootTest : FunSpec({
                 extraSetup.urlPath.shouldNotBeNull()
                 // Same relative urlPath, distinct wire urls: the root segment disambiguates (C3, ADR-0011 D3).
                 mainSetup.urlPath shouldBe extraSetup.urlPath
-                mainSetup.url shouldBe "/docs/main/guides/setup"
-                extraSetup.url shouldBe "/docs/extra/guides/setup"
+                mainSetup.url shouldBe "/docs/guides/setup"
+                extraSetup.url shouldBe "/extra/guides/setup"
 
                 val mainClash = snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("guides/zz-clash.md")))
                 mainClash.urlPath.shouldBeNull() // the within-root loser (raw-byte-order winner keeps it)
@@ -519,10 +519,10 @@ class IndexBuilderMultiRootTest : FunSpec({
 private val EXTRA = RootName.require("extra")
 
 private fun mainFirst(mainDir: Path, extraDir: Path): RootRegistry =
-    RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+    RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
 
 private fun extraFirst(mainDir: Path, extraDir: Path): RootRegistry =
-    RootRegistry.of(listOf(localRoot("extra", extraDir), localRoot("main", mainDir)))
+    RootRegistry.of(listOf(localRoot("extra", extraDir), localRoot("docs", mainDir)))
 
 private fun mainOnlySource(registry: RootRegistry, mainDir: Path): List<IndexBuilder.Source> =
     listOf(IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), NoOpHistoryProvider))

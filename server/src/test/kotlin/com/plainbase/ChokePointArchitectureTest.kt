@@ -65,10 +65,13 @@ class ChokePointArchitectureTest : FunSpec({
         names.containsAll(
             setOf(
                 "PageRoutes.kt", "PageWriteRoutes.kt", "PageCreateRoutes.kt", "AdminRoute.kt",
-                "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "AliasRoute.kt",
+                "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "RootContentRoute.kt",
                 "HistoryRoutes.kt", "SearchRoute.kt", "TreeRoute.kt", "PreviewRoute.kt",
                 "AuthRoutes.kt", "SessionRoutes.kt", "SetupRoutes.kt", "AdminUserRoutes.kt",
                 "AdminTokenRoutes.kt", "ProposalRoutes.kt",
+                // Commit 6: the static mount was replaced by explicit routes, so the bundle and the
+                // SPA's own top-level paths are route SOURCE now and belong under the same scan.
+                "FrontendStaticRoute.kt", "SpaShellRoute.kt",
             ),
         ).shouldBeTrue()
     }

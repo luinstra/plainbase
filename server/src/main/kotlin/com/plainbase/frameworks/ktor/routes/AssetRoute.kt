@@ -33,8 +33,8 @@ import io.ktor.server.routing.get
  * the fix lives at the SERVING layer, correct regardless of how the file arrived. The shadow is given up
  * for the SPA's own immutable build output ONLY (the owner ruling): there is no legitimate reason to
  * override it, and the collision is the exact attack vector. The bundle namespace is the `static/assets/`
- * subtree alone — the favicon/logos/fonts at `static/` root are served by `staticResources("/", "static")`
- * (`KtorServer`), so a user's own `assets/foo.svg` or root `favicon.ico` upload is NOT shadowed.
+ * subtree alone. The favicon, logos, and fonts at the bundle root have explicit server ownership, so a user's
+ * own `assets/foo.svg` or root `favicon.ico` upload is NOT shadowed.
  *
  * **Per-asset sandbox (C1a item 2) — served-MIME inert-allowlist.** A content-tree `Found` response is
  * sandboxed (`Content-Security-Policy: sandbox; script-src 'none'`) iff its resolved [assetContentType]

@@ -305,7 +305,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val frontmatter = FrontmatterReader()
     private val searchIndexer = SearchIndexer(provider, SectionSplitter())
 
-    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", config.contentDir)))
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", config.contentDir)))
 
     private val availability = RootAvailability(kotlin.time.Clock.System)
 

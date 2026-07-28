@@ -84,13 +84,13 @@ class ReadAuthzRouteTest : FunSpec({
     }
 
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.docId(): String =
-        Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/doc").bodyAsText())
+        Json.parseToJsonElement(client.get("/api/v1/pages/by-path/docs/doc").bodyAsText())
             .jsonObject.getValue("id").jsonPrimitive.content
 
     test("enforced permalink auth defers registered and unregistered root lookup until after checkRead") {
         withApp(enforced = true, principal = Principal.Anonymous) { app, harness ->
             val id = harness.builder.current.pages.single().id.value
-            val rooted = app.client.get("/p/main/$id")
+            val rooted = app.client.get("/p/docs/$id")
             val unregistered = app.client.get("/p/ghost/$id")
             val bare = app.client.get("/p/$id")
 
@@ -174,7 +174,7 @@ class ReadAuthzRouteTest : FunSpec({
             // url + permalink track the REAL IndexedPage computation, not a brittle literal (PageIndex.url/permalink).
             val page = harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, com.plainbase.domain.page.PageId.require(id)))!!
             meta.getValue("url").jsonPrimitive.content shouldBe page.url
-            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/main/$id"
+            meta.getValue("permalink").jsonPrimitive.content shouldBe "/p/docs/$id"
             meta.getValue("permalink").jsonPrimitive.content shouldBe page.permalink
             meta.getValue("title").jsonPrimitive.content shouldBe "Doc"
             meta.getValue("content_hash").jsonPrimitive.content shouldContain "sha256:"

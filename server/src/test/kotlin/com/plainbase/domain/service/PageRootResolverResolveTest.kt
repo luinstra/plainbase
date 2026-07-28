@@ -28,7 +28,7 @@ class PageRootResolverResolveTest : FunSpec({
     fun withResolver(liveRoots: List<RootName>, block: (PageRootResolver) -> Unit) {
         val dir = Files.createTempDirectory("pb-resolver-test")
         try {
-            val registry = RootRegistry.of(listOf(localRoot("main", dir), localRoot("notes", dir), localRoot("extra", dir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", dir), localRoot("notes", dir), localRoot("extra", dir)))
             DatabaseFactory.createInMemoryDriver().use { driver ->
                 val real = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
                 block(PageRootResolver(AmbiguousIdMap(real, id, liveRoots = liveRoots), registry))

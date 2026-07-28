@@ -69,7 +69,7 @@ class ProposalAuthzRouteTest : FunSpec({
     }
 
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.pageIdAndHash(): Pair<String, String> {
-        val body = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/main/doc").bodyAsText()).jsonObject
+        val body = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/docs/doc").bodyAsText()).jsonObject
         return body.getValue("id").jsonPrimitive.content to body.getValue("content_hash").jsonPrimitive.content
     }
 

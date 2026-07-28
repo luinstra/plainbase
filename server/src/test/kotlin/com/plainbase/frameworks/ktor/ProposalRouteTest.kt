@@ -44,7 +44,7 @@ class ProposalRouteTest : FunSpec({
      * against). [slug] is root-relative; `by-path` needs the root segment, and these fixtures are single-root.
      */
     suspend fun io.ktor.server.testing.ApplicationTestBuilder.page(slug: String): Pair<String, String> {
-        val body = client.get("/api/v1/pages/by-path/main/$slug").body()
+        val body = client.get("/api/v1/pages/by-path/docs/$slug").body()
         return body.getValue("id").jsonPrimitive.content to body.getValue("content_hash").jsonPrimitive.content
     }
 
@@ -110,7 +110,7 @@ class ProposalRouteTest : FunSpec({
                 val created = client.post("/api/v1/changes") {
                     contentType(json)
                     setBody(
-                        """{"operation":"create","root":"main","target_path":"guides/new.md","proposed_content":"# New\n\nx\n","rationale":"add a page"}""",
+                        """{"operation":"create","root":"docs","target_path":"guides/new.md","proposed_content":"# New\n\nx\n","rationale":"add a page"}""",
                     )
                 }
                 created.status shouldBe HttpStatusCode.Created
@@ -258,7 +258,7 @@ class ProposalRouteTest : FunSpec({
                 val proposalId = client.post("/api/v1/changes") {
                     contentType(json)
                     setBody(
-                        """{"operation":"create","root":"main","target_path":"new.md","proposed_content":"# New\n","rationale":"add"}""",
+                        """{"operation":"create","root":"docs","target_path":"new.md","proposed_content":"# New\n","rationale":"add"}""",
                     )
                 }.body().getValue("id").jsonPrimitive.content
                 client.get("/api/v1/changes/$proposalId").body().getValue("base_drifted").jsonPrimitive.boolean shouldBe false
@@ -298,7 +298,7 @@ class ProposalRouteTest : FunSpec({
                 // Row 2: create with a page_id.
                 assertCode(
                     propose(
-                        """{"operation":"create","root":"main","page_id":"$id","target_path":"a.md","proposed_content":"x","rationale":"r"}""",
+                        """{"operation":"create","root":"docs","page_id":"$id","target_path":"a.md","proposed_content":"x","rationale":"r"}""",
                     ),
                     HttpStatusCode.BadRequest,
                     bad,
@@ -329,27 +329,27 @@ class ProposalRouteTest : FunSpec({
                 )
                 // Row 7: create with no target_path.
                 assertCode(
-                    propose("""{"operation":"create","root":"main","proposed_content":"x","rationale":"r"}"""),
+                    propose("""{"operation":"create","root":"docs","proposed_content":"x","rationale":"r"}"""),
                     HttpStatusCode.BadRequest,
                     bad,
                 )
                 // Row 8: create with a base_hash.
                 assertCode(
                     propose(
-                        """{"operation":"create","root":"main","target_path":"a.md","base_hash":"$hash","proposed_content":"x","rationale":"r"}""",
+                        """{"operation":"create","root":"docs","target_path":"a.md","base_hash":"$hash","proposed_content":"x","rationale":"r"}""",
                     ),
                     HttpStatusCode.BadRequest,
                     bad,
                 )
                 // Row 9: empty/blank proposed_content.
                 assertCode(
-                    propose("""{"operation":"create","root":"main","target_path":"a.md","proposed_content":"   ","rationale":"r"}"""),
+                    propose("""{"operation":"create","root":"docs","target_path":"a.md","proposed_content":"   ","rationale":"r"}"""),
                     HttpStatusCode.BadRequest,
                     bad,
                 )
                 // Row 10: blank rationale.
                 assertCode(
-                    propose("""{"operation":"create","root":"main","target_path":"a.md","proposed_content":"x","rationale":"  "}"""),
+                    propose("""{"operation":"create","root":"docs","target_path":"a.md","proposed_content":"x","rationale":"  "}"""),
                     HttpStatusCode.BadRequest,
                     bad,
                 )
@@ -360,11 +360,11 @@ class ProposalRouteTest : FunSpec({
                     bad,
                 )
                 // Row 12: malformed JSON envelope.
-                assertCode(propose("""{"operation":"create","root":"main","""), HttpStatusCode.BadRequest, bad)
+                assertCode(propose("""{"operation":"create","root":"docs","""), HttpStatusCode.BadRequest, bad)
                 // Row 13: SECURITY — a traversal target_path is rejected via TreePath.of (no ../ reaches the store).
                 assertCode(
                     propose(
-                        """{"operation":"create","root":"main","target_path":"../../etc/passwd","proposed_content":"x","rationale":"r"}""",
+                        """{"operation":"create","root":"docs","target_path":"../../etc/passwd","proposed_content":"x","rationale":"r"}""",
                     ),
                     HttpStatusCode.BadRequest,
                     bad,
@@ -451,7 +451,7 @@ class ProposalRouteTest : FunSpec({
                 val created = client.post("/api/v1/changes") {
                     contentType(json)
                     setBody(
-                        """{"operation":"create","root":"main","target_path":"bom.md","proposed_content":"$withBomCrlf","rationale":"bom"}""",
+                        """{"operation":"create","root":"docs","target_path":"bom.md","proposed_content":"$withBomCrlf","rationale":"bom"}""",
                     )
                 }
                 created.status shouldBe HttpStatusCode.Created

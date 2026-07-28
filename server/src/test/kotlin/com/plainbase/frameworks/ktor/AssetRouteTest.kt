@@ -36,7 +36,7 @@ class AssetRouteTest : FunSpec({
 
     test("a content-tree asset serves with its mapped content type") {
         restTest(Fixtures.demoDocs) {
-            val response = client.get("/assets/main/infra/assets/diagram.svg")
+            val response = client.get("/assets/docs/infra/assets/diagram.svg")
             response.status shouldBe HttpStatusCode.OK
             response.contentType()?.withoutParameters() shouldBe ContentType.Image.SVG
         }
@@ -62,14 +62,14 @@ class AssetRouteTest : FunSpec({
 
             // Over-encoding decodes ONCE to the literal `%2e%2e` name — never re-scanned, so it is
             // just an unknown asset, not a traversal (PB-LINK-1 decode-once semantics).
-            client.get("/assets/main/%252e%252e/secrets").status shouldBe HttpStatusCode.NotFound
+            client.get("/assets/docs/%252e%252e/secrets").status shouldBe HttpStatusCode.NotFound
 
             // A page is never an asset: .md is outside asset space -> 404 not_found.
-            val markdown = client.get("/assets/main/guides/deploy-guide.md")
+            val markdown = client.get("/assets/docs/guides/deploy-guide.md")
             markdown.status shouldBe HttpStatusCode.NotFound
             errorCode(markdown.bodyAsText()) shouldBe "not_found"
 
-            client.get("/assets/main/no/such/file.png").status shouldBe HttpStatusCode.NotFound
+            client.get("/assets/docs/no/such/file.png").status shouldBe HttpStatusCode.NotFound
         }
     }
 
@@ -77,7 +77,7 @@ class AssetRouteTest : FunSpec({
         restTest(Fixtures.demoDocs) {
             // The shell names its hashed bundle; resolve it from the served HTML rather than
             // hardcoding a Vite hash.
-            val shell = client.get("/docs/main/anything").bodyAsText()
+            val shell = client.get("/docs/anything").bodyAsText()
             val src = Regex("src=\"(/assets/[^\"]+)\"").find(shell)?.groupValues?.get(1)
             src.shouldNotBeNull()
             client.get(src).status shouldBe HttpStatusCode.OK
@@ -94,12 +94,12 @@ class AssetRouteTest : FunSpec({
         }) { root ->
             restTest(root) { harness ->
                 // Indexed + present on disk → served.
-                client.get("/assets/main/orphan.bin").status shouldBe HttpStatusCode.OK
+                client.get("/assets/docs/orphan.bin").status shouldBe HttpStatusCode.OK
                 // Delete the file on disk but keep the STALE snapshot (no rebuild) so it stays in current.assets.
                 Files.delete(root.resolve("orphan.bin"))
                 // IndexedButMissing → 404 (disk is source of truth). The bundle-wins inversion (200 + embedded bundle)
                 // applies ONLY to bundle paths; a vanished NON-bundle upload stays a 404.
-                client.get("/assets/main/orphan.bin").status shouldBe HttpStatusCode.NotFound
+                client.get("/assets/docs/orphan.bin").status shouldBe HttpStatusCode.NotFound
             }
         }
     }
@@ -112,7 +112,7 @@ class AssetRouteTest : FunSpec({
         // slot names from the served shell (never a hardcoded Vite hash).
         withTempTree(seed = { root -> writePage(root, "doc.md", "---\ntitle: Doc\n---\n\n# Doc\n") }) { root ->
             restTest(root) { harness ->
-                val shell = client.get("/docs/main/anything").bodyAsText()
+                val shell = client.get("/docs/anything").bodyAsText()
                 val jsRef = Regex("src=\"(/assets/[^\"]+\\.js)\"").find(shell)?.groupValues?.get(1)
                 val cssRef = Regex("href=\"(/assets/[^\"]+\\.css)\"").find(shell)?.groupValues?.get(1)
                 jsRef.shouldNotBeNull()
@@ -180,19 +180,19 @@ class AssetRouteTest : FunSpec({
             Files.writeString(root.resolve("evil.html"), "<script>alert(1)</script>")
         }) { root ->
             restTest(root) { _ ->
-                val svg = client.get("/assets/main/diagram.svg")
+                val svg = client.get("/assets/docs/diagram.svg")
                 svg.status shouldBe HttpStatusCode.OK
                 svg.headers["Content-Security-Policy"] shouldBe "sandbox; script-src 'none'"
 
-                val pdf = client.get("/assets/main/paper.pdf")
+                val pdf = client.get("/assets/docs/paper.pdf")
                 pdf.status shouldBe HttpStatusCode.OK
                 pdf.headers["Content-Security-Policy"] shouldBe "sandbox; script-src 'none'"
 
-                val png = client.get("/assets/main/photo.png")
+                val png = client.get("/assets/docs/photo.png")
                 png.status shouldBe HttpStatusCode.OK
                 png.headers["Content-Security-Policy"] shouldBe null
 
-                val html = client.get("/assets/main/evil.html")
+                val html = client.get("/assets/docs/evil.html")
                 html.status shouldBe HttpStatusCode.OK
                 html.contentType()?.withoutParameters() shouldBe ContentType.Application.OctetStream
                 html.headers["X-Content-Type-Options"] shouldBe "nosniff"
@@ -227,13 +227,13 @@ class AssetRouteTest : FunSpec({
         }) { app ->
             val bundle = app.resolveBundleRef()
             (bundle == "/assets/orphan-asset.bin") shouldBe false // the seed demonstrably does not match the bundle
-            app.client.get("/assets/main/orphan-asset.bin").status shouldBe HttpStatusCode.Unauthorized
+            app.client.get("/assets/docs/orphan-asset.bin").status shouldBe HttpStatusCode.Unauthorized
         }
     }
 
     test("enforced: anonymous GET /assets/<absent non-bundle> → 401 (same as a content asset — the oracle is closed)") {
         enforcedAnonApp(builtinAuthEnabled = true, proxyAuthEnabled = false) { app ->
-            app.client.get("/assets/main/no/such/file.png").status shouldBe HttpStatusCode.Unauthorized
+            app.client.get("/assets/docs/no/such/file.png").status shouldBe HttpStatusCode.Unauthorized
         }
     }
 })
@@ -255,7 +255,7 @@ private fun embeddedBundleBytes(ref: String): ByteArray =
 
 /** The shell's own hashed bundle `src`, resolved from the served HTML (never a hardcoded Vite hash). */
 private suspend fun ApplicationTestBuilder.resolveBundleRef(): String {
-    val shell = client.get("/docs/main/anything").bodyAsText()
+    val shell = client.get("/docs/anything").bodyAsText()
     val src = Regex("src=\"(/assets/[^\"]+)\"").find(shell)?.groupValues?.get(1)
     src.shouldNotBeNull()
     return src

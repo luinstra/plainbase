@@ -236,9 +236,9 @@ data class PlainbaseConfig(
         fun mainUnusable(message: String) = add(BootRefusal(BootRefusal.Kind.MAIN_UNUSABLE, setOf(RootName.PRIMARY), message))
         val fault = mainFault(mainPath)
         when (fault) {
-            MainFault.NOT_A_DIRECTORY -> mainUnusable("roots.main.path does not exist or is not a directory: $mainPath")
+            MainFault.NOT_A_DIRECTORY -> mainUnusable("roots.docs.path does not exist or is not a directory: $mainPath")
             MainFault.NOT_TRAVERSABLE -> mainUnusable(
-                "roots.main.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)",
+                "roots.docs.path is not readable/searchable: $mainPath (fix its permissions so the server can serve it)",
             )
             null -> Unit
         }
@@ -250,7 +250,7 @@ data class PlainbaseConfig(
                 } catch (e: IOException) {
                     // Only worth reporting when main OTHERWISE looked fine (a race, an exotic filesystem): a
                     // main that is simply not there is already named above, and saying it twice says nothing more.
-                    if (fault == null) mainUnusable("roots.main.path cannot be resolved: $declared (${e.message})")
+                    if (fault == null) mainUnusable("roots.docs.path cannot be resolved: $declared (${e.message})")
                     bestEffortCanonical(declared)
                 }
             } else {
@@ -397,7 +397,7 @@ data class PlainbaseConfig(
         if (roots.primaryDeclared && contentDirSource != ConfigSource.DEFAULT) {
             add(
                 "roots {} is configured: the explicitly set CONTENT_DIR/contentDir (via ${contentDirSource.name.lowercase()}) " +
-                    "is ignored - main's path comes from roots.main.path",
+                    "is ignored - primary's path comes from roots.docs.path",
             )
         }
         // The C1 "extras are configured but unserved" and "editable/history are recorded but dormant" warnings are
@@ -984,7 +984,7 @@ data class PlainbaseConfig(
             val managedRoots = parseRootBlock(managed)
             if (!declaredPresent && managedRoots.isEmpty()) return RootsConfig.synthesized(contentDir, storage)
             require(storage.backend != StorageBackend.OBJECT) {
-                "roots {} cannot be combined with storage.backend=object in this release: the bucket is main's content " +
+                "roots {} cannot be combined with storage.backend=object in this release: the bucket is the primary root's content " +
                     "authority and a roots block cannot describe it - remove the roots block to keep the object deployment"
             }
             // Redundant with RootsConfig.of's own check, deliberately: this one is OPERATOR-facing and names the
@@ -993,12 +993,12 @@ data class PlainbaseConfig(
             // makes a roots.conf-only topology legal.
             if (declaredPresent) {
                 require(declared.any { it.name == RootName.PRIMARY }) {
-                    "roots {} must declare a root named '${RootName.PRIMARY}' (the required, reserved primary): roots.main { path = ... }"
+                    "roots {} must declare a root named '${RootName.PRIMARY}' (the required, reserved primary): roots.docs { path = ... }"
                 }
             }
             require(managedRoots.none { it.name == RootName.PRIMARY }) {
-                "$MANAGED_ROOTS_FILE must not declare 'main': main's directory comes from CONTENT_DIR, or from a roots {} " +
-                    "block you wrote yourself in plainbase.conf. `plainbase root` never manages main."
+                "$MANAGED_ROOTS_FILE must not declare 'docs': primary's directory comes from CONTENT_DIR, or from a roots {} " +
+                    "block you wrote yourself in plainbase.conf. `plainbase root` never manages docs."
             }
             // The house idiom, copied from mainDirectCommitGlobs: two spellings of ONE thing refuse the boot rather
             // than guess a winner. Merging two declarations field-wise could silently take `editable` from one file
@@ -1124,13 +1124,13 @@ data class PlainbaseConfig(
          * inside that arm. So this can only fire on a config that explicitly declares main's history non-auto.
          */
         private fun requireCoherentMainHistory(roots: RootsConfig, gitEnabled: Boolean?) {
-            val main = roots.primary
-            require(!(main.history == HistoryMode.NATIVE && gitEnabled == false)) {
-                "roots.main.history = native and git.enabled = false contradict each other: one claims main's git " +
+            val primary = roots.primary
+            require(!(primary.history == HistoryMode.NATIVE && gitEnabled == false)) {
+                "roots.docs.history = native and git.enabled = false contradict each other: one claims primary's git " +
                     "repository, the other turns git off. Set exactly one of them."
             }
-            require(!(main.history == HistoryMode.OFF && gitEnabled == true)) {
-                "roots.main.history = off and git.enabled = true contradict each other: one turns main's history off, " +
+            require(!(primary.history == HistoryMode.OFF && gitEnabled == true)) {
+                "roots.docs.history = off and git.enabled = true contradict each other: one turns primary's history off, " +
                     "the other forces it on. Set exactly one of them."
             }
         }
@@ -1276,14 +1276,14 @@ data class PlainbaseConfig(
         }
 
         /**
-         * MAIN's direct-commit glob list — env-wins over the file key, exactly as it always has.
+         * Primary root's direct-commit glob list - env-wins over the file key, exactly as it always has.
          *
-         * **Main's list has exactly ONE key, and it has three possible SPELLINGS** (ADR-0011 D6): the env var, the
-         * file's `globs`, and now `roots.main` inside the per-root block. Two sources naming the same list is either a
+         * **The primary root's list has exactly ONE key, and it has three possible SPELLINGS** (ADR-0011 D6): the env var, the
+         * file's `globs`, and now `roots.docs` inside the per-root block. Two sources naming the same list is either a
          * silent UNION (a widening of what an agent may commit without review - precisely what this design exists to
          * prevent) or a silent WINNER (which drops an authorization the operator wrote). This is an authorization
-         * surface, so "unspecified" is not an option: declaring `roots.main` alongside EITHER other spelling refuses
-         * the boot, naming both keys. It costs no back-compat at all — `roots.main` is a key C4 invents, so this can
+         * surface, so "unspecified" is not an option: declaring `roots.docs` alongside EITHER other spelling refuses
+         * the boot, naming both keys. It costs no back-compat at all - `roots.docs` is a key C4 invents, so this can
          * never fire on a config that is legal today. (`globs` + the env var stay the ORIGINAL one key with its
          * original env-wins rule, untouched.)
          */
@@ -1294,13 +1294,14 @@ data class PlainbaseConfig(
             if (fromBlock != null) {
                 require(fromEnv == null) {
                     "auth.agentDirectCommit.roots.${RootName.PRIMARY} and PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS both declare " +
-                        "main's direct-commit globs. Declare main's list ONCE - Plainbase will not guess which of the two " +
+                        "the primary root's direct-commit globs. Declare the primary root's list ONCE - Plainbase " +
+                        "will not guess which of the two " +
                         "you meant, and neither unioning them (which would widen what an agent may commit unreviewed) nor " +
                         "picking a winner (which would drop the other) is safe on an authorization surface."
                 }
                 require(fromFile == null) {
-                    "auth.agentDirectCommit.globs and auth.agentDirectCommit.roots.${RootName.PRIMARY} both declare main's " +
-                        "direct-commit globs. Declare main's list ONCE (see the note on the roots block)."
+                    "auth.agentDirectCommit.globs and auth.agentDirectCommit.roots.${RootName.PRIMARY} both declare the primary root's " +
+                        "direct-commit globs. Declare the primary root's list ONCE (see the note on the roots block)."
                 }
                 return fromBlock
             }
@@ -1522,7 +1523,7 @@ data class RootsConfig private constructor(
         ): RootsConfig {
             val snapshot = list.toList()
             require(snapshot.any { it.name == RootName.PRIMARY }) {
-                "no 'main' root in the roots list (parse and synthesis both guarantee one; a directly-constructed " +
+                "no 'docs' root in the roots list (parse and synthesis both guarantee one; a directly-constructed " +
                     "RootsConfig must include it)"
             }
             // The type-level backstop, mirroring RootRegistry.of. Within ONE file HOCON merges duplicate keys

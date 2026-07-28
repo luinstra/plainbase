@@ -61,7 +61,7 @@ class IndexHarness(
     // C2 multi-root knobs (the defaults keep every single-root test on the main-only shape): the
     // registry seats every configured root in D7 order - the rank source and the D16 registeredRoots
     // both derive from it - and [sources] is the subset this builder actually scans.
-    val rootRegistry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root))),
+    val rootRegistry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", root))),
     sources: List<IndexBuilder.Source>? = null,
     /** C4: the availability holder the builder probes/marks through. Empty (every root serving) by default. */
     val availability: RootAvailability = RootAvailability(Clock.System),
@@ -137,7 +137,7 @@ class IndexHarness(
     val epochs = ObservationEpoch(retirements, convergence)
 
     /** Declares [root] under continuous observation - what `serve()` does when it installs the root's watcher. */
-    fun observe(root: String = "main"): IndexHarness = apply { epochs.observing(RootName.require(root)) }
+    fun observe(root: String = "docs"): IndexHarness = apply { epochs.observing(RootName.require(root)) }
 
     val builder = IndexBuilder(
         sources = sourceList,

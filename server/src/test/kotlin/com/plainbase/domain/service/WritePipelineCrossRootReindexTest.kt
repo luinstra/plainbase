@@ -65,7 +65,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             Files.createDirectories(extraDir.resolve("notes"))
             Files.writeString(extraDir.resolve("notes/rollback.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
             val mainStore = LocalContentStore(mainDir, rootName = RootName.PRIMARY)
             val extraRoot = RootName.require("extra")
             val extraStore = LocalContentStore(extraDir, rootName = extraRoot)
@@ -153,7 +153,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             Files.writeString(extraDir.resolve("notes/rollback.md"), slugged("extra-rollback", "original."))
             Files.writeString(mainDir.resolve("notes/rollback.md"), slugged("renamed", "a colliding page in main."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
             val extraRoot = RootName.require("extra")
 
             IndexHarness(
