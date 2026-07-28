@@ -99,7 +99,7 @@ CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
 Like `serve`, the offline CLIs (`reindex`, `adopt`) read `DATA_DIR/plainbase.conf` (env still wins), so a
 file-configured `storage.backend=object` makes them operate on the bucket mirror - not the local
 content root - matching the running server for the same `DATA_DIR`. A file-configured `roots {}`
-block likewise makes them operate on `roots.main.path`, not an ignored `CONTENT_DIR`.
+block likewise makes them operate on `roots.docs.path`, not an ignored `CONTENT_DIR`.
 
 **Do not run `plainbase reindex` against a live server** - use the endpoint instead. The CLI and a
 running server are separate processes with separate write monitors; while SQLite WAL +
@@ -129,27 +129,26 @@ copy, so the on-disk file only reappears on restart. On a *running* server, use
 
 ## Multiple roots: what happens when one is not there
 
-**First, the exception that is not in the table below: a `main` that is not there AT BOOT does not
-degrade - the server REFUSES TO START.**
+The primary root is `docs`, but it follows the same unavailable-root path as every extra. If its directory
+is missing or unreadable when `serve` starts, the server logs this warning and starts with that root marked
+unavailable:
 
 ```
-serve: roots.main.path does not exist or is not a directory: /srv/docs
-serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
+root 'docs' is not available at /srv/docs: it will serve 503 until the path is restored and the server restarted (its pages, aliases and checkpoints are left untouched)
 ```
 
-Main is the root the URL grammar and the SPA shell are anchored on, so `serve` fails closed rather than
-come up serving an empty corpus. The same refusal covers a main it cannot
-read and traverse (`... is not readable/searchable: /srv/docs`). **So unmounting the volume that
-holds `main` does not buy you a degraded server with 503s - it buys you no server.** Restore the path
-or the permissions, then start. (Main vanishing while the server is already *running* is different:
-that is the sticky 503 behavior below, and the *next* boot is what refuses.)
+Root-dependent API, agent, asset, and write surfaces answer 503 until the path is restored and the server
+is restarted. Browser navigation is the deliberate exception: it serves the SPA shell with 200 so the
+client can render its own outage UI. A missing `docs` path is not the same failure as a config declaring the reserved root name
+`main`: the latter refuses during config loading, before a path is checked. Offline commands have their
+own fail-closed path checks; `serve` uses the unavailable-root behavior above.
 
-Everything else in this section is about the **extra** roots.
+Everything else in this section applies to **all** configured roots.
 
-An extra root that is missing at boot, or whose directory vanishes while the server runs, is marked
+A configured root that is missing at boot, or whose directory vanishes while the server runs, is marked
 **unavailable**. Two things matter operationally.
 
-**1. It answers 503, never 404 - and that distinction is for your agents.**
+**1. Root-dependent API, agent, asset, and write surfaces answer 503, never 404 - and that distinction is for your agents.**
 
 | answer | what it means to an agent |
 |---|---|
@@ -175,7 +174,7 @@ rather than rewriting the row.
   "status": "ok",
   "version": "0.1.0",
   "roots": [
-    { "root": "main",    "available": true,  "reason": null },
+    { "root": "docs",    "available": true,  "reason": null },
     { "root": "archive", "available": false, "reason": "vanished" }
   ]
 }
@@ -191,6 +190,27 @@ same bit as `"available": false` on the root's entry (with an empty subtree - ne
 **Recovery is: restore the directory, then RESTART the server.** Unavailability is sticky on purpose -
 a vanished root's scan and identity state cannot be trusted afterwards, so the server will not silently
 re-adopt a directory that reappeared.
+
+## URL surfaces and the top-level root grammar
+
+The server route table treats the first segment as a root name on every root-scoped surface. Do not add a
+`/docs` prefix before an extra root: `docs` is the primary root's name, while `extra` owns `/extra/...`.
+The following table is the operator-facing status contract for the route families that are easiest to
+misconfigure in a proxy or health check:
+
+| surface | request shape | answer |
+|---|---|---|
+| Browser content | `/{unknown-root}` or `/{unknown-root}/{path}` | 404 with the SPA shell body. An unknown first segment is not a path in `docs`. |
+| Browser content | `/{root}` or `/{root}/{path}` for a registered root | 200 with the SPA shell, except a live alias redirects 301 within that root. |
+| Asset files | `/assets` | 400 `invalid_path`, because an asset path is required. `/assets/{unknown-root}/...` and `/assets/{registered-root}` answer 404; a registered root plus a path is required, such as `/assets/docs/infra/assets/diagram.svg`. |
+| Embedded bundle | `/assets/index-<hash>.js` or the corresponding CSS path | 200 from the embedded bundle before the root split and before the content-asset read gate. The bundle check is root-blind. |
+| File-path lookup | `/browse` | 400 `invalid_path`, because a content file path is required. `/browse/{unknown-root}/...` answers 404, while `/browse/{registered-root}` answers 400 `invalid_path`; a registered root plus a file path, such as `/browse/docs/guides/deploy-guide.md`, redirects 302 to its current page URL. |
+| Agent page lookup | `/api/v1/pages/by-path` | 400 `invalid_path`, because a page path is required. A path whose first segment is not a registered root, or a bare registered root, is 404 `page_not_found`, never a lookup under `docs`; `/api/v1/pages/by-path/docs/guides/deploy-guide` is the rooted form. |
+| Permalink | `/p/<id>` or `/p/<root>/<id>` | 302 when the page is found, 200 for a live path-collision loser, 300 for an ambiguous bare id, 404 for an unknown id, 400 for a malformed shape, 410 for a retired id, and 503 when a live page's root is unavailable. |
+
+The app route table owns these paths and their query strings. A reverse proxy must forward them unchanged,
+must not rewrite `/assets/<bundle>` to the SPA shell, and must not add a second `/docs` prefix. The reference
+Caddyfile forwards the application without a path rewrite.
 
 ### How fast is it detected?
 
@@ -287,9 +307,9 @@ directory.** Which stores those are depends on `storage.backend`:
 - **local** (the default): **every configured root's directory is authoritative content, and every one of
   them needs backing up.** With no `roots {}` block that is the single `CONTENT_DIR` tree (see
   [the content tree is plain Markdown on disk](#the-content-tree-is-plain-markdown-on-disk) above). With a
-  `roots {}` block it is `roots.main.path` **plus each extra root's `path`** - `roots.handbook.path`,
+  `roots {}` block it is `roots.docs.path` **plus each extra root's `path`** - `roots.handbook.path`,
   `roots.runbooks.path`, and so on. Roots are disjoint directories with no shared storage and nothing else
-  in the deployment holds a copy of them, so backing up `main` alone silently leaves the rest of your corpus
+  in the deployment holds a copy of them, so backing up `docs` alone silently leaves the rest of your corpus
   unprotected.
 - **object**: the S3-compatible **bucket** is the authority - back *it* up, and `CONTENT_DIR` is ignored
   entirely (the Object-storage subsection below covers that case). Object mode is single-root today: a
@@ -402,7 +422,7 @@ your store, sized to how much history you want:
 
 - **Local (`storage.backend=local`):** the existing guidance above -
   [back up EVERY configured root's directory](#backups) (`CONTENT_DIR` with no `roots {}` block; otherwise
-  `roots.main.path` **and every extra root's `path`** - each root is an independent content authority and
+  `roots.docs.path` **and every extra root's `path`** - each root is an independent content authority and
   nothing else in the deployment holds a copy of it; plus `DATA_DIR/plainbase.db` if users/tokens/proposals
   matter). Unchanged otherwise.
 - **AWS S3 (or any versioning-capable store):** enable bucket
@@ -436,7 +456,7 @@ section.
 
 `DATA_DIR` can vanish entirely - a lost volume, a wiped container - and Plainbase boots clean against
 the surviving authoritative content: in **local** mode that is **every configured root's directory**
-(`CONTENT_DIR` with no `roots {}` block; otherwise `roots.main.path` and each extra root's `path`), and
+(`CONTENT_DIR` with no `roots {}` block; otherwise `roots.docs.path` and each extra root's `path`), and
 in **object** mode it is the bucket (`CONTENT_DIR` is ignored; `DATA_DIR/mirror` re-hydrates from the
 bucket on the next boot). The authoritative content is the source of truth, so most state re-derives; the app database
 `DATA_DIR/plainbase.db` also holds *real* state that does not.
@@ -474,7 +494,7 @@ bucket on the next boot). The authoritative content is the source of truth, so m
   `DATA_DIR` alone, which is the exact loss this command exists to prevent. If it refuses, restore the
   missing path and re-run: adopt is idempotent.
 - back up **every configured root's directory** (`CONTENT_DIR` with no `roots {}` block; otherwise
-  `roots.main.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too if users,
+  `roots.docs.path` and each extra root's `path`) always; back up `DATA_DIR/plainbase.db` too if users,
   tokens, or proposals matter.
 - on a multi-root install, back up `DATA_DIR/plainbase.conf` and `DATA_DIR/roots.conf` too. Neither is
   reconstructable from the content trees: they're the only record of *which* directories are roots,

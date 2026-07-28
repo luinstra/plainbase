@@ -1,8 +1,8 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted, SUPERSEDED IN PART twice - by
-  [ADR-0012](0012-per-root-page-identity.md) on page identity, and by the URL-grammar change recorded
-  in the second note below on D3 (see both notes directly below). D1-D18 were frozen at C4 merge; the
+- **Status:** Accepted, SUPERSEDED IN PART three times - by
+  [ADR-0012](0012-per-root-page-identity.md) on page identity, and by the two URL-grammar changes recorded
+  in the second and third notes below (see all notes directly below). D1-D18 were frozen at C4 merge; the
   later C5 chunk re-opened D2 and D17, and the URL-grammar work re-opened D3.
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
@@ -69,6 +69,39 @@ Authority: the URL-grammar commits on `url-grammar-top-level-roots` (`ab7b025` t
 routing half is pinned by `RootUrlGrammarTest`, `RestRedirectTest` and
 `frontend/src/__tests__/folder-landing.test.tsx`; the name-reservation half by `RootNameTest`,
 `ReservedSegmentsTest`, `RootCommandTest` and `FrontendBundleTest`.
+
+## Superseded in part: top-level root grammar and registration reservation (2026-07-28)
+
+This note corrects the preceding 2026-07-26 URL-grammar note. Its statement that the reserved-`main`
+boot refusal was deleted, and that content named `main` serves at `/docs/main/main/...`, is now false.
+The old D3(a) refusal was deleted, but it was a URL-grammar collision check. Commit 6 added a different
+check: `main` is in `ReservedSegments.words`, so it can never be registered as a live root. A
+`roots { main { path = ... } }` declaration, a managed `roots.conf` declaration, and `plainbase root add
+main ...` are refused as reserved root-registration names.
+
+The reason for the new reservation is durable data, not URL ambiguity. The committed migrations stamp
+`root = 'main'` into existing rows, and `verifyMigrations` freezes `schema/1..18.db`; allowing a later
+root registration named `main` would bind a live root over those migration-era rows. This is distinct
+from the deleted D3(a) content collision check. Content named `main` remains ordinary: a `main/` directory
+inside the primary root or a `main.md` page is legal. The directory is addressed under `docs` at
+`/docs/main/...`, and the page can be addressed at `/docs/main`.
+
+The current decisions are therefore: `RootName.PRIMARY` is named `docs`, an explicit `roots {}` block
+must declare `docs`, `main` is reserved and cannot name any root, and URLs are `/{root}/{path}`. A primary
+page at `guides/x` is `/docs/guides/x`; a page at `notes/y` in an extra root named `extra` is
+`/extra/notes/y`. There is no rootless fallback and no legacy redirect.
+
+The preceding note's route examples are corrected by the same rule: `/docs` is the registered primary
+landing, not a rootless miss. Bare `/assets` and `/browse` answer 400 `invalid_path` because each
+requires a tail. A tail with an unknown root answers 404 on either surface, but a bare registered root
+diverges: `/assets/docs` answers 404 `not_found`, while `/browse/docs` answers 400 `invalid_path`.
+`/docs/guides` is therefore the current `docs`-root address, not the deleted rootless fallback.
+
+The historical D1 and D3 sections below remain unchanged. Read them as the C4 decision record, with this
+note governing current behavior. In particular, the preceding note's `/docs/main/main/...` example is
+corrected here to `/docs/main/...` for content named `main`, while the root name `main` remains illegal.
+The historical `roots { main { ... } }` block below is retained only as C4 context; it is not a current
+configuration example, and the declaration is the reserved-segment boot refusal shown above.
 
 ## Context
 

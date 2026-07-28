@@ -27,6 +27,19 @@ redirect). Owner review during the revamp changed both:
 The bullets below are kept as originally written; where they say "no redirect / independently
 reachable," read the Amendment as governing.
 
+## Superseded in part: roots now own top-level URL segments (2026-07-28)
+
+The URL grammar changed after this amendment. The old `/docs/main` and `/docs/$` references above are
+historical addresses, not current route instructions. The server now registers `get("/{root}")` and
+`get("/{root}/{path...}")`: the required primary root is named `docs`, so its landing is `/docs`, a
+folder under that root is addressed at `/docs/<folder>`, and an extra root named `extra` owns
+`/extra/<folder>`. The SPA folder-landing decision itself is unchanged. The API lookup remains rooted
+at `/api/v1/pages/by-path/{root}/{path}` and still returns 404 for a folder with no page; the browser
+route serves the shell, then the SPA matches the tree's folder URL.
+
+This is a URL-shape correction, not a silent rewrite of the folder decision. The old examples remain
+above so the record shows the address shape that this amendment originally amended.
+
 ## Context
 
 Phase 1 gave folders no URL of their own: `index.md` is an ordinary page, the `/docs/$` route
