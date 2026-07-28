@@ -46,6 +46,7 @@ import io.ktor.server.routing.routing
 import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
 import io.ktor.server.sse.SSE
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 
 /**
@@ -141,8 +142,22 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         }
         // Uncaught failures still answer in the frozen envelope; the code is an append to the
         // §A4 vocabulary (codes are append-only). Details go to the log, never the wire.
+        //
+        // A CANCELLED call is the one case that is NOT a fault: an SSE client (the in-binary MCP
+        // transport) that hangs up cancels the serving coroutine, and `plainbase spike` logged
+        // `ERROR unhandled error serving /api/v1/mcp` over a PASSING check for exactly that.
+        // `McpMount` swallows the cancellation arriving through its own `try`, but a child coroutine
+        // the MCP SDK starts lazily cancels on another path and lands here. Only the SEVERITY moves:
+        // the envelope still answers, because a handler that responds NOTHING hands the call to
+        // Ktor's own error page instead, which is strictly worse than the frozen envelope. The
+        // response is moot anyway on a socket nobody is reading; the false ERROR was the real cost,
+        // because agents connect and disconnect constantly and it buries genuine failures.
         exception<Throwable> { call, cause ->
-            logger.error(cause) { "unhandled error serving ${call.request.local.uri}" }
+            if (cause is CancellationException) {
+                logger.debug { "client disconnected while serving ${call.request.local.uri}" }
+            } else {
+                logger.error(cause) { "unhandled error serving ${call.request.local.uri}" }
+            }
             call.respondError(HttpStatusCode.InternalServerError, ErrorCodes.INTERNAL_ERROR, "Internal server error")
         }
     }

@@ -14,6 +14,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
+import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -83,6 +87,34 @@ class RestErrorContractTest : FunSpec({
 
             // The bare handle covers every method, so non-GETs get the same honest 404.
             client.head("/api/v1/page/anything").status shouldBe HttpStatusCode.NotFound
+        }
+    }
+
+    test("a CANCELLED call still answers the frozen envelope, never Ktor's stack-trace page") {
+        // The real shape is an SSE client (the in-binary MCP transport) hanging up, which cancels the
+        // serving coroutine and reaches the `exception<Throwable>` catch-all. A route that throws is
+        // the honest stand-in: the catch-all is the code under test, not CIO.
+        //
+        // This pins the TRAP, not the log fix. Treating cancellation as "control flow, so answer
+        // NOTHING" looks right and is worse: a StatusPages handler that writes no response hands the
+        // call to Ktor's own error page, which renders the exception and a full STACK TRACE onto the
+        // wire. That inverts §A4 (details go to the log, never the wire) while looking like a tidy-up.
+        // Whether the catch-all logs cancellation at DEBUG rather than ERROR is deliberately UNGATED:
+        // there is no log-capture harness in this tree, and inventing one to observe a severity would
+        // be a gate built for its own sake.
+        RestHarness(Fixtures.demoDocs).use { harness ->
+            testApplication {
+                application {
+                    plainbaseModule(harness.services)
+                    routing { get("/__cancelled-probe") { throw CancellationException("client disconnected") } }
+                }
+                val response = client.get("/__cancelled-probe")
+                response.status shouldBe HttpStatusCode.InternalServerError
+                val body = response.bodyAsText()
+                body shouldContain "\"code\":\"internal_error\""
+                body shouldNotContain "CancellationException" // the leak: Ktor's dev page renders the cause
+                body shouldNotContain "Stack Trace"
+            }
         }
     }
 

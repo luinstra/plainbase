@@ -110,9 +110,15 @@ fun Route.plainbaseMcp(ctx: RouteContext) {
                 awaitCancellation() // keep the SSE stream open until the client disconnects (CIO cancels the coroutine)
             } catch (_: CancellationException) {
                 // The client disconnected — CIO cancels this stream coroutine. That is the EXPECTED end of an SSE
-                // session, not a failure: swallow it so it never surfaces to the app-level StatusPages catch-all
-                // (which would otherwise log `ERROR unhandled error serving /api/v1/mcp`). The connection is already
-                // gone, so swallowing is safe even in the rare case CIO wraps a transport error as a cancellation cause.
+                // session, not a failure, so swallow it. The connection is already gone, so swallowing is safe even
+                // in the rare case CIO wraps a transport error as a cancellation cause.
+                //
+                // This covers ONLY the cancellation that arrives THROUGH this `try`. It is not the whole story and
+                // used to claim to be: a child coroutine the MCP SDK starts lazily cancels on its own path, reaches
+                // the app-level StatusPages instead, and `plainbase spike` logged `ERROR unhandled error serving
+                // /api/v1/mcp` over a PASSING check for exactly that reason. The general guard is the
+                // `exception<CancellationException>` arm in [plainbaseModule]; this one just keeps the common case
+                // from travelling that far.
             } finally {
                 transports.remove(transport.sessionId)
             }
