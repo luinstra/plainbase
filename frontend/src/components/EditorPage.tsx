@@ -14,6 +14,7 @@ import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
 import { PAGE_TEMPLATES } from "../lib/pageTemplates";
 import { previewPath } from "../lib/slugPreview";
+import { primaryEntry } from "../lib/tree";
 import { useDebounced } from "../lib/useDebounced";
 import { EditorToolbar } from "./EditorToolbar";
 import { isRootUnavailable, QueryErrorView } from "./ErrorView";
@@ -517,7 +518,7 @@ export function NewPage({ root }: { root?: string }) {
   // In section mode the Folder field IS the new section's path; a section needs a non-blank path
   // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
   const sectionReady = !section || folderPath !== "";
-  const targetRoot = root ?? tree.data?.roots.find((entry) => entry.primary)?.root;
+  const targetRoot = root ?? primaryEntry(tree.data?.roots ?? [])?.root;
 
   const create = useMutation({
     mutationFn: () =>

@@ -30,10 +30,9 @@ export const treeQuery = queryOptions({
 });
 
 /**
- * Decodes a canonical root-qualified URL back to the DECODED splat `pageByPathQuery` is keyed by
- * (the inverse of {@link encodeTreePath}, mirroring the read path's canonical-redirect resolution in
- * `PageView.tsx`). Returns null for a non-content URL (a collision loser has no by-path key). The
- * key is the URL splat WITHOUT the `.md` extension — NOT the content file path.
+ * Returns the decoded URL splat for a non-null path URL not under `/p/`; returns null for null, non-path, and
+ * permalink URLs. This is the inverse of {@link encodeTreePath}, and the key is the URL splat WITHOUT the `.md`
+ * extension, NOT the content file path.
  */
 export function byPathKeyForUrl(url: string | null): string | null {
   if (!url || !url.startsWith("/") || url.startsWith("/p/")) return null;

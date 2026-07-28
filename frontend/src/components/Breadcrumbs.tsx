@@ -24,21 +24,7 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   const segments = path.split("/").slice(0, -1);
   // The crumb names THIS page's root and links to that root's own server-issued URL. A hardcoded `/docs`
   // crumb would name the wrong tree and walk an extra-root reader into the primary tree.
-  //
-  // **Until the tree RESOLVES, the COUNT is unknown - so the crumb is inert rather than wrong.** The root's
-  // NAME is in hand (the page response carries it), but the server-issued URL is not. A reader on an extra
-  // root's page must not get a guessed link while the tree is pending. The crumb still renders so the trail
-  // does not reflow, but it stays inert until the URL is known.
-  //
-  // A FAILED tree is that same inert trail, and that is the bug this splits: `data?.roots` alone renders the
-  // pending window and the error IDENTICALLY, so a reader whose tree fetch died sits in front of a trail that
-  // will never link, with nothing to tell them it is not still loading. The degraded render is right either way
-  // (we still do not know the count); what differs is that the pending one RESOLVES and the failed one does not,
-  // so the failure is SAID (below) and the pending window is announced as busy instead of silently waiting.
-  const roots = data?.roots;
-  const rootCrumb = !roots
-    ? { key: `root:${root}`, label: root, url: null }
-    : { key: `root:${root}`, label: entry?.root ?? root, url: entry?.tree.url ?? null };
+  const rootCrumb = { key: `root:${root}`, label: root, url: entry?.tree.url ?? null };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
     const folder = folders.get(folderPath);

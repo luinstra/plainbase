@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
-import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
+import type { PageResponse, TreeFolder, TreePage } from "../api/types";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
   folderByUrl,
@@ -14,7 +14,6 @@ import {
   pageHref,
   rootAcceptsWrites,
   rootEntryOfUrl,
-  type FolderEntry,
 } from "../lib/tree";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { QueryErrorView, RootUnavailableView } from "./ErrorView";
@@ -92,7 +91,7 @@ export function FolderLanding({ url }: { url?: string }) {
   const tree = useQuery(treeQuery);
 
   const target = url ?? pathname;
-  const resolved = tree.data ? resolveLanding(tree.data.roots, target) : null;
+  const resolved = tree.data ? folderByUrl(tree.data.roots, target) : null;
 
   if (tree.isPending) return <PagePending />;
   if (tree.isError) return <PageError error={tree.error} />;
@@ -121,19 +120,6 @@ export function FolderLanding({ url }: { url?: string }) {
 }
 
 /**
- * The folder-landing resolver matches the entries' server-issued folder urls verbatim, and a miss is a miss.
- *
- * There is deliberately no fallback that re-reads a rootless tail under the primary. The server
- * answers an unknown first segment with 404, so a client that resolved it would disagree with the
- * address it is standing on - and worse, it would silently REBIND: registering a root named after
- * one of the primary's top-level folders moves that URL from the folder to the new root's landing,
- * with nothing announcing the move.
- */
-function resolveLanding(roots: RootTree[], target: string): FolderEntry | null {
-  return folderByUrl(roots, target);
-}
-
-/**
  * The purely-generated directory view (no index/README): `_folder.yaml` title (else name) as
  * heading, then the generated listing. `data-pb-folder` marks this rail-less generated view.
  *
@@ -142,7 +128,6 @@ function resolveLanding(roots: RootTree[], target: string): FolderEntry | null {
  * Without that spacer the listing would bleed full-bleed and jar against every page view.
  */
 function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
-  // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
   const title = folderTitle(folder) || root;
   useEffect(() => {
     document.title = `${title} · Plainbase`;

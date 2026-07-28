@@ -114,6 +114,8 @@ export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
  * (ADR-0003). Each entry's synthetic root folder is included (its `url` is the bare
  * root URL). Matched verbatim against the server-issued `url`: the server is the single URL
  * authority, so nothing is slugified or re-encoded client-side.
+ * There is no fallback that re-reads a rootless tail under the primary. An unknown first segment gets a 404 from
+ * the server, so resolving it here would disagree with the address and silently move a folder URL to a new root.
  */
 export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | null {
   for (const entry of roots) {
