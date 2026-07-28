@@ -223,18 +223,18 @@ describe("routing flows", () => {
     const primarySelectionTree: TreeResponse = {
       roots: [
         { ...extraPageTree.roots[0], tree: { ...extraPageTree.roots[0].tree, children: [] } },
-        emptyTree.roots[0],
+        { ...emptyTree.roots[0], root: "handbook", tree: { ...emptyTree.roots[0].tree, url: "/hb" } },
       ],
     };
     const { history, view } = renderAt("/", (qc) => qc.setQueryData(treeQuery.queryKey, primarySelectionTree));
 
-    await waitFor(() => expect(history.location.pathname).toBe("/docs"));
-    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"));
+    await waitFor(() => expect(history.location.pathname).toBe("/hb"));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("handbook"));
     expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull();
 
-    history.push("/docs/");
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/"));
-    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"));
+    history.push("/hb/");
+    await waitFor(() => expect(history.location.pathname).toBe("/hb/"));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("handbook"));
     expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull();
   });
 
