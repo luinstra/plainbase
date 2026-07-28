@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.SearchService
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -29,7 +30,7 @@ import kotlinx.coroutines.withContext
  * violation to the frozen envelope. Unknown parameters are ignored (§A1 additive evolution).
  */
 fun Route.searchRoute(ctx: RouteContext) {
-    get("/api/v1/search") {
+    get("/${ServerTopLevel.API}/v1/search") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             val raw = call.request.rawQueryParameters

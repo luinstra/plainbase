@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import io.ktor.http.ContentType
 import io.ktor.server.response.respondText
@@ -12,7 +13,7 @@ import io.ktor.server.routing.get
  * steady-state requests serve a cached string. A3: `read`-gated through the facade.
  */
 fun Route.treeRoute(ctx: RouteContext) {
-    get("/api/v1/tree") {
+    get("/${ServerTopLevel.API}/v1/tree") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             call.respondText(ctx.read.tree(principal), ContentType.Application.Json)

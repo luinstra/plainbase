@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PageHtmlResponse
@@ -34,7 +35,7 @@ import io.ktor.server.routing.route
  * 401/403 BEFORE the page lookup (no existence leak).
  */
 fun Route.pageRoutes(ctx: RouteContext) {
-    route("/api/v1/pages") {
+    route("/${ServerTopLevel.API}/v1/pages") {
         byPathRoute(ctx)
         pageByIdRoute(ctx)
         pageHtmlRoute(ctx)
@@ -48,7 +49,7 @@ private fun Route.byPathRoute(ctx: RouteContext) {
     get("/by-path/{path...}") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
-            val raw = call.rawPathAfter("/api/v1/pages/by-path/")
+            val raw = call.rawPathAfter("/${ServerTopLevel.API}/v1/pages/by-path/")
                 ?: return@guarded call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_PATH,

@@ -8,6 +8,7 @@ import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.ServerTopLevel
 
 /** One root's slice of a snapshot, in the builder's per-root scan order. */
 data class RootSection(
@@ -127,7 +128,8 @@ class PageIndex(sections: List<RootSection>) {
             return indexed.url ?: indexed.permalink
         }
 
-        override fun assetUrl(asset: TreePath): String = "/assets/" + root.value + "/" + PercentCoding.encodePath(asset.value)
+        override fun assetUrl(asset: TreePath): String =
+            "/${ServerTopLevel.ASSETS}/" + root.value + "/" + PercentCoding.encodePath(asset.value)
 
         override fun caseInsensitiveMatches(path: TreePath): List<TreePath> =
             byLowercaseValue[path.value.lowercase()].orEmpty().filterNot { it == path }

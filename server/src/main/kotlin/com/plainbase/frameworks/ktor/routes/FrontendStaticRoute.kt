@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -61,7 +62,7 @@ internal object FrontendBundle {
 
     /** Top-level entries owned by another route, keyed by entry name. */
     val ownedElsewhere = mapOf(
-        "assets" to "assetRoute: get(\"/assets/{path...}\")",
+        ServerTopLevel.ASSETS to "assetRoute: get(\"/${ServerTopLevel.ASSETS}/{path...}\")",
     )
 
     const val SHELL = "index.html"

@@ -45,7 +45,7 @@ import io.ktor.server.routing.get
  * rebuild, and the belt-and-suspenders check here keeps the invariant even mid-rebuild.
  *
  * A3: ONLY the alias-redirect arm is `read`-gated - [com.plainbase.domain.service.ReadFacade
- * .resolveDocsRedirect] returns the target only when there IS a live alias AND the principal may read it; on no
+ * .resolveRootContentRedirect] returns the target only when there IS a live alias AND the principal may read it; on no
  * alias OR a deny it returns null and we fall through to the PUBLIC SPA-shell arm, so unauthenticated SPA
  * navigation still loads the shell and a denied caller cannot tell an alias exists (no 301 existence-leak). The
  * no-root 404 is PRE-gate and leak-free: the root decision is config topology only (registry names, operator
@@ -53,9 +53,7 @@ import io.ktor.server.routing.get
  *
  * An insecure-transport credential is the ONE exception to "fall through to the shell": it is REFUSED (421) via
  * [principalOrRefuseToShell], never silently downgraded to anonymous and served the shell - a credential sent
- * over plaintext must be refused before it is honored, just like every other gated route. This handler takes the
- * BINDING `when` form because step 6 consumes the principal; the bare arm is what `spaShellRoutes`,
- * `/index.html` and `get("/")` use.
+ * over plaintext must be refused before it is honored, just like every other gated route.
  */
 fun Route.rootContentRoutes(ctx: RouteContext) {
     val handler: suspend RoutingContext.() -> Unit = handler@{
@@ -69,7 +67,7 @@ fun Route.rootContentRoutes(ctx: RouteContext) {
         val (root, remainder) = splitRootTail(path, ctx.roots) ?: return@handler call.respondShellNotFound()
         call.guarded {
             val target = try {
-                remainder?.let { ctx.read.resolveDocsRedirect(principal, root, it) }
+                remainder?.let { ctx.read.resolveRootContentRedirect(principal, root, it) }
             } catch (_: RootUnavailable) {
                 null
             }

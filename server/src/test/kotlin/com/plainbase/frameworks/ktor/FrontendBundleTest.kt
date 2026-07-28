@@ -2,19 +2,45 @@ package com.plainbase.frameworks.ktor
 
 import com.plainbase.domain.root.ReservedSegments
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.ServerTopLevel
+import com.plainbase.frameworks.filesystem.Fixtures
 import com.plainbase.frameworks.ktor.routes.FrontendBundle
+import com.plainbase.frameworks.ktor.routes.SpaTopLevel
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.ktor.server.routing.ConstantParameterRouteSelector
+import io.ktor.server.routing.HostRouteSelector
+import io.ktor.server.routing.HttpAcceptRouteSelector
+import io.ktor.server.routing.HttpHeaderRouteSelector
+import io.ktor.server.routing.HttpMethodRouteSelector
+import io.ktor.server.routing.HttpMultiAcceptRouteSelector
+import io.ktor.server.routing.LocalPortRouteSelector
+import io.ktor.server.routing.OptionalParameterRouteSelector
+import io.ktor.server.routing.ParameterRouteSelector
+import io.ktor.server.routing.PathSegmentConstantRouteSelector
+import io.ktor.server.routing.PathSegmentOptionalParameterRouteSelector
+import io.ktor.server.routing.PathSegmentParameterRouteSelector
+import io.ktor.server.routing.PathSegmentRegexRouteSelector
+import io.ktor.server.routing.PathSegmentTailcardRouteSelector
+import io.ktor.server.routing.PathSegmentWildcardRouteSelector
+import io.ktor.server.routing.RoutingNode
+import io.ktor.server.routing.TrailingSlashRouteSelector
+import io.ktor.server.routing.routingRoot
+import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Two properties of the embedded frontend bundle. The inventory is READ from the served tree, never
- * transcribed, so a bundle that grows is answered here rather than by a list somebody has to remember to
- * update. It reads the CLASSPATH copy rather than `frontend/dist`, because the classpath is what is
- * actually served; `processResources` depends on `copyFrontend`, so it is staged before any test runs.
+ * Reservation and integrity properties of the embedded frontend bundle and mounted route surface. The inventory
+ * is READ from the served tree, never transcribed, so a bundle that grows is answered here rather than by a list
+ * somebody has to remember to update. It reads the CLASSPATH copy rather than `frontend/dist`, because that is what
+ * is actually served; `processResources` depends on `copyFrontend`, so it is staged before any test runs.
+ *
+ * The route rows cover the declared server and SPA mounts, plus the actual Ktor tree. The runtime parity row
+ * walks builtin, proxy, and off auth-mode topologies so mode-conditional mounts cannot hide an unreserved segment.
  *
  * RESERVATION, at the top level. [ReservedSegments] claims the product owns the top-level URLs it serves,
  * and the bundle's classpath tree is exposed through explicit server routes, so a new directory there is a
@@ -39,6 +65,57 @@ class FrontendBundleTest : FunSpec({
     test("every top-level bundle entry that could name a root is a reserved segment") {
         withClue("these bundle entries are live top-level routes; ReservedSegments must already own their names") {
             bundleTopLevel().mapNotNull { RootName.of(it) }.filterNot(ReservedSegments::isReserved).map { it.value }.shouldBeEmpty()
+        }
+    }
+
+    test("every live top-level route segment is reserved") {
+        val routeSegments = (
+            SpaTopLevel.segments +
+                SpaTopLevel.parameterized.map { it.removePrefix("/").substringBefore("/") } +
+                ServerTopLevel.segments
+            ).toSet()
+        val rootNames = routeSegments.mapNotNull { RootName.of(it) }
+        val expectedNonSurvivors = setOf("p")
+        withClue(
+            "live route segments (${routeSegments.size}) produced ${rootNames.size} RootName survivors; " +
+                "expected ${routeSegments.size - expectedNonSurvivors.size}, non-survivors=$expectedNonSurvivors",
+        ) {
+            routeSegments.filterNot { it in rootNames.map(RootName::value) }.toSet() shouldBe expectedNonSurvivors
+            rootNames shouldHaveSize routeSegments.size - expectedNonSurvivors.size
+        }
+        val unreserved = rootNames.filterNot(ReservedSegments::isReserved).map { it.value }
+        withClue("live route segments (${routeSegments.size}) must be reserved: $unreserved") {
+            unreserved.shouldBeEmpty()
+        }
+    }
+
+    test("every mounted constant top-level route segment matches the declared inventory in every auth mode") {
+        val expected = (
+            ServerTopLevel.segments +
+                FrontendBundle.files +
+                FrontendBundle.directories +
+                FrontendBundle.ownedElsewhere.keys +
+                SpaTopLevel.segments
+            ).toSet()
+        listOf(
+            "builtin" to (true to false),
+            "proxy" to (false to true),
+            "off" to (false to false),
+        ).forEach { (mode, auth) ->
+            val segments = mountedTopLevelSegmentsForAuthMode(
+                builtinAuthEnabled = auth.first,
+                proxyAuthEnabled = auth.second,
+            )
+            val rootNames = segments.mapNotNull(RootName::of)
+            val unreserved = rootNames.filterNot(ReservedSegments::isReserved).map { it.value }
+            withClue(
+                "runtime route-tree walk for $mode found ${segments.size} constant top-level segments; " +
+                    "expected=${expected.size} values=$expected, RootName survivors=${rootNames.size}, " +
+                    "unreserved=$unreserved, segments=$segments",
+            ) {
+                segments shouldBe expected
+                unreserved.shouldBeEmpty()
+            }
         }
     }
 
@@ -116,4 +193,84 @@ private fun bundleAssetsLevel(): List<Pair<String, Path>> {
     val entries = Files.list(assets).use { stream -> stream.map { it.fileName.toString() to it }.toList() }
     check(entries.isNotEmpty()) { "static/assets/ is empty - the Vite bundle did not stage" }
     return entries
+}
+
+private fun mountedTopLevelSegments(root: RoutingNode): Set<String> {
+    val segments = linkedSetOf<String>()
+
+    fun visit(node: RoutingNode) {
+        when (val selector = node.selector) {
+            is PathSegmentConstantRouteSelector -> segments += selector.value
+            is PathSegmentParameterRouteSelector ->
+                if (selector.prefix.isNullOrEmpty() && selector.suffix.isNullOrEmpty()) {
+                    return
+                } else {
+                    error("top-level path parameter selector encodes a constant: $selector")
+                }
+
+            is PathSegmentOptionalParameterRouteSelector ->
+                if (selector.prefix.isNullOrEmpty() && selector.suffix.isNullOrEmpty()) {
+                    return
+                } else {
+                    error("top-level optional path parameter selector encodes a constant: $selector")
+                }
+
+            is PathSegmentRegexRouteSelector ->
+                error("top-level path regex selector encodes a constant: $selector")
+
+            is PathSegmentTailcardRouteSelector ->
+                if (selector.prefix.isEmpty()) {
+                    return
+                } else {
+                    error("top-level path tailcard selector encodes a constant: $selector")
+                }
+
+            is PathSegmentWildcardRouteSelector -> return
+
+            is ConstantParameterRouteSelector,
+            is ParameterRouteSelector,
+            is OptionalParameterRouteSelector,
+            is HttpMethodRouteSelector,
+            is HttpHeaderRouteSelector,
+            is HttpAcceptRouteSelector,
+            is HttpMultiAcceptRouteSelector,
+            is HostRouteSelector,
+            is LocalPortRouteSelector,
+            TrailingSlashRouteSelector,
+            -> node.children.forEach(::visit)
+
+            else -> {
+                if (selector.javaClass.name == CONTENT_TYPE_SELECTOR_CLASS) {
+                    node.children.forEach(::visit)
+                } else {
+                    error("unrecognized Ktor route selector ${selector.javaClass.name}: $selector")
+                }
+            }
+        }
+    }
+
+    root.children.forEach(::visit)
+    return segments
+}
+
+private const val CONTENT_TYPE_SELECTOR_CLASS = "io.ktor.server.routing.ContentTypeHeaderRouteSelector"
+
+private fun mountedTopLevelSegmentsForAuthMode(
+    builtinAuthEnabled: Boolean,
+    proxyAuthEnabled: Boolean,
+): Set<String> {
+    var segments = emptySet<String>()
+    RestHarness(
+        Fixtures.demoDocs,
+        builtinAuthEnabled = builtinAuthEnabled,
+        proxyAuthEnabled = proxyAuthEnabled,
+        proxySecret = if (proxyAuthEnabled) "test-secret" else null,
+    ).use { harness ->
+        testApplication {
+            application { plainbaseModule(harness.services) }
+            startApplication()
+            segments = mountedTopLevelSegments(application.routingRoot)
+        }
+    }
+    return segments
 }

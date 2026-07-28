@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.WatchCoverage
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.ktor.RouteContext
 import io.ktor.server.response.respond
@@ -58,7 +59,7 @@ data class RootHealth(
 
 /** Registers the unauthenticated `GET /healthz` liveness probe. */
 fun Route.healthRoute(ctx: RouteContext) {
-    get("/healthz") {
+    get("/${ServerTopLevel.HEALTHZ}") {
         // ONE snapshot of each holder for the whole response, never a per-root re-read: a payload that reported
         // half the roots from before a flip and half from after would be a picture of no moment in time.
         val unavailable = ctx.availability.current().unavailable

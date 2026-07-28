@@ -8,6 +8,7 @@ import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.frameworks.ktor.RouteContext
@@ -50,7 +51,7 @@ import kotlinx.serialization.SerializationException
  * `invalid_create_request`) are append-only additions to the frozen `ErrorCodes`.
  */
 fun Route.pageCreateRoutes(ctx: RouteContext) {
-    route("/api/v1/pages") {
+    route("/${ServerTopLevel.API}/v1/pages") {
         post {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
             call.guarded {

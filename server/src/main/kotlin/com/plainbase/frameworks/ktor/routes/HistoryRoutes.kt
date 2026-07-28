@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.git.UnknownRevisionException
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.DiffResponse
@@ -35,7 +36,7 @@ import kotlinx.coroutines.withContext
  * item, deliberately NOT bolted onto the history reads (concurrency-limiting is a cross-cutting server concern).
  */
 fun Route.historyRoutes(ctx: RouteContext) {
-    route("/api/v1/pages") {
+    route("/${ServerTopLevel.API}/v1/pages") {
         get("/{id}/history") {
             val principal = ctx.principalOrRefuse(call) ?: return@get
             call.guarded {

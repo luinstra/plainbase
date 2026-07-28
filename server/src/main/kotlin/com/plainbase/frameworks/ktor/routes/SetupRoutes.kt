@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.encodeTokenSecret
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.BootstrapOutcome
 import com.plainbase.domain.service.ChangeOutcome
 import com.plainbase.domain.service.ResetOutcome
@@ -25,7 +26,7 @@ import io.ktor.server.sessions.set
  * `POST /api/v1/password/change` is cookie-auth + CSRF-protected (a logged-in human changing their own password).
  */
 fun Route.setupRoutes(ctx: RouteContext) {
-    post("/api/v1/setup/consume") {
+    post("/${ServerTopLevel.API}/v1/setup/consume") {
         if (ctx.resolveOrRefuse(call) == null) return@post // secure-context gate for a riding cookie; a stale one may ride
         // The token + password ride the BODY, so the credential-conditional seam above does NOT fire for them; gate the
         // transport credential-agnostically BEFORE reading + verifying the token. 421 on a leaky transport.
@@ -56,7 +57,7 @@ fun Route.setupRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/password/reset/consume") {
+    post("/${ServerTopLevel.API}/v1/password/reset/consume") {
         if (ctx.resolveOrRefuse(call) == null) return@post
         // The token + new password ride the BODY (the seam above only sees a riding cookie); gate the transport
         // credential-agnostically BEFORE reading + verifying the token. 421 on a leaky transport.
@@ -76,7 +77,7 @@ fun Route.setupRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/password/change") {
+    post("/${ServerTopLevel.API}/v1/password/change") {
         val resolved = ctx.resolveOrRefuse(call) ?: return@post
         if (!ctx.enforceCsrf(call, resolved)) return@post
         val human = resolved.principal as? Principal.Human

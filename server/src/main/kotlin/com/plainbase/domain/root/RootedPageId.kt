@@ -29,5 +29,5 @@ data class RootedPageId(val root: RootName, val id: PageId) {
  */
 object Permalink {
 
-    fun of(root: RootName, id: PageId): String = "/p/${root.value}/${id.value}"
+    fun of(root: RootName, id: PageId): String = "/${ServerTopLevel.PERMALINK}/${root.value}/${id.value}"
 }

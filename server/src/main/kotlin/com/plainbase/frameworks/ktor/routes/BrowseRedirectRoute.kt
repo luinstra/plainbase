@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
@@ -23,10 +24,10 @@ import io.ktor.server.routing.get
  * `guarded {}` wrap; anonymous still gets its 401, unchanged.
  */
 fun Route.browseRedirectRoute(ctx: RouteContext) {
-    get("/browse/{path...}") {
+    get("/${ServerTopLevel.BROWSE}/{path...}") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
-            val raw = call.rawPathAfter("/browse/")
+            val raw = call.rawPathAfter("/${ServerTopLevel.BROWSE}/")
                 ?: return@guarded call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_PATH,

@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -25,13 +26,13 @@ import kotlinx.coroutines.awaitCancellation
 import java.util.concurrent.ConcurrentHashMap
 
 /** The frozen P3 MCP mount path — a distinct constant prefix under `/api`, consistent with the §A4 routing matrix. */
-const val MCP_PATH: String = "/api/v1/mcp"
+const val MCP_PATH: String = "/${ServerTopLevel.API}/v1/mcp"
 
 /** The connect-time-authenticated agent, stashed by the SSE-GET gate for the per-connection factory to close over. */
 internal val McpPrincipalKey: AttributeKey<Principal.Agent> = AttributeKey("plainbase.mcp.principal")
 
 /**
- * Mounts the in-binary MCP server (P3) at [MCP_PATH] inside `routing{}`, BEFORE the docs/static fallthrough.
+ * Mounts the in-binary MCP server (P3) at [MCP_PATH] inside `routing{}`, before the remaining route fallthrough.
  *
  * **Why not the SDK's `mcp(Route)` overload (a flagged SDK-vs-HEAD contradiction).** `mcp(Route, path, …)` advertises
  * a HARDCODED-EMPTY message endpoint in the SSE handshake (`KtorServerKt$mcp$2` passes `""` to `mcpSseEndpoint`), and

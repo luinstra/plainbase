@@ -122,7 +122,7 @@ interface ReadFacade {
      * no canonical URL to offer - and the target surface answers the 503. A documented, accepted two-step: the point
      * is that a caller lands on an honest "this root is down", never on a soft 404 that says the page is gone.
      */
-    fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String?
+    fun resolveRootContentRedirect(principal: Principal, root: RootName, path: TreePath): String?
 
     /**
      * The `/browse/{root}/{file-path}` redirect target: the page's canonical URL, or its permalink for a collision

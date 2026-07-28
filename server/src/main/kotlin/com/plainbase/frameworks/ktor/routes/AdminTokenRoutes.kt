@@ -5,6 +5,7 @@ import com.plainbase.domain.repository.ApiTokenMeta
 import com.plainbase.domain.repository.AuditEntry
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.repository.SubjectRoleRow
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AuditEntryResponse
 import com.plainbase.frameworks.ktor.dto.AuditListResponse
@@ -32,14 +33,14 @@ import io.ktor.server.routing.post
  * No list/read response carries a secret — only the one-time mint plaintext (`CreatedTokenResponse`) does.
  */
 fun Route.adminTokenRoutes(ctx: RouteContext) {
-    get("/api/v1/admin/tokens") {
+    get("/${ServerTopLevel.API}/v1/admin/tokens") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             call.respondRest(TokenListResponse.serializer(), TokenListResponse(ctx.auth.admin.listTokens(principal).map { it.toDto() }))
         }
     }
 
-    post("/api/v1/admin/tokens") {
+    post("/${ServerTopLevel.API}/v1/admin/tokens") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val request = call.receiveAuthRequest(MintTokenRequest.serializer()) ?: return@guarded
@@ -59,7 +60,7 @@ fun Route.adminTokenRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/admin/tokens/{id}/revoke") {
+    post("/${ServerTopLevel.API}/v1/admin/tokens/{id}/revoke") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             ctx.auth.admin.revokeToken(principal, call.parameters["id"].orEmpty())
@@ -67,7 +68,7 @@ fun Route.adminTokenRoutes(ctx: RouteContext) {
         }
     }
 
-    get("/api/v1/admin/audit") {
+    get("/${ServerTopLevel.API}/v1/admin/audit") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             val limit = call.parameters["limit"]?.toIntOrNull()?.coerceIn(1, MAX_AUDIT_LIMIT) ?: DEFAULT_AUDIT_LIMIT
@@ -82,14 +83,14 @@ fun Route.adminTokenRoutes(ctx: RouteContext) {
         }
     }
 
-    get("/api/v1/admin/roles") {
+    get("/${ServerTopLevel.API}/v1/admin/roles") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             call.respondRest(RoleListResponse.serializer(), RoleListResponse(ctx.auth.admin.listRoles(principal).map { it.toDto() }))
         }
     }
 
-    post("/api/v1/admin/roles") {
+    post("/${ServerTopLevel.API}/v1/admin/roles") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val request = call.receiveAuthRequest(GrantRoleRequest.serializer()) ?: return@guarded

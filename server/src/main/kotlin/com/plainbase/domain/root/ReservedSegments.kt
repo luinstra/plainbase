@@ -29,10 +29,11 @@ object ReservedSegments {
      * minimum length of 2, and `RootNameTest` pins that.
      */
     val words: Set<String> = setOf(
-        // Live server top-level routes, plus the embedded frontend bundle's own directories - which
-        // `FrontendBundleTest` reads from the SERVED tree, so a new one that nothing here reserves goes red.
-        "api", "assets", "browse", "fonts", "healthz", "p",
-        // Live SPA top-level routes.
+        // Live non-SPA top-level routes, enforced by FrontendBundleTest via ServerTopLevel.
+        "api", "assets", "browse", "healthz", "p",
+        // The embedded bundle's fonts directory, enforced by FrontendBundleTest's bundle reservation row.
+        "fonts",
+        // Live SPA top-level routes, enforced by FrontendBundleTest via SpaTopLevel.
         "admin", "new", "review",
         // Product-owned, and the stems of the prefixes below.
         "pb", "plainbase",

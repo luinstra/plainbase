@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.encodeTokenSecret
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.SessionResponse
 import io.ktor.http.CookieEncoding
@@ -21,7 +22,7 @@ import io.ktor.server.routing.get
  *    plugin (which is configured only for `pb_session` with the opaque serializer).
  */
 fun Route.sessionRoutes(ctx: RouteContext) {
-    get("/api/v1/session") {
+    get("/${ServerTopLevel.API}/v1/session") {
         val resolved = ctx.resolveOrRefuse(call) ?: return@get
         val human = resolved.principal as? Principal.Human
         val csrf = if (ctx.proxyAuthEnabled) {

@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -68,10 +69,10 @@ import io.ktor.server.routing.get
  *    EMBEDDED bundle, not a 404 — the bundle-wins check precedes `assetRead`.
  */
 fun Route.assetRoute(ctx: RouteContext) {
-    get("/assets/{path...}") {
+    get("/${ServerTopLevel.ASSETS}/{path...}") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
-            val raw = call.rawPathAfter("/assets/")
+            val raw = call.rawPathAfter("/${ServerTopLevel.ASSETS}/")
                 ?: return@guarded call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_PATH,

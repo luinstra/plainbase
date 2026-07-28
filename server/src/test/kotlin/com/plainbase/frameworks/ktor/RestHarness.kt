@@ -37,6 +37,9 @@ class RestHarness(
     root: Path,
     seed: (IdMapRepository) -> Unit = {},
     private val history: HistoryProvider = NoOpHistoryProvider,
+    private val builtinAuthEnabled: Boolean = true,
+    private val proxyAuthEnabled: Boolean = false,
+    private val proxySecret: String? = null,
 ) : AutoCloseable {
 
     private val store = LocalContentStore(root)
@@ -81,7 +84,13 @@ class RestHarness(
     init {
         seed(harness.idMap)
         harness.builder.rebuild()
-        services = harness.testRouteContext(searchProvider = searchProvider, history = history)
+        services = harness.testRouteContext(
+            searchProvider = searchProvider,
+            history = history,
+            builtinAuthEnabled = builtinAuthEnabled,
+            proxyAuthEnabled = proxyAuthEnabled,
+            proxySecret = proxySecret,
+        )
     }
 
     override fun close() {

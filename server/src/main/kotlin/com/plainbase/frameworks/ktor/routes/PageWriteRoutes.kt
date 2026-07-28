@@ -3,6 +3,7 @@ package com.plainbase.frameworks.ktor.routes
 import com.plainbase.domain.content.Nfc
 import com.plainbase.domain.content.PercentCoding
 import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.AssetWriteOutcome
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.SaveRequest
@@ -57,7 +58,7 @@ import io.ktor.server.routing.route
  * one - and drop the denied-EDIT audit row entirely. See `GuardedMutatingFacade` for the full ordering.
  */
 fun Route.pageWriteRoutes(ctx: RouteContext) {
-    route("/api/v1/pages") {
+    route("/${ServerTopLevel.API}/v1/pages") {
         registerPageSave(ctx)
         registerAssetUpload(ctx)
     }
