@@ -18,11 +18,11 @@ import { createAppRouter } from "../router";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 
-/** `main` (editable, as every legacy install runs) + `handbook` (read-only, as `root add` produces). */
+/** The primary root (editable, as every legacy install runs) + `handbook` (read-only, as `root add` produces). */
 const tree: TreeResponse = {
   roots: [
-    { root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
-    { root: "handbook", available: true, editable: false, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } },
+    { root: "handbook", available: true, editable: false, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/handbook", page_count: 0, children: [] } },
   ],
 };
 
@@ -59,9 +59,9 @@ function htmlResponse(root: string, url: string): PageHtmlResponse {
   };
 }
 
-/** Mounts the canonical `/docs/{root}/...` read view with the page and the tree already resolved. */
+/** Mounts a canonical root-content read view with the page and tree already resolved. */
 function renderPage(root: string) {
-  const url = `/docs/${root}/guides/onboarding`;
+  const url = `${root === "docs" ? "/docs" : `/${root}`}/guides/onboarding`;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, tree);
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
@@ -80,7 +80,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("the Edit affordance", () => {
   it("renders on an EDITABLE root", async () => {
-    const { container } = renderPage("main");
+    const { container } = renderPage("docs");
     await waitFor(() => expect(container.querySelector("[data-pb-docfoot]")).not.toBeNull());
     expect(container.querySelector("[data-pb-edit-page]")).not.toBeNull();
   });

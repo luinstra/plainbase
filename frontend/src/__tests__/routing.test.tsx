@@ -26,7 +26,7 @@ function citation(id: string) {
   return { page_id: id, heading_id: null, path: "x.md", content_hash: "h", commit: null, uri: `plainbase://${id}@h` };
 }
 
-function pageResponse(id: string, url: string | null, title: string, root = "main"): PageResponse {
+function pageResponse(id: string, url: string | null, title: string, root = "docs"): PageResponse {
   return {
     id,
     root,
@@ -43,7 +43,7 @@ function pageResponse(id: string, url: string | null, title: string, root = "mai
   };
 }
 
-function htmlResponse(id: string, url: string | null, title: string, root = "main"): PageHtmlResponse {
+function htmlResponse(id: string, url: string | null, title: string, root = "docs"): PageHtmlResponse {
   return {
     id,
     root,
@@ -59,14 +59,14 @@ function htmlResponse(id: string, url: string | null, title: string, root = "mai
   };
 }
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 
 // A root-level README child — the fixture-backed smoke suite can't isolate readme-only at
 // the root (demo-docs carries an index.md too), so the readme branch is mocked here.
 const rootReadmeTree: TreeResponse = {
   roots: [
     {
-      root: "main",
+      root: "docs",
       available: true,
       editable: true,
       primary: true,
@@ -76,9 +76,9 @@ const rootReadmeTree: TreeResponse = {
         title: null,
         description: null,
         path: "",
-        url: "/docs/main",
+        url: "/docs",
         page_count: 1,
-        children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/main/readme", status: "active", updated: null }],
+        children: [{ type: "page", id: WINNER_ID, title: "Docs Home", slug: "readme", path: "README.md", url: "/docs/readme", status: "active", updated: null }],
       },
     },
   ],
@@ -94,18 +94,19 @@ const rootReadmeTree: TreeResponse = {
  * by-id read they exist to test.
  */
 function hubEntry(root: string, id: string): TreeResponse["roots"][number] {
+  const rootUrl = root === "docs" ? "/docs" : `/${root}`;
   return {
     root,
     available: true,
     editable: true,
-    primary: root === "main",
+    primary: root === "docs",
     tree: {
       type: "folder",
       name: "",
       title: null,
       description: null,
       path: "",
-      url: `/docs/${root}`,
+      url: rootUrl,
       page_count: 1,
       children: [
         {
@@ -114,10 +115,10 @@ function hubEntry(root: string, id: string): TreeResponse["roots"][number] {
           title: "Permalink",
           description: null,
           path: "permalink",
-          url: `/docs/${root}/permalink`,
+            url: `${rootUrl}/permalink`,
           page_count: 1,
           children: [
-            { type: "page", id, title: "Permalink Hub", slug: "hub", path: "permalink/hub.md", url: `/docs/${root}/permalink/hub`, status: "active", updated: null },
+            { type: "page", id, title: "Permalink Hub", slug: "hub", path: "permalink/hub.md", url: `${rootUrl}/permalink/hub`, status: "active", updated: null },
           ],
         },
       ],
@@ -125,7 +126,40 @@ function hubEntry(root: string, id: string): TreeResponse["roots"][number] {
   };
 }
 
-const twoRoots: TreeResponse = { roots: [hubEntry("main", DUP_ID), hubEntry("extra", DUP_ID)] };
+const twoRoots: TreeResponse = { roots: [hubEntry("docs", DUP_ID), hubEntry("extra", DUP_ID)] };
+
+const extraPageTree: TreeResponse = {
+  roots: [
+    {
+      root: "extra",
+      available: true,
+      editable: true,
+      primary: false,
+      tree: {
+        type: "folder",
+        name: "",
+        title: null,
+        description: null,
+        path: "",
+        url: "/extra",
+        page_count: 1,
+        children: [
+          {
+            type: "folder",
+            name: "notes",
+            title: "Notes",
+            description: null,
+            path: "notes",
+            url: "/extra/notes",
+            page_count: 1,
+            children: [{ type: "page", id: WINNER_ID, title: "Extra Note", slug: "y", path: "notes/y.md", url: "/extra/notes/y", status: "active", updated: null }],
+          },
+        ],
+      },
+    },
+    emptyTree.roots[0],
+  ],
+};
 
 /** An unauthenticated session — the Shell renders no "Review" link, and serves it from cache (no /session fetch). */
 const ANON_SESSION = { authenticated: false, username: null, csrf_token: null, auth_mode: "off" };
@@ -142,7 +176,7 @@ function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  return { history, view };
+  return { history, view, queryClient };
 }
 
 describe("routing flows", () => {
@@ -154,10 +188,60 @@ describe("routing flows", () => {
     expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"); // root fallback heading
   });
 
+  it("renders a root landing when its bare address carries a stray mode", async () => {
+    const primary = renderAt("/docs?mode=edit", () => {});
+    await waitFor(() => expect(primary.view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    expect(primary.view.container.querySelector("[data-pb-editor]")).toBeNull();
+    expect(primary.view.container.querySelector("[data-pb-not-found]")).toBeNull();
+
+    const extra = renderAt("/extra?mode=history", (qc) => qc.setQueryData(treeQuery.queryKey, extraPageTree));
+    await waitFor(() => expect(extra.view.container.querySelector("[data-pb-folder]")).not.toBeNull());
+    expect(extra.view.container.querySelector("[data-pb-history]")).toBeNull();
+    expect(extra.view.container.querySelector("[data-pb-not-found]")).toBeNull();
+  });
+
+  it("dispatches an extra-root page through the root-qualified splat", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const key = "extra/notes/y";
+      const { view, queryClient } = renderAt("/extra/notes/y", (qc) => {
+        qc.setQueryData(treeQuery.queryKey, extraPageTree);
+        qc.setQueryData(pageByPathQuery(key).queryKey, pageResponse(WINNER_ID, "/extra/notes/y", "Extra Note", "extra"));
+        qc.setQueryData(pageHtmlQuery(WINNER_ID, "extra").queryKey, htmlResponse(WINNER_ID, "/extra/notes/y", "Extra Note", "extra"));
+      });
+
+      await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Extra Note"));
+      expect(queryClient.getQueryData(pageByPathQuery(key).queryKey)?.url).toBe("/extra/notes/y");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("selects the primary landing from the wire field and normalizes one trailing slash", async () => {
+    const primarySelectionTree: TreeResponse = {
+      roots: [
+        { ...extraPageTree.roots[0], tree: { ...extraPageTree.roots[0].tree, children: [] } },
+        emptyTree.roots[0],
+      ],
+    };
+    const { history, view } = renderAt("/", (qc) => qc.setQueryData(treeQuery.queryKey, primarySelectionTree));
+
+    await waitFor(() => expect(history.location.pathname).toBe("/docs"));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"));
+    expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull();
+
+    history.push("/docs/");
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/"));
+    await waitFor(() => expect(view.container.querySelector("[data-pb-folder] h1")?.textContent).toBe("docs"));
+    expect(view.container.querySelector("[data-pb-folder]")).not.toBeNull();
+  });
+
   it("renders a root README child's content at bare /docs — README-preference applies to the root node too", async () => {
     const { history, view } = renderAt("/docs", (qc) => {
       qc.setQueryData(treeQuery.queryKey, rootReadmeTree);
-      qc.setQueryData(pageHtmlQuery(WINNER_ID, "main").queryKey, htmlResponse(WINNER_ID, "/docs/main/readme", "Docs Home"));
+      qc.setQueryData(pageHtmlQuery(WINNER_ID, "docs").queryKey, htmlResponse(WINNER_ID, "/docs/readme", "Docs Home"));
     });
 
     await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Docs Home"));
@@ -166,11 +250,11 @@ describe("routing flows", () => {
   });
 
   it("replaceStates an alias path to the canonical url from the by-path response", async () => {
-    const canonical = "/docs/main/guides/deploy-guide";
-    const { history } = renderAt("/docs/main/old/deployment", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
-      qc.setQueryData(pageHtmlQuery(WINNER_ID, "main").queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
+    const canonical = "/docs/guides/deploy-guide";
+    const { history } = renderAt("/docs/old/deployment", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+      qc.setQueryData(pageHtmlQuery(WINNER_ID, "docs").queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
     });
 
     await waitFor(() => expect(history.location.pathname).toBe(canonical));
@@ -181,13 +265,13 @@ describe("routing flows", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       // Only the ALIAS key is primed; the canonical render must come from the seeded cache.
-      const canonical = "/docs/main/guides/deploy-guide";
-      const { history, view } = renderAt("/docs/main/old/deployment", (qc) => {
-        qc.setQueryData(pageByPathQuery("main/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
-        qc.setQueryData(pageHtmlQuery(WINNER_ID, "main").queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
+      const canonical = "/docs/guides/deploy-guide";
+      const { history, view } = renderAt("/docs/old/deployment", (qc) => {
+        qc.setQueryData(pageByPathQuery("docs/old/deployment").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+        qc.setQueryData(pageHtmlQuery(WINNER_ID, "docs").queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide"));
         // PageContent now also subscribes pageQuery(id, root) for the metadata Rail — prime it so the
         // new fetch hits cache and the "no refetch" assertion below stays honest.
-        qc.setQueryData(pageQuery(WINNER_ID, "main").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
+        qc.setQueryData(pageQuery(WINNER_ID, "docs").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide"));
       });
 
       await waitFor(() => expect(history.location.pathname).toBe(canonical));
@@ -275,7 +359,7 @@ describe("routing flows", () => {
         message: `The id ${DUP_ID} exists in more than one root, so the server cannot pick one; retry against one of the candidate roots below.`,
         candidates: [
           { root: "runbooks", url: `/api/v1/pages/${DUP_ID}?root=runbooks` },
-          { root: "main", url: `/api/v1/pages/${DUP_ID}?root=main` },
+          { root: "docs", url: `/api/v1/pages/${DUP_ID}?root=docs` },
         ],
       },
     };
@@ -289,8 +373,8 @@ describe("routing flows", () => {
       await waitFor(() => expect(view.container.querySelector("[data-pb-candidates]")).not.toBeNull());
       const links = [...view.container.querySelectorAll("[data-pb-candidates] a")];
       // Rank order is the server's, and it is preserved verbatim - the client never re-sorts the roots.
-      expect(links.map((a) => a.textContent)).toEqual(["runbooks", "main"]);
-      expect(links.map((a) => a.getAttribute("href"))).toEqual([`/p/runbooks/${DUP_ID}`, `/p/main/${DUP_ID}`]);
+      expect(links.map((a) => a.textContent)).toEqual(["runbooks", "docs"]);
+      expect(links.map((a) => a.getAttribute("href"))).toEqual([`/p/runbooks/${DUP_ID}`, `/p/docs/${DUP_ID}`]);
       // The message the links answer is still on screen; the API retry urls are NOT linked.
       expect(view.container.querySelector("[data-pb-error]")?.textContent).toContain("retry against one of the candidate roots");
       expect(view.container.innerHTML).not.toContain("/api/v1/pages/");
@@ -333,8 +417,8 @@ describe("routing flows", () => {
     const fetchSpy = vi.fn(async () => new Response("{}", { status: 500 }));
     vi.stubGlobal("fetch", fetchSpy);
     try {
-      // extra FIRST and main LAST, deliberately: with a bare key the two primes of a leg COLLIDE and
-      // the last seeded wins, so a dropped root renders main's copy rather than nothing. That makes
+      // extra FIRST and the primary root LAST, deliberately: with a bare key the two primes of a leg COLLIDE and
+      // the last seeded wins, so a dropped root renders the primary root's copy rather than nothing. That makes
       // each back-out deterministic instead of order-dependent.
       const { view } = renderAt(`/p/extra/${DUP_ID}`, (qc) => {
         qc.setQueryData(pageHtmlQuery(DUP_ID, "extra").queryKey, htmlResponse(DUP_ID, null, "Extra Copy", "extra"));
@@ -342,8 +426,8 @@ describe("routing flows", () => {
           ...pageResponse(DUP_ID, null, "Extra Copy", "extra"),
           frontmatter: { owner: "extra-owner" },
         });
-        qc.setQueryData(pageHtmlQuery(DUP_ID, "main").queryKey, htmlResponse(DUP_ID, null, "Main Copy"));
-        qc.setQueryData(pageQuery(DUP_ID, "main").queryKey, {
+        qc.setQueryData(pageHtmlQuery(DUP_ID, "docs").queryKey, htmlResponse(DUP_ID, null, "Main Copy"));
+        qc.setQueryData(pageQuery(DUP_ID, "docs").queryKey, {
           ...pageResponse(DUP_ID, null, "Main Copy"),
           frontmatter: { owner: "main-owner" },
         });
@@ -368,7 +452,7 @@ describe("routing flows", () => {
     try {
       // The primed page's `url` must be NON-null or canonicalUrl is undefined and nothing replaces; the
       // destination is primed too, so the row stays quiet rather than firing a live by-path fetch.
-      const canonical = "/docs/extra/guides/x";
+      const canonical = "/extra/guides/x";
       const { history } = renderAt(`/p/extra/${WINNER_ID}`, (qc) => {
         qc.setQueryData(pageQuery(WINNER_ID, "extra").queryKey, pageResponse(WINNER_ID, canonical, "Deploy Guide", "extra"));
         qc.setQueryData(pageHtmlQuery(WINNER_ID, "extra").queryKey, htmlResponse(WINNER_ID, canonical, "Deploy Guide", "extra"));
@@ -396,7 +480,7 @@ describe("routing flows", () => {
     }
   });
 
-  it("reads an ordinary /docs/{root}/... page's HTML BY ROOT, not by bare id", async () => {
+  it("reads an ordinary root-qualified page's HTML BY ROOT, not by bare id", async () => {
     // The PRIMARY read path, not the permalink route: on a corpus carrying a cross-root duplicate id a
     // bare `GET /api/v1/pages/{id}/html` answers 409, so this is the whole `/docs` read view for that
     // page, not just its permalink. Only the `extra` key is primed and fetch is a loud 500, so a
@@ -404,14 +488,14 @@ describe("routing flows", () => {
     const fetchSpy = vi.fn(async () => new Response("{}", { status: 500 }));
     vi.stubGlobal("fetch", fetchSpy);
     try {
-      const { view } = renderAt("/docs/extra/permalink/hub", (qc) => {
+      const { view } = renderAt("/extra/permalink/hub", (qc) => {
         qc.setQueryData(treeQuery.queryKey, twoRoots);
         // `url` is EXACTLY the mounted path, so DocsPage's canonical-replace effect stays quiet.
         qc.setQueryData(
           pageByPathQuery("extra/permalink/hub").queryKey,
-          pageResponse(DUP_ID, "/docs/extra/permalink/hub", "Permalink Hub", "extra"),
+          pageResponse(DUP_ID, "/extra/permalink/hub", "Permalink Hub", "extra"),
         );
-        qc.setQueryData(pageHtmlQuery(DUP_ID, "extra").queryKey, htmlResponse(DUP_ID, "/docs/extra/permalink/hub", "Permalink Hub", "extra"));
+        qc.setQueryData(pageHtmlQuery(DUP_ID, "extra").queryKey, htmlResponse(DUP_ID, "/extra/permalink/hub", "Permalink Hub", "extra"));
       });
 
       await waitFor(() => expect(view.container.querySelector(".pb-prose h1")?.textContent).toContain("Permalink Hub"));
@@ -423,20 +507,20 @@ describe("routing flows", () => {
   it("does not snap the URL back when navigating away from a resolved page", async () => {
     // Regression: during a click-navigation the OUTGOING DocsPage briefly observes the
     // incoming pathname; its canonical-correction must not replace the URL back.
-    const canonicalA = "/docs/main/guides/deploy-guide";
+    const canonicalA = "/docs/guides/deploy-guide";
     const { history } = renderAt(canonicalA, (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonicalA, "Deploy Guide"));
-      qc.setQueryData(pageHtmlQuery(WINNER_ID, "main").queryKey, htmlResponse(WINNER_ID, canonicalA, "Deploy Guide"));
-      qc.setQueryData(pageByPathQuery("main/welcome").queryKey, pageResponse(LOSER_ID, "/docs/main/welcome", "Welcome"));
-      qc.setQueryData(pageHtmlQuery(LOSER_ID, "main").queryKey, htmlResponse(LOSER_ID, "/docs/main/welcome", "Welcome"));
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, canonicalA, "Deploy Guide"));
+      qc.setQueryData(pageHtmlQuery(WINNER_ID, "docs").queryKey, htmlResponse(WINNER_ID, canonicalA, "Deploy Guide"));
+      qc.setQueryData(pageByPathQuery("docs/welcome").queryKey, pageResponse(LOSER_ID, "/docs/welcome", "Welcome"));
+      qc.setQueryData(pageHtmlQuery(LOSER_ID, "docs").queryKey, htmlResponse(LOSER_ID, "/docs/welcome", "Welcome"));
     });
 
     await waitFor(() => expect(history.location.pathname).toBe(canonicalA));
-    history.push("/docs/main/welcome");
-    await waitFor(() => expect(history.location.pathname).toBe("/docs/main/welcome"));
+    history.push("/docs/welcome");
+    await waitFor(() => expect(history.location.pathname).toBe("/docs/welcome"));
     // Give any stray replace a tick to fire, then confirm the URL held.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(history.location.pathname).toBe("/docs/main/welcome");
+    expect(history.location.pathname).toBe("/docs/welcome");
   });
 
   it("404s an encoded slash in a /docs path without fetching — PB-LINK-1 rejects %2F as a separator", async () => {
@@ -444,8 +528,8 @@ describe("routing flows", () => {
     vi.stubGlobal("fetch", fetchSpy);
     try {
       // The DECODED form exists as a page; the raw URL still names nothing on the server.
-      const { history, view } = renderAt("/docs/main/guides%2Fdeploy-guide", (qc) => {
-        qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, null, "Deploy Guide"));
+      const { history, view } = renderAt("/docs/guides%2Fdeploy-guide", (qc) => {
+        qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(WINNER_ID, null, "Deploy Guide"));
         // Left UNROOTED deliberately: the %2F guard 404s before PageContent ever mounts, so this
         // prime is never read under any root spelling.
         qc.setQueryData(pageHtmlQuery(WINNER_ID, null).queryKey, htmlResponse(WINNER_ID, null, "Deploy Guide"));
@@ -455,7 +539,7 @@ describe("routing flows", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
 
       // Client-side navigation to such a URL (lowercase variant) must 404 the same way.
-      history.push("/docs/main/welcome%2fintro");
+      history.push("/docs/welcome%2fintro");
       await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
@@ -485,6 +569,40 @@ describe("routing flows", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("keeps the option-B route table matched to its recorded addresses", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ["/"] }));
+    const exemplars = [
+      { address: "/", routePath: "/", routeId: "/", params: {} },
+      { address: "/new", routePath: "/new", routeId: "/new", params: {} },
+      { address: "/admin", routePath: "/admin", routeId: "/admin", params: {} },
+      { address: "/review", routePath: "/review", routeId: "/review", params: {} },
+      { address: "/review/123", routePath: "/review/$id", routeId: "/review/$id", params: { id: "123" } },
+      { address: "/p/docs/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "docs/abc" } },
+      { address: "/p/abc", routePath: "/p/$", routeId: "/p/$", params: { _splat: "abc" } },
+      { address: "/docs", routePath: "/$", routeId: "/$", params: { _splat: "docs" } },
+      { address: "/docs/", routePath: "/$", routeId: "/$", params: { _splat: "docs" } },
+      { address: "/docs/guides/deploy-guide", routePath: "/$", routeId: "/$", params: { _splat: "docs/guides/deploy-guide" } },
+      { address: "/extra/notes/y", routePath: "/$", routeId: "/$", params: { _splat: "extra/notes/y" } },
+      { address: "/nope/guides/x", routePath: "/$", routeId: "/$", params: { _splat: "nope/guides/x" } },
+    ];
+    const registeredPaths = Object.values(router.routesById)
+      .filter((route) => route.id !== "__root__" && route.fullPath !== "/$")
+      .map((route) => route.fullPath);
+    for (const path of registeredPaths) expect(exemplars.some((exemplar) => exemplar.routePath === path), path).toBe(true);
+
+    const observed = exemplars.map(({ address, routeId, params }) => {
+      const match = router.matchRoutes(address).at(-1)!;
+      const observedParams: Record<string, string> = { ...(match.params as Record<string, string>) };
+      delete observedParams["*"];
+      expect(match.routeId).toBe(routeId);
+      expect(observedParams).toEqual(params);
+      return { routeId: match.routeId, params: observedParams };
+    });
+    expect(observed).toEqual(exemplars.map(({ routeId, params }) => ({ routeId, params })));
+    expect(new Set(observed.map((match) => match.routeId)).size).toBeGreaterThan(1);
   });
 });
 

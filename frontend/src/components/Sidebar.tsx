@@ -15,7 +15,7 @@ import { ROOT_UNAVAILABLE } from "./ErrorView";
  * `data-pb-root-section` and `data-pb-root-label` are stable selectors (public customization API).
  *
  * Section headers appear only with 2+ roots: with the single root every legacy install has, a header
- * reading "main" is noise. A root that is not SERVING gets the outage notice instead of its tree, never
+ * reading an internal root name is noise. A root that is not SERVING gets the outage notice instead of its tree, never
  * an empty list - see [RootSection].
  */
 export function Sidebar() {
@@ -77,7 +77,7 @@ function RootUnavailableNotice({ root }: { root: string }) {
  */
 export function SidebarNav({ tree, root, currentPathname }: { tree: TreeFolder; root: string; currentPathname: string }) {
   // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
-  // home link AT THE TOP — pointing at the folder URL (`/docs/{root}` since C3), never the page's bare URL.
+  // home link AT THE TOP, pointing at the server-issued folder URL, never the page's bare URL.
   const home = landingPage(tree);
   return (
     <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
@@ -178,7 +178,7 @@ function PageItem({ page, root, currentPathname }: { page: TreePage; root: strin
 
 /**
  * A leaf nav link. `href` is usually the page's own url, but the root landing passes the folder
- * url (`/docs/{root}`) so a folder's index/README has exactly one path. `data-pb-status` stays a
+ * url so a folder's index/README has exactly one path. `data-pb-status` stays a
  * stable selector for the active-tint/slash-bar rule.
  */
 function PageRow({

@@ -16,7 +16,7 @@ describe("previewQuery", () => {
 
   it("keys on the ROOT too: the same buffer previews differently per root (link resolution is per-root)", () => {
     expect(previewQuery("# hi", "guides/x.md", "archive").queryKey).toEqual(["preview", "archive", "guides/x.md", "# hi"]);
-    expect(previewQuery("# hi", "guides/x.md", "archive").queryKey).not.toEqual(previewQuery("# hi", "guides/x.md", "main").queryKey);
+    expect(previewQuery("# hi", "guides/x.md", "archive").queryKey).not.toEqual(previewQuery("# hi", "guides/x.md", "docs").queryKey);
   });
 
   it("sets a bounded gcTime so stale preview entries are collected (not held the default ~5min)", () => {

@@ -112,7 +112,7 @@ function PaletteBody({
   const tree = useQuery({ ...treeQuery, refetchOnMount: false });
 
   // Both stages badge their rows with the root only when there IS more than one (D-C5-11's rule): a
-  // single-root install must not sprout a "main" badge on every row.
+  // single-root install must not sprout a "docs" badge on every row.
   const showRoots = (tree.data?.roots.length ?? 0) > 1;
 
   // ---- Stage 1: quick-switcher (synchronous, zero network) ----

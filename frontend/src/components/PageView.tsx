@@ -3,7 +3,7 @@ import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ApiError } from "../api/client";
-import { encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
+import { byPathKeyForUrl, encodeTreePath, pageByPathQuery, pageHtmlQuery, pageQuery, treeQuery } from "../api/queries";
 import type { PageResponse, RootTree, TreeFolder, TreePage } from "../api/types";
 import { parsePermalink, permalinkOf } from "../lib/permalink";
 import {
@@ -11,7 +11,6 @@ import {
   folderForLanding,
   folderTitle,
   landingPage,
-  mainEntry,
   pageHref,
   rootAcceptsWrites,
   rootEntryOfUrl,
@@ -24,7 +23,7 @@ import { Prose } from "./Prose";
 import { Toc } from "./Toc";
 
 /**
- * The `/docs/$` canonical route body: resolve the splat through `by-path` (canonical or
+ * The `/$` canonical route body: resolve the splat through `by-path` (canonical or
  * alias), then render by id. When the response's canonical `url` differs from the address
  * bar (alias resolved mid-rebuild, page moved under us), the URL is replaceState'd to the
  * canonical — the server's `url` is the single source of URL truth (§A4).
@@ -39,7 +38,7 @@ export function DocsPage({ path }: { path: string }) {
   // The URL this component was resolved FOR. The replace must only fire while the address
   // bar still shows it — during a click-navigation the outgoing page briefly observes the
   // incoming pathname, and an unguarded compare would snap the URL straight back.
-  const resolvedFor = `/docs/${encodeTreePath(path)}`;
+  const resolvedFor = `/${encodeTreePath(path)}`;
   const resolved = page.data;
   // A folder's landing page (index/README) has ONE canonical home: the folder URL. Reaching it at
   // its own bare-page URL redirects to the folder (the lookup needs the tree, kept warm by the
@@ -57,8 +56,8 @@ export function DocsPage({ path }: { path: string }) {
     if (canonicalUrl && canonicalUrl !== resolvedFor) {
       // The alias response IS the canonical page — seed its by-path key so the
       // post-replace render hits cache instead of refetching the same page.
-      if (canonicalUrl.startsWith("/docs/")) {
-        const canonicalPath = canonicalUrl.slice("/docs/".length).split("/").map(decodeURIComponent).join("/");
+      const canonicalPath = byPathKeyForUrl(canonicalUrl);
+      if (canonicalPath !== null) {
         queryClient.setQueryData(pageByPathQuery(canonicalPath).queryKey, resolved);
       }
       router.history.replace(canonicalUrl + window.location.search + window.location.hash);
@@ -79,10 +78,8 @@ export function DocsPage({ path }: { path: string }) {
 }
 
 /**
- * The `/docs/$` 404 fallthrough (ADR-0003) AND the bare `/docs` route body: by-path said
- * no page owns this location - but a folder might (bare `/docs` resolves to the MAIN
- * entry's root folder; no page can own it, so that route skips by-path entirely and
- * passes `url` explicitly). The location is matched VERBATIM against the tree entries'
+ * The `/$` 404 fallthrough (ADR-0003) and root landing body: by-path said no page owns
+ * this location, but a folder might. The location is matched VERBATIM against the tree entries'
  * folder `url`s (the server stays the single URL authority; nothing is slugified here) and
  * nothing else: a location no entry owns is not-found here, the same answer the server gives
  * a tail whose first segment names no root. A README-preference child renders at the folder
@@ -124,21 +121,15 @@ export function FolderLanding({ url }: { url?: string }) {
 }
 
 /**
- * The ONE folder-landing resolver: bare `/docs` is the MAIN entry ("main" is the reserved D1
- * literal, the one legal client-side root name); every other location matches the entries' folder
- * `url`s verbatim, and a miss is a miss.
+ * The folder-landing resolver matches the entries' server-issued folder urls verbatim, and a miss is a miss.
  *
  * There is deliberately no fallback that re-reads a rootless tail under the primary. The server
- * answers `/docs/{not-a-root}/...` with 404, so a client that resolved it would disagree with the
+ * answers an unknown first segment with 404, so a client that resolved it would disagree with the
  * address it is standing on - and worse, it would silently REBIND: registering a root named after
  * one of the primary's top-level folders moves that URL from the folder to the new root's landing,
  * with nothing announcing the move.
  */
 function resolveLanding(roots: RootTree[], target: string): FolderEntry | null {
-  if (target === "/docs") {
-    const main = mainEntry(roots);
-    return main ? { root: "main", available: main.available, folder: main.tree } : null;
-  }
   return folderByUrl(roots, target);
 }
 
@@ -152,7 +143,7 @@ function resolveLanding(roots: RootTree[], target: string): FolderEntry | null {
  */
 function FolderListing({ root, folder }: { root: string; folder: TreeFolder }) {
   // The root has no `_folder.yaml` title and its name is "" — "docs" mirrors the root breadcrumb.
-  const title = folderTitle(folder) || "docs";
+  const title = folderTitle(folder) || root;
   useEffect(() => {
     document.title = `${title} · Plainbase`;
   }, [title]);
@@ -326,7 +317,7 @@ function PermalinkError({ error, id }: { error: Error; id: string }) {
  * Breadcrumbs + server HTML + doc footer in the main column, with a metadata Rail + TOC in
  * the right rail. HTML is the primary content and gates the view (pending/error → the whole
  * page); the Rail/footer read the page's frontmatter. Callers that already hold the page's
- * `PageResponse` (the `/docs/*` by-path route, the permalink route) pass it in via [seeded], so
+ * `PageResponse` (the root-qualified by-path route, the permalink route) pass it in via [seeded], so
  * the Rail reads already-loaded metadata with NO extra `/api/v1/pages/:id` fetch. Only a
  * folder-landing child — which arrives with just a tree-node id — fetches `pageQuery` here, and a
  * slow or failed fetch degrades the Rail to its always-present File row, never blanking the doc.
@@ -503,7 +494,7 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
  * (W6/D-3 — links to the SAME path with `?mode=edit`, the canonical url is the splat key so the editor
  * inherits rename-stability), the W7 "History" affordance beside it, plus a mono "Last updated {date} by
  * {owner}" line sourced from frontmatter. The Edit link renders regardless of `updated`. A collision loser
- * (no canonical url) gets no Edit/History link (it has no `/docs` address). The History link gates on
+ * (no canonical url) gets no Edit/History link (it has no root-content address). The History link gates on
  * `hasHistory` (W7/MF-1: `PageResponse.commit != null` — git-on with ≥1 commit — a ZERO-extra-fetch signal;
  * NoOp git always yields null so git-off never false-positives, and a zero-commit page correctly shows none).
  *
@@ -524,19 +515,19 @@ function DocFooter({
 }) {
   const updated = asString(frontmatter?.updated);
   const owner = asString(frontmatter?.owner);
-  const splat = url?.startsWith("/docs/") ? url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/") : null;
+  const splat = byPathKeyForUrl(url);
   // A read-only page with no `updated` and no history has nothing to put in the footer - render no footer at
   // all rather than an empty frame (a `splat` alone no longer implies an Edit link).
   if (!(splat && (editable || hasHistory)) && !updated) return null;
   return (
     <div className="pb-docfoot" data-pb-docfoot>
       {splat && editable && (
-        <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
+        <Link to="/$" params={{ _splat: splat }} search={{ mode: "edit" }} className="pb-docfoot-edit" data-pb-edit-page>
           Edit this page
         </Link>
       )}
       {splat && hasHistory && (
-        <Link to="/docs/$" params={{ _splat: splat }} search={{ mode: "history" }} className="pb-docfoot-history" data-pb-history-page>
+        <Link to="/$" params={{ _splat: splat }} search={{ mode: "history" }} className="pb-docfoot-history" data-pb-history-page>
           History
         </Link>
       )}

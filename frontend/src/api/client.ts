@@ -226,7 +226,7 @@ function networkError(): ApiError {
  * Renders a Markdown buffer to HTML server-side (`POST /api/v1/preview`, NON-CONTRACTUAL): the RAW
  * `text/markdown` body is the buffer; the optional `path` is the relative-link resolution base and `root`
  * is WHICH root's link space to resolve against (multi-root: `[[other page]]` in an extra root must resolve
- * against that root's pages, not main's, or the preview quietly lies about where a link goes). The `html`
+ * against that root's pages, not the primary root's, or the preview quietly lies about where a link goes). The `html`
  * is best-effort presentation (rendered via `<Prose>`), never a byte-equal claim.
  */
 export async function previewRaw(body: string, path?: string, root?: string): Promise<PreviewResponse> {

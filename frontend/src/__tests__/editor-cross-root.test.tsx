@@ -22,18 +22,19 @@ import { createAppRouter } from "../router";
  */
 
 const DUP_ID = "0197c2d1-9f3b-7a4e-8d6c-1b5a7e9c3f21";
-const MAIN_URL = "/docs/main/permalink/hub";
-const EXTRA_URL = "/docs/extra/permalink/hub";
+const MAIN_URL = "/docs/permalink/hub";
+const EXTRA_URL = "/extra/permalink/hub";
 const MAIN = "---\ntitle: Permalink Hub\n---\n\n# Permalink Hub\n\nMAIN BODY\n";
 const EXTRA = MAIN.replace("MAIN BODY", "EXTRA BODY");
+const rootUrl = (root: string) => (root === "docs" ? "/docs" : `/${root}`);
 
 const twoRoots: TreeResponse = {
-  roots: ["main", "extra"].map((root) => ({
+  roots: ["docs", "extra"].map((root) => ({
     root,
     available: true,
     editable: true,
-    primary: root === "main",
-    tree: { type: "folder", name: "", title: null, description: null, path: "", url: `/docs/${root}`, page_count: 0, children: [] },
+    primary: root === "docs",
+    tree: { type: "folder", name: "", title: null, description: null, path: "", url: rootUrl(root), page_count: 0, children: [] },
   })),
 };
 
@@ -77,7 +78,7 @@ async function appendToBody(view: ReturnType<typeof render>, text: string) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("editor mount identity across roots", () => {
-  it("remounts on a cross-root navigation to the same id, so a save cannot carry root main's buffer and CAS token into extra", async () => {
+  it("remounts on a cross-root navigation to the same id, so a save cannot carry the primary root's buffer and CAS token into extra", async () => {
     let putUrl: string | null = null;
     let putHeaders: Record<string, string> = {};
     let saved = EXTRA;
@@ -101,7 +102,7 @@ describe("editor mount identity across roots", () => {
     queryClient.setQueryData(treeQuery.queryKey, twoRoots);
     // BOTH by-path keys primed: an unprimed second key makes EditorPage render its Loading branch, which
     // unmounts the editor regardless of its key and would make this row pass for the wrong reason.
-    queryClient.setQueryData(pageByPathQuery("main/permalink/hub").queryKey, pageResponse("main", MAIN_URL, MAIN));
+    queryClient.setQueryData(pageByPathQuery("docs/permalink/hub").queryKey, pageResponse("docs", MAIN_URL, MAIN));
     queryClient.setQueryData(pageByPathQuery("extra/permalink/hub").queryKey, pageResponse("extra", EXTRA_URL, EXTRA));
     const history = createMemoryHistory({ initialEntries: [`${MAIN_URL}?mode=edit`] });
     const router = createAppRouter(queryClient, history);
@@ -130,7 +131,7 @@ describe("editor mount identity across roots", () => {
     fireEvent.click(save);
 
     await waitFor(() => expect(putUrl).not.toBeNull());
-    // The CAS token is EXTRA's. Under an id-only key it would be MAIN's, against extra's disk, and on
+    // The CAS token is EXTRA's. Under an id-only key it would be the primary root's, against extra's disk, and on
     // byte-identical copies that CAS would pass.
     expect(putHeaders["if-match"]).toBe(`"${hashOf(EXTRA)}"`);
     // The `?root=extra` half is built from the live prop, so it does NOT observe mount identity (that

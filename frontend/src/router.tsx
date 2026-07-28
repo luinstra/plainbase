@@ -1,4 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
   createRoute,
@@ -16,15 +17,14 @@ import { DocsPage, FolderLanding, PermalinkPage } from "./components/PageView";
 import { ReviewDetail } from "./components/ReviewDetail";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { Shell } from "./components/Shell";
+import { treeQuery } from "./api/queries";
+import { primaryEntry } from "./lib/tree";
 
 /**
  * Route table (chunk 7 + the chunk-6 amendment):
  *
- *   /          → redirect to /docs
- *   /docs      → the home view: the MAIN root's folder landing, resolved explicitly (since C3
- *                the root tree node's `url` is /docs/main, not /docs): root index/readme child
- *                if present, else the top-level listing
- *   /docs/$    → canonical page route; the splat is the by-path key. `?mode=edit` mounts the
+ *   /          → redirect to the primary root's server-issued url
+ *   /$         → canonical root-qualified page route; the splat is the by-path key. `?mode=edit` mounts the
  *                editor, `?mode=history` is the W7 history seam; absent = the clean read view.
  *   /new       → new-page creation (no path exists pre-create — the server mints it)
  *   /p/$       → permalink route, BOTH forms: the rooted `/p/{root}/{id}` the server emits
@@ -46,25 +46,22 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({ to: "/docs", replace: true });
+  beforeLoad: async ({ context }) => {
+    const tree = await context.queryClient.ensureQueryData(treeQuery);
+    const primary = primaryEntry(tree.roots);
+    if (!primary?.tree.url) throw new Error("The primary root has no server-issued URL");
+    throw redirect({ to: primary.tree.url as never, replace: true });
   },
 });
 
-const docsIndexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/docs",
-  component: FolderLanding,
-});
-
-/** The `/docs/$` query mode: `edit` (the editor), `history` (W7 seam), or absent (the read view). */
+/** The `/$` query mode: `edit` (the editor), `history` (W7 seam), or absent (the read view). */
 interface DocsSearch {
   mode?: "edit" | "history";
 }
 
-const docsRoute = createRoute({
+const splatRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/docs/$",
+  path: "/$",
   component: DocsSplat,
   // A bogus `?mode=foo` coerces to undefined → the read view; never an undefined/blank state (D-1).
   validateSearch: (search: Record<string, unknown>): DocsSearch => {
@@ -86,22 +83,24 @@ function useHasEncodedSlash(): boolean {
 }
 
 /**
- * The `/docs/$` dispatcher (D-1): a thin switch on `?mode=` delegating to sub-components that each own
+ * The `/$` dispatcher (D-1): a thin switch on `?mode=` delegating to sub-components that each own
  * their own `useQuery` (component-level data-fetching — no route loader, so the lifecycle separation
  * holds without separate routes). The editor lives UNDER the read route's canonical-redirect resolution
  * (which preserves the query string), so `?mode=edit` is rename-stable.
  */
 function DocsSplat() {
-  const { _splat } = docsRoute.useParams();
-  const { mode } = docsRoute.useSearch();
+  const { _splat } = splatRoute.useParams();
+  const { mode } = splatRoute.useSearch();
   const encodedSlash = useHasEncodedSlash();
+  const tree = useQuery(treeQuery);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   if (encodedSlash) return <NotFoundView />;
   const path = _splat ?? "";
+  const normalizedPathname = pathname.endsWith("/") && pathname !== "/" ? pathname.slice(0, -1) : pathname;
+  const landing = tree.data?.roots.find((entry) => entry.tree.url === normalizedPathname);
+  if (landing?.tree.url) return <FolderLanding url={landing.tree.url} />;
   if (mode === "edit" && path) return <EditorPage path={path} />;
   if (mode === "history" && path) return <History path={path} />;
-  // An empty splat ("/docs/") is the root landing too; the trailing-slash pathname would
-  // never match the root's verbatim `/docs` url, so it is passed explicitly.
-  if (!path) return <FolderLanding url="/docs" />;
   return <DocsPage path={path} />;
 }
 
@@ -109,7 +108,7 @@ function DocsSplat() {
 // (./components/History) — the commit list + two-commit unified diff, consuming the W5 read API. The
 // dispatcher branch + the `validateSearch` enum were pre-wired by W6, so W7 added only the component.
 
-/** The `/new` search: `?root=` names the document root the create lands in (absent → `NewPage` resolves `main`). */
+/** The `/new` search: `?root=` names the document root the create lands in. */
 interface NewSearch {
   root?: string;
 }
@@ -118,8 +117,7 @@ const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
   component: NewSplat,
-  // A non-string `root` coerces to undefined → `NewPage` sends the reserved `main` (the wire field is REQUIRED;
-  // an omitted root is a 400, not a default). An unknown NAME is not decided here: the server owns the registry
+  // A non-string `root` coerces to undefined. An unknown name is not decided here: the server owns the registry
   // and answers 400 `invalid_root`, so the client never guesses.
   validateSearch: (search: Record<string, unknown>): NewSearch =>
     typeof search.root === "string" && search.root !== "" ? { root: search.root } : {},
@@ -170,8 +168,7 @@ function PermalinkSplat() {
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  docsIndexRoute,
-  docsRoute,
+  splatRoute,
   newRoute,
   adminRoute,
   reviewRoute,

@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { historyQuery, invalidateAfterWrite, pageHtmlQuery, pageQuery } from "../api/queries";
+import { byPathKeyForUrl, historyQuery, invalidateAfterWrite, pageHtmlQuery, pageQuery } from "../api/queries";
 
 /**
  * A write clears EVERY root spelling of the written page's id-keyed cache, and nothing else's.
@@ -24,25 +24,31 @@ describe("invalidateAfterWrite", () => {
   it("invalidates all three id-keyed legs in EVERY root spelling, and no other page's", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const dup = [
-      untagged(pageQuery(DUP_ID, "main").queryKey),
+      untagged(pageQuery(DUP_ID, "docs").queryKey),
       untagged(pageQuery(DUP_ID, null).queryKey),
-      untagged(pageHtmlQuery(DUP_ID, "main").queryKey),
+      untagged(pageHtmlQuery(DUP_ID, "docs").queryKey),
       untagged(pageHtmlQuery(DUP_ID, null).queryKey),
-      untagged(historyQuery(DUP_ID, "main").queryKey),
+      untagged(historyQuery(DUP_ID, "docs").queryKey),
       untagged(historyQuery(DUP_ID, null).queryKey),
     ];
     // Id-keyed, deliberately NOT by-path: invalidateAfterWrite clears the whole by-path namespace by
     // design, so a by-path witness would red under correct code.
     const other = [
-      untagged(pageQuery(OTHER_ID, "main").queryKey),
-      untagged(pageHtmlQuery(OTHER_ID, "main").queryKey),
-      untagged(historyQuery(OTHER_ID, "main").queryKey),
+      untagged(pageQuery(OTHER_ID, "docs").queryKey),
+      untagged(pageHtmlQuery(OTHER_ID, "docs").queryKey),
+      untagged(historyQuery(OTHER_ID, "docs").queryKey),
     ];
     for (const key of [...dup, ...other]) qc.setQueryData(key, { seeded: true });
 
-    invalidateAfterWrite(qc, { id: DUP_ID, url: "/docs/main/permalink/hub" });
+    invalidateAfterWrite(qc, { id: DUP_ID, url: "/docs/permalink/hub" });
 
     for (const key of dup) expect(qc.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(true);
     for (const key of other) expect(qc.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(false);
+  });
+
+  it("derives root-qualified by-path keys from canonical URLs and ignores permalink collisions", () => {
+    expect(byPathKeyForUrl("/docs/guides/x")).toBe("docs/guides/x");
+    expect(byPathKeyForUrl("/extra/notes/y")).toBe("extra/notes/y");
+    expect(byPathKeyForUrl("/p/docs/0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")).toBeNull();
   });
 });

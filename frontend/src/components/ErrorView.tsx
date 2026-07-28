@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 
 import { ApiError } from "../api/client";
 
-/** The one recovery destination — shared by the anchor's `href` and the hard navigation so they can't diverge. */
-const DOCS_HOME = "/docs";
+/** The one recovery destination shared by the anchor and hard navigation. */
+const HOME = "/";
 
 /**
  * The ONE outage vocabulary. A root that is not serving is told in exactly TWO places — the full-page
@@ -45,12 +45,12 @@ export function ErrorView({ error }: ErrorComponentProps) {
       <p className="mt-3 text-muted">{error instanceof Error ? error.message : String(error)}</p>
       <p className="mt-6">
         <a
-          href={DOCS_HOME}
+          href={HOME}
           className="font-medium text-link hover:text-link-hover hover:underline"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            window.location.assign(DOCS_HOME);
+            window.location.assign(HOME);
           }}
         >
           Go to the docs home

@@ -12,9 +12,9 @@ import { SearchResultItem } from "../components/SearchResultItem";
 function hit(snippet: string, highlights: { start: number; end: number }[]): SearchHit {
   return {
     page_id: "p1",
-    root: "main",
+    root: "docs",
     path: "x.md",
-    url: "/docs/main/x",
+    url: "/docs/x",
     title: "X",
     heading_id: "h",
     heading_text: "H",

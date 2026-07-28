@@ -9,21 +9,22 @@ import { createAppRouter } from "../router";
 
 /**
  * C4: the chrome "New" action decides WHICH ROOT a create writes into, by carrying `?root=` from the
- * `/docs/{root}` space the reader is standing in. That answer comes from the tree, so until the tree
- * resolves there is no answer — and a `/new` link without `?root=` is not "no answer", it is `main`.
+ * root URL space the reader is standing in. That answer comes from the tree, so until the tree
+ * resolves there is no answer. A `/new` link without `?root=` carries no root in the address; the
+ * create form derives its destination from the primary wire entry.
  * On an extra-root page that is a SILENT write into the wrong repository, which is why the pending
  * window disables the action instead of guessing.
  */
 
-const HANDBOOK_PAGE = "/docs/handbook/guides/onboarding";
+const HANDBOOK_PAGE = "/handbook/guides/onboarding";
 const PAGE_ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
 /** The ROOTED permalink of a handbook page - a collision loser's ONLY address (it has no `/docs` one). */
 const HANDBOOK_PERMALINK = `/p/handbook/${PAGE_ID}`;
 
 const tree: TreeResponse = {
   roots: [
-    { root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } },
-    { root: "handbook", available: true, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } },
+    { root: "handbook", available: true, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/handbook", page_count: 0, children: [] } },
   ],
 };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
@@ -74,7 +75,7 @@ describe("the chrome New action", () => {
     expect(action.getAttribute("href")).toBe("/new?root=handbook");
   });
 
-  it("is DISABLED while the tree is still in flight — never a link that would create in main", async () => {
+  it("is DISABLED while the tree is still in flight, never a link that would create in the primary root", async () => {
     const view = renderShell(false);
     const action = await waitFor(() => {
       const el = view.container.querySelector("[data-pb-new-page]");
@@ -103,9 +104,9 @@ describe("the chrome New action", () => {
   });
 
   it("carries the root of a ROOTED PERMALINK too - a collision loser has no /docs address to read it from", async () => {
-    // `/docs/{root}` url ownership is not the only way a reader stands in a root: a path-space collision
+    // Root URL ownership is not the only way a reader stands in a root: a path-space collision
     // loser is reachable ONLY at `/p/{root}/{id}`, so reading the location as "no root" sends that reader's
-    // new page into main - the same silent write into the wrong repository the pending window exists to stop.
+    // new page into the primary root - the same silent write into the wrong repository the pending window exists to stop.
     const view = renderShell(true, tree, HANDBOOK_PERMALINK);
     const action = await waitFor(() => {
       const el = view.container.querySelector("[data-pb-new-page]");
@@ -115,10 +116,10 @@ describe("the chrome New action", () => {
     expect(action.getAttribute("href")).toBe("/new?root=handbook");
   });
 
-  it("reads a BARE permalink as no root at all - that address names none, and main is the resolved default", async () => {
-    // The boundary of the row above: a bare `/p/{id}` genuinely carries no root, so the create falls back to
-    // the reserved `main` exactly as it does off the docs routes. Guessing a root from the id would need the
-    // page response the header never reads.
+  it("keeps a BARE permalink's New link rootless", async () => {
+    // This row observes only the Shell navigation: a bare `/p/{id}` carries no root, so its New link stays
+    // `/new`. The create form resolves the destination from the primary wire entry; the outside-root row in
+    // `editor-create.test.tsx` owns the POST-root assertion.
     const view = renderShell(true, tree, `/p/${PAGE_ID}`);
     const action = await waitFor(() => {
       const el = view.container.querySelector("[data-pb-new-page]");

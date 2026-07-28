@@ -67,7 +67,7 @@ function HistoryView({ id, root, path }: { id: string; root: string; path: strin
   }, [diff.error, history]);
 
   const back = (
-    <Link to="/docs/$" params={{ _splat: path }} search={{}} className="pb-history-back" data-pb-history-back>
+    <Link to="/$" params={{ _splat: path }} search={{}} className="pb-history-back" data-pb-history-back>
       ← Back to the page
     </Link>
   );

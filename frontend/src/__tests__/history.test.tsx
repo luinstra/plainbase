@@ -7,7 +7,7 @@ import type { CommitDto, PageResponse, TreeResponse } from "../api/types";
 import { MAX_DIFF_RENDER_CHARS } from "../lib/unifiedDiff";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 
 /**
  * W7 history UI. The AFFORDANCE tests render the READ view and assert ONLY on `PageResponse.commit`,
@@ -17,18 +17,18 @@ const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, edita
  */
 
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
-const PATH = "main/guides/deploy-guide"; // the by-path key IS the root-qualified splat (C3)
-const PAGE_URL = "/docs/main/guides/deploy-guide";
+const PATH = "docs/guides/deploy-guide"; // the by-path key IS the root-qualified splat (C3)
+const PAGE_URL = "/docs/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 /** A HAND-BUILT id held by BOTH roots (a copied corpus), for the cross-root rows. */
 const DUP_ID = "0197c2d1-9f3b-7a4e-8d6c-1b5a7e9c3f21";
 const EXTRA_PATH = "extra/permalink/hub";
-const EXTRA_URL = "/docs/extra/permalink/hub";
+const EXTRA_URL = "/extra/permalink/hub";
 
 function pageResponse(commit: string | null): PageResponse {
   return {
     id: ID,
-    root: "main",
+    root: "docs",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url: PAGE_URL,
@@ -79,7 +79,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 /** A minimal `PageHtmlResponse` so the READ view (PageContent → Breadcrumbs/Prose) renders without crashing. */
 function htmlResponse() {
-  return jsonResponse({ id: ID, root: "main", path: "guides/deploy-guide.md", slug: "deploy-guide", url: PAGE_URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
+  return jsonResponse({ id: ID, root: "docs", path: "guides/deploy-guide.md", slug: "deploy-guide", url: PAGE_URL, title: "Deploy Guide", html: "<h1>Deploy Guide</h1>", content_hash: HASH, commit: null, headings: [], citation: { page_id: ID, heading_id: null, path: "guides/deploy-guide.md", content_hash: HASH, commit: null, uri: `plainbase://${ID}@${HASH}` } });
 }
 
 function urlOf(input: RequestInfo | URL): string {
@@ -247,14 +247,14 @@ describe("W7 history view (?mode=history)", () => {
     expect(diffUrl).toContain(`to=${NEWER.sha}`);
   });
 
-  it("REMOUNTS across roots, so a selection made in main cannot drive a diff in extra", async () => {
+  it("REMOUNTS across roots, so a selection made in the primary root cannot drive a diff in extra", async () => {
     // The mount-identity half of the same defect the editor has: two roots hold this id, props flow
-    // without a remount, and an id-only key would leave HistoryView holding MAIN's from/to while `root`
-    // had flipped to extra - a diff request for extra's page carrying main's SHAs.
+    // without a remount, and an id-only key would leave HistoryView holding the primary root's from/to while `root`
+    // had flipped to extra - a diff request for extra's page carrying the primary root's SHAs.
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
       const url = urlOf(input);
       if (url.includes("/history")) {
-        // DISJOINT commit lists per root, switched on the ?root= value, so "main's selection" is
+        // DISJOINT commit lists per root, switched on the ?root= value, so "the primary root's selection" is
         // identifiable in a later request - and so a regression in F17a's rooting fails loudly here too.
         const commits = url.includes("root=extra") ? [OLDEST] : [NEWER, OLDER];
         return jsonResponse({ git_enabled: true, commits });
@@ -276,12 +276,12 @@ describe("W7 history view (?mode=history)", () => {
     });
     vi.stubGlobal("fetch", fetchSpy);
     // BOTH by-path keys primed, or the Loading branch unmounts HistoryView for the wrong reason.
-    const { history, view } = renderAt(`/docs/main/permalink/hub?mode=history`, (qc) => {
-      qc.setQueryData(pageByPathQuery("main/permalink/hub").queryKey, {
+    const { history, view } = renderAt(`/docs/permalink/hub?mode=history`, (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/permalink/hub").queryKey, {
         ...pageResponse(NEWER.sha),
         id: DUP_ID,
-        root: "main",
-        url: "/docs/main/permalink/hub",
+        root: "docs",
+        url: "/docs/permalink/hub",
         path: "permalink/hub.md",
       });
       qc.setQueryData(pageByPathQuery(EXTRA_PATH).queryKey, {
@@ -309,7 +309,7 @@ describe("W7 history view (?mode=history)", () => {
     // The self-heal's fingerprint. If it appeared, the /diff stub 404'd somewhere and assertion 1 is
     // measuring the self-heal instead of mount identity.
     expect(view.container.querySelector("[data-pb-history-notice]")).toBeNull();
-    // (2) no post-navigation /diff carries main's SHAs.
+    // (2) no post-navigation /diff carries the primary root's SHAs.
     const after = fetchSpy.mock.calls.slice(callsBefore).map(([input]) => urlOf(input));
     expect(after.filter((u) => u.includes("/diff") && (u.includes(NEWER.sha) || u.includes(OLDER.sha)))).toEqual([]);
   });

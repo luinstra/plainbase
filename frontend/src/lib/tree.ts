@@ -38,18 +38,16 @@ export function entryFor(roots: RootTree[], root: string): RootTree | null {
   return roots.find((entry) => entry.root === root) ?? null;
 }
 
-/** The named entry's tree, if served. `"main"` is the one legal client-side root literal (D1). */
+/** The named entry's tree, if served. */
 export function treeFor(roots: RootTree[], root: string): TreeFolder | null {
   return entryFor(roots, root)?.tree ?? null;
 }
 
 /**
- * The reserved main root's ENTRY - the `/docs` home view's resolution. The whole entry, not its bare
- * tree: `/docs` lands on main's root folder, and main can be down like any other root (a vanished
- * CONTENT_DIR), so the home view needs its `available` for exactly the reason [FolderEntry] does.
+ * The server-selected primary entry, or null when the roots are not loaded or no primary is present.
  */
-export function mainEntry(roots: RootTree[]): RootTree | null {
-  return entryFor(roots, "main");
+export function primaryEntry(roots: RootTree[]): RootTree | null {
+  return roots.find((entry) => entry.primary) ?? null;
 }
 
 /**
@@ -112,9 +110,9 @@ export function foldersByPath(root: TreeFolder): Map<string, TreeFolder> {
 }
 
 /**
- * The entry whose folder owns a `/docs/{root}` location, if any - the folder-landing resolution
+ * The entry whose folder owns a root-content location, if any - the folder-landing resolution
  * (ADR-0003). Each entry's synthetic root folder is included (its `url` is the bare
- * `/docs/{root}`). Matched verbatim against the server-issued `url`: the server is the single URL
+ * root URL). Matched verbatim against the server-issued `url`: the server is the single URL
  * authority, so nothing is slugified or re-encoded client-side.
  */
 export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | null {
@@ -129,7 +127,7 @@ export function folderByUrl(roots: RootTree[], pathname: string): FolderEntry | 
 }
 
 /**
- * The ENTRY whose `/docs/{root}` URL space owns [pathname], or null when the location is not under one (the
+ * The ENTRY whose server-issued root URL space owns [pathname], or null when the location is not under one (the
  * `/new`, `/review`, `/admin` and `/p/...` permalink routes).
  *
  * Matched against each entry's SERVER-ISSUED root url (`RootTree.tree.url`) rather than by splitting the
@@ -155,17 +153,17 @@ export function rootOfUrl(roots: RootTree[], pathname: string): string | null {
 }
 
 /**
- * The root the READER is standing in, from the address alone - `/docs/{root}` url ownership OR a rooted
- * `/p/{root}/{id}` permalink. The two sources are disjoint (a permalink is never in a `/docs` url space)
+ * The root the READER is standing in, from the address alone - root URL ownership OR a rooted
+ * `/p/{root}/{id}` permalink. The two sources are disjoint (a permalink is never in a root-content URL space)
  * and the second one is not a nicety: a path-space collision loser has `url = null`, so its permalink is
- * its ONLY address, and reading that location as "no root" is what sent a reader's new page into main
+ * its ONLY address, and reading that location as "no root" is what sent a reader's new page into the primary root
  * from a page that lives somewhere else entirely.
  *
  * A BARE `/p/{id}` still answers null, and must: that address names no root, and the only thing that
  * could supply one is the page response this location has not made. An UNKNOWN root name is answered
  * VERBATIM rather than filtered to null - callers gate on the registry themselves ([rootAcceptsWrites],
  * [entryFor]), and their answer for an unknown root is "not writable", which is the right one here too.
- * Filtering would instead hand back "no root", which every caller reads as main.
+ * Filtering would instead hand back "no root", which every caller reads as the primary root.
  */
 export function rootOfLocation(roots: RootTree[], pathname: string): string | null {
   const splat = permalinkSplat(pathname);
@@ -216,7 +214,7 @@ export function nonLandingChildren(folder: TreeFolder): TreeNode[] {
  * The entry whose folder's landing page (index/README) is the page `pageId` WITHIN [root], if any. A
  * landing page has one canonical home - the folder URL - so its own bare-page URL is redirected there;
  * this is the lookup that recognizes such a URL. Each entry's root folder is included (its landing
- * answers `/docs/{root}`).
+ * answers its server-issued root URL).
  *
  * [root] is REQUIRED and is the caller's ALREADY-RESOLVED root (`PageResponse.root`), not a guess: a
  * page id can be held by more than one root (per-root identity), and two roots holding

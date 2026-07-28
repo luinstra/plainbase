@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createPage, putPageRaw, type SaveResult } from "../api/client";
-import { encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery } from "../api/queries";
+import { byPathKeyForUrl, encodeTreePath, invalidateAfterWrite, pageByPathQuery, previewQuery, treeQuery } from "../api/queries";
 import type { WriteConflictReason } from "../api/types";
 import { frontmatterValue, splitFrontmatter } from "../lib/frontmatter";
 import { insertLink, toggleBold, toggleCode, toggleItalic } from "../lib/markdownCommands";
@@ -37,16 +37,16 @@ export function EditorPage({ path }: { path: string }) {
   const location = useRouterState({ select: (s) => ({ pathname: s.location.pathname, searchStr: s.location.searchStr, hash: s.location.hash }) });
 
   // Rename-stable mid-edit (D-1): mirror the read route's canonical-redirect so an alias edit URL
-  // resolves to `/docs/<canonical>?mode=edit`. The replace carries the router location's search + hash
+  // resolves to the server-issued root-qualified `<canonical>?mode=edit` URL. The replace carries the router location's search + hash
   // (so `?mode=edit` survives the path canonicalization — the verified clincher behind the route choice).
-  const resolvedFor = `/docs/${encodeTreePath(path)}`;
+  const resolvedFor = `/${encodeTreePath(path)}`;
   const resolved = page.data;
   useEffect(() => {
     if (!resolved || location.pathname !== resolvedFor) return;
     const canonicalUrl = resolved.url;
     if (canonicalUrl && canonicalUrl !== resolvedFor) {
-      if (canonicalUrl.startsWith("/docs/")) {
-        const canonicalPath = canonicalUrl.slice("/docs/".length).split("/").map(decodeURIComponent).join("/");
+      const canonicalPath = byPathKeyForUrl(canonicalUrl);
+      if (canonicalPath !== null) {
         queryClient.setQueryData(pageByPathQuery(canonicalPath).queryKey, resolved);
       }
       const suffix = location.hash ? `${location.searchStr}#${location.hash}` : location.searchStr;
@@ -108,7 +108,7 @@ function Editor({
   initialHash,
 }: {
   id: string;
-  /** The page's OWN root — the preview must resolve its links against that root's space, never main's. */
+  /** The page's OWN root. The preview must resolve its links against that root's space, never the primary root's. */
   root: string;
   initialPath: string;
   initialUrl: string | null;
@@ -160,7 +160,7 @@ function Editor({
   const debounced = useDebounced(buffer, 300);
   // Gate the preview fetch on the pane being open: AND `showPreview` into the query's own `enabled`
   // (text-non-empty) so a hidden preview never POSTs `/api/v1/preview`.
-  // The page's OWN root: link resolution is per-root, so previewing an extra root's page against main's
+  // The page's OWN root: link resolution is per-root, so previewing an extra root's page against the primary root's
   // link space would render `[[other page]]` as a broken (or, worse, a WRONG) link.
   const previewOptions = previewQuery(debounced, docPath, root);
   const preview = useQuery({ ...previewOptions, enabled: showPreview && previewOptions.enabled });
@@ -442,15 +442,15 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
     const { frontmatter, body } = splitFrontmatter(buffer);
     const title = (frontmatter && frontmatterValue(frontmatter, "title")) || fallbackTitle;
     // The recovered page is re-created in the root it was deleted FROM. The wire root is required (an omitted
-    // one is a 400 `invalid_root`, never a silent `main`), and a rescue path is the last place to fumble the
+    // one is a 400 `invalid_root`, never a silent primary-root write), and a rescue path is the last place to fumble the
     // user's tree - so it is threaded from the page, never re-derived.
     const result = await createPage({ root, folder, title, body });
     setSaving(false);
     if (result.kind === "created") {
       // Invalidate the DESTINATION url's by-path/page cache BEFORE navigating — save-as-new can reuse a
-      // recovered `/docs/...` URL whose by-path entry still points at the deleted old id, so the read route
+      // recovered root-qualified URL whose by-path entry still points at the deleted old id, so the read route
       // would otherwise render that stale id for up to its staleTime. (A permalink url no-ops: it is not
-      // a `/docs/` address, so it has no by-path key. The id leg still clears every root spelling.)
+      // a root landing address, so it has no by-path key. The id leg still clears every root spelling.)
       invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });
       if (result.created.warning || !result.created.url) {
         // Unindexed (or, defensively, no canonical url yet): the page is unpublished, so navigating
@@ -492,15 +492,16 @@ function DeletedBanner({ buffer, root, initialPath }: { buffer: string; root: st
  * The `/new` route body (D-2/D-3): title (+ optional folder/slug) → `POST /api/v1/pages` → navigate
  * DIRECTLY to the server-returned canonical `url` (no tree re-resolve, no client slug derivation).
  *
- * [root] is the document root the page lands in (multi-root C4), carried from the `/docs/{root}/…` location
+ * [root] is the document root the page lands in (multi-root C4), carried from the root-qualified location
  * the "New" action was started from (the route's `?root=` search param). It is absent for a create started
- * outside any root's URL space (`/new` from the home view), and THIS component resolves that to the reserved
- * `main` — the wire has no default, because a server-side one would let any client's omission decide whose
- * tree a page joins. The choice is the client's to make, explicitly, and it is made here.
+ * outside any root's URL space (`/new` from the home view), and THIS component resolves that from the primary
+ * wire entry. The wire has no default, because a server-side one would let any client's omission decide whose tree
+ * a page joins.
  */
 export function NewPage({ root }: { root?: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const tree = useQuery(treeQuery);
   const [title, setTitle] = useState("");
   const [folder, setFolder] = useState("");
   const [slug, setSlug] = useState("");
@@ -516,11 +517,12 @@ export function NewPage({ root }: { root?: string }) {
   // In section mode the Folder field IS the new section's path; a section needs a non-blank path
   // (its `<folder>/index.md` has nowhere to land otherwise), so creation is gated on it.
   const sectionReady = !section || folderPath !== "";
+  const targetRoot = root ?? tree.data?.roots.find((entry) => entry.primary)?.root;
 
   const create = useMutation({
     mutationFn: () =>
       createPage({
-        root: root ?? "main", // no `?root=` means the create started outside any root's URL space (D1's reserved name)
+        root: targetRoot!,
         folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
@@ -561,7 +563,7 @@ export function NewPage({ root }: { root?: string }) {
           setError(null);
           setNotice(null);
           // Guard the blank-section case explicitly so a section create never POSTs without a path.
-          if (title.trim() && sectionReady) create.mutate();
+          if (title.trim() && sectionReady && targetRoot) create.mutate();
         }}
       >
         <label className="flex flex-col gap-1 text-sm text-muted">
@@ -654,7 +656,7 @@ export function NewPage({ root }: { root?: string }) {
           type="submit"
           className="self-start rounded-md border border-edge bg-accent px-4 py-2 text-sm font-medium text-accent-contrast disabled:opacity-50"
           data-pb-new-create
-          disabled={create.isPending || !title.trim() || !sectionReady}
+          disabled={create.isPending || !title.trim() || !sectionReady || !targetRoot}
         >
           {create.isPending ? "Creating…" : "Create page"}
         </button>
