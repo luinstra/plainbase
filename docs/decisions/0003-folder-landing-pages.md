@@ -94,10 +94,10 @@ expand/collapse), and breadcrumb ancestor crumbs link likewise.
 **Trade-offs**
 
 - A folder URL is a *client* construct: a raw `curl /docs/guides` returns the shell, and
-  `by-path/guides` still 404s — tools must use the tree's `url` field, not guess.
-  *(Amended by multi-root C3, ADR-0011 D3: folder URLs are root-qualified now, so the canonical
-  examples read `curl /docs/main/guides` (a rootless `/docs/guides` 404s - it names no root) and
-  `by-path/main/guides` 404s. The trade-off itself is unchanged.)*
+  `by-path/docs/guides` still 404s - tools must use the tree's `url` field, not guess.
+  *(Amended by the 2026-07-28 top-level supersession: the first segment is now the ROOT NAME, not
+  a literal `/docs` prefix, so a root named `handbook` uses `/handbook/guides` for its folder URL.
+  The by-path folder 404 and the client-construct trade-off are unchanged.)*
 - The README renders at two URLs (folder prefix + its own canonical). Citations are id-based, so
   identity is unaffected; the duplication is deliberate (no redirect keeps the folder address
   stable for sharing).

@@ -115,10 +115,11 @@ it is a reserved segment and cannot be registered as a root. The rule fires wher
 [the CLI](#the-cli-and-the-two-files) below). A reserved name already sitting in a config file makes that
 config unloadable, so `plainbase root remove` cannot dig you out either: edit the file that declares it.
 
-For example, this configuration refuses at load time because `main` is reserved as a root name:
+For example, this command refuses before it writes anything because `main` is reserved as a root name:
 
 ```text
-serve: roots.main: 'main' is a reserved segment - Plainbase owns that top-level URL, or expects to. Rename this root by editing the file that declares it (plainbase.conf, or DATA_DIR/roots.conf); plainbase root remove cannot run while the config is refused.
+$ plainbase root add main /home/me/docs
+root add: 'main' is a reserved segment - Plainbase owns that top-level URL, or expects to
 ```
 
 **Nothing in your CONTENT is reserved.** The rule above governs the names you give ROOTS, and nothing

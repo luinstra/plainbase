@@ -416,10 +416,10 @@ data class PlainbaseConfig(
         // because the editable gate denies before the glob is ever consulted. Silently doing nothing is exactly how
         // an operator ends up believing an agent has write access it does not have.
         //
-        // Walked from the ROOTS side, not from the by-root glob map: main's globs live in their own key (D6 -
-        // `agentDirectCommit.globs`, the env var, or `roots.main`, never in the by-root map, which excludes main by
-        // construction), so a map-keyed walk would leave `roots.main { editable = false }` - the likeliest trap of
-        // the lot, since main is the root every glob was written for - the one case it could not see.
+        // Walked from the ROOTS side, not from the by-root glob map: the primary's globs live in their own key
+        // (`agentDirectCommit.globs`, the env var, or `roots.docs`, never in the by-root map, which excludes the
+        // primary by construction), so a map-keyed walk would leave `roots.docs { editable = false }` - the likeliest
+        // trap of the lot, since the primary is the root every glob was written for - the one case it could not see.
         roots.list
             .filter { !it.editable && globbedRoots().contains(it.name) }
             .forEach { root ->
@@ -556,9 +556,9 @@ data class PlainbaseConfig(
             auth.agentDirectCommitGlobsByRoot.flatMap { (root, globs) -> globs.map { CommitGlob.parse(it, root) } }
 
     /**
-     * Main's content root on the local filesystem: roots.main's path for a Local backend, contentDir
-     * otherwise (object mode ignores it, but the mirror/CLI seams still need a defined Path).
-     * Identical to contentDir for every legacy (synthesized) config.
+     * The primary content root on the local filesystem: `roots.docs.path` for a Local backend, and `contentDir`
+     * otherwise. Object mode ignores it, but the mirror and CLI seams still need a defined Path. It is identical to
+     * `contentDir` for every legacy synthesized config.
      */
     fun mainContentRoot(): Path = roots.primary.localPath ?: contentDir
 
@@ -1114,14 +1114,14 @@ data class PlainbaseConfig(
         }
 
         /**
-         * MAIN's history has two knobs — `roots.main.history` and the `git.enabled` tri-state — and when both are set
-         * explicitly they can CONTRADICT. Refuse, naming both keys, rather than pick a silent winner: whichever way
-         * Plainbase guessed, half the operators who wrote that config would get the opposite of what they asked for,
-         * and "history silently off" is not a failure anyone notices until they need the history.
+         * The primary's history has two knobs: `roots.docs.history` and the `git.enabled` tri-state. When both are
+         * set explicitly they can contradict. Refuse, naming both keys, rather than pick a silent winner: whichever
+         * way Plainbase guessed, half the operators who wrote that config would get the opposite of what they asked
+         * for, and history silently off is not a failure anyone notices until they need the history.
          *
-         * `history = auto` (the default, and what every synthesized config produces) is COMPATIBLE with either
-         * `git.enabled` value — that is exactly what auto means, and the tri-state keeps its full current meaning
-         * inside that arm. So this can only fire on a config that explicitly declares main's history non-auto.
+         * `history = auto` is the default, and what every synthesized config produces. It is compatible with either
+         * `git.enabled` value, which is exactly what auto means. This can only fire when a config explicitly declares
+         * the primary's history as non-auto.
          */
         private fun requireCoherentMainHistory(roots: RootsConfig, gitEnabled: Boolean?) {
             val primary = roots.primary
@@ -1152,13 +1152,12 @@ data class PlainbaseConfig(
          * Main's fatal filesystem fault, or null when main is usable. **ONE predicate for BOTH topology arms**,
          * and that is the whole reason it exists as a value rather than as two inline `when`s.
          *
-         * The arms word this fault differently on purpose (`CONTENT_DIR ...` vs `roots.main.path ...`), and
-         * `BootRefusal` is built to absorb exactly that - diff the KEY, print the MESSAGE. But a key is only
-         * stable across the arm switch if both arms RAISE the fault on the same condition. They did not: the
-         * legacy arm probed `isDirectory` alone, so a readable-but-not-searchable main was silently fine there
-         * and `MAIN_UNUSABLE` in the explicit matrix. `plainbase root add` then read a fault the operator
-         * already had as one IT had introduced, and refused an add it should permit - the exact hostage-taking
-         * the structured diff exists to prevent.
+         * The arms word this fault differently on purpose (`CONTENT_DIR ...` vs `roots.docs.path ...`), and
+         * `BootRefusal` is built to absorb exactly that: diff the key, print the message. But a key is only stable
+         * across the arm switch if both arms raise the fault on the same condition. The legacy arm once probed
+         * `isDirectory` alone, so a readable-but-not-searchable main was silently fine there and `MAIN_UNUSABLE` in
+         * the explicit matrix. `plainbase root add` then read a fault the operator already had and refused an add it
+         * should permit, which is the exact hostage-taking the structured diff exists to prevent.
          *
          * The order is the same short-circuit both arms want: one fault, one message. The traversability probe
          * is not a second opinion on a missing directory - it is the check that a main which EXISTS but lacks

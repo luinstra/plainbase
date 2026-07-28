@@ -155,7 +155,7 @@ the loser-behalf issue in-pass, D16) or a UNIQUE(id) crash. Detached rows still 
 UNIQUE(id), and a live bind supersedes a detached row, so "re-add restores permalinks" is conditional.
 (Synthesis #3.)
 
-### D3 - URLs are `/docs/{root}/{path}` always, with a query-preserving 301 for legacy paths
+### D3 - [HISTORICAL, SUPERSEDED] URLs were `/docs/{root}/{path}`, with a query-preserving 301 for legacy paths
 
 No sigil grammars, no conditional shapes: an unknown first segment under `/docs/` 301s to
 `/docs/main/{seg}/...`, preserving query strings; the legacy hop may chain into an alias hop (two
