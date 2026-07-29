@@ -43,11 +43,11 @@ class BootGateTest : FunSpec({
 
     // --- T-GATE-1: the gate produces the same refusals boot raises, with the right KIND -----------------
 
-    test("T-GATE-1: a missing CONTENT_DIR is MAIN_UNUSABLE, with the message requireContentDir throws") {
+    test("T-GATE-1: a missing CONTENT_DIR is PRIMARY_UNUSABLE, with the message requireContentDir throws") {
         withDataDir { _, env ->
             val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/nope/not/here"))
             val refusal = config.bootRefusals().single()
-            refusal.kind shouldBe BootRefusal.Kind.MAIN_UNUSABLE
+            refusal.kind shouldBe BootRefusal.Kind.PRIMARY_UNUSABLE
             refusal.roots shouldBe setOf(RootName.PRIMARY)
             // Message EQUALITY, not similarity: a paraphrase would mean somebody re-implemented something.
             refusal.message shouldBe shouldThrow<IllegalArgumentException> { config.requireContentDir() }.message
@@ -135,7 +135,7 @@ class BootGateTest : FunSpec({
             ) { _, env ->
                 val refusals = PlainbaseConfig.fromEnvAndFile(env).bootRefusals()
                 refusals.map { it.kind } shouldContainExactly listOf(
-                    BootRefusal.Kind.MAIN_UNUSABLE, // main is not a directory
+                    BootRefusal.Kind.PRIMARY_UNUSABLE, // primary is not a directory
                     BootRefusal.Kind.ROOT_PAIR, // AND outer/inner nest - a fault BEHIND the first one
                 )
                 withClue("boot must still refuse with the FIRST message, byte-identical to what it always printed") {
@@ -190,7 +190,7 @@ class BootGateTest : FunSpec({
     test("T-GATE-3b: a READABLE-BUT-NOT-SEARCHABLE main keys the same across the arm switch, in BOTH arms") {
         // The other half of T-GATE-3b, and the half that was WRONG: equal KINDS are only equal KEYS if both arms
         // raise the fault on the same CONDITION. The legacy arm probed `isDirectory` alone, so a main with no
-        // search bit was silently fine there and MAIN_UNUSABLE in the explicit matrix - and `root add` on a
+        // search bit was silently fine there and PRIMARY_UNUSABLE in the explicit matrix - and `root add` on a
         // synthesized-main install then saw a key its baseline structurally could not produce, called the
         // operator's own broken permissions a fault IT had introduced, and refused an add that introduced nothing.
         val data = Files.createTempDirectory("pb-gate-perm-data")
@@ -208,12 +208,12 @@ class BootGateTest : FunSpec({
             )
             val explicit = PlainbaseConfig.fromEnvAndFile(env)
 
-            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
-            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
+            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
+            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
 
             withClue("equal KEYS: one unchanged fault, so `root add` warns and proceeds instead of taking a hostage") {
                 legacyRefusal.key shouldBe explicitRefusal.key
-                legacyRefusal.key shouldBe (BootRefusal.Kind.MAIN_UNUSABLE to setOf(RootName.PRIMARY))
+                legacyRefusal.key shouldBe (BootRefusal.Kind.PRIMARY_UNUSABLE to setOf(RootName.PRIMARY))
             }
             withClue("DIFFERENT prose: each arm still names the key the operator actually wrote") {
                 legacyRefusal.message shouldContain "CONTENT_DIR is not readable/searchable"

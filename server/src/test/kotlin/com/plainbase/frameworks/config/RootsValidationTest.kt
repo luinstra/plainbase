@@ -73,7 +73,7 @@ class RootsValidationTest : FunSpec({
 
     test("synthesized: a CONTENT_DIR that exists but cannot be traversed is fatal, like the explicit main it mirrors") {
         // The one guard the synthesized arm did NOT inherit, and the omission was not conservative: it made the two
-        // arms raise MAIN_UNUSABLE on DIFFERENT conditions, so `plainbase root add` on a legacy install read this
+        // arms raise PRIMARY_UNUSABLE on DIFFERENT conditions, so `plainbase root add` on a legacy install read this
         // permission fault (which its baseline could not see, and its explicit candidate could) as one IT had caused,
         // and refused. Same fault, same key, both arms - the prose is all that differs.
         withBase { base ->

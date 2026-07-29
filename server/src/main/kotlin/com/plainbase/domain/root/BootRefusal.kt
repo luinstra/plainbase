@@ -25,8 +25,8 @@ data class BootRefusal(val kind: Kind, val roots: Set<RootName>, val message: St
     val key: Pair<Kind, Set<RootName>> get() = kind to roots
 
     enum class Kind {
-        /** main is missing, not a directory, unreadable/unsearchable, or will not canonicalize. */
-        MAIN_UNUSABLE,
+        /** The primary root is missing, not a directory, unreadable/unsearchable, or will not canonicalize. */
+        PRIMARY_UNUSABLE,
 
         /**
          * Two roots resolve to the same directory, or one nests inside the other. Keyed by the PAIR, as a

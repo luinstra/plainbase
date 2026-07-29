@@ -453,16 +453,16 @@ val BIND_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.BIND_GUAR
  * The kinds `serve()` RECORDS and DEGRADES on rather than refusing - the fourth disposition, and the one that
  * makes the partition honest instead of forcing an outage into a stage that exits.
  *
- * `MAIN_UNUSABLE` is an OUTAGE, not a config fault: the config is perfectly well-formed and a directory is late.
- * So `serve()` treats main exactly as it treats an extra in the same state - Unavailable, a WARN, 503 for its
+ * `PRIMARY_UNUSABLE` is an OUTAGE, not a config fault: the config is perfectly well-formed and a directory is late.
+ * So `serve()` treats the primary exactly as it treats an extra in the same state - Unavailable, a WARN, 503 for its
  * pages - through [rootGateVerdicts], and this set is what says so out loud.
  *
  * It stays a [BootRefusal] for the two consumers that still need it, and both genuinely do: the OFFLINE commands
  * refuse on it through `requireContentDir()` (a `plainbase reindex` over a content tree that is not there is a
  * no-op pretending to be a rebuild), and `plainbase root`'s baseline diff is keyed on it - where it can only ever
- * appear on BOTH sides, since no value `root` writes can move main.
+ * appear on BOTH sides, since no value `root` writes can move the primary.
  */
-val DEGRADED_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.MAIN_UNUSABLE)
+val DEGRADED_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.PRIMARY_UNUSABLE)
 
 /** Reached through [BootGate.verdicts] in rank order, so an earlier root's WARN still prints before it. */
 val VERDICT_REFUSAL_KINDS: Set<BootRefusal.Kind> = setOf(BootRefusal.Kind.GIT_GATE)
