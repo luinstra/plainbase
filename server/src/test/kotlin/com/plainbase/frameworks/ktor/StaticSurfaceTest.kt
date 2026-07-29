@@ -35,11 +35,11 @@ class StaticSurfaceTest : FunSpec({
 
     test("every top-level bundle entry is served or ledgered to its owning route") {
         restTest(Fixtures.demoDocs) {
-            val expectedOwned = FrontendBundle.directories + FrontendBundle.ownedElsewhere.keys
+            val expectedOwned = FrontendBundle.directories + FrontendBundle.ownedElsewhere.map { it.name }
             val client = restClient()
-            // Only the SERVED half carries assertions. The ledgered half is proved by FrontendBundleTest's
-            // H2 equality (ledger set == served tree, with three observed back-outs); restating
-            // `name in expectedOwned` inside its own branch asserted nothing and could never fail.
+            // Only the SERVED half carries assertions. FrontendBundleTest proves the delegated half against
+            // the mounted route tree and H2 proves the ledger against the served bundle; restating
+            // `name in expectedOwned` inside its own branch would assert nothing and could never fail.
             bundleTopLevel().filterNot { it in expectedOwned }.forEach { name ->
                 withClue(name) {
                     run {

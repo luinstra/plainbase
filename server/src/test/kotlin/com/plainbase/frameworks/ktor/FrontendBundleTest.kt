@@ -90,11 +90,12 @@ class FrontendBundleTest : FunSpec({
     }
 
     test("every mounted constant top-level route segment matches the declared inventory in every auth mode") {
+        val delegatedEntries = FrontendBundle.ownedElsewhere.map { it.name }
         val expected = (
             ServerTopLevel.segments +
                 FrontendBundle.files +
                 FrontendBundle.directories +
-                FrontendBundle.ownedElsewhere.keys +
+                delegatedEntries +
                 SpaTopLevel.segments
             ).toSet()
         listOf(
@@ -113,6 +114,11 @@ class FrontendBundleTest : FunSpec({
                     "expected=${expected.size} values=$expected, RootName survivors=${rootNames.size}, " +
                     "unreserved=$unreserved, segments=$segments",
             ) {
+                FrontendBundle.ownedElsewhere.forEach { entry ->
+                    withClue("${entry.name} delegates to ${entry.owner}") {
+                        entry.owner.topLevelSegment shouldBe entry.name
+                    }
+                }
                 segments shouldBe expected
                 unreserved.shouldBeEmpty()
             }
@@ -138,7 +144,11 @@ class FrontendBundleTest : FunSpec({
         // `Set<String>`; `AbstractList.equals` is false against any non-List, so written without it this
         // COMPILES (both are `Collection<String>`), is ALWAYS false, and every back-out below stops proving
         // anything. Confirm it passes on the untouched tree before trusting a single one of them.
-        val ledgered = (FrontendBundle.files + FrontendBundle.directories + FrontendBundle.ownedElsewhere.keys).toSet()
+        val ledgered = (
+            FrontendBundle.files +
+                FrontendBundle.directories +
+                FrontendBundle.ownedElsewhere.map { it.name }
+            ).toSet()
         withClue("the ledger and the served bundle disagree; a route is missing or a ledger entry is stale") {
             ledgered shouldBe bundleTopLevel()
         }

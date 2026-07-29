@@ -48,6 +48,14 @@ fun Route.frontendStaticRoutes(ctx: RouteContext) {
  * direct file, a flat directory, or owned by another route. A bundle entry with no owner is a 404.
  */
 internal object FrontendBundle {
+    /** A bundle entry delegated to a separately mounted top-level route. */
+    data class OwnedEntry(val name: String, val owner: Owner)
+
+    /** The route that owns a delegated bundle entry. */
+    enum class Owner(val topLevelSegment: String) {
+        ASSET_ROUTE(ServerTopLevel.ASSETS),
+    }
+
     /** Top-level bundle files served here. [SHELL] is the HTML shell. */
     val files = listOf(
         "apple-touch-icon.png",
@@ -60,9 +68,9 @@ internal object FrontendBundle {
     /** Top-level bundle directories, each exposed through one flat file parameter. */
     val directories = listOf("fonts")
 
-    /** Top-level entries owned by another route, keyed by entry name. */
-    val ownedElsewhere = mapOf(
-        ServerTopLevel.ASSETS to "assetRoute: get(\"/${ServerTopLevel.ASSETS}/{path...}\")",
+    /** Top-level entries owned by another route. */
+    val ownedElsewhere = setOf(
+        OwnedEntry(ServerTopLevel.ASSETS, Owner.ASSET_ROUTE),
     )
 
     const val SHELL = "index.html"
