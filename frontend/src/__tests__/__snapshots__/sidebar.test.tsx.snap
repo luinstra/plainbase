@@ -29,7 +29,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
         </button>
         <a
           class="block flex-1 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
-          href="/docs/main/guides"
+          href="/docs/guides"
         >
           Guides
         </a>
@@ -48,7 +48,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
               aria-current="page"
               class="block rounded px-2 py-1 text-ink"
               data-pb-status="active"
-              href="/docs/main/guides/deploy-guide"
+              href="/docs/guides/deploy-guide"
             >
               Deploy Guide
             </a>
@@ -94,7 +94,7 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             <a
               class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
               data-pb-status="active"
-              href="/p/main/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+              href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
             >
               Shadowed Page
             </a>

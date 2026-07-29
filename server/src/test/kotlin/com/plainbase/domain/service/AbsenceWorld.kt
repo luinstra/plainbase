@@ -57,7 +57,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
 
-    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
 
     val availability = RootAvailability(Clock.System)
     val idMap = SqlDelightIdMapRepository(database)
@@ -143,7 +143,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         idMap: IdMapRepository = this.idMap,
     ): IndexBuilder = IndexBuilder(
         sources = listOf(
-            IndexBuilder.Source(registry.main, LocalContentStore(mainDir), mainHistory),
+            IndexBuilder.Source(registry.primary, LocalContentStore(mainDir), mainHistory),
             IndexBuilder.Source(requireNotNull(registry.byName(RootName.require("extra"))), extraStore, extraHistory),
         ),
         frontmatterParser = FrontmatterReader(),

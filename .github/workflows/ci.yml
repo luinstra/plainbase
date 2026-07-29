@@ -149,7 +149,7 @@ jobs:
             sleep 2
           done
           test "$ok" = "1"
-          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsSL http://localhost:8080/ | grep -q '<div id="root">'
           docker logs plainbase-smoke >plainbase-smoke.log 2>&1
           test -s plainbase-smoke.log
           while IFS= read -r line; do
@@ -205,7 +205,7 @@ jobs:
             sleep 1
           done
           test "$ok" = "1"
-          curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+          curl -fsSL http://localhost:8080/ | grep -q '<div id="root">'
           kill $SERVER_PID
 
       # SecureRandom/SHA-256 is a named native divergence surface — prove enforced auth under the

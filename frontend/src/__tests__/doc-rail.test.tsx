@@ -23,7 +23,7 @@ function htmlResponse(id: string, headings: PageHtmlResponse["headings"]): PageH
   const title = "Kubernetes";
   return {
     id,
-    root: "main",
+    root: "docs",
     path: "infra/kubernetes.md",
     slug: "kubernetes",
     url: null,
@@ -39,7 +39,7 @@ function htmlResponse(id: string, headings: PageHtmlResponse["headings"]): PageH
 function pageResponse(id: string, frontmatter: Record<string, unknown>): PageResponse {
   return {
     id,
-    root: "main",
+    root: "docs",
     path: "infra/kubernetes.md",
     slug: "kubernetes",
     url: null,
@@ -169,7 +169,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
   });
 
   it("reuses the by-path page for the rail on /docs — no redundant /api/v1/pages/:id fetch", async () => {
-    // The /docs/$ route already resolved the page (with frontmatter) via pageByPathQuery and hands
+    // The /$ route already resolved the page (with frontmatter) via pageByPathQuery and hands
     // it to PageContent, so the rail reads that metadata directly. pageQuery(id, root) is left un-primed
     // and the stub THROWS for every url but the two the chrome legitimately reads (the tree, for
     // Breadcrumbs/Sidebar, and the session, for the Shell's Review gate), so a stray by-id fetch blows up
@@ -188,9 +188,9 @@ describe("doc reading metadata rail (chunk-4)", () => {
       throw new Error(`unexpected fetch: ${url}`);
     }));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-    queryClient.setQueryData(pageByPathQuery("main/infra/kubernetes").queryKey, pageResponse(PAGE_ID, { owner: "ops", status: "active" }));
-    queryClient.setQueryData(pageHtmlQuery(PAGE_ID, "main").queryKey, htmlResponse(PAGE_ID, []));
-    const history = createMemoryHistory({ initialEntries: ["/docs/main/infra/kubernetes"] });
+    queryClient.setQueryData(pageByPathQuery("docs/infra/kubernetes").queryKey, pageResponse(PAGE_ID, { owner: "ops", status: "active" }));
+    queryClient.setQueryData(pageHtmlQuery(PAGE_ID, "docs").queryKey, htmlResponse(PAGE_ID, []));
+    const history = createMemoryHistory({ initialEntries: ["/docs/infra/kubernetes"] });
     const router = createAppRouter(queryClient, history);
     const { container } = render(
       <QueryClientProvider client={queryClient}>
@@ -204,7 +204,7 @@ describe("doc reading metadata rail (chunk-4)", () => {
     expect(container.querySelector(".pb-chip")?.getAttribute("data-pb-chip-status")).toBe("active");
     // …without the redundant by-id page fetch (/api/v1/pages/:id) Codex flagged. The /html and
     // by-path endpoints are distinct paths, so this only catches the duplicate page load.
-    // Compared as a PATHNAME, not as a URL tail: the by-id read carries `?root=main` now, so a
+    // Compared as a PATHNAME, not as a URL tail: the by-id read carries `?root=docs` now, so a
     // tail match could never fire again while still reporting green.
     expect(calls.some((u) => new URL(u, "http://x").pathname === `/api/v1/pages/${PAGE_ID}`)).toBe(false);
   });
@@ -217,9 +217,9 @@ describe("doc reading metadata rail (chunk-4)", () => {
       { id: "a", level: 2, text: "Alpha" },
       { id: "b", level: 2, text: "Beta" },
     ];
-    queryClient.setQueryData(pageByPathQuery("main/infra/kubernetes").queryKey, pageResponse(PAGE_ID, {}));
-    queryClient.setQueryData(pageHtmlQuery(PAGE_ID, "main").queryKey, htmlResponse(PAGE_ID, headings));
-    const history = createMemoryHistory({ initialEntries: ["/docs/main/infra/kubernetes"] });
+    queryClient.setQueryData(pageByPathQuery("docs/infra/kubernetes").queryKey, pageResponse(PAGE_ID, {}));
+    queryClient.setQueryData(pageHtmlQuery(PAGE_ID, "docs").queryKey, htmlResponse(PAGE_ID, headings));
+    const history = createMemoryHistory({ initialEntries: ["/docs/infra/kubernetes"] });
     const router = createAppRouter(queryClient, history);
     const { container } = render(
       <QueryClientProvider client={queryClient}>

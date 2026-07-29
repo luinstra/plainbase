@@ -29,7 +29,7 @@ class PerRootTombstoneTest {
         try {
             DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { driver ->
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                val main = RootName.MAIN
+                val main = RootName.PRIMARY
                 val extra = RootName.require("extra")
                 val x = PageId.require("01010101-0101-0101-0101-010101010101")
                 val yMain = PageId.require("02020202-0202-0202-0202-020202020202")

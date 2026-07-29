@@ -22,7 +22,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
  */
 class PageIdentityServiceTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val service = PageIdentityService(TestIdProvider())
 

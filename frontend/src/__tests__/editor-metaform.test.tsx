@@ -9,7 +9,7 @@ import { splitFrontmatter } from "../lib/frontmatter";
 import type { PageResponse, TreeResponse } from "../api/types";
 import { createAppRouter } from "../router";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 
 /**
  * C2 metadata-form rail editing (acceptance #3/#4/#5/#7/#8). The `?mode=edit` editor shows the body in
@@ -29,11 +29,11 @@ const SEED = "---\nid: 0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a\ntitle: Deploy Guide
 
 const hashOf = (text: string): string => `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 
-function pageResponse(markdown: string, url: string | null = "/docs/main/guides/deploy-guide"): PageResponse {
+function pageResponse(markdown: string, url: string | null = "/docs/guides/deploy-guide"): PageResponse {
   const contentHash = hashOf(markdown);
   return {
     id: ID,
-    root: "main",
+    root: "docs",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url,
@@ -66,8 +66,8 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 }
 
 function renderSeeded(markdown = SEED) {
-  const result = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-    qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(markdown));
+  const result = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+    qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(markdown));
   });
   return result;
 }
@@ -188,8 +188,8 @@ describe("C2 metadata form", () => {
   it("an unknown status keeps the select editable but carries no status-color hook on the pill", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const weird = SEED.replace("status: draft", "status: experimental");
-    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(weird));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(weird));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-meta-form]")).not.toBeNull());
@@ -203,8 +203,8 @@ describe("C2 metadata form", () => {
   it("REVIEW BY falls back to a text input when `review` isn't an ISO date (so the value isn't hidden)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const weird = SEED.replace("review: 2026-06-01", "review: 2026 Q3");
-    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(weird));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(weird));
     });
 
     const review = await waitFor(() => {
@@ -431,8 +431,8 @@ describe("C2 metadata form", () => {
   it("falls back to a text input when `updated` isn't an ISO date (so the value isn't hidden #7)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const weird = SEED.replace("updated: 2026-01-01", "updated: 2026 Q1");
-    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(weird));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(weird));
     });
 
     const updated = await waitFor(() => {
@@ -450,8 +450,8 @@ describe("C2 metadata form", () => {
     // would silently blank the value — the calendar round-trip (server LocalDate.parse parity) keeps it text/visible.
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     const impossible = SEED.replace("updated: 2026-01-01", "updated: 2026-02-30");
-    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(impossible));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(impossible));
     });
     const updated = await waitFor(() => {
       const el = view.container.querySelector<HTMLInputElement>("[data-pb-field-updated]");
@@ -466,8 +466,8 @@ describe("C2 metadata form", () => {
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ html: "", headings: [] })));
     // A status outside the known five from a hand-edited file must still render and be editable.
     const weird = SEED.replace("status: draft", "status: experimental").replace("owner: Ada Lovelace", "owner: root");
-    const { view } = renderEditorAt("/docs/main/guides/deploy-guide?mode=edit", (qc) => {
-      qc.setQueryData(pageByPathQuery("main/guides/deploy-guide").queryKey, pageResponse(weird));
+    const { view } = renderEditorAt("/docs/guides/deploy-guide?mode=edit", (qc) => {
+      qc.setQueryData(pageByPathQuery("docs/guides/deploy-guide").queryKey, pageResponse(weird));
     });
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-meta-form]")).not.toBeNull());

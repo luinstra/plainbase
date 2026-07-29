@@ -46,7 +46,7 @@ class ProposalStatusCasTest : FunSpec({
                     decidedAt = null,
                     appliedCommit = null,
                     statusReason = null,
-                    root = RootName.MAIN,
+                    root = RootName.PRIMARY,
                 ),
             )
 

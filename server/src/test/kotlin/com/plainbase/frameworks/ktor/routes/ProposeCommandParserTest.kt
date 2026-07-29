@@ -22,7 +22,7 @@ class ProposeCommandParserTest : FunSpec({
 
     fun req(
         operation: String = "edit",
-        root: String? = "main",
+        root: String? = "docs",
         pageId: String? = null,
         baseHash: String? = null,
         targetPath: String? = null,
@@ -31,7 +31,7 @@ class ProposeCommandParserTest : FunSpec({
     ) = ProposeChangeRequest(operation, root, pageId, baseHash, targetPath, proposedContent, rationale)
 
     /** The registered root names the parser validates a DECLARED create root against (the pure `ctx.roots` set). */
-    val roots = setOf(RootName.MAIN, RootName.require("archive"))
+    val roots = setOf(RootName.PRIMARY, RootName.require("archive"))
 
     fun parse(request: ProposeChangeRequest) = parseProposeCommand(request, roots)
 

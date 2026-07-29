@@ -112,8 +112,8 @@ pass "cross-origin session write -> 403 cross_origin"
 #    If-Match — literal DOUBLE QUOTES around "sha256:<64-hex>" — and a modified markdown body.
 #    The body is the GET's own raw markdown plus an appended line, so any materialized `id:`
 #    frontmatter matches (no id-tamper 422).
-code=$(curl -s -o "$tmp/page.json" -w '%{http_code}' -b "$JAR" "$BASE/api/v1/pages/by-path/guides/deploy-guide")
-expect_status 200 "$code" "GET /api/v1/pages/by-path/guides/deploy-guide (admin session)"
+code=$(curl -s -o "$tmp/page.json" -w '%{http_code}' -b "$JAR" "$BASE/api/v1/pages/by-path/docs/guides/deploy-guide")
+expect_status 200 "$code" "GET /api/v1/pages/by-path/docs/guides/deploy-guide (admin session)"
 PAGE_ID=$(jq -re '.id' "$tmp/page.json")
 CONTENT_HASH=$(jq -re '.content_hash' "$tmp/page.json")
 code=$(jq -rj '.markdown + "\nEnforced-smoke edit.\n"' "$tmp/page.json" \
@@ -125,7 +125,7 @@ pass "PB-WRITE-1 page write with quoted strong If-Match -> 200"
 
 # 8. Agent bearer read -> 200 (loopback is a secure context; the REAL extraction path).
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AGENT_TOKEN" \
-  "$BASE/api/v1/pages/by-path/guides/deploy-guide")
+  "$BASE/api/v1/pages/by-path/docs/guides/deploy-guide")
 expect_status 200 "$code" "agent bearer read"
 pass "agent bearer read -> 200"
 
@@ -139,7 +139,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -b "$JAR" -H "X-CSRF-Token
   "$BASE/api/v1/admin/tokens/$tid/revoke")
 case "$code" in 2??) ;; *) fail "POST /api/v1/admin/tokens/$tid/revoke: expected 2xx, got $code" ;; esac
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AGENT_TOKEN" \
-  "$BASE/api/v1/pages/by-path/guides/deploy-guide")
+  "$BASE/api/v1/pages/by-path/docs/guides/deploy-guide")
 expect_status 401 "$code" "revoked agent bearer read"
 pass "REST revoke -> revoked bearer 401"
 

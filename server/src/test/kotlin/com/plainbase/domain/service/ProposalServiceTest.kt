@@ -72,7 +72,7 @@ class ProposalServiceTest : FunSpec({
         // Root-scoped like the real reader: a page lives in main here, so a lookup under any OTHER root answers null -
         // which is what makes the cross-root rows below assert something rather than accidentally pass.
         override fun pathOf(root: RootName, pageId: PageId): RootedPath? =
-            pathById[pageId]?.takeIf { root == RootName.MAIN }?.let { RootedPath(RootName.MAIN, it) }
+            pathById[pageId]?.takeIf { root == RootName.PRIMARY }?.let { RootedPath(RootName.PRIMARY, it) }
 
         override fun currentBytes(target: RootedPath): ContentRead = when {
             target.path in rootDownPaths -> ContentRead.RootDown
@@ -84,7 +84,7 @@ class ProposalServiceTest : FunSpec({
     }
 
     /** Main-rooted, since every fixture here is main's. */
-    fun rooted(p: TreePath) = RootedPath(RootName.MAIN, p)
+    fun rooted(p: TreePath) = RootedPath(RootName.PRIMARY, p)
 
     /** A trivial in-memory ProposalRepository capturing inserts + the P1b status CASes (no SQLite needed). */
     class MemRepo : ProposalRepository {
@@ -857,7 +857,11 @@ class ProposalServiceTest : FunSpec({
         val id = TestProposalIdProvider().next()
         repo.insert(
             ProposalRow(
-                id = id, operation = ProposalOperation.EDIT, pageId = pageId, root = RootName.MAIN, baseHash = "sha256:" + "0".repeat(64),
+                id = id,
+                operation = ProposalOperation.EDIT,
+                pageId = pageId,
+                root = RootName.PRIMARY,
+                baseHash = "sha256:" + "0".repeat(64),
                 targetPath = path, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,
@@ -873,7 +877,7 @@ class ProposalServiceTest : FunSpec({
         repo.insert(
             ProposalRow(
                 // A CREATE APPLYING row carries a non-null page_id (minted at propose time) but NO base_hash.
-                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, root = RootName.MAIN, baseHash = null,
+                id = id, operation = ProposalOperation.CREATE, pageId = createPageId, root = RootName.PRIMARY, baseHash = null,
                 targetPath = targetPath, proposedContent = content, rationale = "r", diffArtifact = "",
                 status = ProposalStatus.PENDING, authorIssuer = "agent", authorExternalId = "pb_a", authorLabel = "ci",
                 approverIssuer = null, approverExternalId = null, decisionComment = null,

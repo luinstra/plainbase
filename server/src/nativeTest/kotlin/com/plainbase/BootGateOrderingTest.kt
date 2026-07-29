@@ -55,7 +55,7 @@ class BootGateOrderingTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main    { path = "$main" }
+                  docs    { path = "$main" }
                   absent  { path = "$missing" }
                   claimed { path = "$notARepo", history = native }
                 }
@@ -66,7 +66,7 @@ class BootGateOrderingTest {
 
             // Registry (rank) order, which is the order `serve()` replays them in.
             assertEquals(
-                listOf(RootName.MAIN, RootName.require("absent"), RootName.require("claimed")),
+                listOf(RootName.PRIMARY, RootName.require("absent"), RootName.require("claimed")),
                 gate.verdicts.map { it.root },
                 "the verdicts must come back in RANK order, or replaying them cannot reproduce today's boot output",
             )
@@ -96,7 +96,7 @@ class BootGateOrderingTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main    { path = "$main" }
+                  docs    { path = "$main" }
                   claimed { path = "$notARepo", history = native }
                 }
                 """.trimIndent(),

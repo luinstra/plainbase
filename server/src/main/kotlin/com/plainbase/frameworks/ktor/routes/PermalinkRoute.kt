@@ -1,7 +1,9 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.PermalinkResolution
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.AmbiguousCandidate
@@ -45,13 +47,13 @@ import io.ktor.server.routing.get
  * **A root that is not serving answers 503, never 404** (ADR-0011 D5): the facade throws and `guarded {}` maps it.
  */
 fun Route.permalinkRoute(ctx: RouteContext) {
-    get("/p/{segments...}") { call.handlePermalinkDispatch(ctx) }
+    get("/${ServerTopLevel.PERMALINK}/{segments...}") { call.handlePermalinkDispatch(ctx) }
 }
 
 private suspend fun ApplicationCall.handlePermalinkDispatch(ctx: RouteContext) {
     val principal = ctx.principalOrRefuse(this) ?: return
     guarded {
-        val raw = rawPathAfter("/p/")
+        val raw = rawPathAfter("/${ServerTopLevel.PERMALINK}/")
             ?: return@guarded respondError(
                 HttpStatusCode.BadRequest,
                 ErrorCodes.INVALID_PAGE_ID,
@@ -113,7 +115,10 @@ private fun canonicalPageId(segment: String): PageId? =
 /** 410 Gone naming the requested root and last-known path, with alternate live roots in Link headers only. */
 private suspend fun ApplicationCall.respondRetired(id: PageId, resolution: PermalinkResolution.Retired) {
     resolution.liveElsewhere.forEach {
-        response.header(HttpHeaders.Link, "</p/${it.value}/${id.value}>; rel=\"alternate\"")
+        response.header(
+            HttpHeaders.Link,
+            "<${Permalink.of(it, id)}>; rel=\"alternate\"",
+        )
     }
     // Retirement is reversible when the same (root, path) reclaims the id, so a cached 410 could mask its return.
     response.header(HttpHeaders.CacheControl, "no-store")
@@ -141,7 +146,12 @@ private suspend fun ApplicationCall.respondAmbiguousPermalink(
     candidates: List<RootName>,
     hasRetiredCandidate: Boolean,
 ) {
-    candidates.forEach { response.header(HttpHeaders.Link, "</p/${it.value}/${id.value}>; rel=\"alternate\"") }
+    candidates.forEach {
+        response.header(
+            HttpHeaders.Link,
+            "<${Permalink.of(it, id)}>; rel=\"alternate\"",
+        )
+    }
     // Ambiguity is TRANSIENT - it ends the moment the duplicate is resolved - but 300 is heuristically cacheable, so an
     // intermediary would keep serving "pick a root" long after there is only one.
     response.header(HttpHeaders.CacheControl, "no-store")
@@ -151,7 +161,12 @@ private suspend fun ApplicationCall.respondAmbiguousPermalink(
             AmbiguousPageIdBody(
                 code = ErrorCodes.AMBIGUOUS_PAGE_ID,
                 message = ambiguousMessage(id, hasRetiredCandidate = hasRetiredCandidate),
-                candidates = candidates.map { AmbiguousCandidate(root = it.value, url = "/p/${it.value}/${id.value}") },
+                candidates = candidates.map {
+                    AmbiguousCandidate(
+                        root = it.value,
+                        url = Permalink.of(it, id),
+                    )
+                },
             ),
         ),
         HttpStatusCode.MultipleChoices,

@@ -61,16 +61,17 @@ const REINDEX_WARNING = {
 const treeResponse: TreeResponse = {
   roots: [
     {
-      root: "main",
+      root: "docs",
       available: true,
       editable: true,
+      primary: true,
       tree: {
         type: "folder",
         name: "",
         title: null,
         description: null,
         path: "",
-        url: "/docs/main",
+        url: "/docs",
         page_count: 0,
         children: [
           {
@@ -79,7 +80,7 @@ const treeResponse: TreeResponse = {
             title: "Guides",
             description: "How-to guides",
             path: "guides",
-            url: "/docs/main/guides",
+            url: "/docs/guides",
             page_count: 1,
             children: [
               {
@@ -88,7 +89,7 @@ const treeResponse: TreeResponse = {
                 title: "Deploy Guide",
                 slug: "deploy-guide",
                 path: "guides/deploy-guide.md",
-                url: "/docs/main/guides/deploy-guide",
+                url: "/docs/guides/deploy-guide",
                 status: "published",
                 updated: "2026-06-01",
               },
@@ -107,7 +108,7 @@ const treeResponse: TreeResponse = {
 // stays pinned by treeResponse/createdResponse.
 const pageResponse: PageResponse = {
   id: PAGE_1,
-  root: "main",
+  root: "docs",
   path: "guides/deploy-guide.md",
   slug: "deploy-guide",
   url: null,
@@ -123,13 +124,13 @@ const pageResponse: PageResponse = {
     path: "guides/deploy-guide.md",
     content_hash: HASH_A,
     commit: null,
-    uri: `plainbase://main/${PAGE_1}@${HASH_A}`,
+    uri: `plainbase://docs/${PAGE_1}@${HASH_A}`,
   },
 };
 
 const pageHtmlResponse: PageHtmlResponse = {
   id: PAGE_2,
-  root: "main",
+  root: "docs",
   path: "shadowed.md",
   slug: "shadowed",
   url: null,
@@ -146,7 +147,7 @@ const pageHtmlResponse: PageHtmlResponse = {
     path: "shadowed.md",
     content_hash: HASH_B,
     commit: COMMIT_1,
-    uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
+    uri: `plainbase://docs/${PAGE_2}@${HASH_B}`,
   },
 };
 
@@ -163,7 +164,7 @@ const searchResponse: SearchResponse = {
   hits: [
     {
       page_id: PAGE_2,
-      root: "main",
+      root: "docs",
       path: "shadowed.md",
       url: null,
       title: "Shadowed",
@@ -179,7 +180,7 @@ const searchResponse: SearchResponse = {
         path: "shadowed.md",
         content_hash: HASH_B,
         commit: null,
-        uri: `plainbase://main/${PAGE_2}@${HASH_B}`,
+        uri: `plainbase://docs/${PAGE_2}@${HASH_B}`,
       },
     },
   ],
@@ -235,12 +236,12 @@ const pageExistsEnvelope: PageExistsEnvelope = {
 };
 
 // `root` rides the create request (multi-root C4). It is pinned HERE because omitting it is not a type error -
-// it is a SILENT default to `main`, i.e. the page lands in the wrong tree with no failure anywhere.
+// it is a SILENT default to `docs`, i.e. the page lands in the wrong tree with no failure anywhere.
 const createPageRequest: CreatePageRequest = { root: "extra", title: "Deploy Guide" };
 
 const createdResponse: CreatedResponse = {
   id: PAGE_1,
-  url: "/docs/main/guides/deploy-guide",
+  url: "/docs/guides/deploy-guide",
   content_hash: HASH_A,
   commit: null,
 };
@@ -339,7 +340,7 @@ const listChangesResponse: ListChangesResponse = {
       id: "01970000-0000-7000-8000-0000000000a2",
       operation: "create",
       status: "PENDING",
-      root: "main",
+      root: "docs",
       target_path: "guides/rollback.md",
       page_id: null,
       base_drifted: false,
@@ -354,7 +355,7 @@ const changeDetail: ChangeDetail = {
   id: "01970000-0000-7000-8000-0000000000a3",
   operation: "create",
   status: "PENDING",
-  root: "main",
+  root: "docs",
   target_path: "guides/rollback.md",
   page_id: null,
   base_hash: null,

@@ -8,6 +8,7 @@ import com.plainbase.domain.render.HeadingSlugger
 import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.CreateIntent
 import com.plainbase.domain.service.CreateOutcome
 import com.plainbase.frameworks.ktor.RouteContext
@@ -50,7 +51,7 @@ import kotlinx.serialization.SerializationException
  * `invalid_create_request`) are append-only additions to the frozen `ErrorCodes`.
  */
 fun Route.pageCreateRoutes(ctx: RouteContext) {
-    route("/api/v1/pages") {
+    route("/${ServerTopLevel.API}/v1/pages") {
         post {
             val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
             call.guarded {
@@ -215,7 +216,7 @@ private fun controlCharField(title: String, slug: String?): String? = when {
 /**
  * 409 `slug_conflict` — the create's canonical URL is already owned by a published page; nothing written.
  * The URL is qualified with the root the request ASKED for: URL space is per root (C3), so the contested
- * URL only exists in [root], and naming main's would point the client at a page that isn't the conflict.
+ * URL only exists in [root], and naming the requested root points the client at the actual conflict.
  */
 private suspend fun ApplicationCall.respondSlugConflict(root: RootName, urlPath: String) {
     respondText(
@@ -224,7 +225,7 @@ private suspend fun ApplicationCall.respondSlugConflict(root: RootName, urlPath:
             PageExistsEnvelope(
                 PageExistsBody(
                     code = ErrorCodes.SLUG_CONFLICT,
-                    message = "Another page already owns the canonical URL /docs/$root/$urlPath",
+                    message = "Another page already owns the canonical URL /$root/$urlPath",
                     path = urlPath,
                 ),
             ),
@@ -348,7 +349,7 @@ internal data class CreatedIdentity(val id: PageId, val url: String)
  * page that LOST the path-space race carries a null canonical `url` (it is reachable only via its permalink), so
  * the fallback is the rooted `/p/{root}/{id}` permalink — the one URL that ALWAYS resolves for any published page (the server
  * 302s a winner's permalink → canonical, and serves a loser's permalink directly). We NEVER fabricate a
- * `/docs/<raw path>` url: the raw path diverges from the canonical and points at a route that may not exist (a
+ * `/{root}/<raw path>` url: the raw path diverges from the canonical and points at a route that may not exist (a
  * 404 for a loser). A location the snapshot does not hold at all falls back to the minted id's permalink, which
  * is the same answer the pre-multi-root code gave when the id was missing.
  *

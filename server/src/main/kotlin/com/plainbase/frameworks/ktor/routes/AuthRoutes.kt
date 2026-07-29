@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.principal.encodeTokenSecret
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.LoginOutcome
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
@@ -27,7 +28,7 @@ import kotlin.time.Duration
  * cookie is adopted) and sets the `pb_session` cookie. `POST /api/v1/logout` is cookie-auth + CSRF-protected.
  */
 fun Route.authRoutes(ctx: RouteContext) {
-    post("/api/v1/login") {
+    post("/${ServerTopLevel.API}/v1/login") {
         // A credential MAY ride the request (a stale cookie); run the secure-context gate, but NOT check* — login
         // is pre-auth by construction. A refused-insecure credential is the 421 (resolveOrRefuse answers it).
         if (ctx.resolveOrRefuse(call) == null) return@post
@@ -73,7 +74,7 @@ fun Route.authRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/logout") {
+    post("/${ServerTopLevel.API}/v1/logout") {
         val resolved = ctx.resolveOrRefuse(call) ?: return@post
         if (!ctx.enforceCsrf(call, resolved)) return@post
         // Revoke the current session (idempotent for an absent/garbage cookie) and clear the cookie.

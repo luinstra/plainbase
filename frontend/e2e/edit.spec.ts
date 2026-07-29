@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoExpectStatus } from "./helpers";
 
 /**
  * W6 acceptance #6 (Playwright, real server): the edit→preview→save→reflect flow and the real
@@ -12,12 +13,12 @@ import { expect, test } from "@playwright/test";
  * fast local iteration.
  */
 
-const PAGE = "/docs/main/guides/deploy-guide";
+const PAGE = "/docs/guides/deploy-guide";
 
 test("edit a fixture page: preview updates, save persists, the reading view reflects it", async ({ page }) => {
   const marker = `e2e edit ${Date.now()}`;
 
-  await page.goto(`${PAGE}?mode=edit`);
+  await gotoExpectStatus(page, `${PAGE}?mode=edit`);
   const editor = page.locator("[data-pb-editor]");
   await expect(editor).toBeVisible();
 
@@ -36,14 +37,14 @@ test("edit a fixture page: preview updates, save persists, the reading view refl
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 
   // Return to the reading view; the saved marker is part of the rendered page.
-  await page.goto(PAGE);
+  await gotoExpectStatus(page, PAGE);
   await expect(page.locator(".pb-prose")).toContainText(marker);
 });
 
 test("format body text via the toolbar: bold persists and renders as <strong>", async ({ page }) => {
   const word = `bold${Date.now()}`;
 
-  await page.goto(`${PAGE}?mode=edit`);
+  await gotoExpectStatus(page, `${PAGE}?mode=edit`);
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
 
   // Type a fresh word at the end of the body, then select it back so the Bold op wraps it.
@@ -62,12 +63,12 @@ test("format body text via the toolbar: bold persists and renders as <strong>", 
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 
   // The reading view renders the bolded word inside a <strong>.
-  await page.goto(PAGE);
+  await gotoExpectStatus(page, PAGE);
   await expect(page.locator(".pb-prose strong")).toContainText(word);
 });
 
 test("edit a metadata field via the rail form: save persists, the read view's rail reflects it", async ({ page }) => {
-  await page.goto(`${PAGE}?mode=edit`);
+  await gotoExpectStatus(page, `${PAGE}?mode=edit`);
   await expect(page.locator("[data-pb-meta-form]")).toBeVisible();
 
   // Change the status via the rail form's dropdown (a surgical frontmatter edit, not a body edit).
@@ -80,19 +81,19 @@ test("edit a metadata field via the rail form: save persists, the read view's ra
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 
   // The read view's rail shows the new status chip.
-  await page.goto(PAGE);
+  await gotoExpectStatus(page, PAGE);
   await expect(page.locator('[data-pb-rail] [data-pb-chip-status="review"]')).toBeVisible();
 });
 
 test("a concurrent edit shows the content_changed conflict and keeps the buffer", async ({ page, request }) => {
   // Resolve the page id + its current content_hash (the GET ETag IS the accepted If-Match).
-  const byPath = await request.get("/api/v1/pages/by-path/guides/deploy-guide");
+  const byPath = await request.get("/api/v1/pages/by-path/docs/guides/deploy-guide");
   expect(byPath.ok()).toBe(true);
   const { id, markdown } = (await byPath.json()) as { id: string; markdown: string };
   const get = await request.get(`/api/v1/pages/${id}`);
   const baseHash = (get.headers()["etag"] ?? "").replaceAll('"', "");
 
-  await page.goto(`${PAGE}?mode=edit`);
+  await gotoExpectStatus(page, `${PAGE}?mode=edit`);
   await expect(page.locator("[data-pb-editor]")).toBeVisible();
 
   // Mutate the SAME page out-of-band (a second writer), so the editor's base_hash is now stale.

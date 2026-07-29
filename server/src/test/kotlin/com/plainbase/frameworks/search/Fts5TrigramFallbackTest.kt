@@ -40,7 +40,7 @@ class Fts5TrigramFallbackTest : FunSpec({
                 val splitter = SectionSplitter()
                 provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
 
-                val cjkPage = snapshot.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("notes/日本語ガイド.md")))
+                val cjkPage = snapshot.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("notes/日本語ガイド.md")))
                 val results = provider.search(query("ガイド"))
                 results.hits.shouldNotBeEmpty()
                 results.hits.map { it.pageId }.toSet() shouldBe setOf(cjkPage.id)

@@ -12,7 +12,7 @@ import { createAppRouter } from "../router";
  * per-test fetch stub. Each row links to `/review/$id`.
  */
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -24,7 +24,7 @@ function summary(over: Partial<ChangeSummary>): ChangeSummary {
     id: "id-1",
     operation: "edit",
     status: "PENDING",
-    root: "main",
+    root: "docs",
     target_path: "guides/deploy-guide.md",
     page_id: "page-1",
     base_drifted: false,
@@ -100,7 +100,7 @@ describe("review queue", () => {
   it("qualifies every row by ROOT - two roots can hold the same target_path", async () => {
     const { view } = renderQueue({
       proposals: [
-        summary({ id: "in-main", root: "main" }),
+        summary({ id: "in-main", root: "docs" }),
         summary({ id: "in-handbook", root: "handbook" }),
       ],
     });
@@ -109,7 +109,7 @@ describe("review queue", () => {
     const roots = [...view.container.querySelectorAll("[data-pb-review-root]")].map((el) => el.getAttribute("data-pb-review-root"));
     // Both rows carry the SAME target_path: without the root they are indistinguishable, and an approver
     // picking one of them is picking a repository blind.
-    expect(roots).toEqual(["main", "handbook"]);
+    expect(roots).toEqual(["docs", "handbook"]);
   });
 
   it("renders the empty notice when there are no proposals", async () => {

@@ -42,7 +42,7 @@ class DirectCommitGlobConfigTest : FunSpec({
         }
     }
 
-    val twoRoots = """roots { main { path = "/roots/m" }, archive { path = "/roots/a" } }"""
+    val twoRoots = """roots { docs { path = "/roots/m" }, archive { path = "/roots/a" } }"""
 
     // ---- THE retarget pin: the row this whole design exists for -----------------------------------
 
@@ -56,7 +56,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
 
             withClue("the pattern did NOT move: it still authorizes the colon-bearing FOLDER in MAIN") {
-                globs.single().root shouldBe RootName.MAIN
+                globs.single().root shouldBe RootName.PRIMARY
                 globs.single().matches(TreePath.require("archive:2024/plan.md")).shouldBeTrue()
             }
             withClue("and it grants NOTHING inside the `archive` ROOT - the escalation an in-string grammar would have created") {
@@ -82,7 +82,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             """.trimIndent(),
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
-            globs.map { it.root } shouldContainExactly listOf(RootName.MAIN, RootName.MAIN)
+            globs.map { it.root } shouldContainExactly listOf(RootName.PRIMARY, RootName.PRIMARY)
             globs[0].matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs[1].matches(TreePath.require("guides/a.md")).shouldBeTrue()
         }
@@ -96,26 +96,26 @@ class DirectCommitGlobConfigTest : FunSpec({
             """.trimIndent(),
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("notes/a.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("notes/a.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
         }
     }
 
-    test("roots.main alone is a complete main grant source rather than an empty legacy fallback") {
+    test("roots.docs alone is a complete primary grant source rather than an empty legacy fallback") {
         withConf(
             """
             $twoRoots
-            auth { agentDirectCommit { roots { main = ["drafts/**"], archive = ["2024/**"] } } }
+            auth { agentDirectCommit { roots { docs = ["drafts/**"], archive = ["2024/**"] } } }
             """.trimIndent(),
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env).agentDirectCommitGlobs()
 
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("drafts/plan.md")).shouldBeTrue()
             globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
         }
     }
 
-    test("the env var still overrides MAIN's file list and leaves an EXTRAS-only block intact (the LEGAL combination)") {
+    test("the env var still overrides the primary root's file list and leaves an EXTRAS-only block intact (the LEGAL combination)") {
         withConf(
             """
             $twoRoots
@@ -126,7 +126,7 @@ class DirectCommitGlobConfigTest : FunSpec({
             val globs = config.agentDirectCommitGlobs()
 
             withClue("env-wins over the FILE key, exactly as it always has") {
-                globs.single { it.root == RootName.MAIN }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
+                globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
             }
             withClue("extras are FILE-ONLY by construction (there is no env path to a roots block at all), so the block survives") {
                 globs.single { it.root == RootName.require("archive") }.matches(TreePath.require("2024/plan.md")).shouldBeTrue()
@@ -134,40 +134,40 @@ class DirectCommitGlobConfigTest : FunSpec({
         }
     }
 
-    // ---- main's list has exactly ONE key, and it has THREE possible spellings ---------------------
+    // ---- the primary root's list has exactly ONE key, and it has THREE possible spellings ---------------------
 
-    test("`globs` + `roots.main` together REFUSE at boot, naming BOTH keys - never a union, never a silent winner") {
+    test("`globs` + `roots.docs` together REFUSE at boot, naming BOTH keys - never a union, never a silent winner") {
         withConf(
             """
             $twoRoots
-            auth { agentDirectCommit { globs = ["notes/**"], roots { main = ["other/**"] } } }
+            auth { agentDirectCommit { globs = ["notes/**"], roots { docs = ["other/**"] } } }
             """.trimIndent(),
         ) { env ->
             val error = shouldThrow<IllegalArgumentException> { PlainbaseConfig.fromEnvAndFile(env) }
             error.message!! shouldContain "agentDirectCommit.globs"
-            error.message!! shouldContain "agentDirectCommit.roots.main"
+            error.message!! shouldContain "agentDirectCommit.roots.docs"
         }
     }
 
-    test("the ENV VAR + `roots.main` together ALSO refuse - the env var is a THIRD spelling of the same one key") {
+    test("the ENV VAR + `roots.docs` together ALSO refuse - the env var is a THIRD spelling of the same one key") {
         // The pair is what proves the refusal is about the CONFLICT and not about the env var: a union would silently
         // WIDEN what an agent may commit unreviewed, and a winner would silently DROP an authorization the operator
         // wrote. Neither is acceptable on an authorization surface, so "unspecified" is not an option.
         withConf(
             """
             $twoRoots
-            auth { agentDirectCommit { roots { main = ["other/**"] } } }
+            auth { agentDirectCommit { roots { docs = ["other/**"] } } }
             """.trimIndent(),
         ) { env ->
             val error = shouldThrow<IllegalArgumentException> {
                 PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
             }
             error.message!! shouldContain "PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS"
-            error.message!! shouldContain "agentDirectCommit.roots.main"
+            error.message!! shouldContain "agentDirectCommit.roots.docs"
         }
     }
 
-    test("the SAME config WITHOUT roots.main loads, with the env var as main's list (the refusal is about the conflict)") {
+    test("the SAME config WITHOUT roots.docs loads, with the env var as the primary root's list (the refusal is about the conflict)") {
         withConf(
             """
             $twoRoots
@@ -176,7 +176,7 @@ class DirectCommitGlobConfigTest : FunSpec({
         ) { env ->
             val globs = PlainbaseConfig.fromEnvAndFile(env + ("PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS" to "from-env/**"))
                 .agentDirectCommitGlobs()
-            globs.single { it.root == RootName.MAIN }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
+            globs.single { it.root == RootName.PRIMARY }.matches(TreePath.require("from-env/a.md")).shouldBeTrue()
         }
     }
 
@@ -211,7 +211,7 @@ class DirectCommitGlobConfigTest : FunSpec({
     test("a direct-commit glob on a NON-editable root WARNS - the editable gate denies first, so it can grant nothing") {
         withConf(
             """
-            roots { main { path = "/roots/m" }, archive { path = "/roots/a", editable = false } }
+            roots { docs { path = "/roots/m" }, archive { path = "/roots/a", editable = false } }
             auth { agentDirectCommit { roots { archive = ["**"] } } }
             """.trimIndent(),
         ) { env ->
@@ -226,13 +226,13 @@ class DirectCommitGlobConfigTest : FunSpec({
     test("the same warning covers a non-editable MAIN - whose globs live in their OWN key, not the by-root block") {
         withConf(
             """
-            roots { main { path = "/roots/m", editable = false }, archive { path = "/roots/a" } }
+            roots { docs { path = "/roots/m", editable = false }, archive { path = "/roots/a" } }
             auth { agentDirectCommit { globs = ["**"] } }
             """.trimIndent(),
         ) { env ->
             val warning = PlainbaseConfig.fromEnvAndFile(env).rootsWarnings().single { it.contains("agentDirectCommit") }
             withClue("main is the root every glob was written for, so a by-root-map walk would miss the likeliest trap of all") {
-                warning shouldContain "main"
+                warning shouldContain "docs"
                 warning shouldContain "editable = false"
             }
         }

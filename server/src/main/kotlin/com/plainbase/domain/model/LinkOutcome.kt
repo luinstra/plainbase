@@ -18,7 +18,7 @@ sealed interface LinkOutcome {
 
     /**
      * The target was classified successfully. [url] is the value emitted on the wire: a canonical
-     * `/docs/...` or `/assets/...` URL for internal targets, or the verbatim source string for
+     * `/{root}/...` or `/assets/...` URL for internal targets, or the verbatim source string for
      * external/anchor pass-throughs.
      */
     sealed interface Resolved : LinkOutcome {
@@ -26,7 +26,7 @@ sealed interface LinkOutcome {
 
         /**
          * An internal page target. [page] is the resolved page's [TreePath]; [url] is the page's
-         * canonical `/docs/...` path URL (with a re-encoded `#fragment` appended if one was present),
+         * canonical `/{root}/...` path URL (with a re-encoded `#fragment` appended if one was present),
          * or — for a path-space collision loser — its `/p/{root}/{id}` permalink (§A4).
          */
         data class Page(val page: TreePath, override val url: String) : Resolved

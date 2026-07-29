@@ -40,7 +40,7 @@ class OnlineMoveIdentityTest : FunSpec({
             writePage(extraDir, "notes/rollback.md", identified(pinned))
 
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
 
                 // The OPENING scan: the epoch WITNESSES the page at its original path.
@@ -73,7 +73,7 @@ class OnlineMoveIdentityTest : FunSpec({
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
 
             AbsenceWorld(mainDir, extraDir).use { world ->
-                world.observe("main", "extra")
+                world.observe("docs", "extra")
                 val builder = world.builder(mainDir, world.extraStore(extraDir), world.indexer)
                 val before = builder.rebuild().byPath.getValue(RootedPath(extra, from)).id
 

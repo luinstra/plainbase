@@ -37,7 +37,7 @@ class ClaimantStateAtomicityTest {
             DatabaseFactory.createDriver(dir.resolve("plainbase.db")).use { real ->
                 val spy = CountingDriver(real)
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(spy))
-                val main = RootName.MAIN
+                val main = RootName.PRIMARY
                 val x = PageId.require("01010101-0101-0101-0101-010101010101")
                 val y = PageId.require("02020202-0202-0202-0202-020202020202")
                 val p = RootedPath(main, TreePath.require("a.md"))

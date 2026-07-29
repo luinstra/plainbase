@@ -47,7 +47,7 @@ class RootCommandNativeTest {
             assertTrue(added.contains("restart the server to apply"))
 
             val afterAdd = PlainbaseConfig.fromEnvAndFile(env).roots
-            assertContentEquals(listOf("main", "notes"), afterAdd.list.map { it.name.value })
+            assertContentEquals(listOf("docs", "notes"), afterAdd.list.map { it.name.value })
             assertTrue(afterAdd.extras.single().editable)
             assertEquals(RootsOrigin.EXPLICIT, afterAdd.origin)
 
@@ -84,7 +84,7 @@ class RootCommandNativeTest {
                 host = "127.0.0.1"
 
                 roots {
-                  main { path = "$content" }
+                  docs { path = "$content" }
                 }
                 """.trimIndent(),
             )

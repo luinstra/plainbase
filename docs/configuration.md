@@ -83,38 +83,49 @@ migration, platform support), [operating-plainbase.md](operating-plainbase.md#ba
 object-mode backup guidance, and [ADR-0010](decisions/0010-object-storage-backend.md) for the design
 record.
 
-## `main` is a reserved URL segment - in EVERY install
+## Root names are top-level URL segments
 
-**This applies whether or not you configure roots at all.** Page URLs are `/docs/{root}/{path}`, and
-`main` is the name of the root your `CONTENT_DIR` becomes. So a top-level URL segment `main` inside
-that tree is ambiguous with the root segment itself, and **`serve` refuses to start** while one
-exists:
+Page URLs are `/{root}/{path}`, so a root's name IS a top-level URL segment on this server. The required
+primary root is named `docs`. Two
+rules follow from that - one on the SHAPE of a name, one on the segments the product already owns or
+expects to grow into - and each is a refusal naming the offending root, at boot and at `plainbase root
+add` alike.
 
+**The shape.** A root name is a lowercase slug - `[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2 to 32 characters:
+letter-leading, digits and hyphens after it, no doubled or trailing hyphen, no dots or underscores. It
+also may not parse as a page id (a 32-hex or UUID string), which is what keeps `/p/{root}/{id}` from
+being ambiguous with the bare `/p/{id}` permalink.
+
+**The reserved segments.** No root may be named:
+
+- one of Plainbase's own top-level URLs, live or foreseeable - `api`, `assets`, `browse`, `healthz`,
+  `p`, `fonts`, the SPA's `admin`, `new` and `review`, and the auth/ops/discovery vocabulary
+  (`login`, `search`, `session`, `settings`, `static`, `metrics`, `well-known` and the rest);
+  `ReservedSegments.kt` holds the list in full and it is deliberately generous, because growing it later
+  would boot-refuse an install that had already taken the new word;
+- anything beginning `pb-` or `plainbase-`, or the bare stems `pb` and `plainbase`;
+- a `v` followed by digits and nothing else (`v1`, `v2`, `v10`), which keeps the API-version namespace
+  free without enumerating it. `v2beta` and `v1alpha1` are legal names and are NOT reserved.
+
+Corpus vocabulary is not reserved: `guides`, `notes`, `handbook`, `changelog`, `team` are all fine, and
+so is `docs`. `main` is different: it is the former primary name frozen into migration-stamped rows, so
+it is a reserved segment and cannot be registered as a root. The rule fires wherever a root is registered -
+`plainbase.conf`, `DATA_DIR/roots.conf`, and
+`plainbase root add`, which refuses before it writes anything (see
+[the CLI](#the-cli-and-the-two-files) below). A reserved name already sitting in a config file makes that
+config unloadable, so `plainbase root remove` cannot dig you out either: edit the file that declares it.
+
+For example, this command refuses before it writes anything because `main` is reserved as a root name:
+
+```text
+$ plainbase root add main /home/me/docs
+root add: 'main' is a reserved segment - Plainbase owns that top-level URL, or expects to
 ```
-serve: REFUSING TO SERVE: the main root contains top-level URL segment 'main' - since multi-root
-(ADR-0011 D1/D3) 'main' is the RESERVED root segment, so an old /docs/main/... deep link is
-indistinguishable from a root-qualified URL and would silently re-resolve to the wrong page.
-Colliding entries: main/
-```
 
-It is the **top-level segment** that is reserved, not the word: any of these trips it, and only in
-the main root (an extra root's `main/` folder is harmless - its URLs are `/docs/{extra}/main/...`).
-
-- a top-level directory `main/` (or `Main/`, or anything else that slugifies to `main`),
-- a top-level page file `main.md` (its URL is `/docs/main/main`),
-- a top-level page whose frontmatter says `slug: main`,
-- a top-level folder whose `_folder.yaml` says `slug: main`,
-- a top-level asset path under `main/` (assets mirror the URL grammar).
-
-Nested ones are fine: `guides/main/` is `/docs/main/guides/main/...`, unambiguous.
-
-**The remedy is to rename the offending entry** - the directory, or the `slug:` that mints the
-segment - so no top-level URL segment is `main`. There is no config key to disable this: the
-reservation is deterministic, and a fresh corpus is refused exactly like an upgraded one.
-**Renaming permanently forfeits any circulating `/docs/main/...` deep links into that entry** (and
-their recorded aliases): after the rename those old links answer not-found instead of redirecting.
-`plainbase root add` applies a stricter, `--force`-able version of the same rule to the names you
-give extra roots (see [the CLI](#the-cli-and-the-two-files) below).
+**Nothing in your CONTENT is reserved.** The rule above governs the names you give ROOTS, and nothing
+else. A directory literally named `main/` inside the primary `docs` root, a `main.md`, and a `slug: main`
+are all ordinary content. The directory serves at `/docs/main/...`, while a page named `main` or with
+`slug: main` can serve at `/docs/main`; reserving `main` as a root name does not make content named `main` illegal.
 
 ## Multiple document roots - the `roots {}` block
 
@@ -126,7 +137,7 @@ is restart-only.
 
 ```hocon
 roots {
-  main    { path = "/home/me/docs" }                    # editable=true, history=auto by default
+  docs    { path = "/home/me/docs" }                    # editable=true, history=auto by default
   memoria { path = "/home/me/dev/memoria/.crew" }       # editable=false, history=off by default
   notes   { path = "/home/me/notes", editable = true }
 }
@@ -134,7 +145,7 @@ roots {
 
 Per-root keys:
 
-| Key | Meaning | Default (`main`) | Default (extras) |
+| Key | Meaning | Default (`docs`) | Default (extras) |
 |---|---|---|---|
 | `path` | the directory the root serves (**required**, non-blank) | - | - |
 | `editable` | whether pages in this root can be edited/created. **Topology, not authorization**: it is enforced in EVERY auth mode, `off` included, and a write to a read-only root answers 403 `root_not_editable` | `true` | `false` |
@@ -156,15 +167,15 @@ disambiguates by naming a root. **Reordering the block therefore reassigns NO pe
 # `runbooks` is rank 0, so in a bare /p/{a-shared-id} listing ITS root is offered first.
 roots {
   runbooks { path = "/srv/runbooks" }
-  main     { path = "/srv/docs" }
+  docs     { path = "/srv/docs" }
   archive  { path = "/srv/archive" }
 }
 
-# The same three roots, alphabetized with main first. No value changed and NO permalink moved:
-# /p/runbooks/{a-shared-id} and /p/main/{a-shared-id} both answer exactly as before. `main` is
+# The same three roots, alphabetized with docs first. No value changed and NO permalink moved:
+# /p/runbooks/{a-shared-id} and /p/docs/{a-shared-id} both answer exactly as before. `docs` is
 # rank 0 now, so it is merely offered FIRST in the bare 300 disambiguation list.
 roots {
-  main     { path = "/srv/docs" }
+  docs     { path = "/srv/docs" }
   archive  { path = "/srv/archive" }
   runbooks { path = "/srv/runbooks" }
 }
@@ -177,21 +188,21 @@ tie-break every bare lookup reads.
 
 Three consequences worth stating outright:
 
-- **`main` is not automatically rank 0.** It ranks where you declared it, so this really does let
-  `zeta` outrank `main` - that is the point of honoring the order you wrote:
+- **`docs` is not automatically rank 0.** It ranks where you declared it, so this really does let
+  `zeta` outrank `docs` - that is the point of honoring the order you wrote:
 
   ```hocon
   roots {
     zeta { path = "/srv/zeta" }
-    main { path = "/srv/docs" }
+    docs { path = "/srv/docs" }
   }
   ```
 
 - **Roots declared on ONE line rank ALPHABETICALLY, not left-to-right.** Rank reads the declaration
   LINE, so roots sharing a line are tied and the tie breaks on the name. Written on one line
-  (`roots { zeta { path = "/srv/zeta" }, main { path = "/srv/docs" } }` - and the comma is not
+  (`roots { zeta { path = "/srv/zeta" }, docs { path = "/srv/docs" } }` - and the comma is not
   optional there; without a newline between them HOCON refuses to parse the block at all), the
-  example above means the OPPOSITE of what it reads like: both roots are on line 1, so `main`
+  example above means the OPPOSITE of what it reads like: both roots are on line 1, so `docs`
   outranks `zeta`. **Give each root its own line and the question never arises** - which is why every
   example here does.
 - **`roots.conf` (the CLI's file) always ranks after `plainbase.conf`'s block**, and `plainbase root
@@ -222,22 +233,24 @@ SURROUNDING checkout. In all three cases `git -C <root>` succeeds quietly agains
 is not this root's, and you would find out when an unrelated branch had Plainbase commits on it. It
 also never `git init`s a claimed root: a missing `.git` there is reported, not created.
 
-For `main`, `history` and the `git.enabled` tri-state are two knobs on one thing. `auto` (the
+For `docs`, `history` and the `git.enabled` tri-state are two knobs on one thing. `auto` (the
 default, and what every config without a `roots {}` block produces) is compatible with either
 `git.enabled` value. Setting them to CONTRADICT (`history = native` with `git.enabled = false`, or
 `history = off` with `git.enabled = true`) is a boot error naming both keys - never a silent winner.
 
-Validation at boot (each failure is an actionable `serve:` refusal naming the offending root):
+Validation and startup behavior (config faults are actionable `serve:` refusals; unavailable paths are warnings plus 503):
 
-- a root named `main` is **required** (it is the reserved primary);
-- names are lowercase slugs (`[a-z0-9][a-z0-9-]*`, max 32 chars), and may **not** be page-id-shaped
-  (a 32-hex string a page id could parse) - such a name is a boot **refusal**, since `/p/{root}/{id}`
-  must never be ambiguous with the bare `/p/{id}` permalink;
-- `main`'s path must exist and be a **readable and searchable** (`r-x`) directory - a missing or
-  unreadable `main` is a boot **refusal**, never a degraded 503 root (see
-  [When a root is not there](#when-a-root-is-not-there) below). The identical rule applies to
-  `CONTENT_DIR` when there is no `roots {}` block at all: it is the same root, under the same name;
-- a missing/unreadable EXTRA path is a startup **warning**, never a boot error - the root serves 503
+- a root named `docs` is **required** in an explicit `roots {}` block (it is the primary);
+- names are lowercase slugs (`[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2-32 chars), may **not** be page-id-shaped
+  (a 32-hex string a page id could parse), and may not take a reserved segment (`api`, `assets`, `new`,
+  the `pb-`/`plainbase-` prefixes, the `v[0-9]+` version shape, and the rest of the list). Each is a boot
+  **refusal**; the full rule is in
+  [Root names are top-level URL segments](#root-names-are-top-level-url-segments) above;
+- `docs`'s path is checked at startup. If it is missing or not **readable and searchable** (`r-x`),
+  `serve` marks `docs` unavailable and starts with 503 responses for that root until the path is restored
+  and the server is restarted. The same rule applies to `CONTENT_DIR` when there is no `roots {}` block:
+  it is the `docs` root;
+- a missing/unreadable extra path is a startup **warning**, never a boot error - the root serves 503
   until it is restored AND the server is restarted;
 - `history = auto` on an extra root is refused (see above);
 - no two roots may resolve to the same directory (symlinks are resolved for this check), no root may
@@ -246,12 +259,12 @@ Validation at boot (each failure is an actionable `serve:` refusal naming the of
   keep the plain `CONTENT_DIR`-less config shape.
 
 When a `roots {}` block is present, an explicitly set `CONTENT_DIR`/`contentDir` is **ignored** with
-a startup warning: `roots.main.path` is main's directory.
+a startup warning: `roots.docs.path` is the primary directory.
 
 ### The CLI and the two files
 
 ```
-plainbase root add <name> <path> [--editable] [--history off|native] [--force]
+plainbase root add <name> <path> [--editable] [--history off|native]
 plainbase root remove <name>
 plainbase root list
 ```
@@ -268,17 +281,18 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
   hand-edit it - a hand edit is lost on the next `add`/`remove`.
 - At boot the two files **merge**. A root name declared in both is a **boot error** naming the
   file - never a silent winner, never a merge of the two declarations.
-- **`main` is never CLI-managed.** `plainbase root add main` and `plainbase root remove main` are
-  usage errors (exit 2), and `roots.conf` declaring `main` is a boot error. Main's path keeps coming
-  from a hand-written `roots {}` block in `plainbase.conf`, or from `CONTENT_DIR` when there is none.
+- **`docs` is never CLI-managed.** `plainbase root add docs` and `plainbase root remove docs` are
+  usage errors (exit 2), and `roots.conf` declaring `docs` is a boot error. The primary path keeps
+  coming from a hand-written `roots {}` block in `plainbase.conf`, or from `CONTENT_DIR` when there is none.
 - **Restart to apply.** `root add`/`remove` edit a file; they do not talk to a running server, and the
   server does not hot-reload topology. Nothing changes until the next restart.
 
 `root add` refuses outright (an error message, not a silent skip) on:
 
-- **a name that shadows an existing top-level entry of main** - a page, a folder, an asset, or a URL
-  minted by a `slug:`/`_folder.yaml slug:` - overridable with `--force`. See below for exactly what
-  this check does and does not catch.
+- **a reserved segment** - Plainbase owns a set of top-level URLs for its own surfaces (`api`,
+  `assets`, `browse`, `healthz`, `p`, `admin`, `new`, `review` and the like), plus the `pb-` and
+  `plainbase-` prefixes and any `v` followed only by digits. No root may take one. The refusal names
+  the word, and it is exit 2 - a bad argument, refused before anything is locked or read.
 - **nesting** - the new path may not sit inside another configured root or inside `DATA_DIR`, and may
   not equal one already configured.
 - **a duplicate declaration** - the name is already in `roots.conf` or in `plainbase.conf`'s block.
@@ -289,9 +303,6 @@ Exit codes: `0` success, `1` runtime failure, `2` usage error (the same conventi
   too.
 - **an empty path** - `plainbase root add docs "$DOCS_DIR"` with `DOCS_DIR` unset is a usage error
   (exit 2), never a root pointing at the process's working directory.
-- **a main root it cannot read** - the shadow check needs to scan main, and a tree it cannot read
-  proves nothing about what the new name would shadow, so it refuses rather than accept the add
-  blind. Restore the path, or pass `--force` to add without the check.
 
 It does **not** refuse a path that is not there: an extra root may legitimately be a volume that is
 not mounted yet (the server marks it unavailable and serves 503 for it until it is restored and the
@@ -301,7 +312,7 @@ visible, not silent.
 `--editable` defaults to `false` for an extra root; `--history` defaults to `off`.
 
 `root remove` of the **last** managed root deletes `roots.conf` outright, so the topology is then
-whatever `plainbase.conf` alone says: main from its `roots {}` block or from `CONTENT_DIR`, plus any
+whatever `plainbase.conf` alone says: docs from its `roots {}` block or from `CONTENT_DIR`, plus any
 **other** roots you declared there by hand. `plainbase root` never writes that file, so it cannot
 remove those - deleting `roots.conf` returns the install to single-root behavior only if
 `plainbase.conf` declares no extra roots of its own.
@@ -312,23 +323,6 @@ remove those - deleting `roots.conf` returns the install to single-root behavior
 server has marked unavailable in memory - so it points at `GET /healthz` for that instead (see
 [When a root is not there](#when-a-root-is-not-there) above).
 
-#### What the shadow check does not catch
-
-`root add`'s shadow refusal scans main's content tree at add time: every page, folder and asset
-path, plus every URL a page's `slug:`/a `_folder.yaml slug:` mints. Two things it structurally cannot
-see - and an operator who reads "refuses shadows" as "shadows are impossible" will be wrong in
-exactly these two ways:
-
-1. **A `redirect_from` alias.** Alias rows live in the database, not on disk, and they outlive the
-   frontmatter that minted them; the CLI opens no database (it is a plain filesystem scan), so it
-   cannot see them. This one has a backstop: **boot WARNs** on it, because boot builds the real index
-   and reads the alias registry - which is exactly why the boot warn exists, not as "the CLI check
-   again, later."
-2. **A folder created tomorrow through Plainbase's own UI.** The check runs once, at `add` time, and
-   nothing re-checks it afterward. This is [ADR-0011 D3](decisions/0011-multi-root-document-directories.md)'s
-   explicitly accepted tradeoff, not an oversight - and nothing is a backstop for it. A runtime shadow
-   resolves that one segment to the root, not to main's directory, until an operator renames one side.
-
 ## Per-root agent direct-commit globs
 
 `auth.agentDirectCommit` is the agent **privilege gate**: a COMMIT-mode agent writing inside a glob
@@ -337,7 +331,7 @@ lands its change UNREVIEWED; outside one it degrades to a proposal for a human.
 ```hocon
 auth {
   agentDirectCommit {
-    globs = ["notes/**", "archive:2024/**"]   # MAIN's list - unchanged meaning, colons and all
+    globs = ["notes/**", "archive:2024/**"]   # DOCS's list - unchanged meaning, colons and all
     roots {
       archive  = ["2024/**"]                  # the ONLY way to grant an EXTRA root
       handbook = ["**"]
@@ -346,18 +340,18 @@ auth {
 }
 ```
 
-**The existing `globs` key is main-scoped and always will be**, and neither it nor its env var
+**The existing `globs` key is docs-scoped and always will be**, and neither it nor its env var
 (`PLAINBASE_AGENT_DIRECT_COMMIT_GLOBS`) changes meaning when you add roots. That is why per-root
 globs are a structured block rather than a `<root>:<pattern>` prefix: a colon is a legal directory
 name character AND a legal glob character, so an in-string grammar would silently RETARGET an
 operator's existing `archive:2024/**` pattern the day they added a root named `archive` - revoking it
-in main and granting it, unasked, inside the new root. **No config that authorizes something today
+in docs and granting it, unasked, inside the new root. **No config that authorizes something today
 authorizes anything different after an upgrade.**
 
 Rules:
 
 - every key in the block must name a **configured** root (an unknown or malformed name refuses at boot);
-- main's list has exactly ONE key. Declaring `roots.main` alongside `globs` or the env var is a boot
+- docs's list has exactly ONE key. Declaring `roots.docs` alongside `globs` or the env var is a boot
   error naming both - Plainbase will not guess, because a union would silently widen what an agent may
   commit unreviewed and a winner would silently drop an authorization you wrote;
 - there is no env form for the block (extra roots are file-only by construction);
@@ -366,29 +360,29 @@ Rules:
 
 ## When a root is not there
 
-**`main` is the exception, and it is not a small one: a `main` that is not there at boot REFUSES to
-start.** There is no degraded mode for it - main is the root the whole URL grammar, the SPA shell and
-every legacy redirect are anchored on, so `serve` fails closed instead of coming up with an empty
-corpus:
+The primary root is `docs`, but a missing or unreadable root is not a server-boot refusal. `serve` marks
+the root unavailable, logs the following warning, and starts. Root-dependent API, agent, asset, and write
+surfaces answer 503 until the path is restored and the server is restarted. Browser navigation is the
+deliberate exception: it serves the SPA shell with 200 so the client can render its own outage UI:
 
 ```
-serve: roots.main.path does not exist or is not a directory: /srv/docs
-serve: CONTENT_DIR does not exist or is not a directory: /srv/docs     # the same fault, no roots {} block
+root 'docs' is not available at /srv/docs: it will serve 503 until the path is restored and the server restarted (its pages, aliases and checkpoints are left untouched)
 ```
 
-The same refusal covers a `main` that exists but the server cannot **read and traverse** (`r-x`):
-`... is not readable/searchable: /srv/docs`. Restore the path (remount the volume, fix the
-permissions) and start again. If main vanishes while the server is already *running*, it behaves like
-any other root below - 503, sticky until restart - but the *next* boot will refuse until it is back.
+The same behavior applies to an extra root. A config that declares `main` is a different failure: `main`
+is a reserved root-registration segment and the config refuses before any root path is checked. Offline
+commands such as `reindex` and `adopt` have their own fail-closed path checks, but `serve` keeps the
+unavailable-root behavior above.
 
-Everything below is about the **extra** roots.
+Everything below applies to **all** configured roots.
 
-An extra root that is missing at boot, or whose directory vanishes while the server runs, is marked
+A configured root that is missing at boot, or whose directory vanishes while the server runs, is marked
 **unavailable** and:
 
-- every read and write of it answers **503 `root_unavailable`** with a `Retry-After`, **never a 404**.
-  A 404 tells an agent the page is gone and it should drop its citations; the truth is that a disk is
-  unmounted and the content is coming back. Nothing is written on a 503;
+- root-dependent API, agent, asset, and write surfaces answer **503 `root_unavailable`** with a `Retry-After`,
+  **never a 404**. Browser navigation is the deliberate exception: it serves the SPA shell with **200** so
+  the client can render its outage UI. A 404 tells an agent the page is gone and it should drop its citations;
+  the truth is that a disk is unmounted and the content is coming back. Nothing is written on a 503;
 - **nothing is deleted for it.** Its pages stay in the index (carried forward), and its `id_map`,
   `url_alias`, `page_checkpoint` and `dirty_page` rows are left exactly as they are;
 - it still appears in `GET /api/v1/tree` with `"available": false` and an EMPTY subtree (never a stale

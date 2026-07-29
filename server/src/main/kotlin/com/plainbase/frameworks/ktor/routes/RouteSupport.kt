@@ -121,11 +121,11 @@ internal suspend fun ApplicationCall.pageId(): PageId? {
 
 /**
  * Redirects to [target], carrying the request's RAW query string through verbatim — so a direct hit
- * (cold load / refresh / pasted link) on `/docs/<alias>?mode=edit` lands on the canonical URL still
+ * (cold load / refresh / pasted link) on `/{root}/<alias>?mode=edit` lands on the canonical URL still
  * in edit mode, not the read view. The query is appended unparsed (the SPA, not us, owns its grammar)
  * and only when present, so a no-query redirect stays a clean `Location` with no trailing `?`. The
  * client-side canonical redirect preserves the query the same way (router.history.replace); this is
- * the server-side half of the same rename-stability guarantee, applied to every `/docs`-path hop.
+ * the server-side half of the same rename-stability guarantee, applied to every root-content hop.
  */
 internal suspend fun ApplicationCall.respondRedirectPreservingQuery(target: String, permanent: Boolean) {
     val query = request.queryString()

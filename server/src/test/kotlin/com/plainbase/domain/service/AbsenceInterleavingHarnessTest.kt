@@ -89,7 +89,7 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 // reason both are here: an early break stops EPOCH from minting, so only GIT can exercise the windows
                 // where the observation STAMP - rather than the absent epoch - is the only thing standing in the way.
                 val git = MovingHistory(deletes = source == Authority.GIT)
-                if (source == Authority.EPOCH) world.observe("main", "extra")
+                if (source == Authority.EPOCH) world.observe("docs", "extra")
                 val id = world.builder(mainDir, LocalContentStore(extraDir), world.indexer, extraHistory = git)
                     .rebuild().byPath.getValue(RootedPath(extra, rollback)).id
 
@@ -164,7 +164,7 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 val after = snapshot.section(extra).pages.map { it.rooted }
 
                 withClue("this pass never rebuilt anything, so nothing below tells a carry from a no-op") {
-                    snapshot.byPath.containsKey(RootedPath(RootName.MAIN, TreePath.require("guides/rollout.md"))) shouldBe true
+                    snapshot.byPath.containsKey(RootedPath(RootName.PRIMARY, TreePath.require("guides/rollout.md"))) shouldBe true
                 }
                 withClue("'extra' was not carried: only a carry can publish notes/keep.md, whose file is gone from disk") {
                     snapshot.pageAt(keptId)?.path shouldBe keep.path

@@ -28,7 +28,7 @@ class RootedPermalinkMatrixTest : FunSpec({
     val retiredMainId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
     val retiredDetachedId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
     val absentId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5d"
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
 
     fun oneRoot(block: (Path) -> Unit) {
         val parent = Files.createTempDirectory("pb-permalink-matrix")
@@ -48,7 +48,7 @@ class RootedPermalinkMatrixTest : FunSpec({
 
     test("the permalink READ matrix: present/retired/detached/absent/malformed on rooted and bare /p") {
         oneRoot { mainDir ->
-            multiRootTest(listOf(testRoot("main", mainDir))) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir))) { harness ->
                 // Post-boot durable state: a tombstone under REGISTERED main, and a tombstone under a DETACHED root.
                 val p = RootedPath(main, TreePath.require("gone.md"))
                 harness.idMap.bind(p, retiredMainId, materialized = false)
@@ -57,8 +57,8 @@ class RootedPermalinkMatrixTest : FunSpec({
 
                 val c = createClient { followRedirects = false }
 
-                withClue("PRESENT: /p/main/{id} -> 302") {
-                    c.get("/p/main/$presentId").status shouldBe HttpStatusCode.Found
+                withClue("PRESENT: /p/docs/{id} -> 302") {
+                    c.get("/p/docs/$presentId").status shouldBe HttpStatusCode.Found
                 }
                 withClue("PRESENT: bare /p/{id} -> 302") {
                     c.get("/p/$presentId").status shouldBe HttpStatusCode.Found
@@ -71,26 +71,26 @@ class RootedPermalinkMatrixTest : FunSpec({
                     res.status shouldBe HttpStatusCode.BadRequest
                     res.code() shouldBe "invalid_root"
                 }
-                withClue("ABSENT: /p/main/{unknown} -> 404") {
-                    c.get("/p/main/$absentId").status shouldBe HttpStatusCode.NotFound
+                withClue("ABSENT: /p/docs/{unknown} -> 404") {
+                    c.get("/p/docs/$absentId").status shouldBe HttpStatusCode.NotFound
                 }
-                withClue("RETIRED under REGISTERED main: /p/main/{id} -> 410, and bare /p/{id} -> 410") {
-                    c.get("/p/main/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
+                withClue("RETIRED under REGISTERED main: /p/docs/{id} -> 410, and bare /p/{id} -> 410") {
+                    c.get("/p/docs/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
                     c.get("/p/${retiredMainId.value}").status shouldBe HttpStatusCode.Gone
                 }
                 withClue("CLASS-A flip: a sole tombstone under a DETACHED root -> bare /p/{id} is 404, NEVER 410") {
                     c.get("/p/${retiredDetachedId.value}").status shouldBe HttpStatusCode.NotFound
                 }
                 withClue("MALFORMED id: the 32-hex hyphenless form is 400 invalid_page_id on rooted /p") {
-                    val res = c.get("/p/main/${presentId.replace("-", "")}")
+                    val res = c.get("/p/docs/${presentId.replace("-", "")}")
                     res.status shouldBe HttpStatusCode.BadRequest
                     res.code() shouldBe "invalid_page_id"
                 }
                 withClue("canonical hyphenated UPPERCASE still resolves on rooted /p (any-case is canonical-shape)") {
-                    c.get("/p/main/${presentId.uppercase()}").status shouldBe HttpStatusCode.Found
+                    c.get("/p/docs/${presentId.uppercase()}").status shouldBe HttpStatusCode.Found
                 }
                 withClue("interior and leading empty segments are malformed") {
-                    val interior = c.get("/p/main//$presentId")
+                    val interior = c.get("/p/docs//$presentId")
                     interior.status shouldBe HttpStatusCode.BadRequest
                     interior.code() shouldBe "invalid_page_id"
                     val leading = c.get("/p//$presentId")
@@ -113,7 +113,7 @@ class RootedPermalinkMatrixTest : FunSpec({
             val liveDownId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b61")
             val retiredDownId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b62")
             val limboId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b63")
-            MultiRootRestHarness(listOf(testRoot("main", mainDir), testRoot("extra", missing))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", mainDir), testRoot("extra", missing))).use { harness ->
                 harness.idMapOnly("extra", "notes/live.md", liveDownId) // bound BEFORE boot - the boot arm
                 harness.boot()
                 // Post-boot durable rows: a tombstone under the DOWN extra (the displacing double-bind), and a LIMBO
@@ -137,7 +137,7 @@ class RootedPermalinkMatrixTest : FunSpec({
                         c.get("/p/extra/$absentId").status shouldBe HttpStatusCode.NotFound
                     }
                     withClue("LIMBO under an UP root (bound, not in the snapshot) -> 503 absence_unverified, never the 404 lie") {
-                        val res = c.get("/p/main/${limboId.value}")
+                        val res = c.get("/p/docs/${limboId.value}")
                         res.status shouldBe HttpStatusCode.ServiceUnavailable
                         res.code() shouldBe "absence_unverified"
                     }

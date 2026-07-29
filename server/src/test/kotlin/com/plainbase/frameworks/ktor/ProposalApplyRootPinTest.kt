@@ -54,16 +54,16 @@ class ProposalApplyRootPinTest : FunSpec({
             Files.createDirectories(mirrorDir.resolve("guides"))
             Files.writeString(mirrorDir.resolve("guides/deploy.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("mirror", mirrorDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("mirror", mirrorDir)))
             val mirror = RootName.require("mirror")
-            val mainStore = LocalContentStore(mainDir, rootName = RootName.MAIN)
+            val mainStore = LocalContentStore(mainDir, rootName = RootName.PRIMARY)
             val mirrorStore = LocalContentStore(mirrorDir, rootName = mirror)
 
             IndexHarness(
                 root = mainDir,
                 rootRegistry = registry,
                 sources = listOf(
-                    IndexBuilder.Source(registry.main, mainStore, NoOpHistoryProvider),
+                    IndexBuilder.Source(registry.primary, mainStore, NoOpHistoryProvider),
                     IndexBuilder.Source(requireNotNull(registry.byName(mirror)), mirrorStore, NoOpHistoryProvider),
                 ),
             ).use { harness ->
@@ -77,7 +77,7 @@ class ProposalApplyRootPinTest : FunSpec({
                 Files.writeString(mainDir.resolve("guides/deploy.md"), body("original."))
                 harness.builder.rebuild()
                 withClue("both roots now hold the id under per-root identity; mirror still owns the page its proposal named") {
-                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId))!!.root shouldBe RootName.MAIN
+                    harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.root shouldBe RootName.PRIMARY
                     harness.builder.current.pageAt(RootedPageId(mirror, pageId))!!.root shouldBe mirror
                 }
 
@@ -128,14 +128,14 @@ class ProposalApplyRootPinTest : FunSpec({
             Files.createDirectories(mirrorDir.resolve("guides"))
             Files.writeString(mirrorDir.resolve("guides/deploy.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("mirror", mirrorDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("mirror", mirrorDir)))
             val mirror = RootName.require("mirror")
 
             IndexHarness(
                 root = mainDir,
                 rootRegistry = registry,
                 sources = listOf(
-                    IndexBuilder.Source(registry.main, LocalContentStore(mainDir, rootName = RootName.MAIN), NoOpHistoryProvider),
+                    IndexBuilder.Source(registry.primary, LocalContentStore(mainDir, rootName = RootName.PRIMARY), NoOpHistoryProvider),
                     IndexBuilder.Source(
                         requireNotNull(registry.byName(mirror)),
                         LocalContentStore(mirrorDir, rootName = mirror),

@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.repository.Role
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.CreateUserOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.CreateUserRequest
@@ -22,7 +23,7 @@ import io.ktor.server.routing.post
  * through the SAME `RoleRepository.upsert` path the admin CLI uses.
  */
 fun Route.adminUserRoutes(ctx: RouteContext) {
-    post("/api/v1/admin/users") {
+    post("/${ServerTopLevel.API}/v1/admin/users") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val request = call.receiveAuthRequest(CreateUserRequest.serializer()) ?: return@guarded
@@ -46,7 +47,7 @@ fun Route.adminUserRoutes(ctx: RouteContext) {
         }
     }
 
-    get("/api/v1/admin/users") {
+    get("/${ServerTopLevel.API}/v1/admin/users") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
             val users = ctx.auth.admin.listUsers(principal).map {
@@ -56,7 +57,7 @@ fun Route.adminUserRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/admin/users/{id}/disable") {
+    post("/${ServerTopLevel.API}/v1/admin/users/{id}/disable") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val id = call.parameters["id"].orEmpty()
@@ -68,7 +69,7 @@ fun Route.adminUserRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/admin/users/{id}/reset") {
+    post("/${ServerTopLevel.API}/v1/admin/users/{id}/reset") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val id = call.parameters["id"].orEmpty()
@@ -85,7 +86,7 @@ fun Route.adminUserRoutes(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/admin/sessions/revoke") {
+    post("/${ServerTopLevel.API}/v1/admin/sessions/revoke") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val request = call.receiveAuthRequest(SessionRevokeRequest.serializer()) ?: return@guarded

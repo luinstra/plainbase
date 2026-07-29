@@ -15,6 +15,8 @@ class RootNameIdOverlapTest : FunSpec({
         RootName.of("a".repeat(32)).shouldBeNull()
     }
 
+    // Two independent rules reject a digit-leading hex string (the shape rule and the page-id guard) and only
+    // ONE rejects a letter-leading one, so the deterministic witness above is what keeps the guard honest.
     test("every generated 32-hex page-id shape is rejected as a root name") {
         checkAll(Arb.stringPattern("[0-9a-f]{32}")) { hex32 ->
             RootName.of(hex32).shouldBeNull()

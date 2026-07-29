@@ -292,14 +292,14 @@ data class TreeResponse(val roots: List<RootTreeDto>)
 
 /**
  * One root's tree entry: the validated root-name slug, whether it is currently SERVING, whether it accepts
- * WRITES, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
+ * WRITES, whether it is the PRIMARY, and its synthetic root folder node. [tree] is always a folder node, but it is DECLARED as the sealed
  * interface so the polymorphic serializer emits the `type` discriminator on the root exactly like on every child
  * (the pre-C3 TreeResponse rule, unchanged).
  *
  * [available] `false` means the root is configured but not serving: its subtree is EMPTY here (never its stale
  * carried-forward listing) and every read of it answers 503. It is listed rather than omitted so a client can tell
  * "this root is down" from "this root does not exist" - and so the client's known-root set matches the server's,
- * which is what lets it route `/docs/{root}/...` without guessing.
+ * which is what lets it route `/{root}/...` without guessing.
  *
  * [editable] is the root's CONFIGURED write disposition (ADR-0011 `roots.<name>.editable`), and it is on the wire
  * for the same reason [available] is: without it the SPA cannot tell a writable root from a read-only one, so it
@@ -307,9 +307,14 @@ data class TreeResponse(val roots: List<RootTreeDto>)
  * add` defaults an extra root to `editable = false`, which makes that the DEFAULT experience of a CLI-added root,
  * not an exotic one. Config, not authorization: it says what the TOPOLOGY allows, never what this principal may do
  * (the 403 remains the authority, and the client's buffer-preserving 403 path remains the backstop).
+ *
+ * [primary] flags the reserved primary root (ADR-0011 D1). It is on the wire because the primary is NOT
+ * `roots[0]`: D7 order is the operator's config order, so it sits wherever config declared it, and a client
+ * deriving it positionally is wrong on any install that declared its primary second. Exactly one entry carries
+ * `true`, guaranteed by `RootRegistry`'s construction-time resolution rather than by a search here.
  */
 @Serializable
-data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val tree: TreeNodeDto)
+data class RootTreeDto(val root: String, val available: Boolean, val editable: Boolean, val primary: Boolean, val tree: TreeNodeDto)
 
 /** A tree node; the `type` discriminator (`folder`/`page`) comes from the sealed serializer. */
 @Serializable
@@ -323,7 +328,7 @@ sealed interface TreeNodeDto {
         // provisional (Chunk-3 landing): the `_folder.yaml` plaintext summary; null when absent/blank.
         val description: String?,
         val path: String,
-        /** Additive amendment (ADR-0003): the folder's `/docs` URL prefix; null for a collision-loser subtree. */
+        /** Additive amendment (ADR-0003): the folder's `/{root}` URL prefix; null for a collision-loser subtree. */
         val url: String?,
         // provisional (Chunk-3 landing): page_count is DIRECT child pages only (not recursive).
         @SerialName("page_count") val pageCount: Int,

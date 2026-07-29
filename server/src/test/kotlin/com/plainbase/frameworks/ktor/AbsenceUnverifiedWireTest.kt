@@ -52,7 +52,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
     val docPath = TreePath.require("doc.md")
     val page = "---\ntitle: Doc\n---\n\n# Doc\n\nBody.\n"
     val seed: (IdMapRepository) -> Unit = { idMap ->
-        idMap.bind(RootedPath(RootName.MAIN, docPath), PageId.require(docId), materialized = false)
+        idMap.bind(RootedPath(RootName.PRIMARY, docPath), PageId.require(docId), materialized = false)
     }
 
     suspend fun HttpResponse.error(): JsonObject = Json.parseToJsonElement(bodyAsText()).jsonObject.getValue("error").jsonObject
@@ -62,7 +62,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
     fun limboed(block: suspend ApplicationTestBuilder.(RestHarness, java.nio.file.Path) -> Unit): Unit =
         withTempTree(seed = { writePage(it, "doc.md", page) }) { root ->
             restTest(root, seed) { harness ->
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(docId))) shouldNotBe null
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(docId))) shouldNotBe null
                 Files.delete(root.resolve("doc.md"))
                 harness.builder.rebuild()
                 block(harness, root)
@@ -72,10 +72,10 @@ class AbsenceUnverifiedWireTest : FunSpec({
     test("a read for an indexed page whose bytes are unavailable is 503 absence_unverified, NEVER 404") {
         limboed { harness, _ ->
             withClue("the page left the SNAPSHOT - that is what makes this the 404 path, and it is the lie") {
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(docId))) shouldBe null
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(docId))) shouldBe null
             }
             withClue("...but the durable index still BINDS it, and that is the fact that decides") {
-                harness.idMap.livePathOf(PageId.require(docId)) shouldBe RootedPath(RootName.MAIN, docPath)
+                harness.idMap.livePathOf(PageId.require(docId)) shouldBe RootedPath(RootName.PRIMARY, docPath)
             }
 
             val get = client.get("/api/v1/pages/$docId")
@@ -93,13 +93,13 @@ class AbsenceUnverifiedWireTest : FunSpec({
             limbo.status shouldBe HttpStatusCode.ServiceUnavailable
             limbo.code() shouldBe "absence_unverified"
             withClue("the ROOT is healthy - saying otherwise would send an operator to remount a mounted disk") {
-                harness.availability.current().isAvailable(RootName.MAIN) shouldBe true
+                harness.availability.current().isAvailable(RootName.PRIMARY) shouldBe true
                 limbo.error().getValue("message").jsonPrimitive.content shouldNotBe null
             }
 
             // The SAME page, the SAME missing bytes - and now the root really is gone. A different fact deserves a
             // different answer: nothing about this root may be believed, and recovery is an operator's job.
-            harness.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+            harness.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
             val down = client.get("/api/v1/pages/$docId")
             down.status shouldBe HttpStatusCode.ServiceUnavailable
             down.code() shouldBe "root_unavailable"
@@ -134,10 +134,10 @@ class AbsenceUnverifiedWireTest : FunSpec({
             harness.retirements.applyProofs(
                 listOf(
                     AbsenceProof(
-                        root = RootName.MAIN,
+                        root = RootName.PRIMARY,
                         source = ProofSource.OPERATOR,
-                        observationId = harness.retirements.observation(RootName.MAIN),
-                        bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
+                        observationId = harness.retirements.observation(RootName.PRIMARY),
+                        bindingEpoch = harness.retirements.bindingEpoch(RootName.PRIMARY),
                         covers = setOf(BindingRef(docPath, PageId.require(docId))),
                     ),
                 ),
@@ -145,7 +145,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
                 unavailableNow = { emptySet() },
             )
 
-            val p = c.get("/p/main/$docId")
+            val p = c.get("/p/docs/$docId")
             p.status shouldBe HttpStatusCode.Gone
             p.code() shouldBe "page_retired"
             p.headers[HttpHeaders.CacheControl] shouldBe "no-store"
@@ -156,7 +156,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
             writePage(root, "doc.md", "---\nid: $docId\ntitle: Doc\n---\n\n# Doc\n\nBody.\n")
             harness.builder.rebuild()
 
-            c.get("/p/main/$docId").status shouldBe HttpStatusCode.Found
+            c.get("/p/docs/$docId").status shouldBe HttpStatusCode.Found
         }
     }
 
@@ -174,7 +174,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
             withClue("and it comes back with the id it left with - the binding was never touched") {
                 Json.parseToJsonElement(healed.bodyAsText()).jsonObject.getValue("id").jsonPrimitive.content shouldBe docId
             }
-            harness.limbo.count(RootName.MAIN) shouldBe 0
+            harness.limbo.count(RootName.PRIMARY) shouldBe 0
         }
     }
 
@@ -191,7 +191,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
             harness.builder.rebuild()
             val healed = Json.parseToJsonElement(client.get("/healthz").bodyAsText()).jsonObject
             healed.getValue("roots").jsonArray.single().jsonObject.getValue("limbo").jsonPrimitive.content shouldBe "0"
-            harness.limbo.count(RootName.MAIN) shouldBe 0
+            harness.limbo.count(RootName.PRIMARY) shouldBe 0
         }
     }
 })

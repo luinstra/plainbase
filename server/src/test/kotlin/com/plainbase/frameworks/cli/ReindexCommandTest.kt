@@ -91,13 +91,13 @@ class ReindexCommandTest : FunSpec({
         withTwoRootTree { config, _ ->
             val out = captureStdout { runReindex(emptyList(), config) shouldBe 0 }
             out.lineSequence().toList() shouldContain
-                "reindex: rebuilt the search index for 3 page(s) across 2 roots: main (2), handbook (1)"
+                "reindex: rebuilt the search index for 3 page(s) across 2 roots: docs (2), handbook (1)"
 
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 // The regression this pins: a main-only source list would leave the engine holding `main` alone,
                 // because the rebuild is a GENERATION SWAP - every root it does not see is deleted from the index.
-                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
                 provider.search(SearchQuery(text = "capacitor", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
             }
@@ -116,7 +116,7 @@ class ReindexCommandTest : FunSpec({
 
             // Nothing was swapped: the vanished root's documents are still in the engine, and come back when it does.
             SearchDb(config.searchDatabasePath).use { db ->
-                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
             }
         }
     }
@@ -139,7 +139,7 @@ class ReindexCommandTest : FunSpec({
             // The swap never happened: handbook's documents are still searchable, exactly as for a root nobody touched.
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
-                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
             }
         }
@@ -152,12 +152,12 @@ class ReindexCommandTest : FunSpec({
             // `openStores` constructs main's entry EXPLICITLY, outside the extras fold - the one place `decorate` could
             // be dropped without any other test noticing, since the test above only ever drives it through an EXTRA.
             // Undecorated, main's store would be the real one: nothing vanishes, and this run returns 0.
-            val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(RootName.MAIN)) shouldBe 1 }
-            err shouldContain "root 'main' went away while it was being indexed"
+            val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(RootName.PRIMARY)) shouldBe 1 }
+            err shouldContain "root 'docs' went away while it was being indexed"
             err shouldContain "nothing was written"
 
             SearchDb(config.searchDatabasePath).use { db ->
-                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.MAIN, HANDBOOK)
+                Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
             }
         }
     }
@@ -230,7 +230,7 @@ private fun withTwoRootTree(block: (PlainbaseConfig, Path) -> Unit) {
                 config.copy(
                     roots = RootsConfig.of(
                         list = listOf(
-                            Root(RootName.MAIN, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
+                            Root(RootName.PRIMARY, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
                             Root(HANDBOOK, RootBackend.Local(handbook), editable = true, history = HistoryMode.OFF),
                         ),
                         origin = RootsOrigin.EXPLICIT,

@@ -6,6 +6,7 @@ import com.plainbase.domain.repository.ApiTokenMeta
 import com.plainbase.domain.repository.Role
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.Permalink
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
@@ -280,7 +281,7 @@ object AdminCommand {
         }
         output.result(
             "force-retired ${id.value} in root '${root.value}' (last at ${binding.path.path.value}); " +
-                "/p/${root.value}/${id.value} now answers 410 for a snapshot-absent page. If the file is still present, " +
+                "${Permalink.of(root, id)} now answers 410 for a snapshot-absent page. If the file is still present, " +
                 "the next pass reclaims the id at its own (root, path).",
         )
         return 0

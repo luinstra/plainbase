@@ -4,7 +4,7 @@ import type { MouseEvent } from "react";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree } from "../api/types";
 import { interceptableHref } from "../lib/links";
-import { entryFor, rootAcceptsWrites, rootOfLocation } from "../lib/tree";
+import { entryFor, primaryEntry, rootAcceptsWrites, rootOfLocation } from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
 import { SearchPalette } from "./SearchPalette";
 import { Sidebar } from "./Sidebar";
@@ -53,7 +53,7 @@ function newPageBlockedReason(target: RootTree | null): string | undefined {
 
 /**
  * App shell: header + tree sidebar + content outlet. One delegated click handler routes
- * every internal `/docs/...` / `/p/...` anchor (either permalink form) — sidebar links AND links inside the
+ * every internal root-content or `/p/...` anchor (either permalink form), including sidebar links and links inside the
  * server-rendered prose — through the SPA router; external links keep native behavior
  * (lib/links.ts decides).
  */
@@ -65,33 +65,32 @@ export function Shell() {
   // that would need a server DTO change, out of scope for this frontend-only chunk).
   const session = useQuery(sessionQuery);
 
-  // WHERE a new page lands: the root the reader's ADDRESS names - its `/docs/{root}` url space, or the root
+  // WHERE a new page lands: the root the reader's ADDRESS names, or the root
   // segment of a `/p/{root}/{id}` permalink - carried into `/new` as `?root=`. The wire `root` is REQUIRED and
-  // has no server-side default (an omitted one is a 400 `invalid_root`, never permission to write into main),
+  // has no server-side default (an omitted one is a 400 `invalid_root`),
   // so SOMETHING must name it: on an address that names none (a bare permalink, `/review`, `/admin`) the create
-  // has no root of its own and `NewPage` resolves it to the reserved `main` - the one legal client-side root
-  // literal.
+  // has no root of its own and `NewPage` resolves it to the primary wire entry.
   //
   // Until the tree RESOLVES there is no answer at all — not even "no root": the roots and their url prefixes are
   // exactly what the tree carries, so a `/new` link rendered in that window would look identical on an extra-root
-  // page and on `/review`, and land the bytes in main either way. So the action is DISABLED rather than wrong: a
+  // page and on `/review`, and land the bytes in the primary root either way. So the action is DISABLED rather than wrong: a
   // reader who has to wait a beat has lost nothing, a reader whose page silently appeared in the wrong repository
   // has. (Same reason the create payload threads the root explicitly — see api/types.ts `CreateRequest.root`.)
   const tree = useQuery(treeQuery);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const roots = tree.data?.roots;
   const currentRoot = roots ? rootOfLocation(roots, pathname) : null;
-  // WHETHER a new page can land there at all: the target root must be editable AND serving. Off the docs routes
-  // the target is the `main` the create would resolve to, so main's bits decide, not "none". Read-only, down, and
+  // WHETHER a new page can land there at all: the target root must be editable AND serving. Off root-content routes
+  // the target is the primary entry, so its bits decide, not "none". Read-only, down, and
   // not-yet-known all get the SAME disabled twin, for one reason: an enabled action that can only end in a 403 or
   // a 503 is a reader taken into the editor to lose their keystrokes at save. (`plainbase root add` defaults an
   // extra root to `editable = false`, so the read-only case is the ordinary state of a CLI-added root, not a
   // corner; the unavailable case is a root whose disk is not mounted, which the tree still LISTS.)
-  const target = roots ? entryFor(roots, currentRoot ?? "main") : null;
-  const canCreate = rootAcceptsWrites(roots, currentRoot ?? "main");
+  const target = roots ? (currentRoot ? entryFor(roots, currentRoot) : primaryEntry(roots)) : null;
+  const canCreate = target ? rootAcceptsWrites(roots, target.root) : false;
 
   const onClick = (event: MouseEvent) => {
-    const href = interceptableHref(event.nativeEvent);
+    const href = interceptableHref(event.nativeEvent, roots);
     if (href) {
       event.preventDefault();
       router.history.push(href);

@@ -54,7 +54,7 @@ class WritePipelineTest : FunSpec({
                 val saveBytes = "---\ntitle: Edit Me\n---\n\n# Edit Me\n\nmy save.\n".toByteArray()
                 val outcome = harness.writePipeline().write(
                     grantForTests(),
-                    WriteIntent(page.id, RootName.MAIN, page.path, baseHash, saveBytes),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, baseHash, saveBytes),
                 )
 
                 outcome.shouldBeInstanceOf<WriteOutcome.Conflict>().reason shouldBe "content_changed"
@@ -74,7 +74,7 @@ class WritePipelineTest : FunSpec({
 
                 val outcome = harness.writePipeline().write(
                     grantForTests(),
-                    WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, saveBytes),
                 )
 
                 val written = outcome.shouldBeInstanceOf<WriteOutcome.Written>()
@@ -107,18 +107,18 @@ class WritePipelineTest : FunSpec({
                 val urlBefore = page.urlPath
                 val pipeline = harness.writePipeline()
 
-                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, doc(slug = "new-slug")))
+                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, doc(slug = "new-slug")))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "slug"
 
                 pipeline.write(
                     grantForTests(),
-                    WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, doc(redirect = "other/path")),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, doc(redirect = "other/path")),
                 )
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "redirect_from"
 
                 pipeline.write(
                     grantForTests(),
-                    WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, doc(id = "00000000-0000-0000-0000-000000000000")),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, doc(id = "00000000-0000-0000-0000-000000000000")),
                 )
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
@@ -144,12 +144,12 @@ class WritePipelineTest : FunSpec({
 
                 // (a) Removing the id line entirely (null ≠ present) — a rename, rejected.
                 val idRemoved = "---\ntitle: Stable\n---\n\n# Stable\n\nbody edited.\n".toByteArray()
-                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, idRemoved))
+                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, idRemoved))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
                 // (b) Changing the id to a different value — also rejected.
                 val idChanged = "---\nid: 0190ffff-bbbb-7ccc-8ddd-eeeeeeeeeeee\ntitle: Stable\n---\n\n# Stable\n\nbody.\n".toByteArray()
-                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, idChanged))
+                pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, idChanged))
                     .shouldBeInstanceOf<WriteOutcome.UnsupportedEdit>().field shouldBe "id"
 
                 Files.readAllBytes(root.resolve("guides/stable.md")) shouldBe before // nothing written either time
@@ -175,13 +175,13 @@ class WritePipelineTest : FunSpec({
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
                 // The copy: its on-disk frontmatter id is the shared id, but its assigned pageId is minted (different).
-                val copy = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("b-copy.md")))
+                val copy = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("b-copy.md")))
                 copy.frontmatter.scalar("id") shouldBe sharedId
                 copy.id.value shouldNotBe sharedId // the reassigned (minted) pageId genuinely differs
 
                 // A body-only edit keeping the SAME on-disk id is a content edit — must be Written, not rejected.
                 val edited = dup(sharedId, "the copy, edited.").toByteArray()
-                harness.writePipeline().write(grantForTests(), WriteIntent(copy.id, RootName.MAIN, copy.path, copy.contentHash, edited))
+                harness.writePipeline().write(grantForTests(), WriteIntent(copy.id, RootName.PRIMARY, copy.path, copy.contentHash, edited))
                     .shouldBeInstanceOf<WriteOutcome.Written>()
                 Files.readAllBytes(root.resolve("b-copy.md")) shouldBe edited
             }
@@ -212,7 +212,7 @@ class WritePipelineTest : FunSpec({
                 )
                 val outcome = pipeline.write(
                     grantForTests(),
-                    WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, "x".toByteArray()),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, "x".toByteArray()),
                 )
                 outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>().cause shouldBe "simulated permission denied"
                 harness.dirtyPages.all().isEmpty() shouldBe true // nothing written ⇒ mark cleared
@@ -238,7 +238,10 @@ class WritePipelineTest : FunSpec({
                 val pipeline = harness.writePipeline(store = mutatingStore)
                 val saveBytes = "---\ntitle: Edit Me\n---\n\n# Edit Me\n\nthe intended save.\n".toByteArray()
 
-                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(
+                    grantForTests(),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, saveBytes),
+                )
                 outcome.shouldBeInstanceOf<WriteOutcome.Unreadable>()
                 harness.dirtyPages.all().shouldHaveSize(1) // mark RETAINED over the mutated target (expectedHash = saveBytes')
 
@@ -271,14 +274,14 @@ class WritePipelineTest : FunSpec({
                 }
                 val pageId = PageId.require("01900000-0000-7000-8000-0000000000d1")
                 val bytes = "---\nid: ${pageId.value}\ntitle: Doomed\n---\n\n# Doomed\n\nbody.\n".toByteArray()
-                val intent = CreateIntent(pageId, RootName.MAIN, TreePath.require("doomed.md"), bytes)
+                val intent = CreateIntent(pageId, RootName.PRIMARY, TreePath.require("doomed.md"), bytes)
 
                 harness.writePipeline(store = failingCreateStore(mutated = true))
                     .create(createGrantForTests(), intent)
                     .shouldBeInstanceOf<WriteOutcome.Unreadable>()
                 harness.dirtyPages.all().shouldHaveSize(1) // mark RETAINED (expectedHash = the intended bytes')
 
-                harness.dirtyPages.clear(RootedPageId(RootName.MAIN, pageId))
+                harness.dirtyPages.clear(RootedPageId(RootName.PRIMARY, pageId))
                 harness.writePipeline(store = failingCreateStore(mutated = false))
                     .create(createGrantForTests(), intent)
                     .shouldBeInstanceOf<WriteOutcome.Unreadable>()
@@ -305,7 +308,7 @@ class WritePipelineTest : FunSpec({
                 provider.failOnIndex = true
                 val outcome = pipeline.create(
                     createGrantForTests(),
-                    CreateIntent(pageId, RootName.MAIN, TreePath.require("created.md"), bytes),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("created.md"), bytes),
                 )
 
                 outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
@@ -341,7 +344,7 @@ class WritePipelineTest : FunSpec({
                 val committer = com.plainbase.domain.history.CommitIdentity("Alice Admin", "alice@builtin.plainbase.local")
                 pipeline.create(
                     createGrantForTests(),
-                    CreateIntent(pageId, RootName.MAIN, TreePath.require("attr.md"), bytes, author = author, committer = committer),
+                    CreateIntent(pageId, RootName.PRIMARY, TreePath.require("attr.md"), bytes, author = author, committer = committer),
                 ).shouldBeInstanceOf<WriteOutcome.Written>()
                 capturedAuthor shouldBe author
                 capturedCommitter shouldBe committer

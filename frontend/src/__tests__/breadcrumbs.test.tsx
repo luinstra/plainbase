@@ -15,16 +15,17 @@ import { Breadcrumbs } from "../components/Breadcrumbs";
 const tree: TreeResponse = {
   roots: [
     {
-      root: "main",
+      root: "docs",
       available: true,
       editable: true,
+      primary: true,
       tree: {
         type: "folder",
         name: "",
         title: null,
         description: null,
         path: "",
-        url: "/docs/main",
+        url: "/docs",
         page_count: 0,
         children: [
           {
@@ -33,11 +34,11 @@ const tree: TreeResponse = {
             title: null,
             description: null,
             path: "runbooks",
-            url: "/docs/main/runbooks",
+            url: "/docs/runbooks",
             page_count: 2,
             children: [
-              { type: "page", id: "id-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/main/runbooks/index", status: "active", updated: null },
-              { type: "page", id: "id-deploy", title: "Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/main/runbooks/deploy", status: "active", updated: null },
+              { type: "page", id: "id-index", title: "Runbooks", slug: "index", path: "runbooks/index.md", url: "/docs/runbooks/index", status: "active", updated: null },
+              { type: "page", id: "id-deploy", title: "Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/runbooks/deploy", status: "active", updated: null },
             ],
           },
         ],
@@ -48,13 +49,14 @@ const tree: TreeResponse = {
       root: "extra",
       available: true,
       editable: true,
+      primary: false,
       tree: {
         type: "folder",
         name: "",
         title: null,
         description: null,
         path: "",
-        url: "/docs/extra",
+        url: "/extra",
         page_count: 0,
         children: [
           {
@@ -63,10 +65,10 @@ const tree: TreeResponse = {
             title: "Extra Runbooks",
             description: null,
             path: "runbooks",
-            url: "/docs/extra/runbooks",
+            url: "/extra/runbooks",
             page_count: 1,
             children: [
-              { type: "page", id: "id-extra", title: "Extra Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/docs/extra/runbooks/deploy", status: "active", updated: null },
+              { type: "page", id: "id-extra", title: "Extra Deploy", slug: "deploy", path: "runbooks/deploy.md", url: "/extra/runbooks/deploy", status: "active", updated: null },
             ],
           },
         ],
@@ -75,7 +77,7 @@ const tree: TreeResponse = {
   ],
 };
 
-function renderCrumbs(path: string, title: string, root = "main") {
+function renderCrumbs(path: string, title: string, root = "docs") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, tree);
   return render(
@@ -91,7 +93,7 @@ function renderSoloCrumbs(path: string, title: string) {
   queryClient.setQueryData(treeQuery.queryKey, { roots: [tree.roots[0]] } satisfies TreeResponse);
   return render(
     <QueryClientProvider client={queryClient}>
-      <Breadcrumbs root="main" path={path} title={title} />
+      <Breadcrumbs root="docs" path={path} title={title} />
     </QueryClientProvider>,
   );
 }
@@ -100,13 +102,13 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("Breadcrumbs", () => {
   it("drops the redundant ancestor crumb on a section's own index landing", () => {
-    // The index page renders AS the /docs/main/runbooks landing; folderTitle(runbooks) === the index title,
-    // so the parent crumb would self-link to the very page shown. The trail collapses to `main / Runbooks`.
+    // The index page renders AS the /docs/runbooks landing; folderTitle(runbooks) === the index title,
+    // so the parent crumb would self-link to the very page shown. The trail collapses to `docs / Runbooks`.
     const { container } = renderCrumbs("runbooks/index.md", "Runbooks");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
-    expect(items.map((li) => li.textContent)).toEqual(["main", "Runbooks"]);
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks"]);
     // No ancestor crumb links to the page being viewed.
-    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
+    expect(container.querySelector('a[href="/docs/runbooks"]')).toBeNull();
     // The leaf is the non-link current crumb.
     const current = container.querySelector('[aria-current="page"]')!;
     expect(current.textContent).toBe("Runbooks");
@@ -115,57 +117,48 @@ describe("Breadcrumbs", () => {
   it("keeps the ancestor crumb for a normal page under a folder", () => {
     const { container } = renderCrumbs("runbooks/deploy.md", "Deploy");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
-    expect(items.map((li) => li.textContent)).toEqual(["main", "Runbooks", "Deploy"]);
+    expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks", "Deploy"]);
     // The ancestor links to its folder landing.
-    expect(container.querySelector('a[href="/docs/main/runbooks"]')?.textContent).toBe("Runbooks");
+    expect(container.querySelector('a[href="/docs/runbooks"]')?.textContent).toBe("Runbooks");
   });
 
   it("scopes the folder lookup BY root: the same relative path in another root gets ITS titles and urls", () => {
     // Both roots hold `runbooks/`; the extra-root page must crumb through the EXTRA entry's folder
-    // (title + url), never main's - the root prop is the scope, the path alone is ambiguous.
+    // (title + url), never the primary root's. The root prop is the scope, because the path alone is ambiguous.
     const { container } = renderCrumbs("runbooks/deploy.md", "Extra Deploy", "extra");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["extra", "Extra Runbooks", "Extra Deploy"]);
-    expect(container.querySelector('a[href="/docs/extra/runbooks"]')?.textContent).toBe("Extra Runbooks");
-    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
+    expect(container.querySelector('a[href="/extra/runbooks"]')?.textContent).toBe("Extra Runbooks");
+    expect(container.querySelector('a[href="/docs/runbooks"]')).toBeNull();
   });
 
   it("roots the trail in THIS page's root, linking to that root's own url - never back to /docs", () => {
     // The crumb was hardcoded `{ label: "docs", url: "/docs" }`. On an extra root that named the wrong
-    // tree AND, because `/docs` legacy-redirects to main, quietly walked the reader into a DIFFERENT
+    // tree AND, because bare `/docs` resolves to the primary, quietly walked the reader into a DIFFERENT
     // root's copy of the docs. The negative assertion is the load-bearing one.
     const { container } = renderCrumbs("runbooks/deploy.md", "Extra Deploy", "extra");
     const crumb = container.querySelector("a")!;
     expect(crumb.textContent).toBe("extra");
-    // The url is the entry's SERVER-ISSUED root url, consumed verbatim (never `/docs/${root}` re-derived).
-    expect(crumb.getAttribute("href")).toBe("/docs/extra");
+    // The url is the entry's SERVER-ISSUED root url, consumed verbatim and never re-derived from the root name.
+    expect(crumb.getAttribute("href")).toBe("/extra");
     expect(container.querySelector('a[href="/docs"]')).toBeNull();
     expect(container.textContent).not.toContain("docs /");
   });
 
-  it("names the root ONLY when there is more than one: a SINGLE-root install keeps the `docs` crumb", () => {
-    // The rule the sidebar section headers and the search root badges already follow (`roots.length > 1`),
-    // and the breadcrumb follows it for the same reason: with the one root every legacy install has,
-    // "main" is an internal name leaking into the UI where a meaningful word used to be. Naming it
-    // unconditionally would be a UX regression for essentially every current user, shipped as a side
-    // effect of a multi-root refactor.
+  it("derives a single-root crumb from its server-issued entry", () => {
     const { container } = renderSoloCrumbs("runbooks/deploy.md", "Deploy");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks", "Deploy"]);
     expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("docs");
-    expect(container.querySelector('a[href="/docs/main"]')).toBeNull();
   });
 
-  it("SINGLE root × index landing: the trail collapses to `docs / Runbooks`", () => {
-    // The combination every existing single-root install actually runs, and it was pinned by NOTHING: the
-    // collapse test above runs against the MULTI-root fixture (so it asserts `main / Runbooks`), and the
-    // single-root test covers only a normal page. Either half can regress without the other noticing.
+  it("single root index landing: the trail collapses to `docs / Runbooks`", () => {
     const { container } = renderSoloCrumbs("runbooks/index.md", "Runbooks");
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
     expect(items.map((li) => li.textContent)).toEqual(["docs", "Runbooks"]);
     expect(container.querySelector('a[href="/docs"]')?.textContent).toBe("docs");
     // No ancestor crumb links to the page being viewed.
-    expect(container.querySelector('a[href="/docs/main/runbooks"]')).toBeNull();
+    expect(container.querySelector('a[href="/docs/runbooks"]')).toBeNull();
     expect(container.querySelector('[aria-current="page"]')?.textContent).toBe("Runbooks");
   });
 
@@ -186,18 +179,15 @@ describe("Breadcrumbs", () => {
     await waitFor(() => expect(container.querySelector("[data-pb-breadcrumbs-error]")).not.toBeNull());
     // The trail itself still renders (the page is perfectly readable) and still links nowhere.
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
-    expect(items.map((li) => li.textContent)).toEqual(["docs", "runbooks", "Extra Deploy"]);
+    expect(items.map((li) => li.textContent)).toEqual(["extra", "runbooks", "Extra Deploy"]);
     expect(container.querySelectorAll("a")).toHaveLength(0);
     // A settled failure is NOT busy - the one bit that tells the two states apart.
     expect(container.querySelector("[data-pb-breadcrumbs]")?.getAttribute("aria-busy")).toBe("false");
   });
 
-  it("while the tree is still loading the `docs` crumb is INERT - a link there could walk the reader into main", () => {
-    // The root COUNT is unknown until the tree arrives, and the crumb's two forms disagree about where it
-    // POINTS: on a single-root install `/docs` is this page's own tree, and on a multi-root one `/docs`
-    // resolves to MAIN. So a linked `docs` crumb rendered in this window takes a reader who is on an EXTRA
-    // root's page and, on click, walks them out of the tree they are reading and into a different one.
-    // The label still renders (the trail must not reflow); it simply does not link anywhere until we know.
+  it("while the tree is still loading the root crumb is inert", () => {
+    // The server-issued root URL is unknown until the tree arrives, so the label renders without a guessed
+    // link. This keeps an extra-root reader in the same tree while navigation is pending.
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { container } = render(
       <QueryClientProvider client={queryClient}>
@@ -205,7 +195,7 @@ describe("Breadcrumbs", () => {
       </QueryClientProvider>,
     );
     const items = [...container.querySelectorAll("li")].filter((li) => li.textContent?.trim() !== "/");
-    expect(items.map((li) => li.textContent)).toEqual(["docs", "runbooks", "Extra Deploy"]);
+    expect(items.map((li) => li.textContent)).toEqual(["extra", "runbooks", "Extra Deploy"]);
     expect(container.querySelector('a[href="/docs"]')).toBeNull();
     // No crumb links anywhere in this window: the ancestor has no server-issued url yet either.
     expect(container.querySelectorAll("a")).toHaveLength(0);

@@ -39,7 +39,7 @@ class ForceRetireCommandTest : FunSpec({
             block(
                 base.copy(
                     roots = RootsConfig.of(
-                        list = listOf(Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)),
+                        list = listOf(Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)),
                         origin = RootsOrigin.EXPLICIT,
                     ),
                 ),
@@ -52,7 +52,7 @@ class ForceRetireCommandTest : FunSpec({
     fun seedBinding(config: PlainbaseConfig, rel: String) {
         DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
             SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                .bind(RootedPath(RootName.MAIN, TreePath.require(rel)), PageId.require(id), materialized = false)
+                .bind(RootedPath(RootName.PRIMARY, TreePath.require(rel)), PageId.require(id), materialized = false)
         }
     }
 
@@ -64,14 +64,14 @@ class ForceRetireCommandTest : FunSpec({
 
     test("a malformed id -> exit 2 (usage)") {
         withConfig { config ->
-            AdminCommand.run(listOf("force-retire", "main", "not-a-uuid"), config, CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("force-retire", "docs", "not-a-uuid"), config, CommandOutputFixture().output) shouldBe 2
         }
     }
 
     test("wrong arity (too few / too many) -> exit 2") {
         withConfig { config ->
-            AdminCommand.run(listOf("force-retire", "main"), config, CommandOutputFixture().output) shouldBe 2
-            AdminCommand.run(listOf("force-retire", "main", id, "extra"), config, CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("force-retire", "docs"), config, CommandOutputFixture().output) shouldBe 2
+            AdminCommand.run(listOf("force-retire", "docs", id, "extra"), config, CommandOutputFixture().output) shouldBe 2
         }
     }
 
@@ -86,7 +86,7 @@ class ForceRetireCommandTest : FunSpec({
     test("a registered root with no live binding for the id -> exit 1") {
         withConfig { config ->
             val out = CommandOutputFixture()
-            AdminCommand.run(listOf("force-retire", "main", id), config, out.output) shouldBe 1
+            AdminCommand.run(listOf("force-retire", "docs", id), config, out.output) shouldBe 1
             out.stderr shouldContain "no live binding"
         }
     }
@@ -96,11 +96,11 @@ class ForceRetireCommandTest : FunSpec({
             seedBinding(config, "guides/a.md")
 
             val reap = CommandOutputFixture()
-            AdminCommand.run(listOf("force-retire", "main", id), config, reap.output) shouldBe 0
+            AdminCommand.run(listOf("force-retire", "docs", id), config, reap.output) shouldBe 0
             reap.stdout shouldContain "force-retired"
 
             val again = CommandOutputFixture()
-            AdminCommand.run(listOf("force-retire", "main", id), config, again.output) shouldBe 0
+            AdminCommand.run(listOf("force-retire", "docs", id), config, again.output) shouldBe 0
             again.stdout shouldContain "already retired"
         }
     }
@@ -112,17 +112,17 @@ class ForceRetireCommandTest : FunSpec({
 
             rootsLock.use {
                 val refused = CommandOutputFixture()
-                AdminCommand.run(listOf("force-retire", "main", id), config, refused.output) shouldBe 1
+                AdminCommand.run(listOf("force-retire", "docs", id), config, refused.output) shouldBe 1
                 refused.stderr shouldContain "root` command is holding"
 
                 DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                     SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
-                        .bindingInRoot(RootName.MAIN, PageId.require(id)).shouldNotBeNull()
+                        .bindingInRoot(RootName.PRIMARY, PageId.require(id)).shouldNotBeNull()
                 }
             }
 
             val retried = CommandOutputFixture()
-            AdminCommand.run(listOf("force-retire", "main", id), config, retried.output) shouldBe 0
+            AdminCommand.run(listOf("force-retire", "docs", id), config, retried.output) shouldBe 0
             retried.stdout shouldContain "force-retired"
         }
     }
@@ -132,7 +132,7 @@ class ForceRetireCommandTest : FunSpec({
         try {
             val content = Files.createDirectories(data.resolve("content"))
             val extraContent = Files.createDirectories(data.resolve("extra"))
-            val main = Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)
+            val main = Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF)
             val extra = Root(RootName.require("extra"), RootBackend.Local(extraContent), editable = true, history = HistoryMode.OFF)
             val base = PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0)
             // The snapshot the command started with: `extra` is still registered.

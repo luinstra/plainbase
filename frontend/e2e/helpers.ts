@@ -1,12 +1,18 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Response } from "@playwright/test";
 
 /**
  * Shared spec helpers. `playwright.config.ts` sets `testDir: "./e2e"` with the default `testMatch`
  * (`*.spec.ts`), so this module is never collected as a test file.
  *
- * Nothing typechecks this file: `frontend/tsconfig.json` includes `src` only, so an error here shows
- * up at `:frontend:smokeTest` and nowhere earlier.
+ * `frontend/tsconfig.json` includes `e2e`, so `:frontend:build` typechecks these helpers.
  */
+
+/** Opens a server-backed route and verifies the transport status before making DOM assertions. */
+export async function gotoExpectStatus(page: Page, url: string, status = 200): Promise<Response | null> {
+  const response = await page.goto(url);
+  expect(response?.status(), url).toBe(status);
+  return response;
+}
 
 /** Plants a marker that a full page (re)load would wipe. */
 export async function plantNoReloadMarker(page: Page) {

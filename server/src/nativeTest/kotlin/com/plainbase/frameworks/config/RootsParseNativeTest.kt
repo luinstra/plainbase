@@ -25,14 +25,14 @@ class RootsParseNativeTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main { path = "/roots/m" }
+                  docs { path = "/roots/m" }
                   zeta { path = "/roots/z" }, alpha { path = "/roots/a" }
                 }
                 """.trimIndent(),
             )
             val config = PlainbaseConfig.fromEnvAndFile(mapOf("DATA_DIR" to data.toString()))
             assertEquals(RootsOrigin.EXPLICIT, config.roots.origin)
-            assertEquals(listOf("main", "alpha", "zeta"), config.roots.list.map { it.name.value })
+            assertEquals(listOf("docs", "alpha", "zeta"), config.roots.list.map { it.name.value })
         } finally {
             Files.walk(data).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
@@ -49,7 +49,7 @@ class RootsParseNativeTest {
                 data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main { path = "$docs" }
+                  docs { path = "$docs" }
                   twin { path = "$link" }
                 }
                 """.trimIndent(),

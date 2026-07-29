@@ -86,7 +86,7 @@ class FacadeGuardTest : FunSpec({
                 rows.single().decision shouldBe "denied"
                 // Rooted since C4: a write decision audits `{root}:{resource}` (the id alone would lose which
                 // tree the bytes were bound for, which is the one thing an auditor most needs from a write row).
-                rows.single().resource shouldBe "main:${page.id.value}"
+                rows.single().resource shouldBe "docs:${page.id.value}"
             }
         } finally {
             root.toFile().deleteRecursively()

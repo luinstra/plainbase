@@ -115,10 +115,10 @@ object AdoptCommand {
                 // to prevent. Extras are local-only in v1 (D10), so this is the whole local topology.
                 //
                 // Main is EXPLICIT (its tree is `mainContentRoot()`, the env-sourced path, not `localPath`); the fold
-                // sees ONLY extras and never re-selects main by name. The report below iterates the REGISTRY, so this
+                // sees ONLY extras and never re-selects primary by name. The report below iterates the REGISTRY, so this
                 // map's insertion order is nobody's contract.
                 StorageBackend.LOCAL -> {
-                    stores[registry.main.name] = localStore(config, config.mainContentRoot(), registry.main.name)
+                    stores[registry.primary.name] = localStore(config, config.mainContentRoot(), registry.primary.name)
                     registry.extras.forEach { root ->
                         val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
                         stores[root.name] = localStore(config, path, root.name)
@@ -136,9 +136,9 @@ object AdoptCommand {
                         config,
                         IgnoreRules(),
                         dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
-                        isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
+                        isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
                     )
-                    stores[registry.main.name] = hybrid
+                    stores[registry.primary.name] = hybrid
                     if (mode != AdoptionPass.Mode.PREVIEW && !hydrate(hybrid, output)) {
                         return 1
                     }
@@ -335,7 +335,7 @@ object AdoptCommand {
     private fun adoptedTree(config: PlainbaseConfig, registry: RootRegistry, root: RootName): Path =
         when (config.storage.backend) {
             StorageBackend.LOCAL ->
-                if (root == registry.main.name) config.mainContentRoot() else requireNotNull(registry.byName(root)?.localPath)
+                if (root == registry.primary.name) config.mainContentRoot() else requireNotNull(registry.byName(root)?.localPath)
             StorageBackend.OBJECT -> config.dataDir.resolve("mirror")
         }
 

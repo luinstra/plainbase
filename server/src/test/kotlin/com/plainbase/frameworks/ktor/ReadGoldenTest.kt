@@ -66,8 +66,8 @@ class ReadGoldenTest : FunSpec({
             Files.writeString(root.resolve("broken.md"), brokenSource)
             Files.writeString(root.resolve("clean.md"), cleanSource)
             val seed: (IdMapRepository) -> Unit = { idMap ->
-                idMap.bind(RootedPath(RootName.MAIN, TreePath.require("broken.md")), PageId.require(brokenId), materialized = false)
-                idMap.bind(RootedPath(RootName.MAIN, TreePath.require("clean.md")), PageId.require(cleanId), materialized = false)
+                idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("broken.md")), PageId.require(brokenId), materialized = false)
+                idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("clean.md")), PageId.require(cleanId), materialized = false)
             }
             restTest(root, seed) { block() }
         } finally {

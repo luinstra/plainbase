@@ -91,7 +91,7 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
                 val outcome = AtomicReference<WriteOutcome>()
                 val threadB = thread {
                     outcome.set(
-                        pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require("race.md"), bytes)),
+                        pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.PRIMARY, TreePath.require("race.md"), bytes)),
                     )
                 }
 
@@ -114,8 +114,8 @@ class WritePipelineCreateRebuildRaceTest : FunSpec({
 
                 // current agrees (byPath and byId both resolve it), the journal is clean, bytes are verbatim.
                 val racePath = TreePath.require("race.md")
-                harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, racePath)).id shouldBe pageId
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId))!!.path shouldBe racePath
+                harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, racePath)).id shouldBe pageId
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, pageId))!!.path shouldBe racePath
                 harness.dirtyPages.all().isEmpty() shouldBe true
                 Files.readAllBytes(root.resolve("race.md")) shouldBe bytes
             }

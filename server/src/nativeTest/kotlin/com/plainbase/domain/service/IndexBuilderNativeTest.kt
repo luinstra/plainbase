@@ -48,9 +48,9 @@ class IndexBuilderNativeTest {
                 val idMap = SqlDelightIdMapRepository(database)
                 val aliases = SqlDelightUrlAliasRepository(database)
                 val registry = UrlAliasRegistry(aliases)
-                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val builder = IndexBuilder(
-                    sources = listOf(IndexBuilder.Source(rootRegistry.main, LocalContentStore(content), NoOpHistoryProvider)),
+                    sources = listOf(IndexBuilder.Source(rootRegistry.primary, LocalContentStore(content), NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
@@ -66,16 +66,19 @@ class IndexBuilderNativeTest {
                 val first = builder.rebuild()
                 assertEquals(1, first.pages.size)
                 val page = first.pages.single()
-                assertEquals("/docs/main/docs/start", page.url)
+                assertEquals("/docs/docs/start", page.url)
                 assertEquals(first, builder.current) // the AtomicReference swap published it
 
                 // Move the page; the rescan must re-point the id and record the old canonical path.
                 Files.createDirectories(content.resolve("archive"))
                 Files.move(content.resolve("docs/start.md"), content.resolve("archive/start.md"))
                 val second = builder.rebuild()
-                assertEquals("/docs/main/archive/start", second.pageAt(RootedPageId(RootName.MAIN, page.id))!!.url)
-                assertNotNull(registry.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
-                assertEquals(RootedPageId(RootName.MAIN, page.id), aliases.find(RootedPath(RootName.MAIN, TreePath.require("docs/start"))))
+                assertEquals("/docs/archive/start", second.pageAt(RootedPageId(RootName.PRIMARY, page.id))!!.url)
+                assertNotNull(registry.find(RootedPath(RootName.PRIMARY, TreePath.require("docs/start"))))
+                assertEquals(
+                    RootedPageId(RootName.PRIMARY, page.id),
+                    aliases.find(RootedPath(RootName.PRIMARY, TreePath.require("docs/start"))),
+                )
             } finally {
                 Files.walk(content).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             }

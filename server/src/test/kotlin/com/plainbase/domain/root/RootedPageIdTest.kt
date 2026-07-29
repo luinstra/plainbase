@@ -16,14 +16,14 @@ class RootedPageIdTest : FunSpec({
 
     test("permalink is the rooted /p/{root}/{id} form") {
         val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-        RootedPageId(RootName.MAIN, id).permalink shouldBe "/p/main/${id.value}"
-        Permalink.of(RootName.MAIN, id) shouldBe "/p/main/${id.value}"
+        RootedPageId(RootName.PRIMARY, id).permalink shouldBe "/p/docs/${id.value}"
+        Permalink.of(RootName.PRIMARY, id) shouldBe "/p/docs/${id.value}"
     }
 
     test("two roots holding the same id emit DIFFERENT permalinks") {
         val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
         val notes = RootName.require("notes")
         RootedPageId(notes, id).permalink shouldBe "/p/notes/${id.value}"
-        RootedPageId(notes, id).permalink shouldNotBe RootedPageId(RootName.MAIN, id).permalink
+        RootedPageId(notes, id).permalink shouldNotBe RootedPageId(RootName.PRIMARY, id).permalink
     }
 })

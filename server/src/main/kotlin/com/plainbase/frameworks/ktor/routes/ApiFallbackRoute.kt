@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.request.path
@@ -18,7 +19,7 @@ import io.ktor.server.routing.route
  * honest 404 instead of the shell.
  */
 fun Route.apiFallbackRoute() {
-    route("/api/{...}") {
+    route("/${ServerTopLevel.API}/{...}") {
         handle {
             call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such API endpoint: ${call.request.path()}")
         }

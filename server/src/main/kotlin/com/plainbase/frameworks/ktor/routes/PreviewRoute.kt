@@ -2,6 +2,7 @@ package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
 import com.plainbase.frameworks.ktor.dto.PreviewResponse
@@ -25,7 +26,7 @@ import io.ktor.server.routing.post
  * size class as a saved document). NOT in `ForeverApiGoldenSuite`; no byte-equal-to-`/html` claim.
  */
 fun Route.previewRoute(ctx: RouteContext) {
-    post("/api/v1/preview") {
+    post("/${ServerTopLevel.API}/v1/preview") {
         val principal = ctx.principalOrRefuse(call) ?: return@post
         call.guarded {
             // (1) Media type — the RAW body is a Markdown document (mirror the PUT guard).
@@ -45,13 +46,13 @@ fun Route.previewRoute(ctx: RouteContext) {
             // content-relative), else a fixed synthetic root path for a not-yet-saved buffer.
             val sourcePath = call.previewPath()
 
-            // (3b) WHICH root's link space to resolve against: an optional ?root= (a registered name), else main.
+            // (3b) WHICH root's link space to resolve against: an optional ?root= (a registered name), else the primary (`docs`).
             // Unlike ?path=, an unusable value is a hard 400 rather than a silent default - `[[other page]]` links
             // would otherwise resolve against the wrong root's pages and the preview would quietly lie.
             val root = call.request.queryParameters["root"]?.let { raw ->
                 RootName.registered(raw, ctx.roots)
                     ?: return@guarded call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_ROOT, "Unknown root: '$raw'")
-            } ?: RootName.MAIN
+            } ?: RootName.PRIMARY
 
             // (4) Single-renderer reuse against the current published snapshot (READ-ONLY, read-gated).
             val rendered = ctx.read.preview(principal, root, sourcePath, bytes)

@@ -39,7 +39,7 @@ class HistoryCitationTest : FunSpec({
     val pagePath = "notes/page.md"
     val seed: (
         IdMapRepository,
-    ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
+    ) -> Unit = { it.bind(RootedPath(RootName.PRIMARY, TreePath.require(pagePath)), PageId.require(pageId), materialized = false) }
 
     fun withTree(block: (Path) -> Unit) {
         val root = Files.createTempDirectory("plainbase-history-citation")

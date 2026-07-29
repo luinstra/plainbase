@@ -33,11 +33,13 @@ val kotlinFormattingSources =
     }
 
 tasks.register<LintTask>("lintKotlin") {
+    group = "verification"
     source(kotlinFormattingSources)
     reports.set(mapOf("plain" to layout.buildDirectory.file("reports/kotlinter/lint.txt").get().asFile))
 }
 
 tasks.register<FormatTask>("formatKotlin") {
+    group = "verification"
     source(kotlinFormattingSources)
     report.set(layout.buildDirectory.file("reports/kotlinter/format.txt"))
 }

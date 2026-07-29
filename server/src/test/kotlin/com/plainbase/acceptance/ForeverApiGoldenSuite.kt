@@ -71,6 +71,15 @@ import io.kotest.core.spec.style.FunSpec
  * pinned by the native decode round-trip + the route tests, not by the response goldens; an EDIT proposal still
  * declares no root at all.
  *
+ * URL grammar, commit 5 of this PR (2026-07, owner-approved): `RootTreeDto` gains an ADDITIVE
+ * `primary: Boolean` scalar, the reserved primary root's flag. It is on the wire because a client cannot derive
+ * it: the primary is not `roots[0]` (D7 order is the operator's), and after the rename scheduled below its name
+ * is not a client constant either. No key was removed or retyped, which is what makes it legal under the policy
+ * above. `golden/rest/tree.json` and the frontend `wire-golden.json` twin moved together under diff review, as
+ * C3 and C5 did. Commit 6 of the same PR then hoists every emitted `url` VALUE from `/docs/{root}/...` to
+ * `/{root}/...` and renames the primary root `main` -> `docs`: a SECOND touch of those same two artifacts, on
+ * DISJOINT keys (this commit adds a scalar, that one moves the `url` strings), so no URL value moves twice.
+ *
  * PB-SEARCH-1 freeze-tier notes (phase-2 §A6 — what these goldens do and do NOT freeze):
  *   - `score` VALUES are deliberately NOT frozen (§A4: engine-scaled, never comparable across
  *     engines or releases) — the comparison normalizes each hit's `score` to the `{{score}}`

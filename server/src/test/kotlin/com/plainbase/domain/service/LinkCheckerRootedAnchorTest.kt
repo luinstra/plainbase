@@ -49,7 +49,7 @@ class LinkCheckerRootedAnchorTest : FunSpec({
         // main:X HAS the heading its anchor names; extra:X (SAME id) does NOT - so only extra's anchor is broken.
         val index = PageIndex(
             listOf(
-                RootSection(RootName.MAIN, listOf(page(RootName.MAIN, "a.md", listOf("target"), "target")), emptyList(), emptySet()),
+                RootSection(RootName.PRIMARY, listOf(page(RootName.PRIMARY, "a.md", listOf("target"), "target")), emptyList(), emptySet()),
                 RootSection(extra, listOf(page(extra, "b.md", emptyList(), "target")), emptyList(), emptySet()),
             ),
         )
@@ -61,7 +61,7 @@ class LinkCheckerRootedAnchorTest : FunSpec({
     test("both roots resolve their own anchor -> nothing broken (the control)") {
         val index = PageIndex(
             listOf(
-                RootSection(RootName.MAIN, listOf(page(RootName.MAIN, "a.md", listOf("target"), "target")), emptyList(), emptySet()),
+                RootSection(RootName.PRIMARY, listOf(page(RootName.PRIMARY, "a.md", listOf("target"), "target")), emptyList(), emptySet()),
                 RootSection(extra, listOf(page(extra, "b.md", listOf("target"), "target")), emptyList(), emptySet()),
             ),
         )

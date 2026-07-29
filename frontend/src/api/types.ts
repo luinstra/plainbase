@@ -15,7 +15,7 @@ export interface TreeFolder {
   /** The `_folder.yaml` plaintext summary on the landing card — null when absent/blank (provisional, Chunk-3). */
   description: string | null;
   path: string;
-  /** The folder's `/docs/{root}` URL prefix (percent-encoded, ready to use) - the landing-view address (ADR-0003); null for a collision-loser subtree. */
+  /** The folder's server-issued root URL (percent-encoded, ready to use), or null for a collision-loser subtree. */
   url: string | null;
   /** Count of DIRECT child pages only (not recursive) — drives the `path/ · N pages` meta (provisional, Chunk-3). */
   page_count: number;
@@ -29,7 +29,7 @@ export interface TreePage {
   slug: string;
   /** Content-relative file path, e.g. "guides/deploy-guide.md". */
   path: string;
-  /** Canonical `/docs/{root}/...` URL (percent-encoded, ready to use) - null for a collision loser. */
+  /** Canonical root-content URL (percent-encoded, ready to use), or null for a collision loser. */
   url: string | null;
   status: string;
   /** Editorial frontmatter date, server-validated to `YYYY-MM-DD` — null when absent/invalid (provisional, Chunk-3). */
@@ -56,6 +56,12 @@ export interface RootTree {
    * `plainbase root add` defaults an extra root to `false`, so a read-only root is the common case, not the odd one.
    */
   editable: boolean;
+  /**
+   * Whether this is the reserved PRIMARY root (ADR-0011 D1). Server-issued because the primary is NOT `roots[0]`:
+   * D7 order is the operator's config order, so a positional guess is wrong on any install that declared its
+   * primary second. Exactly one entry in `roots` carries `true`.
+   */
+  primary: boolean;
   tree: TreeFolder;
 }
 
@@ -227,7 +233,7 @@ export interface CreatePageRequest {
   /**
    * WHICH document root the page lands in (multi-root C4) — REQUIRED, with no server-side default. It decides
    * whose disk the bytes land on and whose editable/glob policy authorizes the write, so omitting it is a 400
-   * `invalid_create_request`, never a quiet relocation into `main`. Every call site threads the root it is
+   * `invalid_create_request`, never a quiet relocation into the primary root. Every call site threads the root it is
    * creating in. An unknown name is a 400 `invalid_root`.
    */
   root: string;

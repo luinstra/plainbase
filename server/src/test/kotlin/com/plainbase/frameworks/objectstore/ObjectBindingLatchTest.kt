@@ -63,7 +63,7 @@ class ObjectBindingLatchTest : FunSpec({
                 "an empty at-risk snapshot is trivially satisfied, and that is SAFE: a proof authorizes only " +
                     "RETIREMENTS, and a root with no durable rows has nothing to retire",
             ) {
-                world.topology.topology(RootName.MAIN).shouldNotBeNull().status shouldBe BindingStatus.TRUSTED
+                world.topology.topology(RootName.PRIMARY).shouldNotBeNull().status shouldBe BindingStatus.TRUSTED
             }
             snapshot.pages.map { it.path } shouldContainExactlyInAnyOrder listOf(deploy, runbook, onboarding)
             world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, runbookId, onboardingId)
@@ -81,7 +81,7 @@ class ObjectBindingLatchTest : FunSpec({
             withClue("FIRST SIGHT of the new binding: the LIST is complete and it says NOTHING, because it is not ours") {
                 world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, runbookId, onboardingId)
                 world.idMap.retiredBindings().shouldBeEmpty()
-                world.limbo.count(RootName.MAIN) shouldBe 3
+                world.limbo.count(RootName.PRIMARY) shouldBe 3
             }
 
             // THE SECOND POLL. This is where the first fix of this bug rebuilt it: the binding had been RECORDED, so
@@ -97,12 +97,12 @@ class ObjectBindingLatchTest : FunSpec({
             // thing that can still say "this binding was never verified" is the durable row.
             world.boot(wrong, typo).rebuild()
             withClue("UNRESOLVED survives the process that latched it, or it is not a latch") {
-                world.topology.topology(RootName.MAIN).shouldNotBeNull().status shouldBe BindingStatus.UNRESOLVED
+                world.topology.topology(RootName.PRIMARY).shouldNotBeNull().status shouldBe BindingStatus.UNRESOLVED
                 world.idMap.retiredBindings().shouldBeEmpty()
                 world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, runbookId, onboardingId)
             }
             withClue("and the pages read 503, never 404: their absence is UNVERIFIED, which is not the same as gone") {
-                world.limbo.count(RootName.MAIN) shouldBe 3
+                world.limbo.count(RootName.PRIMARY) shouldBe 3
             }
         }
     }
@@ -122,7 +122,7 @@ class ObjectBindingLatchTest : FunSpec({
             world.boot(clone, typo).rebuild()
 
             withClue("identical paths are not identical pages: the at-risk set is witnessed by IDENTITY or not at all") {
-                world.topology.topology(RootName.MAIN).shouldNotBeNull().status shouldBe BindingStatus.UNRESOLVED
+                world.topology.topology(RootName.PRIMARY).shouldNotBeNull().status shouldBe BindingStatus.UNRESOLVED
             }
             withClue(
                 "and the door BESIDE the latch: a decoy carrying different ids would DISPLACE the incumbents - " +
@@ -151,7 +151,7 @@ class ObjectBindingLatchTest : FunSpec({
             withClue("a retired binding is TOMBSTONED, so /p/{root}/{id} stays a 410 rather than the 404 that kills a citation") {
                 world.idMap.retiredBindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId, onboardingId)
             }
-            world.limbo.count(RootName.MAIN) shouldBe 0
+            world.limbo.count(RootName.PRIMARY) shouldBe 0
         }
     }
 
@@ -180,7 +180,7 @@ class ObjectBindingLatchTest : FunSpec({
             withClue("and NOTHING is tombstoned - a renamed key must not turn /p/{root}/{id} into a 410") {
                 world.idMap.retiredBindings().shouldBeEmpty()
             }
-            world.limbo.count(RootName.MAIN) shouldBe 0
+            world.limbo.count(RootName.PRIMARY) shouldBe 0
         }
     }
 
@@ -210,7 +210,7 @@ class ObjectBindingLatchTest : FunSpec({
             }
             withClue("the page is not gone, it is UNREAD - so it waits in limbo, and the next poll fetches it") {
                 world.idMap.livePathOf(deployId).shouldNotBeNull()
-                world.limbo.count(RootName.MAIN) shouldBe 1
+                world.limbo.count(RootName.PRIMARY) shouldBe 1
             }
         }
     }
@@ -226,8 +226,8 @@ class ObjectBindingLatchTest : FunSpec({
             val racing = page("guides/fresh.md")
             val racingId = PageId.require("01900000-0000-7000-9000-0000000000fa")
             bucket.onNetworkOp = {
-                if (world.idMap.find(RootedPath(RootName.MAIN, racing)) == null) {
-                    world.idMap.bind(RootedPath(RootName.MAIN, racing), racingId, materialized = true)
+                if (world.idMap.find(RootedPath(RootName.PRIMARY, racing)) == null) {
+                    world.idMap.bind(RootedPath(RootName.PRIMARY, racing), racingId, materialized = true)
                 }
             }
 
@@ -236,7 +236,7 @@ class ObjectBindingLatchTest : FunSpec({
 
             withClue("rowsAtStart is read BEFORE the first LIST page, so a row created after it cannot be covered") {
                 world.idMap.retiredBindings().shouldBeEmpty()
-                world.idMap.find(RootedPath(RootName.MAIN, racing)).shouldNotBeNull()
+                world.idMap.find(RootedPath(RootName.PRIMARY, racing)).shouldNotBeNull()
             }
         }
     }

@@ -94,8 +94,12 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             val history = historyFactory(root)
             IndexHarness(root, contentStore = store, history = history).use { harness ->
                 history.prepare()
-                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("docs/in.md")), PageId.require(inId), materialized = false)
-                harness.idMap.bind(RootedPath(RootName.MAIN, TreePath.require("notes/out.md")), PageId.require(outId), materialized = false)
+                harness.idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("docs/in.md")), PageId.require(inId), materialized = false)
+                harness.idMap.bind(
+                    RootedPath(RootName.PRIMARY, TreePath.require("notes/out.md")),
+                    PageId.require(outId),
+                    materialized = false,
+                )
                 harness.builder.rebuild()
                 val resolved: Principal = when {
                     seedAgentMode != null -> Principal.Agent(harness.apiTokens.mint(label = "ci", mode = seedAgentMode).id)
@@ -137,7 +141,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
     suspend fun ApplicationTestBuilder.postCreate(folder: String, title: String = "newpage"): HttpResponse =
         client.post("/api/v1/pages") {
             contentType(ContentType.Application.Json)
-            setBody("""{"root":"main","folder":"$folder","title":"$title"}""")
+            setBody("""{"root":"docs","folder":"$folder","title":"$title"}""")
         }
 
     fun List<AuditEntry>.edits() = filter { it.action == "EDIT" }
@@ -152,7 +156,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             withClue(inDirect.bodyAsText()) { inDirect.status shouldBe HttpStatusCode.OK }
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe edited
             harness.proposalRepository.all().shouldBeEmpty()
-            harness.auditRepository.recent(50).edits().single { it.resource == "main:$inId" }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).edits().single { it.resource == "docs:$inId" }.decision shouldBe "allowed"
 
             // The SAME call shape to the OUT-of-glob page → 202 degrade, a proposal row, disk byte-UNCHANGED,
             // an allowed EDIT@"proposal" row.
@@ -167,7 +171,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             body.getValue("unified_diff").jsonPrimitive.content.shouldNotBeEmpty()
             store.read(TreePath.require("notes/out.md"))!!.decodeToString() shouldBe outDoc // UNCHANGED
             harness.proposalRepository.all().shouldHaveSize(1)
-            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).edits().single { it.resource == "docs:proposal" }.decision shouldBe "allowed"
         }
     }
 
@@ -188,7 +192,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.Forbidden
             harness.proposalRepository.all().shouldBeEmpty()
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe inDoc
-            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).edits().single { it.resource == "docs:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -221,7 +225,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.Forbidden
             store.read(TreePath.require("docs/in.md"))!!.decodeToString() shouldBe inDoc // disk byte-unchanged
             harness.proposalRepository.all().shouldBeEmpty() // the degrade's propose was denied before any row
-            harness.auditRepository.recent(50).edits().single { it.resource == "main:proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).edits().single { it.resource == "docs:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -237,7 +241,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             store.read(TreePath.require("docs/newpage.md")) shouldBe null // nothing written — it is a proposal now
             harness.proposalRepository.all().shouldHaveSize(1)
             harness.proposalRepository.all().single().operation shouldBe com.plainbase.domain.repository.ProposalOperation.CREATE
-            harness.auditRepository.recent(50).creates().single { it.resource == "main:proposal" }.decision shouldBe "allowed"
+            harness.auditRepository.recent(50).creates().single { it.resource == "docs:proposal" }.decision shouldBe "allowed"
         }
     }
 
@@ -270,7 +274,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             app.postCreate("docs").status shouldBe HttpStatusCode.Forbidden
             store.read(TreePath.require("docs/newpage.md")) shouldBe null
             harness.proposalRepository.all().shouldBeEmpty()
-            harness.auditRepository.recent(50).creates().single { it.resource == "main:proposal" }.decision shouldBe "denied"
+            harness.auditRepository.recent(50).creates().single { it.resource == "docs:proposal" }.decision shouldBe "denied"
         }
     }
 
@@ -327,7 +331,7 @@ class AgentDirectCommitAuthzRouteTest : FunSpec({
             // Retire an id by displacement (the detachedTombstone idiom, here under REGISTERED main): bind it, then
             // bind a DIFFERENT id at the SAME rooted path - the first id is now tombstoned with NO live binding.
             val retired = "0190aaaa-bbbb-7ccc-8ddd-0000000000fe"
-            val gone = RootedPath(RootName.MAIN, TreePath.require("notes/gone.md"))
+            val gone = RootedPath(RootName.PRIMARY, TreePath.require("notes/gone.md"))
             harness.idMap.bind(gone, PageId.require(retired), materialized = false)
             harness.idMap.bind(gone, PageId.require("0190aaaa-bbbb-7ccc-8ddd-0000000000fd"), materialized = false)
             val resp = app.client.put("/api/v1/pages/$retired") {

@@ -120,7 +120,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
     }
 
     suspend fun ApplicationTestBuilder.pageIdAndHash(): Pair<String, String> {
-        val body = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/doc").bodyAsText()).jsonObject
+        val body = Json.parseToJsonElement(client.get("/api/v1/pages/by-path/docs/doc").bodyAsText()).jsonObject
         return body.getValue("id").jsonPrimitive.content to body.getValue("content_hash").jsonPrimitive.content
     }
 
@@ -369,7 +369,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                     Files.write(root.resolve("guides/doc.md"), Files.readAllBytes(root.resolve("doc.md")))
                     Files.delete(root.resolve("doc.md"))
                     harness.builder.rebuild()
-                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(movableId)))!!.path shouldBe
+                    harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(movableId)))!!.path shouldBe
                         TreePath.require("guides/doc.md")
                     val resp = client.post("/api/v1/changes/$proposalId/approve")
                     withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.OK }
@@ -516,7 +516,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val created = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","root":"main","target_path":"guides/brand-new.md","proposed_content":"# New\n","rationale":"r"}""",
+                    """{"operation":"create","root":"docs","target_path":"guides/brand-new.md","proposed_content":"# New\n","rationale":"r"}""",
                 )
             }
             withClue(created.bodyAsText()) { created.status shouldBe HttpStatusCode.Created }
@@ -540,7 +540,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val created = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","root":"main","target_path":"guides/race.md","proposed_content":"# Race\n","rationale":"r"}""",
+                    """{"operation":"create","root":"docs","target_path":"guides/race.md","proposed_content":"# Race\n","rationale":"r"}""",
                 )
             }
             val pid = com.plainbase.domain.page.ProposalId.require(
@@ -569,7 +569,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.COMMIT) { app, harness, store, _, _ ->
             val resp = app.client.post("/api/v1/pages") {
                 contentType(json)
-                setBody("""{"root":"main","folder":"guides","title":"Degraded"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Degraded"}""")
             }
             withClue(resp.bodyAsText()) { resp.status shouldBe HttpStatusCode.Accepted }
             val body = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
@@ -585,7 +585,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
         withApp(Principal.Anonymous, seedAgentMode = AgentMode.READ_ONLY) { app, harness, _, _, _ ->
             val resp = app.client.post("/api/v1/pages") {
                 contentType(json)
-                setBody("""{"root":"main","folder":"guides","title":"Nope"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Nope"}""")
             }
             resp.status shouldBe HttpStatusCode.Forbidden
             harness.proposalRepository.all() shouldHaveSize 0
@@ -604,7 +604,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "Landed", null, "# body\n")
             val degraded = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/landed.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/landed.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
@@ -620,7 +620,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "OffMode", null, "# body\n")
             val degraded = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/offmode.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/offmode.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             val pid = (degraded as CreateOutcome.DegradedToProposal).proposalId
@@ -649,7 +649,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val bytes = composeDocument(pageId.value, "Direct", null, "# body\n")
             val outcome = mutate.create(
                 agent,
-                CreateIntent(pageId, com.plainbase.domain.root.RootName.MAIN, TreePath.require("guides/direct.md"), bytes),
+                CreateIntent(pageId, com.plainbase.domain.root.RootName.PRIMARY, TreePath.require("guides/direct.md"), bytes),
                 WriteOrigin.DIRECT_PUT,
             )
             outcome.shouldBeInstanceOf<CreateOutcome.DirectCreated>()
@@ -675,7 +675,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             // Agent proposes a create (the facade mints + patches the id); ADMIN approves.
             facade.propose(
                 agent,
-                ProposeCommand.Create(RootName.MAIN, TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"),
+                ProposeCommand.Create(RootName.PRIMARY, TreePath.require("guides/attr.md"), "# body\n".toByteArray(), "r"),
             )
             val pid = harness.proposalRepository.all().single().id
             facade.approve(admin, pid).shouldBeInstanceOf<ApplyOutcome.Applied>()
@@ -694,7 +694,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
                 app.client.post("/api/v1/changes") {
                     contentType(json)
                     setBody(
-                        """{"operation":"create","root":"main","target_path":"guides/dup.md","proposed_content":"# Dup\n","rationale":"r"}""",
+                        """{"operation":"create","root":"docs","target_path":"guides/dup.md","proposed_content":"# Dup\n","rationale":"r"}""",
                     )
                 }.bodyAsText(),
             ).jsonObject.getValue("id").jsonPrimitive.content
@@ -720,7 +720,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val malformed = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","root":"main","target_path":"guides/bad.md","proposed_content":${
+                    """{"operation":"create","root":"docs","target_path":"guides/bad.md","proposed_content":${
                         Json.encodeToString("---\n\"quoted key\": v\n---\n\nbody\n")
                     },"rationale":"r"}""",
                 )
@@ -732,7 +732,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val suppliedId = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","root":"main","target_path":"guides/own-id.md","proposed_content":${
+                    """{"operation":"create","root":"docs","target_path":"guides/own-id.md","proposed_content":${
                         Json.encodeToString("---\nid: 0190ffff-ffff-7fff-8fff-ffffffffffff\n---\n\nbody\n")
                     },"rationale":"r"}""",
                 )
@@ -742,7 +742,7 @@ class ProposalApplyAuthzRouteTest : FunSpec({
             val plain = app.client.post("/api/v1/changes") {
                 contentType(json)
                 setBody(
-                    """{"operation":"create","root":"main","target_path":"guides/plain.md","proposed_content":"# Just a heading\n","rationale":"r"}""",
+                    """{"operation":"create","root":"docs","target_path":"guides/plain.md","proposed_content":"# Just a heading\n","rationale":"r"}""",
                 )
             }
             plain.status shouldBe HttpStatusCode.Created

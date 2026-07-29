@@ -53,7 +53,7 @@ class Fts5SearchProviderNativeTest {
                 val state = provider.indexedState()
                 assertEquals(2, state.size)
                 // The rooted key round-trips through the engine's own state (the same JDBC surface).
-                assertTrue(state.keys.all { it.root == RootName.MAIN }, "rooted key did not round-trip")
+                assertTrue(state.keys.all { it.root == RootName.PRIMARY }, "rooted key did not round-trip")
 
                 // Two roots sharing ONE id coexist across the JNI boundary. rebuild (not index) so the swap
                 // replaces the whole corpus and indexedState is EXACTLY the pair.
@@ -61,21 +61,21 @@ class Fts5SearchProviderNativeTest {
                 val extraRoot = RootName.require("extra")
                 provider.rebuild(
                     sequenceOf(
-                        page(id.value, "a.md", "Twin", "coexist body", root = RootName.MAIN),
+                        page(id.value, "a.md", "Twin", "coexist body", root = RootName.PRIMARY),
                         page(id.value, "b.md", "Twin", "coexist body", root = extraRoot),
                     ),
                 )
-                assertEquals(setOf(RootedPageId(RootName.MAIN, id), RootedPageId(extraRoot, id)), provider.indexedState().keys)
+                assertEquals(setOf(RootedPageId(RootName.PRIMARY, id), RootedPageId(extraRoot, id)), provider.indexedState().keys)
                 val hits = provider.search(SearchQuery("coexist", 10, 0)).hits
                 assertEquals(2, hits.size)
-                assertEquals(setOf(RootName.MAIN, extraRoot), hits.map { it.root }.toSet())
+                assertEquals(setOf(RootName.PRIMARY, extraRoot), hits.map { it.root }.toSet())
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 
-    private fun page(id: String, path: String, title: String, body: String, root: RootName = RootName.MAIN): PageDocuments {
+    private fun page(id: String, path: String, title: String, body: String, root: RootName = RootName.PRIMARY): PageDocuments {
         val pageId = PageId.require(id)
         val treePath = TreePath.require(path)
         val doc = SectionDocument(

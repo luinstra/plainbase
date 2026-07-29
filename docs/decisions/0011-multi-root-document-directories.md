@@ -1,8 +1,9 @@
 # 11. Multi-root document directories: composite (root, path) keys, reserved main, per-root editability/history
 
-- **Status:** Accepted, SUPERSEDED IN PART by
-  [ADR-0012](0012-per-root-page-identity.md) (see the superseding note directly below). D1-D18 were
-  frozen at C4 merge; the later C5 chunk did re-open D2 and D17.
+- **Status:** Accepted, SUPERSEDED IN PART three times - by
+  [ADR-0012](0012-per-root-page-identity.md) on page identity, and by the two URL-grammar changes recorded
+  in the second and third notes below (see all notes directly below). D1-D18 were frozen at C4 merge; the
+  later C5 chunk re-opened D2 and D17, and the URL-grammar work re-opened D3.
 - **Date:** 2026-07-11
 - **Deciders:** luinstra (after the 6-seat multi-root design debate of 2026-07-11: codex, agy,
   cursor-auto, opus, sonnet, fable; record in `.crew/debates/20260711-004023-multi-root-design/`,
@@ -35,6 +36,72 @@ the original reasoning stays legible; where the frozen text and this note disagr
 Authority: the C5 commits on `multi-root` (`d934220` plus its four follow-ups, PR #14). The
 replacement decision record is [ADR-0012](0012-per-root-page-identity.md); read it for current
 behavior, and this note only as the in-place warning on D2 and D17.
+
+## Superseded in part: the URL grammar has no rootless fallback (2026-07-26)
+
+**D3's legacy 301 is gone, and so is every piece of machinery that existed to make it safe.** A URL whose
+first segment does not name a REGISTERED root addresses nothing and is answered as missing: 404 with the
+SPA shell body on `/docs`, 404 on `/assets` and `/browse`, `page_not_found` on `by-path`. The one
+exception is the SPA's own embedded bundle, which `/assets` serves from the root-BLIND bundle-wins check
+that precedes the root parse (C1a item 1) - `RootUrlGrammarTest` pins that half alongside the 404s. It is
+never reinterpreted as a path under the primary. Read every "legacy tail", "two-hop chain" and
+"`/docs/{path}` -> 301" statement below as the C3 design, not as today's. Alias redirects are untouched:
+a moved page, or one carrying `redirect_from`, still 301s WITHIN its root, one hop.
+
+Three of D3's recorded consequences go with it, because each existed only to contain the fallback:
+
+- **D3(a) and the reserved-`main` boot refusal are deleted.** A top-level `main` entry in the primary
+  root was ambiguous only against a rootless `/docs/main/...` link. With no rootless URLs it serves at
+  `/docs/main/main/...`, and nothing refuses, warns, or needs renaming.
+- **D3(b)'s residual runtime shadow no longer exists, and neither does D-C5-6's split of the shadow check
+  between `root add` and boot** (the `--force` override, the boot WARN, and the shared `topLevelIndex`
+  both were computed from). Registering a root cannot change what a ROOT-QUALIFIED URL resolves to, so
+  there is nothing left to detect: each root's URL space is its own.
+- **What replaces them is a reservation on root NAMES, checked at REGISTRATION** - the product's own
+  top-level segments, the `pb-`/`plainbase-` prefixes and the `v[0-9]+` shape, over a tightened name
+  grammar (`[a-z][a-z0-9]*(-[a-z0-9]+)*`, 2-32 chars). It refuses operator CONFIG, never author content,
+  which is why it can fail closed without bricking a restart.
+
+D3 existed to keep circulating links working across the upgrade. Plainbase is pre-1.0 with no install
+base, so there is nothing to keep working and the trade costs nothing.
+
+Authority: the URL-grammar commits on `url-grammar-top-level-roots` (`ab7b025` through `992b2de`). The
+routing half is pinned by `RootUrlGrammarTest`, `RestRedirectTest` and
+`frontend/src/__tests__/folder-landing.test.tsx`; the name-reservation half by `RootNameTest`,
+`ReservedSegmentsTest`, `RootCommandTest` and `FrontendBundleTest`.
+
+## Superseded in part: top-level root grammar and registration reservation (2026-07-28)
+
+This note corrects the preceding 2026-07-26 URL-grammar note. Its statement that the reserved-`main`
+boot refusal was deleted, and that content named `main` serves at `/docs/main/main/...`, is now false.
+The old D3(a) refusal was deleted, but it was a URL-grammar collision check. Commit 6 added a different
+check: `main` is in `ReservedSegments.words`, so it can never be registered as a live root. A
+`roots { main { path = ... } }` declaration, a managed `roots.conf` declaration, and `plainbase root add
+main ...` are refused as reserved root-registration names.
+
+The reason for the new reservation is durable data, not URL ambiguity. The committed migrations stamp
+`root = 'main'` into existing rows, and `verifyMigrations` freezes `schema/1..18.db`; allowing a later
+root registration named `main` would bind a live root over those migration-era rows. This is distinct
+from the deleted D3(a) content collision check. Content named `main` remains ordinary: a `main/` directory
+inside the primary root or a `main.md` page is legal. The directory is addressed under `docs` at
+`/docs/main/...`, and the page can be addressed at `/docs/main`.
+
+The current decisions are therefore: `RootName.PRIMARY` is named `docs`, an explicit `roots {}` block
+must declare `docs`, `main` is reserved and cannot name any root, and URLs are `/{root}/{path}`. A primary
+page at `guides/x` is `/docs/guides/x`; a page at `notes/y` in an extra root named `extra` is
+`/extra/notes/y`. There is no rootless fallback and no legacy redirect.
+
+The preceding note's route examples are corrected by the same rule: `/docs` is the registered primary
+landing, not a rootless miss. Bare `/assets` and `/browse` answer 400 `invalid_path` because each
+requires a tail. A tail with an unknown root answers 404 on either surface, but a bare registered root
+diverges: `/assets/docs` answers 404 `not_found`, while `/browse/docs` answers 400 `invalid_path`.
+`/docs/guides` is therefore the current `docs`-root address, not the deleted rootless fallback.
+
+The historical D1 and D3 sections below remain unchanged. Read them as the C4 decision record, with this
+note governing current behavior. In particular, the preceding note's `/docs/main/main/...` example is
+corrected here to `/docs/main/...` for content named `main`, while the root name `main` remains illegal.
+The historical `roots { main { ... } }` block below is retained only as C4 context; it is not a current
+configuration example, and the declaration is the reserved-segment boot refusal shown above.
 
 ## Context
 
@@ -88,7 +155,7 @@ the loser-behalf issue in-pass, D16) or a UNIQUE(id) crash. Detached rows still 
 UNIQUE(id), and a live bind supersedes a detached row, so "re-add restores permalinks" is conditional.
 (Synthesis #3.)
 
-### D3 - URLs are `/docs/{root}/{path}` always, with a query-preserving 301 for legacy paths
+### D3 - [HISTORICAL, SUPERSEDED] URLs were `/docs/{root}/{path}`, with a query-preserving 301 for legacy paths
 
 No sigil grammars, no conditional shapes: an unknown first segment under `/docs/` 301s to
 `/docs/main/{seg}/...`, preserving query strings; the legacy hop may chain into an alias hop (two

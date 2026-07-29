@@ -68,7 +68,7 @@ class PreviewRouteTest : FunSpec({
             Files.write(tree.resolve("parity.md"), original.toByteArray())
             val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
                 idMap.bind(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, com.plainbase.domain.content.TreePath.require("parity.md")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, com.plainbase.domain.content.TreePath.require("parity.md")),
                     com.plainbase.domain.page.PageId.require(pageId),
                     materialized = true,
                 )
@@ -95,7 +95,7 @@ class PreviewRouteTest : FunSpec({
         val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
                 com.plainbase.domain.root.RootedPath(
-                    RootName.MAIN,
+                    RootName.PRIMARY,
                     com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
                 ),
                 com.plainbase.domain.page.PageId.require(pageId),
@@ -109,7 +109,7 @@ class PreviewRouteTest : FunSpec({
             }
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
-            html shouldContain "/docs/main/guides/deploy-guide"
+            html shouldContain "/docs/guides/deploy-guide"
             html shouldContain "data-pb-link-error"
         }
     }
@@ -128,7 +128,7 @@ class PreviewRouteTest : FunSpec({
             resp.status shouldBe HttpStatusCode.OK
             val html = resp.obj().getValue("html").jsonPrimitive.content
             // Resolved against guides/ (the buffer's folder), NOT the content root.
-            html shouldContain "\"/docs/main/guides/getting-started\""
+            html shouldContain "\"/docs/guides/getting-started\""
             html shouldNotContain "data-pb-link-error"
         }
     }
@@ -140,7 +140,7 @@ class PreviewRouteTest : FunSpec({
         val seed: (com.plainbase.domain.repository.IdMapRepository) -> Unit = { idMap ->
             idMap.bind(
                 com.plainbase.domain.root.RootedPath(
-                    RootName.MAIN,
+                    RootName.PRIMARY,
                     com.plainbase.domain.content.TreePath.require("guides/deploy-guide.md"),
                 ),
                 com.plainbase.domain.page.PageId.require(pageId),

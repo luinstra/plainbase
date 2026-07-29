@@ -30,7 +30,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("ancestor segments and the page slug are slugified; frontmatter slug overrides the stem") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             pages = listOf(
                 page("Release Notes/release notes 2026.md"),
                 page("guides/deploy-guide.md", slug = "Deploy Guide"),
@@ -47,7 +47,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("a _folder.yaml slug override replaces the directory segment and is itself slugified") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             pages = listOf(page("v2 docs/setup.md")),
             folders = listOf(folder("v2 docs", FolderMeta(slug = "Version Two"))),
         )
@@ -56,7 +56,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("empty slugification results fall back to the frozen literals: page / folder") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             // '!!!' and '?' delete to empty under steps 1-6 (PB-SLUG-1 row 18's input class).
             pages = listOf(page("!!!/?.md")),
             folders = listOf(folder("!!!")),
@@ -66,7 +66,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("same-parent page collision: raw-unsigned-byte-order winner owns the path; loser url is null + issue") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             // Both slugify to 'a-b'. Raw bytes: 'a b.md' has 0x20 at index 1, 'a-b.md' has 0x2D -> space wins.
             pages = listOf(page("notes/a-b.md"), page("notes/a b.md")),
             folders = listOf(folder("notes")),
@@ -75,7 +75,7 @@ class CanonicalUrlBuilderTest : FunSpec({
         urlPathOf(result, "notes/a-b.md").shouldBeNull()
         result.issues shouldContainExactly listOf(
             IdentityIssue.PathSlugCollision(
-                root = RootName.MAIN,
+                root = RootName.PRIMARY,
                 keptPath = TreePath.require("notes/a b.md"),
                 loserPath = TreePath.require("notes/a-b.md"),
             ),
@@ -84,7 +84,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("the tie-break is UNSIGNED byte order: a high UTF-8 byte sorts after every ASCII byte") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             // Both slugify to 'café' ('~' is punctuation, deleted by step 4). First differing raw
             // byte (index 3): 'café.md' has the UTF-8 lead 0xC3 (195); 'caf~é.md' has '~' = 0x7E
             // (126). Unsigned: 0x7E < 0xC3 -> 'caf~é.md' wins. A signed comparison would flip it
@@ -96,7 +96,7 @@ class CanonicalUrlBuilderTest : FunSpec({
         urlPathOf(result, "café.md").shouldBeNull()
         result.issues shouldContainExactly listOf(
             IdentityIssue.PathSlugCollision(
-                root = RootName.MAIN,
+                root = RootName.PRIMARY,
                 keptPath = TreePath.require("caf~é.md"),
                 loserPath = TreePath.require("café.md"),
             ),
@@ -105,7 +105,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("a page and a sibling folder sharing a slug do NOT collide — distinct URLs, no issue (ADR-0002)") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             // The common overview-page-next-to-detail-folder layout: setup.md beside setup/.
             pages = listOf(page("docs/setup.md"), page("docs/setup/intro.md")),
             folders = listOf(folder("docs"), folder("docs/setup")),
@@ -117,7 +117,7 @@ class CanonicalUrlBuilderTest : FunSpec({
 
     test("a losing folder takes its whole subtree out of path space") {
         val result = CanonicalUrlBuilder.build(
-            root = RootName.MAIN,
+            root = RootName.PRIMARY,
             pages = listOf(page("a b/deep/page.md"), page("a-b/other.md")),
             // Sibling folders 'a b' and 'a-b' both slugify to 'a-b'; 'a b' (0x20) wins.
             folders = listOf(folder("a b"), folder("a b/deep"), folder("a-b")),
@@ -125,7 +125,11 @@ class CanonicalUrlBuilderTest : FunSpec({
         urlPathOf(result, "a b/deep/page.md") shouldBe "a-b/deep/page"
         urlPathOf(result, "a-b/other.md").shouldBeNull()
         result.issues shouldContainExactly listOf(
-            IdentityIssue.PathSlugCollision(root = RootName.MAIN, keptPath = TreePath.require("a b"), loserPath = TreePath.require("a-b")),
+            IdentityIssue.PathSlugCollision(
+                root = RootName.PRIMARY,
+                keptPath = TreePath.require("a b"),
+                loserPath = TreePath.require("a-b"),
+            ),
         )
     }
 

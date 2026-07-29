@@ -46,10 +46,10 @@ class HistoryModuleRootModeTest : FunSpec({
                 val provider = koin.get<HistoryProvider>()
                 provider shouldBe NoOpHistoryProvider
                 withClue("the per-root map must agree with the single - main resolves THROUGH it") {
-                    koin.get<HistoryProviders>().main shouldBe NoOpHistoryProvider
+                    koin.get<HistoryProviders>().primary shouldBe NoOpHistoryProvider
                 }
 
-                val sha = koin.get<WriteHistoryHook>().commit(RootName.MAIN, TreePath.require("a.md"), "# A edited\n".toByteArray())
+                val sha = koin.get<WriteHistoryHook>().commit(RootName.PRIMARY, TreePath.require("a.md"), "# A edited\n".toByteArray())
 
                 withClue("`off` means off: a null SHA, and the operator's repository is left exactly as they left it") {
                     sha shouldBe null
@@ -126,7 +126,7 @@ private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: 
                 contentDir = content,
                 dataDir = dataDir,
                 roots = RootsConfig.of(
-                    list = listOf(Root(RootName.MAIN, RootBackend.Local(content), editable = true, history = history)),
+                    list = listOf(Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = history)),
                     origin = RootsOrigin.EXPLICIT,
                 ),
             )

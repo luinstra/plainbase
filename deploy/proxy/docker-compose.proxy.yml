@@ -55,7 +55,9 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2
+    # Pin deliberately: {http.request.uri_escaped} needs Caddy 2.11+; unknown placeholders ship as literal
+    # text that caddy adapt cannot catch. Bump deliberately for security updates.
+    image: caddy:2.11.4
     # The ONLY published service. Terminates TLS, runs forward_auth to oauth2-proxy, then
     # strips-then-sets the identity + secret headers before proxying to plainbase.
     ports:

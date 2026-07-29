@@ -10,7 +10,7 @@ import com.plainbase.domain.page.PageIndexView
 /**
  * PB-LINK-1 (§A2) — internal link resolution as a pure function of (current page [TreePath], raw link
  * href, a [PageIndexView]) → [LinkOutcome]. Owns the frozen scheme **allowlist**; emits canonical
- * `/docs`/`/assets` URLs via the index's URL view (URL *construction* is chunk 5's job — here it is
+ * `/{root}`/`/assets` URLs via the index's URL view (URL *construction* is chunk 5's job; here it is
  * stubbed behind [PageIndexView]).
  *
  * Imports chunk 1.5's [PercentCoding] / [TreePath] / [ContentRoot] and **re-derives nothing**: the

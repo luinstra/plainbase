@@ -38,7 +38,11 @@ class ShellSecurityHeadersTest : FunSpec({
 
     test("the shell CSP is stamped on BOTH shell-serving paths with the full directive set + companion headers") {
         restTest(Fixtures.demoDocs) {
-            for (path in listOf("/", "/docs/main/anything")) {
+            // `/docs` and NOT `/`: post-flip the bare `/` is a 302 to the primary, so with the default
+            // redirect-following client it would land on `/docs` and assert the same path twice while
+            // reading as two. The two genuine shell-serving paths are the bare landing and the
+            // fallthrough tail; `/`'s own contract (302 + its A3 refusal) belongs to RestRedirectTest.
+            for (path in listOf("/docs", "/docs/anything")) {
                 val response = client.get(path)
                 response.status shouldBe HttpStatusCode.OK
                 assertFullShellCsp(response.headers["Content-Security-Policy"])
@@ -50,9 +54,24 @@ class ShellSecurityHeadersTest : FunSpec({
         }
     }
 
+    test("the 404-with-shell-body answer carries the same headers as the 200 shell") {
+        restTest(Fixtures.demoDocs) {
+            // A tail naming no registered root answers 404 with the shell BODY, so it is a document
+            // the browser renders, and the plugin gates on content type alone, never on status. A
+            // shell served without its CSP is the C1a stored-XSS surface reopening on a silent path.
+            // `restClient()` (not the default `client`) because that one FOLLOWS redirects, which
+            // would let any 404-shell at the end of a chain satisfy this row instead of the arm named.
+            val response = restClient().get("/nope/guides/deploy-guide")
+            response.status shouldBe HttpStatusCode.NotFound
+            assertFullShellCsp(response.headers["Content-Security-Policy"])
+            response.headers["Referrer-Policy"] shouldBe "strict-origin-when-cross-origin"
+            response.headers["X-Content-Type-Options"] shouldBe "nosniff"
+        }
+    }
+
     test("the script-src hash equals a fresh sha256 of the served shell's inline block (not a constant)") {
         restTest(Fixtures.demoDocs) {
-            val csp = client.get("/docs/main/anything").headers["Content-Security-Policy"]
+            val csp = client.get("/docs/anything").headers["Content-Security-Policy"]
             csp.shouldNotBeNull()
             expectedHash shouldStartWith "sha256-"
             csp shouldContain "'$expectedHash'"
@@ -61,8 +80,8 @@ class ShellSecurityHeadersTest : FunSpec({
 
     test("[B4] the text/html gate covers prefix-collision shell paths and skips api/asset responses") {
         restTest(Fixtures.demoDocs) {
-            // /apiary and /assetsx SHARE the /api and /assets prefixes but are served the shell HTML by
-            // staticResources — a startsWith() exclusion would wrongly strip their CSP. They MUST carry it.
+            // /apiary and /assetsx share the /api and /assets prefixes but are served shell HTML by fallback
+            // routing. A startsWith() exclusion would wrongly strip their CSP. They MUST carry it.
             assertFullShellCsp(client.get("/apiary").headers["Content-Security-Policy"])
             assertFullShellCsp(client.get("/assetsx").headers["Content-Security-Policy"])
 
@@ -74,7 +93,7 @@ class ShellSecurityHeadersTest : FunSpec({
 
             // A real bundle asset is not text/html → no shell document CSP (and bundle-wins sets none). Pin BOTH
             // shell trust slots: the js bundle (text/javascript) AND the css bundle (text/css).
-            val shell = client.get("/docs/main/anything").bodyAsText()
+            val shell = client.get("/docs/anything").bodyAsText()
             val jsRef = Regex("src=\"(/assets/[^\"]+\\.js)\"").find(shell)?.groupValues?.get(1)
             val cssRef = Regex("href=\"(/assets/[^\"]+\\.css)\"").find(shell)?.groupValues?.get(1)
             jsRef.shouldNotBeNull()

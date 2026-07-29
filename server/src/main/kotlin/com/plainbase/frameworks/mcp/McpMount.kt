@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.mcp
 
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.frameworks.ktor.PrincipalExtraction
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -25,13 +26,13 @@ import kotlinx.coroutines.awaitCancellation
 import java.util.concurrent.ConcurrentHashMap
 
 /** The frozen P3 MCP mount path — a distinct constant prefix under `/api`, consistent with the §A4 routing matrix. */
-const val MCP_PATH: String = "/api/v1/mcp"
+const val MCP_PATH: String = "/${ServerTopLevel.API}/v1/mcp"
 
 /** The connect-time-authenticated agent, stashed by the SSE-GET gate for the per-connection factory to close over. */
 internal val McpPrincipalKey: AttributeKey<Principal.Agent> = AttributeKey("plainbase.mcp.principal")
 
 /**
- * Mounts the in-binary MCP server (P3) at [MCP_PATH] inside `routing{}`, BEFORE the docs/static fallthrough.
+ * Mounts the in-binary MCP server (P3) at [MCP_PATH] inside `routing{}`, before the remaining route fallthrough.
  *
  * **Why not the SDK's `mcp(Route)` overload (a flagged SDK-vs-HEAD contradiction).** `mcp(Route, path, …)` advertises
  * a HARDCODED-EMPTY message endpoint in the SSE handshake (`KtorServerKt$mcp$2` passes `""` to `mcpSseEndpoint`), and
@@ -110,9 +111,15 @@ fun Route.plainbaseMcp(ctx: RouteContext) {
                 awaitCancellation() // keep the SSE stream open until the client disconnects (CIO cancels the coroutine)
             } catch (_: CancellationException) {
                 // The client disconnected — CIO cancels this stream coroutine. That is the EXPECTED end of an SSE
-                // session, not a failure: swallow it so it never surfaces to the app-level StatusPages catch-all
-                // (which would otherwise log `ERROR unhandled error serving /api/v1/mcp`). The connection is already
-                // gone, so swallowing is safe even in the rare case CIO wraps a transport error as a cancellation cause.
+                // session, not a failure, so swallow it. The connection is already gone, so swallowing is safe even
+                // in the rare case CIO wraps a transport error as a cancellation cause.
+                //
+                // This covers ONLY the cancellation that arrives THROUGH this `try`. It is not the whole story and
+                // used to claim to be: a child coroutine the MCP SDK starts lazily cancels on its own path, reaches
+                // the app-level StatusPages instead, and `plainbase spike` logged `ERROR unhandled error serving
+                // /api/v1/mcp` over a PASSING check for exactly that reason. The general guard is the cancellation
+                // branch inside [plainbaseModule]'s `exception<Throwable>` catch-all, which demotes the severity
+                // while still answering the frozen envelope; this one just keeps the common case from getting there.
             } finally {
                 transports.remove(transport.sessionId)
             }

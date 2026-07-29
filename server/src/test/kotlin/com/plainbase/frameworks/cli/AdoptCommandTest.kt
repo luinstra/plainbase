@@ -80,7 +80,7 @@ class AdoptCommandTest : FunSpec({
             captureStdout { runAdopt(emptyList(), config) shouldBe 0 } // RECORD binds map-only ids
             val mappedId = DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                 DatabaseFactory.createDatabase(driver).idMapQueries
-                    .selectBinding(RootName.MAIN, TreePath.require("titled.md")).executeAsOne().id
+                    .selectBinding(RootName.PRIMARY, TreePath.require("titled.md")).executeAsOne().id
             }
             Files.writeString(config.contentDir.resolve("copy.md"), "---\nid: $mappedId\n---\nA pasted duplicate.\n")
 
@@ -216,7 +216,7 @@ class AdoptCommandTest : FunSpec({
             val out = captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
             withClue("each root gets its own named section - the same page path can exist in two of them") {
-                out shouldContain "adopt: root 'main': 3 page(s)"
+                out shouldContain "adopt: root 'docs': 3 page(s)"
                 out shouldContain "adopt: root 'handbook': 1 page(s)"
             }
             withClue("THE point: the extra root's identity now lives in the tree itself, so a lost DATA_DIR cannot take it") {
@@ -241,7 +241,7 @@ class AdoptCommandTest : FunSpec({
             captureStdout { runAdopt(listOf("--write-ids"), config) shouldBe 0 }
 
             withClue("main keeps the id it carries in its frontmatter, materialized in its own file") {
-                binding(config, RootName.MAIN, "claimant.md") shouldBe shared
+                binding(config, RootName.PRIMARY, "claimant.md") shouldBe shared
                 String(Files.readAllBytes(config.contentDir.resolve("claimant.md"))) shouldContain "id: $shared"
             }
             withClue("handbook KEEPS its own map-only claim on the SAME id (root-scoped, never stolen) and materializes it") {
@@ -282,7 +282,7 @@ private fun withTwoRootCliTree(block: (PlainbaseConfig, java.nio.file.Path) -> U
                 config.copy(
                     roots = RootsConfig.of(
                         list = listOf(
-                            Root(RootName.MAIN, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
+                            Root(RootName.PRIMARY, RootBackend.Local(config.contentDir), editable = true, history = HistoryMode.OFF),
                             Root(RootName.require("handbook"), RootBackend.Local(handbook), editable = true, history = HistoryMode.OFF),
                         ),
                         origin = RootsOrigin.EXPLICIT,

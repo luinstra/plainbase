@@ -18,10 +18,10 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 class McpRootPinTest : FunSpec({
 
-    test("read_page root=main (registered, holds it) succeeds; root=ghost|a/b -> invalid_root") {
+    test("read_page root=docs (registered, holds it) succeeds; root=ghost|a/b -> invalid_root") {
         McpHarness().use { harness ->
             harness.session(harness.readOnlyBearer) { client ->
-                client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "main")).isErr() shouldBe false
+                client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "docs")).isErr() shouldBe false
 
                 val ghost = client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "ghost"))
                 ghost.isErr() shouldBe true
@@ -44,7 +44,7 @@ class McpRootPinTest : FunSpec({
     }
 
     test("a FAKE-ambiguous bare read answers the ambiguous_page_id body with one candidate per holding root") {
-        val roots = listOf(RootName.MAIN, RootName.require("notes"))
+        val roots = listOf(RootName.PRIMARY, RootName.require("notes"))
         McpHarness(ambiguousRoots = roots).use { harness ->
             harness.session(harness.readOnlyBearer) { client ->
                 val res = client.call("read_page", mapOf("id" to harness.seedPageId))
@@ -56,17 +56,17 @@ class McpRootPinTest : FunSpec({
                 body.getValue("code").jsonPrimitive.content shouldBe "ambiguous_page_id"
                 body.getValue("id").jsonPrimitive.content shouldBe harness.seedPageId
                 body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldBe
-                    listOf("main", "notes")
+                    listOf("docs", "notes")
                 body.getValue("message").jsonPrimitive.content shouldContain "root"
 
                 // Naming a root resolves it: the pin is the documented remedy the error tells the agent to use.
-                client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "main")).isErr() shouldBe false
+                client.call("read_page", mapOf("id" to harness.seedPageId, "root" to "docs")).isErr() shouldBe false
             }
         }
     }
 
     test("a bare read with a LIVE claimant AND a foreign TOMBSTONE -> ambiguous_page_id with the STATUS-NEUTRAL retired note, no 410") {
-        McpHarness(ambiguousRoots = listOf(RootName.MAIN), retiredRoots = listOf(RootName.require("notes"))).use { harness ->
+        McpHarness(ambiguousRoots = listOf(RootName.PRIMARY), retiredRoots = listOf(RootName.require("notes"))).use { harness ->
             harness.session(harness.readOnlyBearer) { client ->
                 val res = client.call("read_page", mapOf("id" to harness.seedPageId))
                 res.isErr() shouldBe true
@@ -75,7 +75,7 @@ class McpRootPinTest : FunSpec({
                 body.getValue("id").jsonPrimitive.content shouldBe harness.seedPageId
                 // The candidate list is the RANKED UNION of live + tombstone roots (registry order), not just the live one.
                 body.getValue("candidates").jsonArray.map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldBe
-                    listOf("main", "notes")
+                    listOf("docs", "notes")
                 val message = body.getValue("message").jsonPrimitive.content
                 // STATUS-NEUTRAL: MCP mirrors REST's 404/stale_base, so the mixed note promises no cross-surface status.
                 message shouldContain "some candidate roots have retired this id"
@@ -88,7 +88,7 @@ class McpRootPinTest : FunSpec({
 
     // ---- propose_change's edit pin: grammar pre-auth, durable-validated AFTER checkEdit ----------------------
 
-    test("propose_change edit pin: root=main (holds it) proceeds; root=ghost (non-owner) is stale_base, never a re-resolve") {
+    test("propose_change edit pin: root=docs (holds it) proceeds; root=ghost (non-owner) is stale_base, never a re-resolve") {
         McpHarness().use { harness ->
             harness.session(harness.proposeBearer) { client ->
                 fun edit(root: String?) = buildMap<String, Any?> {
@@ -99,7 +99,7 @@ class McpRootPinTest : FunSpec({
                     put("rationale", "r")
                     if (root != null) put("root", root)
                 }
-                client.call("propose_change", edit("main")).isErr() shouldBe false
+                client.call("propose_change", edit("docs")).isErr() shouldBe false
                 // `ghost` is a legal slug naming no registered root, so the shared parser lets it through (an EDIT pin
                 // is grammar-only pre-auth) and the facade fails it CLOSED: it reads as gone from the pinned root
                 // rather than walking the edit into whichever root actually holds the id.
@@ -121,7 +121,7 @@ class McpRootPinTest : FunSpec({
                     mapOf(
                         "operation" to "edit",
                         "page_id" to harness.seedPageId,
-                        "root" to "main",
+                        "root" to "docs",
                         "base_hash" to harness.seedBaseHash,
                         "proposed_content" to "---\ntitle: Doc\n---\n\n# Doc\n\nedited.\n",
                         "rationale" to "r",

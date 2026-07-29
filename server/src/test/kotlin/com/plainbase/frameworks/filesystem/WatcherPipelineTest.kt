@@ -63,7 +63,7 @@ class WatcherPipelineTest : FunSpec({
                         val start = System.nanoTime()
                         writePage(root, "docs/note.md", "---\ntitle: New Title\n---\n\nbody\n")
                         awaitUntil(90_000, "the external edit never reached the published index") {
-                            harness.builder.current.byPath[RootedPath(RootName.MAIN, TreePath.require("docs/note.md"))]?.title ==
+                            harness.builder.current.byPath[RootedPath(RootName.PRIMARY, TreePath.require("docs/note.md"))]?.title ==
                                 "New Title"
                         }
                         val elapsedMillis = (System.nanoTime() - start) / 1_000_000

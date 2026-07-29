@@ -19,7 +19,7 @@ import java.nio.file.Files
  */
 class PageRootResolverResolveTest : FunSpec({
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val notes = RootName.require("notes")
     val extra = RootName.require("extra")
     val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
@@ -28,7 +28,7 @@ class PageRootResolverResolveTest : FunSpec({
     fun withResolver(liveRoots: List<RootName>, block: (PageRootResolver) -> Unit) {
         val dir = Files.createTempDirectory("pb-resolver-test")
         try {
-            val registry = RootRegistry.of(listOf(localRoot("main", dir), localRoot("notes", dir), localRoot("extra", dir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", dir), localRoot("notes", dir), localRoot("extra", dir)))
             DatabaseFactory.createInMemoryDriver().use { driver ->
                 val real = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
                 block(PageRootResolver(AmbiguousIdMap(real, id, liveRoots = liveRoots), registry))

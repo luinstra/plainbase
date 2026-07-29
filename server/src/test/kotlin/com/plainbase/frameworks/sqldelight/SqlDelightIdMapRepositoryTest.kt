@@ -40,7 +40,7 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             block(SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)), driver)
         }
 
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
     val extra = RootName.require("extra")
     val pathA = RootedPath(main, TreePath.require("guides/a.md"))
     val pathB = RootedPath(main, TreePath.require("notes/réunion.md"))

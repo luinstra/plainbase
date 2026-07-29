@@ -2,16 +2,17 @@
   "treeResponse": {
     "roots": [
       {
-        "root": "main",
+        "root": "docs",
         "available": true,
         "editable": true,
+        "primary": true,
         "tree": {
           "type": "folder",
           "name": "",
           "title": null,
           "description": null,
           "path": "",
-          "url": "/docs/main",
+          "url": "/docs",
           "page_count": 0,
           "children": [
             {
@@ -20,7 +21,7 @@
               "title": "Guides",
               "description": "How-to guides",
               "path": "guides",
-              "url": "/docs/main/guides",
+              "url": "/docs/guides",
               "page_count": 1,
               "children": [
                 {
@@ -29,7 +30,7 @@
                   "title": "Deploy Guide",
                   "slug": "deploy-guide",
                   "path": "guides/deploy-guide.md",
-                  "url": "/docs/main/guides/deploy-guide",
+                  "url": "/docs/guides/deploy-guide",
                   "status": "published",
                   "updated": "2026-06-01"
                 }
@@ -62,7 +63,7 @@
   },
   "pageResponse": {
     "id": "01970000-0000-7000-8000-000000000001",
-    "root": "main",
+    "root": "docs",
     "path": "guides/deploy-guide.md",
     "slug": "deploy-guide",
     "url": null,
@@ -84,12 +85,12 @@
       "path": "guides/deploy-guide.md",
       "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "commit": null,
-      "uri": "plainbase://main/01970000-0000-7000-8000-000000000001@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "uri": "plainbase://docs/01970000-0000-7000-8000-000000000001@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   },
   "pageHtmlResponse": {
     "id": "01970000-0000-7000-8000-000000000002",
-    "root": "main",
+    "root": "docs",
     "path": "shadowed.md",
     "slug": "shadowed",
     "url": null,
@@ -110,7 +111,7 @@
       "path": "shadowed.md",
       "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "commit": "1111111111111111111111111111111111111111",
-      "uri": "plainbase://main/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "uri": "plainbase://docs/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   },
   "errorEnvelope": {
@@ -128,7 +129,7 @@
     "hits": [
       {
         "page_id": "01970000-0000-7000-8000-000000000002",
-        "root": "main",
+        "root": "docs",
         "path": "shadowed.md",
         "url": null,
         "title": "Shadowed",
@@ -149,7 +150,7 @@
           "path": "shadowed.md",
           "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "commit": null,
-          "uri": "plainbase://main/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "uri": "plainbase://docs/01970000-0000-7000-8000-000000000002@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       }
     ]
@@ -219,7 +220,7 @@
   },
   "createdResponse": {
     "id": "01970000-0000-7000-8000-000000000001",
-    "url": "/docs/main/guides/deploy-guide",
+    "url": "/docs/guides/deploy-guide",
     "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "commit": null
   },
@@ -328,7 +329,7 @@
         "id": "01970000-0000-7000-8000-0000000000a2",
         "operation": "create",
         "status": "PENDING",
-        "root": "main",
+        "root": "docs",
         "target_path": "guides/rollback.md",
         "page_id": null,
         "base_drifted": false,
@@ -342,7 +343,7 @@
     "id": "01970000-0000-7000-8000-0000000000a3",
     "operation": "create",
     "status": "PENDING",
-    "root": "main",
+    "root": "docs",
     "target_path": "guides/rollback.md",
     "page_id": null,
     "base_hash": null,

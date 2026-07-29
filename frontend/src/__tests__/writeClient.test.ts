@@ -26,7 +26,7 @@ describe("write client network-error handling", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -41,7 +41,7 @@ describe("write client network-error handling", () => {
         throw new TypeError("Failed to fetch");
       }),
     );
-    const result = await createPage({ root: "main", title: "X" });
+    const result = await createPage({ root: "docs", title: "X" });
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -67,7 +67,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(413)),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(413);
@@ -79,7 +79,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(200)),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(200);
@@ -91,7 +91,7 @@ describe("write client non-JSON body handling", () => {
       "fetch",
       vi.fn(async () => htmlResponse(409)),
     );
-    const result = await createPage({ root: "main", title: "X" });
+    const result = await createPage({ root: "docs", title: "X" });
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(409);
@@ -117,7 +117,7 @@ describe("write client 202 degrade-to-proposal handling", () => {
       "fetch",
       vi.fn(async () => degradedResponse()),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("degraded");
     if (result.kind === "degraded") {
       expect(result.proposalId).toBe("0198abc");
@@ -140,7 +140,7 @@ describe("write client 202 degrade-to-proposal handling", () => {
       "fetch",
       vi.fn(async () => primitiveBodyResponse(200)),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.error.status).toBe(200);
   });
@@ -165,7 +165,7 @@ describe("write client error-envelope fallback (clone keeps the body readable)",
       "fetch",
       vi.fn(async () => envelopeResponse(503, "content_unreadable", "the file is temporarily locked")),
     );
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") {
       expect(result.error.status).toBe(503);
@@ -196,7 +196,7 @@ function writtenResponse(): Response {
 }
 
 function createdResponse(): Response {
-  return new Response(JSON.stringify({ id: "p1", url: "/docs/main/p1", content_hash: "sha256:abc", commit: null }), {
+  return new Response(JSON.stringify({ id: "p1", url: "/docs/p1", content_hash: "sha256:abc", commit: null }), {
     status: 201,
     headers: { "content-type": "application/json" },
   });
@@ -229,7 +229,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       sentCsrf = csrf;
       return writtenResponse();
     });
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("saved");
     expect(sentCsrf).toBe("tok-1");
   });
@@ -258,7 +258,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       sentCsrf = csrf;
       return createdResponse();
     });
-    const result = await createPage({ root: "main", title: "X" });
+    const result = await createPage({ root: "docs", title: "X" });
     expect(result.kind).toBe("created");
     expect(sentCsrf).toBe("tok-1");
   });
@@ -269,7 +269,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       seen.push(csrf);
       return seen.length === 1 ? csrfFailed() : writtenResponse();
     });
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("saved");
     // First attempt with the stale token, then the refreshed one — exactly two mutation attempts.
     expect(seen).toEqual(["stale", "fresh"]);
@@ -287,7 +287,7 @@ describe("write client CSRF wiring (editor + new-page flows)", () => {
       seen.push(csrf);
       return forbidden;
     });
-    const result = await putPageRaw("id", "main", "buffer", HASH);
+    const result = await putPageRaw("id", "docs", "buffer", HASH);
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.error.code).toBe("forbidden");
     expect(seen).toEqual(["tok-1"]); // exactly one attempt — a real authz denial is not a CSRF retry

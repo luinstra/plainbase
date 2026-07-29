@@ -50,10 +50,10 @@ class WritePipelineNativeTest {
                 val citations = CitationFactory()
                 val idMap = SqlDelightIdMapRepository(database)
                 val registry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
-                val rootRegistry = RootRegistry.of(listOf(localRoot("main", content)))
+                val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(kotlin.time.Clock.System)
                 val builder = IndexBuilder(
-                    sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+                    sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
                     frontmatterParser = FrontmatterReader(),
                     rendererFactory = { view -> FlexmarkRenderer(view) },
                     identity = PageIdentityService(UuidV7IdProvider()),
@@ -82,14 +82,14 @@ class WritePipelineNativeTest {
                 val saveBytes = "---\ntitle: Doc\n---\n\n# Doc\n\nnatively saved.\n".toByteArray()
                 val outcome = pipeline.write(
                     grantForTests(),
-                    WriteIntent(page.id, rootRegistry.main.name, page.path, page.contentHash, saveBytes),
+                    WriteIntent(page.id, rootRegistry.primary.name, page.path, page.contentHash, saveBytes),
                 )
 
                 assertTrue(outcome is WriteOutcome.Written, "expected Written, got $outcome")
                 assertEquals(citations.contentHash(saveBytes), (outcome as WriteOutcome.Written).newHash)
                 assertContentEquals(saveBytes, Files.readAllBytes(content.resolve("doc.md")))
                 // The targeted reindex ran: the snapshot reflects the new bytes.
-                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.pageAt(RootedPageId(RootName.MAIN, page.id))!!.markdown)
+                assertEquals(String(saveBytes, Charsets.UTF_8), builder.current.pageAt(RootedPageId(RootName.PRIMARY, page.id))!!.markdown)
                 // The write-ahead mark was cleared on success.
                 assertTrue(SqlDelightDirtyPageRepository(database).all().isEmpty(), "dirty mark not cleared")
                 // The CAS resolved the indexed path (sanity that the path round-trips).

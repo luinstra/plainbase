@@ -27,6 +27,19 @@ redirect). Owner review during the revamp changed both:
 The bullets below are kept as originally written; where they say "no redirect / independently
 reachable," read the Amendment as governing.
 
+## Superseded in part: roots now own top-level URL segments (2026-07-28)
+
+The URL grammar changed after this amendment. The old `/docs/main` and `/docs/$` references above are
+historical addresses, not current route instructions. The server now registers `get("/{root}")` and
+`get("/{root}/{path...}")`: the required primary root is named `docs`, so its landing is `/docs`, a
+folder under that root is addressed at `/docs/<folder>`, and an extra root named `extra` owns
+`/extra/<folder>`. The SPA folder-landing decision itself is unchanged. The API lookup remains rooted
+at `/api/v1/pages/by-path/{root}/{path}` and still returns 404 for a folder with no page; the browser
+route serves the shell, then the SPA matches the tree's folder URL.
+
+This is a URL-shape correction, not a silent rewrite of the folder decision. The old examples remain
+above so the record shows the address shape that this amendment originally amended.
+
 ## Context
 
 Phase 1 gave folders no URL of their own: `index.md` is an ordinary page, the `/docs/$` route
@@ -81,10 +94,10 @@ expand/collapse), and breadcrumb ancestor crumbs link likewise.
 **Trade-offs**
 
 - A folder URL is a *client* construct: a raw `curl /docs/guides` returns the shell, and
-  `by-path/guides` still 404s — tools must use the tree's `url` field, not guess.
-  *(Amended by multi-root C3, ADR-0011 D3: folder URLs are root-qualified now, so the canonical
-  examples read `curl /docs/main/guides` (a rootless `/docs/guides` first 301s there) and
-  `by-path/main/guides` 404s. The trade-off itself is unchanged.)*
+  `by-path/docs/guides` still 404s - tools must use the tree's `url` field, not guess.
+  *(Amended by the 2026-07-28 top-level supersession: the first segment is now the ROOT NAME, not
+  a literal `/docs` prefix, so a root named `handbook` uses `/handbook/guides` for its folder URL.
+  The by-path folder 404 and the client-construct trade-off are unchanged.)*
 - The README renders at two URLs (folder prefix + its own canonical). Citations are id-based, so
   identity is unaffected; the duplication is deliberate (no redirect keeps the folder address
   stable for sharing).

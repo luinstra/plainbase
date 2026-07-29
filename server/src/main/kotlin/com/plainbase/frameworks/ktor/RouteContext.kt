@@ -113,8 +113,11 @@ class RouteContext(
     /**
      * The registry root names the URL grammar scopes by (`splitRootTail`'s known set) and the shared propose parser
      * validates a declared root against: config TOPOLOGY only (operator-declared names, never content existence), so
-     * the pre-gate root decision leaks nothing. [RootRegistry] guarantees `main` is present — the legacy 301 arm
-     * targets `/docs/main/...`, so a set without it would redirect its own target forever.
+     * the pre-gate root decision leaks nothing. [RootRegistry] guarantees the primary is present as a
+     * construction-time invariant, independent of the URL grammar: no route derives a root from its absence any more.
      */
     val roots: Set<RootName> = registry.roots.map { it.name }.toSet()
+
+    /** The primary root name used by root-level redirects, read from the registry when the route runs. */
+    val primary: RootName get() = registry.primary.name
 }

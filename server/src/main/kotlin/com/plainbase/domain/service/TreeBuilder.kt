@@ -13,7 +13,7 @@ import kotlinx.datetime.LocalDate
  * A node of the nav tree (§A4 `/api/v1/tree` shape, chunk 6 maps it to DTOs).
  *
  * Page nodes carry [Page.url] — the canonical path URL, null for a slug-collision loser (the UI
- * links those via `/p/{root}/{id}`). Folder nodes carry [Folder.url] - the folder's `/docs/{root}` URL
+ * links those via `/p/{root}/{id}`). Folder nodes carry [Folder.url] - the folder's `/{root}` URL
  * prefix, where the SPA renders the folder landing view (ADR-0003); null for a collision-loser
  * subtree.
  * Folder [Folder.title] comes from `_folder.yaml`, else null (the UI falls back to [Folder.name]);
@@ -33,7 +33,7 @@ sealed interface TreeNode {
         val description: String?,
         /** The folder's content path; null only for the synthetic root node. */
         val path: TreePath?,
-        /** The folder's `/docs/{root}` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
+        /** The folder's `/{root}` URL prefix on the wire (encoded like page urls); null for a collision-loser subtree. */
         val url: String?,
         /** Count of DIRECT child pages only (not recursive); drives the landing card's `path/ · N pages` meta. */
         val pageCount: Int,
@@ -79,7 +79,7 @@ object TreeBuilder {
             description = null,
             path = null,
             // The synthetic root folder's URL prefix is the bare root landing (C3, ADR-0011 D3).
-            url = "/docs/" + root.value,
+            url = "/" + root.value,
             pageCount = children.count { it is TreeNode.Page },
             children = children,
         )
@@ -103,7 +103,7 @@ object TreeBuilder {
                     title = folder.meta?.title,
                     description = folder.meta?.description,
                     path = folder.path,
-                    url = folderUrls.getValue(folder.path)?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) },
+                    url = folderUrls.getValue(folder.path)?.let { "/" + root.value + "/" + PercentCoding.encodePath(it.value) },
                     pageCount = children.count { it is TreeNode.Page }, // DIRECT child pages only
                     children = children,
                 ),

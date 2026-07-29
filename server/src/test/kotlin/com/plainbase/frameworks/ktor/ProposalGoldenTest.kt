@@ -79,7 +79,7 @@ class ProposalGoldenTest : FunSpec({
             "change-detail.json",
             ChangeDetail.serializer(),
             ChangeDetail(
-                id = proposalId1, operation = "edit", status = "PENDING", root = "main",
+                id = proposalId1, operation = "edit", status = "PENDING", root = "docs",
                 targetPath = "guides/deploy-guide.md",
                 pageId = pageId, baseHash = baseHash, baseDrifted = false, authorLabel = "ci-bot",
                 authorIssuer = "agent", authorExternalId = "pb_token", createdAt = createdAt,
@@ -98,7 +98,7 @@ class ProposalGoldenTest : FunSpec({
             ListChangesResponse(
                 proposals = listOf(
                     ChangeSummary(
-                        id = proposalId1, operation = "edit", status = "PENDING", root = "main",
+                        id = proposalId1, operation = "edit", status = "PENDING", root = "docs",
                         targetPath = "guides/deploy-guide.md",
                         pageId = pageId, baseDrifted = false, authorLabel = "ci-bot", createdAt = createdAt,
                         rationale = "tighten the deploy steps",
@@ -114,7 +114,7 @@ class ProposalGoldenTest : FunSpec({
             "reject-rejected.json",
             ChangeDetail.serializer(),
             ChangeDetail(
-                id = proposalId1, operation = "edit", status = "REJECTED", root = "main",
+                id = proposalId1, operation = "edit", status = "REJECTED", root = "docs",
                 targetPath = "guides/deploy-guide.md",
                 pageId = pageId, baseHash = baseHash, baseDrifted = false, authorLabel = "ci-bot",
                 authorIssuer = "agent", authorExternalId = "pb_token", createdAt = createdAt,

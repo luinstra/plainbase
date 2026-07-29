@@ -28,7 +28,7 @@ class VerbatimMarkdownTest : FunSpec({
             Files.write(root.resolve("crlf.md"), rawBytes)
         }) { root ->
             restTest(root) {
-                val response = client.get("/api/v1/pages/by-path/crlf")
+                val response = client.get("/api/v1/pages/by-path/docs/crlf")
                 response.status shouldBe HttpStatusCode.OK
                 val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
 

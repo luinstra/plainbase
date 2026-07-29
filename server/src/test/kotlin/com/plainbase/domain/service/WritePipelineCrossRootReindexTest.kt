@@ -65,8 +65,8 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             Files.createDirectories(extraDir.resolve("notes"))
             Files.writeString(extraDir.resolve("notes/rollback.md"), body("original."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
-            val mainStore = LocalContentStore(mainDir, rootName = RootName.MAIN)
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
+            val mainStore = LocalContentStore(mainDir, rootName = RootName.PRIMARY)
             val extraRoot = RootName.require("extra")
             val extraStore = LocalContentStore(extraDir, rootName = extraRoot)
             val search = RecordingSearchProvider()
@@ -75,7 +75,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                 root = mainDir,
                 rootRegistry = registry,
                 sources = listOf(
-                    IndexBuilder.Source(registry.main, mainStore, NoOpHistoryProvider),
+                    IndexBuilder.Source(registry.primary, mainStore, NoOpHistoryProvider),
                     IndexBuilder.Source(requireNotNull(registry.byName(extraRoot)), extraStore, NoOpHistoryProvider),
                 ),
                 // NO search publication listener: a full rebuild therefore syncs NOTHING to search, so whatever the
@@ -123,7 +123,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
 
                 outcome.shouldBeInstanceOf<WriteOutcome.Written>()
                 withClue("per-root identity (C5): main's colliding page and extra's page now BOTH hold the id, each its own page") {
-                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId)).shouldNotBeNull()
+                    harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, pageId)).shouldNotBeNull()
                     harness.builder.current.pageAt(RootedPageId(extraRoot, pageId)).shouldNotBeNull()
                 }
 
@@ -153,14 +153,14 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             Files.writeString(extraDir.resolve("notes/rollback.md"), slugged("extra-rollback", "original."))
             Files.writeString(mainDir.resolve("notes/rollback.md"), slugged("renamed", "a colliding page in main."))
 
-            val registry = RootRegistry.of(listOf(localRoot("main", mainDir), localRoot("extra", extraDir)))
+            val registry = RootRegistry.of(listOf(localRoot("docs", mainDir), localRoot("extra", extraDir)))
             val extraRoot = RootName.require("extra")
 
             IndexHarness(
                 root = mainDir,
                 rootRegistry = registry,
                 sources = listOf(
-                    IndexBuilder.Source(registry.main, LocalContentStore(mainDir, rootName = RootName.MAIN), NoOpHistoryProvider),
+                    IndexBuilder.Source(registry.primary, LocalContentStore(mainDir, rootName = RootName.PRIMARY), NoOpHistoryProvider),
                     IndexBuilder.Source(
                         requireNotNull(registry.byName(extraRoot)),
                         LocalContentStore(extraDir, rootName = extraRoot),
@@ -173,7 +173,7 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                     "per-root identity (C5): main's page and extra's page BOTH hold the id, so an " +
                         "id-addressed guard could read MAIN's frontmatter",
                 ) {
-                    harness.builder.current.pageAt(RootedPageId(RootName.MAIN, pageId)).shouldNotBeNull()
+                    harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, pageId)).shouldNotBeNull()
                     harness.builder.current.pageAt(RootedPageId(extraRoot, pageId)).shouldNotBeNull()
                 }
                 val target = harness.builder.current.byPath.getValue(RootedPath(extraRoot, path))

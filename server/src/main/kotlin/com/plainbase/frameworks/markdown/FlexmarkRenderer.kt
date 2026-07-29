@@ -48,7 +48,7 @@ import com.vladsch.flexmark.ast.Heading as FlexmarkHeading
  *    id; links/images get a [LinkOutcome] from chunk 2's [LinkResolver]. Both are stashed by node
  *    identity for the render hooks to read — one resolution pass, consumed twice.
  *  - **Links:** an [AttributeProvider] rewrites each link/image `href`/`src` to its resolved
- *    `/docs`/`/assets` URL (§A2); a broken or blocked target is rendered **inert** — the href/src is
+ *    `/{root}`/`/assets` URL (§A2); a broken or blocked target is rendered **inert**; the href/src is
  *    dropped and a `data-pb-link-error="{class}"` attribute is added (markup detail, not frozen §A2).
  *  - **M2 bridging:** the authoritative [FrontmatterBlock] detector runs on the raw bytes FIRST and
  *    only the body region is handed to the Markdown parser — flexmark never sees the raw file head,

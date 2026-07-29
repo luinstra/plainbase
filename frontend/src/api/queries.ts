@@ -14,7 +14,7 @@ import type {
 } from "./types";
 
 /**
- * Re-encodes a decoded `/docs/`-relative path for the by-path endpoint. The router hands
+ * Re-encodes a decoded root-qualified path for the by-path endpoint. The router hands
  * us the splat percent-DECODED; the server decodes exactly once (PB-LINK-1), so each
  * segment goes back through encodeURIComponent. This is transport encoding only — slug
  * semantics stay server-owned.
@@ -30,14 +30,13 @@ export const treeQuery = queryOptions({
 });
 
 /**
- * Decodes a `/docs/<splat>` canonical URL back to the DECODED splat `pageByPathQuery` is keyed by
- * (the inverse of {@link encodeTreePath}, mirroring the read path's canonical-redirect resolution in
- * `PageView.tsx`). Returns null for a non-`/docs/` URL (a collision loser has no by-path key). The
- * key is the URL splat WITHOUT the `.md` extension — NOT the content file path.
+ * Returns the decoded URL splat for a non-null path URL not under `/p/`; returns null for null, non-path, and
+ * permalink URLs. This is the inverse of {@link encodeTreePath}, and the key is the URL splat WITHOUT the `.md`
+ * extension, NOT the content file path.
  */
 export function byPathKeyForUrl(url: string | null): string | null {
-  if (!url || !url.startsWith("/docs/")) return null;
-  return url.slice("/docs/".length).split("/").map(decodeURIComponent).join("/");
+  if (!url || !url.startsWith("/") || url.startsWith("/p/")) return null;
+  return url.slice(1).split("/").map(decodeURIComponent).join("/");
 }
 
 export const pageByPathQuery = (path: string) =>
@@ -181,7 +180,7 @@ export function previewQuery(text: string, path?: string, root?: string) {
  * commits, so the commit list grows; W7 master criterion 6), the destination URL's by-path read
  * (`pageByPathQuery` — keyed by the URL splat, NOT the content file path; reuse {@link byPathKeyForUrl}),
  * AND any full-text `['search', …]` result (full-text goes stale on ANY content edit). Pass whatever of
- * {id, url} the calling path knows; an absent/non-`/docs/` url no-ops its by-path leg. Covering the whole
+ * {id, url} the calling path knows; an absent/non-content url no-ops its by-path leg. Covering the whole
  * `['page', 'by-path']` namespace too leaves NEITHER a stale old nor new location after a rename/recovery.
  *
  * The three id-keyed legs are cleared by their id PREFIX ({@link pageKey} and friends), never by a rooted

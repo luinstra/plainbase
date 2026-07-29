@@ -55,9 +55,9 @@ class MultiRootCorpusPerfTest : FunSpec({
     test("1,000 pages in 1 root vs 3: rebuild / create / render (ratios recorded, the 1-root literals gated)") {
         // Contiguous slices, so every page's generated sibling link resolves exactly as it does in the 1-root
         // corpus: the two shapes render the same work, not merely the same page count.
-        val single = measure(listOf("main" to (0 until 1000)))
-        val singleAgain = measure(listOf("main" to (0 until 1000)))
-        val triple = measure(listOf("main" to (0 until 334), "extra" to (334 until 667), "archive" to (667 until 1000)))
+        val single = measure(listOf("docs" to (0 until 1000)))
+        val singleAgain = measure(listOf("docs" to (0 until 1000)))
+        val triple = measure(listOf("docs" to (0 until 334), "extra" to (334 until 667), "archive" to (667 until 1000)))
 
         report("rebuild median ms", single.rebuildMedian, singleAgain.rebuildMedian, triple.rebuildMedian)
         report("create median ms", single.createMedian, singleAgain.createMedian, triple.createMedian)
@@ -135,13 +135,13 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
             // materialized frontmatter (id included) never changes and classifyEdit stays green.
             val target = TreePath.require("section-00/page-000.md")
             val saves = (0 until 20).map { round ->
-                val current = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, target))
+                val current = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, target))
                 val bytes = (current.markdown + "\nsave round $round.\n").toByteArray()
                 val outcome: WriteOutcome
                 val millis = measureTimeMillis {
                     outcome = pipeline.write(
                         grantForTests(),
-                        WriteIntent(current.id, RootName.MAIN, current.path, current.contentHash, bytes),
+                        WriteIntent(current.id, RootName.PRIMARY, current.path, current.contentHash, bytes),
                     )
                 }
                 outcome.shouldBeInstanceOf<WriteOutcome.Written>()
@@ -203,7 +203,7 @@ private fun timedCreate(pipeline: WritePipeline, path: String): Long {
     val bytes = "---\nid: ${pageId.value}\ntitle: Created\n---\n\n# Created\n\nbody.\n".toByteArray()
     val outcome: WriteOutcome
     val millis = measureTimeMillis {
-        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.MAIN, TreePath.require(path), bytes))
+        outcome = pipeline.create(createGrantForTests(), CreateIntent(pageId, RootName.PRIMARY, TreePath.require(path), bytes))
     }
     outcome.shouldBeInstanceOf<WriteOutcome.Written>()
     return millis

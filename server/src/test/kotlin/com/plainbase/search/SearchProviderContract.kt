@@ -152,10 +152,10 @@ abstract class SearchProviderContract(
                     page(2, preamble = "survivor"),
                 ),
             )
-            engine.provider.delete(listOf(rooted(1, RootName.MAIN)))
+            engine.provider.delete(listOf(rooted(1, RootName.PRIMARY)))
             engine.provider.search(query("vanishing")).total shouldBe 0L
             engine.provider.search(query("survivor")).total shouldBe 1L
-            engine.provider.indexedState().keys shouldBe setOf(rooted(2, RootName.MAIN))
+            engine.provider.indexedState().keys shouldBe setOf(rooted(2, RootName.PRIMARY))
         }
     }
 
@@ -207,15 +207,15 @@ abstract class SearchProviderContract(
             engine.provider.indexedState() shouldBe emptyMap()
             engine.provider.index(listOf(page(1, contentHash = "sha256:v1"), page(2, contentHash = "sha256:v2")))
             engine.provider.indexedState().mapValues { it.value.contentHash } shouldBe
-                mapOf(rooted(1, RootName.MAIN) to "sha256:v1", rooted(2, RootName.MAIN) to "sha256:v2")
+                mapOf(rooted(1, RootName.PRIMARY) to "sha256:v1", rooted(2, RootName.PRIMARY) to "sha256:v2")
 
             engine.provider.index(listOf(page(1, contentHash = "sha256:v1b", path = "moved/page-1.md")))
-            val state = engine.provider.indexedState().getValue(rooted(1, RootName.MAIN))
+            val state = engine.provider.indexedState().getValue(rooted(1, RootName.PRIMARY))
             state.contentHash shouldBe "sha256:v1b"
             state.path.value shouldBe "moved/page-1.md"
 
-            engine.provider.delete(listOf(rooted(2, RootName.MAIN)))
-            engine.provider.indexedState().keys shouldBe setOf(rooted(1, RootName.MAIN))
+            engine.provider.delete(listOf(rooted(2, RootName.PRIMARY)))
+            engine.provider.indexedState().keys shouldBe setOf(rooted(1, RootName.PRIMARY))
         }
     }
 

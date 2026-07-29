@@ -91,7 +91,7 @@ object CanonicalUrlBuilder {
             }
 
     /**
-     * Every folder's canonical URL path — the `/docs` prefix its descendants' URLs extend, which
+     * Every folder's canonical URL path; the `/{root}` prefix its descendants' URLs extend, which
      * the folder landing view answers at (ADR-0003). Same §A4 construction as a page's ancestor
      * segments, ending in the folder's own segment; null when the folder or any ancestor lost a
      * same-role collision (a losing folder takes its whole subtree out of path space).

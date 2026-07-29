@@ -50,7 +50,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                 h.builder.rebuild()
                 val before = h.builder.current
                 val targetId = before.pages.first().id
-                val targetPath = before.pageAt(RootedPageId(RootName.MAIN, targetId))!!.path.value
+                val targetPath = before.pageAt(RootedPageId(RootName.PRIMARY, targetId))!!.path.value
                 h.renders.clear()
 
                 // Change that page's bytes on disk so reindex re-reads.
@@ -61,7 +61,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
 
                 h.renders.keys shouldBe setOf(targetPath)
                 h.renders.values.all { it == 1 } shouldBe true
-                after.pageAt(RootedPageId(RootName.MAIN, targetId))!!.markdown shouldBe edited
+                after.pageAt(RootedPageId(RootName.PRIMARY, targetId))!!.markdown shouldBe edited
                 // Every other page is the SAME instance — untouched.
                 for (page in before.pages) {
                     if (page.id != targetId) after.pageAt(page.rooted)!! shouldBeSameInstanceAs page
@@ -76,7 +76,7 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                 ReindexHarness(root).use { h ->
                     h.builder.rebuild()
                     val targetId = h.builder.current.pages.first().id
-                    val targetPath = h.builder.current.pageAt(RootedPageId(RootName.MAIN, targetId))!!.path.value
+                    val targetPath = h.builder.current.pageAt(RootedPageId(RootName.PRIMARY, targetId))!!.path.value
                     h.renders.clear()
                     h.search.reset()
                     h.checkpoint.replaceCalls = 0
@@ -119,14 +119,14 @@ class IndexBuilderReindexTargetedTest : FunSpec({
 })
 
 /** The reindex target for a path in `main` — the write location, which is what [IndexBuilder.reindex] addresses. */
-private fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+private fun mainPath(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
 /** A reindex harness with counting collaborators — built directly (not via IndexHarness) for spy control. */
 private class ReindexHarness(root: Path) : AutoCloseable {
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
-    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", root)))
 
     val renders = ConcurrentHashMap<String, Int>()
     val search = CountingSearchProvider()
@@ -143,7 +143,7 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     }
 
     val builder = IndexBuilder(
-        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+        sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = countingRenderer,
         identity = PageIdentityService(UuidV7IdProvider()),

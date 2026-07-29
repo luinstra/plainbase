@@ -88,7 +88,7 @@ class LocalContentStore(
     exclusions: List<Path> = emptyList(),
     private val atomics: FileAtomics = FileAtomics.Real,
     /** WHICH root this store serves - carried on every [RootUnavailable] it throws. */
-    private val rootName: RootName = RootName.MAIN,
+    private val rootName: RootName = RootName.PRIMARY,
     /**
      * Called the instant this store's own probe finds the root gone, immediately BEFORE it answers root-loss
      * (the [FileWatcher] `onFailure` ctor-callback idiom). Marking is load-bearing, not bookkeeping: detection

@@ -8,6 +8,7 @@ import com.plainbase.domain.render.RenderedSection
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.ServerTopLevel
 
 /** One root's slice of a snapshot, in the builder's per-root scan order. */
 data class RootSection(
@@ -35,7 +36,7 @@ data class RootSection(
  * consumer goes through [section] or [view], both total (an unknown root yields the empty
  * section/view, so `EMPTY`-snapshot readers stay total from startup).
  *
- * **URL emission is root-qualified (C3):** `IndexedPage.url` is `/docs/{root}/{path}` and asset
+ * **URL emission is root-qualified (C3):** `IndexedPage.url` is `/{root}/{path}` and asset
  * URLs are `/assets/{root}/{path}`, so two roots holding the same relative URL path can no longer
  * emit identical `url` strings. [byUrlPath] stays keyed (root, urlPath) - the root segment on the
  * wire and the composite key agree by construction.
@@ -64,7 +65,7 @@ class PageIndex(sections: List<RootSection>) {
 
     /**
      * Page by rooted canonical URL path (the ROOT-relative slug segments, decoded - the tail after
-     * `/docs/{root}/` since C3) - the `by-path` lookup. Collision losers have no URL path and are
+     * `/{root}/` since C3) - the `by-path` lookup. Collision losers have no URL path and are
      * absent (§A4): reachable by id only. URL uniqueness is per root (the composite key); see the
      * class doc's root-qualified emission note.
      */
@@ -127,7 +128,8 @@ class PageIndex(sections: List<RootSection>) {
             return indexed.url ?: indexed.permalink
         }
 
-        override fun assetUrl(asset: TreePath): String = "/assets/" + root.value + "/" + PercentCoding.encodePath(asset.value)
+        override fun assetUrl(asset: TreePath): String =
+            "/${ServerTopLevel.ASSETS}/" + root.value + "/" + PercentCoding.encodePath(asset.value)
 
         override fun caseInsensitiveMatches(path: TreePath): List<TreePath> =
             byLowercaseValue[path.value.lowercase()].orEmpty().filterNot { it == path }
@@ -138,7 +140,7 @@ class PageIndex(sections: List<RootSection>) {
         val EMPTY: PageIndex = PageIndex(emptyList())
 
         /** [view]'s unknown-root answer: a [SectionView] over nothing (root-independent lookups). */
-        private val EMPTY_VIEW: PageIndexView = SectionView(RootSection(RootName.MAIN, emptyList(), emptyList(), emptySet()))
+        private val EMPTY_VIEW: PageIndexView = SectionView(RootSection(RootName.PRIMARY, emptyList(), emptyList(), emptySet()))
     }
 }
 
@@ -150,7 +152,7 @@ class PageIndex(sections: List<RootSection>) {
  * [urlPath] is the canonical URL as a [TreePath] of DECODED slug segments (e.g.
  * `notes/release-notes-2026`) - the form the alias registry stores, root-relative; null marks a
  * same-parent slug-collision loser, excluded from path space but fully reachable via its
- * [permalink]. [url] is the wire form: `/docs/{root}/` + the RFC 3986 percent-encoded segments
+ * [permalink]. [url] is the wire form: `/{root}/` + the RFC 3986 percent-encoded segments
  * (unicode slugs are legal and encoded on emit; the root slug is URL-safe by construction and
  * never encoded - C3, ADR-0011 D3).
  *
@@ -203,7 +205,7 @@ data class IndexedPage(
 ) {
 
     /** The canonical path URL on the wire (§A4), or null for a collision loser (REST `url` field). */
-    val url: String? = urlPath?.let { "/docs/" + root.value + "/" + PercentCoding.encodePath(it.value) }
+    val url: String? = urlPath?.let { "/" + root.value + "/" + PercentCoding.encodePath(it.value) }
 
     /** This page's real identity: the [RootedPageId] seam every id-bearing surface funnels through. */
     val rooted: RootedPageId get() = RootedPageId(root, id)

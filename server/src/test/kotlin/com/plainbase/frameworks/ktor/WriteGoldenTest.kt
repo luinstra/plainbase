@@ -57,7 +57,7 @@ class WriteGoldenTest : FunSpec({
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("guides/deploy-guide.md")),
             PageId.require(deployGuideId),
             materialized = false,
         )
@@ -89,36 +89,36 @@ class WriteGoldenTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"guides","title":"Golden Create"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Golden Create"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             // The 201 GAINS the minted `id` + the SERVER-AUTHORITATIVE canonical `url` (W6, additive
             // PB-WRITE-1 revision). The golden pins both; `url` is the published `IndexedPage.url`, NOT a
             // client-/path-derived slug — asserted against the snapshot below so the literal can't drift.
             post.tree() shouldBe RestGolden.load("write-post-ok.json", mapOf("content_hash" to citations.contentHash(composed)))
-            harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(createdId)))?.url shouldBe
-                "/docs/main/guides/golden-create"
+            harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(createdId)))?.url shouldBe
+                "/docs/guides/golden-create"
         }
     }
 
     test("write-post-ok-unicode.json — a 201 create's url is the slugified urlPath, NOT the raw on-disk path") {
         // The divergence guard (house rule). The slug "Café Ω" slugifies to the NON-ASCII `café-ω`, so the
         // on-disk filename is `café-ω.md` (raw unicode bytes) while the canonical url percent-encodes the
-        // urlPath: `/docs/main/guides/caf%C3%A9-%CF%89`. A naive re-compose from the file path would give a
+        // urlPath: `/docs/guides/caf%C3%A9-%CF%89`. A naive re-compose from the file path would give a
         // DIFFERENT string (raw é/ω, or a title slug) — proving `url` is the published IndexedPage.url.
         val createdId = "01900000-0000-7000-8000-000000000001"
         val composed = "---\nid: $createdId\ntitle: \"Report\"\nslug: \"Café Ω\"\n---\n\n".toByteArray()
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider()) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"guides","title":"Report","slug":"Café Ω"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Report","slug":"Café Ω"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             post.tree() shouldBe RestGolden.load("write-post-ok-unicode.json", mapOf("content_hash" to citations.contentHash(composed)))
             // The response url IS the published IndexedPage.url: the PercentCoding.encodePath(urlPath) form,
             // never a percent-encode of the raw on-disk filename nor a slug of the title.
-            harness.builder.current.pageAt(RootedPageId(RootName.MAIN, PageId.require(createdId)))?.url shouldBe
-                "/docs/main/guides/caf%C3%A9-%CF%89"
+            harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, PageId.require(createdId)))?.url shouldBe
+                "/docs/guides/caf%C3%A9-%CF%89"
         }
     }
 
@@ -129,9 +129,9 @@ class WriteGoldenTest : FunSpec({
         // latter is the loser (url = null) — the same induction RestRedirectTest uses.
         val winnerId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d1"
         val loserId = "0190aaaa-bbbb-7ccc-8ddd-0000000000d2"
-        val loserPath = RootedPath(RootName.MAIN, TreePath.require("a-b.md"))
+        val loserPath = RootedPath(RootName.PRIMARY, TreePath.require("a-b.md"))
         val seedCollision: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("a b.md")), PageId.require(winnerId), materialized = true)
+            idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("a b.md")), PageId.require(winnerId), materialized = true)
             idMap.bind(loserPath, PageId.require(loserId), materialized = true)
         }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-loser")
@@ -141,12 +141,12 @@ class WriteGoldenTest : FunSpec({
             writeRestTest(tree, seedCollision) { harness ->
                 val loser = PageId.require(loserId)
                 // The induction held: the loser really has a null canonical url.
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, loser))?.url shouldBe null
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, loser))?.url shouldBe null
                 // So the 201 serves the permalink — the SAME `/p/{root}/{id}` shape PermalinkRoute resolves and
                 // RestRedirectTest's loser alias lands on — not a `/docs/<raw path>` fabrication (rooted since C5).
                 val identity = createdIdentity(loserPath, minted = loser, snapshot = harness.builder.current)
                 identity.id shouldBe loser
-                identity.url shouldBe "/p/main/$loserId"
+                identity.url shouldBe "/p/docs/$loserId"
             }
         } finally {
             tree.toFile().deleteRecursively()
@@ -169,10 +169,10 @@ class WriteGoldenTest : FunSpec({
                 extra.resolve("notes/theirs.md"),
                 "---\nid: ${minted.value}\ntitle: Theirs\n---\n\n# T\n".toByteArray(),
             )
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
                 val snapshot = harness.builder.current
-                val ours = RootedPath(RootName.MAIN, TreePath.require("guides/ours.md"))
+                val ours = RootedPath(RootName.PRIMARY, TreePath.require("guides/ours.md"))
                 withClue("the induction: the minted id lives in the OTHER root's page (a legal per-root claimant)") {
                     snapshot.pageAt(RootedPageId(RootName.require("extra"), minted)).shouldNotBeNull()
                 }
@@ -180,7 +180,7 @@ class WriteGoldenTest : FunSpec({
                 val identity = createdIdentity(ours, minted = minted, snapshot = snapshot)
 
                 identity.id shouldBe snapshot.byPath.getValue(ours).id
-                identity.url shouldBe "/docs/main/guides/ours"
+                identity.url shouldBe "/docs/guides/ours"
             }
         } finally {
             listOf(main, extra).forEach { it.toFile().deleteRecursively() }
@@ -247,7 +247,7 @@ class WriteGoldenTest : FunSpec({
         val original = "---\nid: $pageId\ntitle: Special\n---\n\n# Special\n\nplain body.\n".toByteArray()
         val seedSpecial: (
             IdMapRepository,
-        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("special.md")), PageId.require(pageId), materialized = true) }
+        ) -> Unit = { it.bind(RootedPath(RootName.PRIMARY, TreePath.require("special.md")), PageId.require(pageId), materialized = true) }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-special")
         try {
             java.nio.file.Files.write(tree.resolve("special.md"), original)
@@ -294,10 +294,10 @@ class WriteGoldenTest : FunSpec({
             harness.retirements.applyProofs(
                 listOf(
                     AbsenceProof(
-                        root = RootName.MAIN,
+                        root = RootName.PRIMARY,
                         source = ProofSource.OPERATOR,
-                        observationId = harness.retirements.observation(RootName.MAIN),
-                        bindingEpoch = harness.retirements.bindingEpoch(RootName.MAIN),
+                        observationId = harness.retirements.observation(RootName.PRIMARY),
+                        bindingEpoch = harness.retirements.bindingEpoch(RootName.PRIMARY),
                         covers = setOf(BindingRef(TreePath.require("guides/deploy-guide.md"), PageId.require(deployGuideId))),
                     ),
                 ),
@@ -319,7 +319,7 @@ class WriteGoldenTest : FunSpec({
         val original = "---\nid: $pageId\ntitle: Slugged\nslug: original-slug\n---\n\n# Slugged\n\nbody.\n".toByteArray()
         val seedMat: (
             IdMapRepository,
-        ) -> Unit = { it.bind(RootedPath(RootName.MAIN, TreePath.require("slugged.md")), PageId.require(pageId), materialized = true) }
+        ) -> Unit = { it.bind(RootedPath(RootName.PRIMARY, TreePath.require("slugged.md")), PageId.require(pageId), materialized = true) }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-golden")
         try {
             java.nio.file.Files.write(tree.resolve("slugged.md"), original)
@@ -379,8 +379,8 @@ class WriteGoldenTest : FunSpec({
         val badBytes = "---\nid: $badId\ntitle: Bad\ndesc: ".toByteArray() +
             byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "\n---\n\n# Bad\n\nbody.\n".toByteArray()
         val seedAdv: (IdMapRepository) -> Unit = { idMap ->
-            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bom.md")), PageId.require(bomId), materialized = true)
-            idMap.bind(RootedPath(RootName.MAIN, TreePath.require("bad.md")), PageId.require(badId), materialized = true)
+            idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("bom.md")), PageId.require(bomId), materialized = true)
+            idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("bad.md")), PageId.require(badId), materialized = true)
         }
         val tree = java.nio.file.Files.createTempDirectory("plainbase-write-adversarial")
         try {

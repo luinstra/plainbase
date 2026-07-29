@@ -93,7 +93,7 @@ class LostDataDirRecoveryTest : FunSpec({
             answer.total to
                 answer.hits.groupBy { it.score }.entries.sortedByDescending { it.key }.map { (score, tier) ->
                     score to tier.map { hit ->
-                        val page = snapshot.pageAt(RootedPageId(RootName.MAIN, hit.pageId))!!
+                        val page = snapshot.pageAt(RootedPageId(RootName.PRIMARY, hit.pageId))!!
                         HitFacet(page.path.value, hit.headingId, hit.snippet, hit.highlights)
                     }.toSet()
                 }
@@ -305,13 +305,13 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val frontmatter = FrontmatterReader()
     private val searchIndexer = SearchIndexer(provider, SectionSplitter())
 
-    private val rootRegistry = RootRegistry.of(listOf(localRoot("main", config.contentDir)))
+    private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", config.contentDir)))
 
     private val availability = RootAvailability(kotlin.time.Clock.System)
 
     val builder = IndexBuilder(
         // git state lives under CONTENT_DIR, untouched by the loss - hence NoOpHistoryProvider
-        sources = listOf(IndexBuilder.Source(rootRegistry.main, store, NoOpHistoryProvider)),
+        sources = listOf(IndexBuilder.Source(rootRegistry.primary, store, NoOpHistoryProvider)),
         frontmatterParser = frontmatter,
         rendererFactory = { view -> FlexmarkRenderer(view) },
         identity = PageIdentityService(UuidV7IdProvider()),

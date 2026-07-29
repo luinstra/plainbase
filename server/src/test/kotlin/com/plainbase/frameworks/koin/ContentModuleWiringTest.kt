@@ -121,7 +121,7 @@ class ContentModuleWiringTest : FunSpec({
                 bundleDr.shouldBeInstanceOf<GitBundleDr>()
 
                 val hook = app.koin.get<WriteHistoryHook>()
-                hook.commit(RootName.MAIN, TreePath.require("wiring.md"), "content".toByteArray(), null, null) shouldBe null
+                hook.commit(RootName.PRIMARY, TreePath.require("wiring.md"), "content".toByteArray(), null, null) shouldBe null
             } finally {
                 bundleDr.close()
                 store.close()
@@ -165,9 +165,9 @@ class ContentModuleWiringTest : FunSpec({
                     val idMap = app.koin.get<IdMapRepository>()
                     val retirements = app.koin.get<RetirementRepository>()
 
-                    retirements.observation(RootName.MAIN)
-                    idMap.bind(RootedPath(RootName.MAIN, path), id, materialized = false)
-                    val expectedEpoch = retirements.bindingEpoch(RootName.MAIN)
+                    retirements.observation(RootName.PRIMARY)
+                    idMap.bind(RootedPath(RootName.PRIMARY, path), id, materialized = false)
+                    val expectedEpoch = retirements.bindingEpoch(RootName.PRIMARY)
                     expectedEpoch shouldBe BindingEpoch(1)
 
                     store.pollOnce()

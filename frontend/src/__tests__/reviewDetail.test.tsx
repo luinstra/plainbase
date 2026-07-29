@@ -14,7 +14,7 @@ import { createAppRouter } from "../router";
  */
 
 const ID = "rev-1";
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "csrf-xyz", auth_mode: "builtin" };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -26,7 +26,7 @@ function detail(over: Partial<ChangeDetail>): ChangeDetail {
     id: ID,
     operation: "edit",
     status: "PENDING",
-    root: "main",
+    root: "docs",
     target_path: "guides/deploy-guide.md",
     page_id: "page-1",
     base_hash: "sha256:base",

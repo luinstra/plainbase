@@ -110,10 +110,10 @@ interface ReadFacade {
     fun currentSnapshot(principal: Principal, resource: String): PageIndex
 
     /**
-     * The `/docs/{root}/{path}` 301 alias-redirect target under [root] (the route-parsed root segment, C3): the
+     * The `/{root}/{path}` 301 alias-redirect target under [root] (the route-parsed root segment, C3): the
      * page's current canonical URL, or its permalink for a collision loser - or null when there is no LIVE alias
      * OR the principal may not read the target. Returning null on a DENY (rather than throwing) is deliberate:
-     * the `docsRoutes` shell-fallback arm is PUBLIC, so an unauthorized caller must fall through to the shell
+     * the `rootContentRoutes` shell-fallback arm is PUBLIC, so an unauthorized caller must fall through to the shell
      * EXACTLY like any unknown path - a 401 here would itself leak that an alias exists. A live canonical path
      * shadows an alias (§A4).
      *
@@ -122,7 +122,7 @@ interface ReadFacade {
      * no canonical URL to offer - and the target surface answers the 503. A documented, accepted two-step: the point
      * is that a caller lands on an honest "this root is down", never on a soft 404 that says the page is gone.
      */
-    fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String?
+    fun resolveRootContentRedirect(principal: Principal, root: RootName, path: TreePath): String?
 
     /**
      * The `/browse/{root}/{file-path}` redirect target: the page's canonical URL, or its permalink for a collision

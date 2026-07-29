@@ -11,6 +11,15 @@ an overlay on the base `docker-compose.yml`, which is the host-published local-d
 stack - you supply your IdP and hostname. See also the TLS-termination decision:
 [`decisions/0008-tls-terminates-at-an-external-reverse-proxy.md`](../decisions/0008-tls-terminates-at-an-external-reverse-proxy.md).
 
+A request with no session takes the long way in: `forward_auth` asks oauth2-proxy's `/oauth2/auth`,
+which answers 401, and the Caddyfile turns that 401 into a redirect to `/oauth2/start` (oauth2-proxy's
+own endpoint, which is what then redirects to your IdP), carrying the original address in `rd` so the
+reader lands where they were headed. That redirect is not automatic - Caddy's `forward_auth` handles
+ONLY 2xx and copies any other status straight to the client - so if you adapt this Caddyfile, keep the
+`@unauthenticated` block or nobody can sign in. Keep the `uri_escaped` placeholder too: `rd` is a query
+value, and an unescaped `&` in the original address would hand the trailing parameters to
+`/oauth2/start`, which reads them as provider login overrides.
+
 Run it on its **own** (a single `-f`, never layered on the base - layering would inherit the dev
 tier's host-loopback publish), from the **repo root** (the project dir compose resolves the
 `build:`/bind-mount paths against), loading the env file beside it (`deploy/proxy/.env`, seeded from

@@ -95,7 +95,7 @@ class RequireDistinctIdsTest : FunSpec({
     test("R14: the SAME id in two DIFFERENT roots passes - a cross-root duplicate is legal per-root") {
         requireDistinctIds(
             mapOf(
-                RootedPath(RootName.MAIN, TreePath.require("a.md")) to dup,
+                RootedPath(RootName.PRIMARY, TreePath.require("a.md")) to dup,
                 RootedPath(RootName.require("extra"), TreePath.require("b.md")) to dup,
             ),
         ) // no throw
@@ -105,8 +105,8 @@ class RequireDistinctIdsTest : FunSpec({
         val failure = shouldThrow<IllegalStateException> {
             requireDistinctIds(
                 mapOf(
-                    RootedPath(RootName.MAIN, TreePath.require("a.md")) to dup,
-                    RootedPath(RootName.MAIN, TreePath.require("b.md")) to dup,
+                    RootedPath(RootName.PRIMARY, TreePath.require("a.md")) to dup,
+                    RootedPath(RootName.PRIMARY, TreePath.require("b.md")) to dup,
                 ),
             )
         }
@@ -134,7 +134,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
 
     private val driver = DatabaseFactory.createInMemoryDriver()
     private val database = DatabaseFactory.createDatabase(driver)
-    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("main", root)))
+    private val registry: RootRegistry = RootRegistry.of(listOf(localRoot("docs", root)))
 
     val idMap = SqlDelightIdMapRepository(database)
 
@@ -145,7 +145,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
     private fun identity(collidingIds: Boolean) = PageIdentityService(idProvider(collidingIds))
 
     fun builder(collidingIds: Boolean): IndexBuilder = IndexBuilder(
-        sources = listOf(IndexBuilder.Source(registry.main, LocalContentStore(root), NoOpHistoryProvider)),
+        sources = listOf(IndexBuilder.Source(registry.primary, LocalContentStore(root), NoOpHistoryProvider)),
         frontmatterParser = FrontmatterReader(),
         rendererFactory = { view -> FlexmarkRenderer(view) },
         identity = identity(collidingIds),
@@ -159,7 +159,7 @@ private class DistinctIdsWorld(private val root: Path) : AutoCloseable {
     )
 
     fun adoption(collidingIds: Boolean): AdoptionPass = AdoptionPass(
-        sources = listOf(AdoptionPass.Source(RootName.MAIN, LocalContentStore(root))),
+        sources = listOf(AdoptionPass.Source(RootName.PRIMARY, LocalContentStore(root))),
         idMap = idMap,
         identity = identity(collidingIds),
         patcher = FrontmatterPatcher(),

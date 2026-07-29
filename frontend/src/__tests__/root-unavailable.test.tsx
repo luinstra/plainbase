@@ -21,17 +21,17 @@ const CRASH = { error: { code: "internal_error", message: "boom" } };
 const MISSING = { error: { code: "not_found", message: "no page at that path" } };
 
 const ID = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a";
-const PATH = "main/guides/deploy-guide";
-const PAGE_URL = "/docs/main/guides/deploy-guide";
+const PATH = "docs/guides/deploy-guide";
+const PAGE_URL = "/docs/guides/deploy-guide";
 const HASH = "sha256:5df17ea6dababd5ad54c0f365a1a1cbf02f304c48db492b8046f2c0d2341534e";
 
-const emptyTree: TreeResponse = { roots: [{ root: "main", available: true, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/main", page_count: 0, children: [] } }] };
+const emptyTree: TreeResponse = { roots: [{ root: "docs", available: true, editable: true, primary: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs", page_count: 0, children: [] } }] };
 /** The tree a down root actually ships: LISTED (it is configured) with an EMPTY subtree - so nothing under
- *  `/docs/handbook` can be found by folder lookup, and only the root url space still names it. */
+ *  `/handbook` can be found by folder lookup, and only the root url space still names it. */
 const outageTree: TreeResponse = {
   roots: [
     ...emptyTree.roots,
-    { root: "handbook", available: false, editable: true, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/docs/handbook", page_count: 0, children: [] } },
+    { root: "handbook", available: false, editable: true, primary: false, tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/handbook", page_count: 0, children: [] } },
   ],
 };
 const AUTHED = { authenticated: true, username: "admin", csrf_token: "c", auth_mode: "builtin" };
@@ -43,7 +43,7 @@ function jsonResponse(body: unknown, status = 200) {
 function pageResponse(): PageResponse {
   return {
     id: ID,
-    root: "main",
+    root: "docs",
     path: "guides/deploy-guide.md",
     slug: "deploy-guide",
     url: PAGE_URL,
@@ -159,7 +159,7 @@ describe("the folder landing under a root that is not serving", () => {
   it("shows the outage for a DEEP url, whose folder the emptied subtree no longer carries", async () => {
     stubPageMissing();
 
-    const view = under("/docs/handbook/guides/onboarding");
+    const view = under("/handbook/guides/onboarding");
 
     await expectOutage(view);
     expect(view.container.querySelector("[data-pb-not-found]")).toBeNull();
@@ -169,13 +169,13 @@ describe("the folder landing under a root that is not serving", () => {
   it("shows the outage for the bare root url too (the behavior the deep-link fix must preserve)", async () => {
     stubPageMissing();
 
-    await expectOutage(under("/docs/handbook"));
+    await expectOutage(under("/handbook"));
   });
 
   it("still calls a bogus deep url under a SERVING root not-found (an outage is not a 404's excuse)", async () => {
     stubPageMissing();
 
-    const view = renderAt("/docs/main/nope/nope");
+    const view = renderAt("/docs/nope/nope");
 
     await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
     expect(view.container.querySelector("[data-pb-root-unavailable]")).toBeNull();

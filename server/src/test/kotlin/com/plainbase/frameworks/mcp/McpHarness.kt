@@ -115,8 +115,8 @@ class McpHarness(
             // its claimant list to registered roots: an unregistered candidate is dropped and the Ambiguous arm
             // collapses back to One, so the fake alone cannot pose ambiguity.
             rootRegistry = RootRegistry.of(
-                listOf(localRoot("main", root, editable = editable)) +
-                    (ambiguousRoots + retiredRoots).filter { it != RootName.MAIN }.distinct()
+                listOf(localRoot("docs", root, editable = editable)) +
+                    (ambiguousRoots + retiredRoots).filter { it != RootName.PRIMARY }.distinct()
                         .map { localRoot(it.value, Files.createDirectories(extraDir.resolve(it.value))) },
             ),
         )
@@ -153,7 +153,7 @@ class McpHarness(
     fun proposalContentBytes() = requireNotNull(index.proposalRepository.findById(proposalRows().single().id)).proposedContent
 
     /** Drives the sticky runtime-outage state without depending on an OS-specific unmount in an MCP contract test. */
-    fun markMainUnavailable() = index.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+    fun markMainUnavailable() = index.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
 
     /**
      * Leaves the seeded page durably bound but absent from the next snapshot. A second live page keeps this from

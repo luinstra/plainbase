@@ -14,7 +14,7 @@ import java.nio.file.Path
 fun pageId(n: Int): PageId = PageId.require("0197aaaa-0000-7000-8000-%012x".format(n))
 
 /** The rooted key for page [n] under [root] (default MAIN) - the shape [Fts5SearchProvider.indexedState] returns. */
-fun rooted(n: Int, root: RootName = RootName.MAIN) = RootedPageId(root, pageId(n))
+fun rooted(n: Int, root: RootName = RootName.PRIMARY) = RootedPageId(root, pageId(n))
 
 fun section(
     pageId: PageId,
@@ -47,7 +47,7 @@ fun pageDocuments(
     path: String = "docs/page-$n.md",
     title: String = "Page $n",
     contentHash: String = "sha256:$n",
-    root: RootName = RootName.MAIN,
+    root: RootName = RootName.PRIMARY,
     tags: List<String> = emptyList(),
     aliases: List<String> = emptyList(),
     owner: String? = null,

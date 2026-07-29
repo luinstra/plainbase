@@ -1,6 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
-import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.AssetReadOutcome
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -13,9 +13,9 @@ import io.ktor.server.routing.get
 /**
  * `GET /assets/{root}/{path}` (§A4 + C3): serves any non-`.md`, non-ignored file from the content
  * tree, plus the SPA's own embedded bundle under `static/assets/`. The root grammar mirrors
- * `/docs` (ADR-0011 D3): a first segment naming a known registry root scopes the remainder; any
- * other tail is a legacy main-relative asset path and 301s to `/assets/main/{tail}`, query
- * preserved. The bundle check stays FIRST and root-BLIND on the full tail (see below).
+ * `/docs`: a first segment naming a known registry root scopes the remainder; any other tail
+ * addresses no root and therefore no asset, and 404s. The bundle check stays FIRST and root-BLIND
+ * on the full tail (see below).
  *
  * Security path (frozen, chunk 1.5 rules): the RAW url tail → `PercentCoding.decodeOnce` (the one
  * decoder; `%2F`, malformed escapes, invalid UTF-8 all rejected) → `TreePath` (NFC; traversal and
@@ -34,8 +34,8 @@ import io.ktor.server.routing.get
  * the fix lives at the SERVING layer, correct regardless of how the file arrived. The shadow is given up
  * for the SPA's own immutable build output ONLY (the owner ruling): there is no legitimate reason to
  * override it, and the collision is the exact attack vector. The bundle namespace is the `static/assets/`
- * subtree alone — the favicon/logos/fonts at `static/` root are served by `staticResources("/", "static")`
- * (`KtorServer`), so a user's own `assets/foo.svg` or root `favicon.ico` upload is NOT shadowed.
+ * subtree alone. The favicon, logos, and fonts at the bundle root have explicit server ownership, so a user's
+ * own `assets/foo.svg` or root `favicon.ico` upload is NOT shadowed.
  *
  * **Per-asset sandbox (C1a item 2) — served-MIME inert-allowlist.** A content-tree `Found` response is
  * sandboxed (`Content-Security-Policy: sandbox; script-src 'none'`) iff its resolved [assetContentType]
@@ -69,10 +69,10 @@ import io.ktor.server.routing.get
  *    EMBEDDED bundle, not a 404 — the bundle-wins check precedes `assetRead`.
  */
 fun Route.assetRoute(ctx: RouteContext) {
-    get("/assets/{path...}") {
+    get("/${ServerTopLevel.ASSETS}/{path...}") {
         val principal = ctx.principalOrRefuse(call) ?: return@get
         call.guarded {
-            val raw = call.rawPathAfter("/assets/")
+            val raw = call.rawPathAfter("/${ServerTopLevel.ASSETS}/")
                 ?: return@guarded call.respondError(
                     HttpStatusCode.BadRequest,
                     ErrorCodes.INVALID_PATH,
@@ -85,20 +85,22 @@ fun Route.assetRoute(ctx: RouteContext) {
             // ALWAYS the embedded bytes - a content asset shadowing a bundle name can never be served -
             // and checked on the FULL tail BEFORE the root split: the shell's absolute
             // `/assets/index-<hash>.js` references must keep resolving with zero hops and zero root
-            // semantics. No collision is possible: a root name cannot contain a dot (the RootName
-            // grammar), a bundle file name always does.
+            // semantics. A SINGLE-segment tail cannot collide: a root name carries no dot (the RootName
+            // grammar) and a bundle file name always does. That argument does NOT extend to a nested tail,
+            // because the check runs on the whole thing: a `static/assets/img/x.png` would answer
+            // `/assets/img/x.png` from the bundle even for a registered root named `img`. Vite's output is
+            // flat today, so that is latent, and `FrontendBundleTest` is the falsifier that keeps it so.
             val bundled = staticResourceBytes(decoded.value)
             if (bundled != null) {
                 call.response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
                 call.respondBytes(bundled, assetContentType(decoded.name))
                 return@guarded
             }
-            // The C3 root grammar, mirroring /docs: a non-root first segment is a legacy
-            // main-relative asset path (301, raw tail so encoding survives, query preserved;
-            // pre-gate is leak-free - the root decision is config topology only). A bare known
-            // root names no asset.
+            // The root grammar, mirroring /docs: a first segment that names no registered root names
+            // no asset either, and a bare known root names none. Both are the same 404 - refusing to
+            // guess a root is config topology only, so it stays leak-free.
             val (root, path) = splitRootTail(decoded, ctx.roots)
-                ?: return@guarded call.respondRedirectPreservingQuery("/assets/${RootName.MAIN}/$raw", permanent = true)
+                ?: return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${decoded.value}")
             if (path == null) {
                 return@guarded call.respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "No such asset: ${decoded.value}")
             }

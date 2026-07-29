@@ -8,7 +8,7 @@ package com.plainbase.domain.root
  *  - the message names PATHS, so an unrelated `root add` can change its text without the fault changing;
  *  - the legacy and explicit arms of the topology matrix word the SAME fault differently (a legacy
  *    `DATA_DIR == CONTENT_DIR` says "DATA_DIR and CONTENT_DIR must be different directories"; the same
- *    install after one `root add` is EXPLICIT and says "roots.main and DATA_DIR must be different
+ *    install after one `root add` is EXPLICIT and says "roots.docs and DATA_DIR must be different
  *    directories"), so a diff over prose calls a PRE-EXISTING fault NEW and traps the operator inside a
  *    config only this command can repair.
  *
@@ -25,8 +25,8 @@ data class BootRefusal(val kind: Kind, val roots: Set<RootName>, val message: St
     val key: Pair<Kind, Set<RootName>> get() = kind to roots
 
     enum class Kind {
-        /** main is missing, not a directory, unreadable/unsearchable, or will not canonicalize. */
-        MAIN_UNUSABLE,
+        /** The primary root is missing, not a directory, unreadable/unsearchable, or will not canonicalize. */
+        PRIMARY_UNUSABLE,
 
         /**
          * Two roots resolve to the same directory, or one nests inside the other. Keyed by the PAIR, as a

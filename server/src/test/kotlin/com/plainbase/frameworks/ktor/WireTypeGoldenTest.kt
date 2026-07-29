@@ -83,15 +83,16 @@ class WireTypeGoldenTest : FunSpec({
             TreeResponse(
                 roots = listOf(
                     RootTreeDto(
-                        root = "main",
+                        root = "docs",
                         available = true,
                         editable = true,
+                        primary = true,
                         tree = TreeNodeDto.Folder(
                             name = "",
                             title = null,
                             description = null,
                             path = "",
-                            url = "/docs/main",
+                            url = "/docs",
                             pageCount = 0,
                             children = listOf(
                                 TreeNodeDto.Folder(
@@ -99,7 +100,7 @@ class WireTypeGoldenTest : FunSpec({
                                     title = "Guides",
                                     description = "How-to guides",
                                     path = "guides",
-                                    url = "/docs/main/guides",
+                                    url = "/docs/guides",
                                     pageCount = 1,
                                     children = listOf(
                                         TreeNodeDto.Page(
@@ -107,7 +108,7 @@ class WireTypeGoldenTest : FunSpec({
                                             title = "Deploy Guide",
                                             slug = "deploy-guide",
                                             path = "guides/deploy-guide.md",
-                                            url = "/docs/main/guides/deploy-guide",
+                                            url = "/docs/guides/deploy-guide",
                                             status = "published",
                                             updated = "2026-06-01",
                                         ),
@@ -144,7 +145,7 @@ class WireTypeGoldenTest : FunSpec({
             PageResponse.serializer(),
             PageResponse(
                 id = PAGE_1,
-                root = "main",
+                root = "docs",
                 path = "guides/deploy-guide.md",
                 slug = "deploy-guide",
                 url = null,
@@ -166,7 +167,7 @@ class WireTypeGoldenTest : FunSpec({
                     path = "guides/deploy-guide.md",
                     contentHash = HASH_A,
                     commit = null,
-                    uri = "plainbase://main/$PAGE_1@$HASH_A",
+                    uri = "plainbase://docs/$PAGE_1@$HASH_A",
                 ),
             ),
         ),
@@ -174,7 +175,7 @@ class WireTypeGoldenTest : FunSpec({
             PageHtmlResponse.serializer(),
             PageHtmlResponse(
                 id = PAGE_2,
-                root = "main",
+                root = "docs",
                 path = "shadowed.md",
                 slug = "shadowed",
                 url = null,
@@ -190,7 +191,7 @@ class WireTypeGoldenTest : FunSpec({
                     path = "shadowed.md",
                     contentHash = HASH_B,
                     commit = COMMIT_1,
-                    uri = "plainbase://main/$PAGE_2@$HASH_B",
+                    uri = "plainbase://docs/$PAGE_2@$HASH_B",
                 ),
             ),
         ),
@@ -208,7 +209,7 @@ class WireTypeGoldenTest : FunSpec({
                 total = 1,
                 hits = listOf(
                     SearchHitDto(
-                        pageId = PAGE_2, root = "main", path = "shadowed.md", url = null, title = "Shadowed",
+                        pageId = PAGE_2, root = "docs", path = "shadowed.md", url = null, title = "Shadowed",
                         headingId = null, headingText = null, headingPath = emptyList(),
                         snippet = "Deploy targets are listed here.",
                         highlights = listOf(HighlightDto(start = 0, end = 6)),
@@ -219,7 +220,7 @@ class WireTypeGoldenTest : FunSpec({
                             path = "shadowed.md",
                             contentHash = HASH_B,
                             commit = null,
-                            uri = "plainbase://main/$PAGE_2@$HASH_B",
+                            uri = "plainbase://docs/$PAGE_2@$HASH_B",
                         ),
                     ),
                 ),
@@ -299,7 +300,7 @@ class WireTypeGoldenTest : FunSpec({
         ),
         "createdResponse" to encoded(
             CreatedResponse.serializer(),
-            CreatedResponse(id = PAGE_1, url = "/docs/main/guides/deploy-guide", contentHash = HASH_A, commit = null),
+            CreatedResponse(id = PAGE_1, url = "/docs/guides/deploy-guide", contentHash = HASH_A, commit = null),
         ),
         "createdButUnindexedResponse" to encoded(
             CreatedButUnindexedResponse.serializer(),
@@ -403,7 +404,7 @@ class WireTypeGoldenTest : FunSpec({
                 proposals = listOf(
                     ChangeSummary(
                         id = "01970000-0000-7000-8000-0000000000a2", operation = "create", status = "PENDING",
-                        root = "main", targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
+                        root = "docs", targetPath = "guides/rollback.md", pageId = null, baseDrifted = false,
                         authorLabel = "ci-bot", createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",
                     ),
                 ),
@@ -413,7 +414,7 @@ class WireTypeGoldenTest : FunSpec({
             ChangeDetail.serializer(),
             ChangeDetail(
                 id = "01970000-0000-7000-8000-0000000000a3", operation = "create", status = "PENDING",
-                root = "main", targetPath = "guides/rollback.md", pageId = null,
+                root = "docs", targetPath = "guides/rollback.md", pageId = null,
                 baseHash = null, baseDrifted = false,
                 authorLabel = "ci-bot", authorIssuer = "plainbase", authorExternalId = TOKEN_ID,
                 createdAt = "2026-06-01T12:00:00Z", rationale = "Add a rollback guide.",

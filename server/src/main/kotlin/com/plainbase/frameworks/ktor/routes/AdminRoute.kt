@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor.routes
 
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.ReindexResult
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
@@ -24,7 +25,7 @@ import kotlinx.coroutines.withContext
  *    the facade (never exposed): a concurrent call returns [ReindexResult.InFlight] → 409 `reindex_in_flight`.
  */
 fun Route.adminRoute(ctx: RouteContext) {
-    post("/api/v1/admin/rescan") {
+    post("/${ServerTopLevel.API}/v1/admin/rescan") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             val snapshot = ctx.mutate.rescan(principal)
@@ -32,7 +33,7 @@ fun Route.adminRoute(ctx: RouteContext) {
         }
     }
 
-    post("/api/v1/admin/reindex") {
+    post("/${ServerTopLevel.API}/v1/admin/reindex") {
         val principal = ctx.mutatingPrincipalOrRefuse(call) ?: return@post
         call.guarded {
             // Blocking JDBC must never park a CIO event-loop thread (mirrors SearchRoute): the manage check +

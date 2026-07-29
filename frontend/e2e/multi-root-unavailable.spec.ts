@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoExpectStatus } from "./helpers";
 
 /**
  * A configured root that is NOT SERVING, against a real server booted with its second root's tree
@@ -10,8 +11,8 @@ import { expect, test } from "@playwright/test";
  * The server EMPTIES a down root's subtree rather than serving a stale listing, so the thing under
  * test is that the SPA says so. An empty list would tell the reader their docs are gone.
  */
-test("the unavailable root's section shows the outage notice, and main still browses", async ({ page }) => {
-  await page.goto("/docs/main/welcome");
+test("the unavailable root's section shows the outage notice, and docs still browses", async ({ page }) => {
+  await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   // Still ONE aside with both roots' sections: a down root is LISTED, never dropped — so the reader
@@ -26,9 +27,9 @@ test("the unavailable root's section shows the outage notice, and main still bro
   // The affordance REPLACES the tree — the section carries no nav rows at all, empty or otherwise.
   await expect(page.locator('[data-pb-root-section="extra"] [data-pb-nav-item]')).toHaveCount(0);
 
-  // main is untouched: one root's outage is not the server's.
-  const mainSection = page.locator('[data-pb-root-section="main"]');
-  await mainSection.getByRole("link", { name: "Deploy Guide" }).click();
-  await expect(page).toHaveURL("/docs/main/guides/deploy-guide");
+  // docs is untouched: one root's outage is not the server's.
+  const docsSection = page.locator('[data-pb-root-section="docs"]');
+  await docsSection.getByRole("link", { name: "Deploy Guide" }).click();
+  await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 });

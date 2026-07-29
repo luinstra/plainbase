@@ -51,7 +51,7 @@ class RootCommandTest : FunSpec({
 
             // The loader sees it, which is the only claim that matters.
             val roots = w.config().roots
-            roots.list.map { it.name.value } shouldBe listOf("main", "notes")
+            roots.list.map { it.name.value } shouldBe listOf("docs", "notes")
             roots.managed.map { it.value } shouldBe listOf("notes")
             roots.extras.single().localPath shouldBe extra
         }
@@ -65,7 +65,7 @@ class RootCommandTest : FunSpec({
             host = "127.0.0.1"   # trailing comment
 
             roots {
-              main { path = "MAIN_PLACEHOLDER" }
+              docs { path = "MAIN_PLACEHOLDER" }
             }
         """.trimIndent()
         world { w ->
@@ -82,13 +82,21 @@ class RootCommandTest : FunSpec({
 
     // --- T-CLI-3 / T-CLI-8 / T-CLI-10: the argv grammar, which makes some boot rules UNREACHABLE ---------
 
-    test("T-CLI-3: `root add main` and `root remove main` are USAGE errors (exit 2) - main is never CLI-managed") {
+    test("T-CLI-3: `root add docs` and `root remove docs` are USAGE errors (exit 2) - docs is never CLI-managed") {
         world { w ->
             val err = captureStderr {
-                w.root("add", "main", "/tmp/whatever") shouldBe 2
-                w.root("remove", "main") shouldBe 2
+                w.root("add", "docs", "/tmp/whatever") shouldBe 2
+                w.root("remove", "docs") shouldBe 2
             }
-            err shouldContain "'main' is never CLI-managed"
+            err shouldContain "'docs' is never CLI-managed"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
+    test("T-CLI-3b: `root add main` is a reserved-segment usage error") {
+        world { w ->
+            val err = captureStderr { w.root("add", "main", "/tmp/whatever") shouldBe 2 }
+            err shouldContain "'main' is a reserved segment"
             Files.exists(w.rootsConf) shouldBe false
         }
     }
@@ -129,6 +137,43 @@ class RootCommandTest : FunSpec({
         }
     }
 
+    test("root add rejects a reserved segment with exit 2 - a bad ARGUMENT, refused before the lock") {
+        world { w ->
+            val err = captureStderr {
+                w.root("add", "api", "/tmp/x") shouldBe 2
+                w.root("add", "pb-internal", "/tmp/x") shouldBe 2
+            }
+            err shouldContain "'api' is a reserved segment"
+            err shouldContain "'pb-internal' is a reserved segment"
+            Files.exists(w.rootsConf) shouldBe false
+        }
+    }
+
+    test("a reserved name already in roots.conf makes even `root remove` exit 1 - the refusal message says so") {
+        // The loader's message tells the operator to edit the declaring file BECAUSE this command cannot dig them
+        // out: every verb LOADS the config first, and a reserved name is a load failure rather than a gate one -
+        // the opposite of T-CLI-12 below, where a config that loads but would not serve is warned about and the
+        // verb proceeds. Without this row that sentence is prose nothing could contradict.
+        world(rootsConf = """roots { api { path = "/roots/api" } }""") { w ->
+            val before = Files.readAllBytes(w.rootsConf)
+            val err = captureStderr { w.root("remove", "api") shouldBe 1 }
+            err shouldContain "'api' is a reserved segment"
+            err shouldContain "plainbase root remove cannot run while the config is refused"
+            withClue("and the file the operator is told to edit is byte-identical - the CLI did not half-help") {
+                Files.readAllBytes(w.rootsConf) shouldBe before
+            }
+        }
+    }
+
+    test("root add's invalid-name refusal quotes the grammar the loader enforces") {
+        // The one gate on this copy of the regex text. Five further copies are hand-maintained and unasserted
+        // (see `RootName`'s KDoc for the census); this is the operator's first encounter with the rule, so it
+        // is the one worth pinning.
+        world { w ->
+            captureStderr { w.root("add", "Bad_Name", "/tmp/x") shouldBe 2 } shouldContain "[a-z][a-z0-9]*(-[a-z0-9]+)*"
+        }
+    }
+
     test("root add rejects a page-id-shaped name with the permalink ambiguity message") {
         world { w ->
             val err = captureStderr {
@@ -165,7 +210,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main  { path = "CONTENT" }
+                  docs  { path = "CONTENT" }
                   notes { path = "/roots/hand-notes" }
                 }
             """.trimIndent(),
@@ -258,80 +303,6 @@ class RootCommandTest : FunSpec({
         }
     }
 
-    // --- T-CLI-5: the SHADOW refusal - the one place the CLI is STRICTER than boot -----------------------
-
-    context("T-CLI-5 - the shadow refusal catches all THREE collision kinds, and --force overrides") {
-
-        test("(a) a top-level DIRECTORY named guides") {
-            world { w ->
-                Files.createDirectories(w.content.resolve("guides"))
-                Files.writeString(w.content.resolve("guides/page.md"), "---\ntitle: P\n---\n\n# P\n")
-                val err = captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                err shouldContain "already a top-level segment of the main root"
-                Files.exists(w.rootsConf) shouldBe false
-                // --force is the escape, because ADR-0011 D3 rules the check best-effort by nature.
-                captureStdout { w.root("add", "guides", w.tmp("g2").toString(), "--force") shouldBe 0 }
-                Files.exists(w.rootsConf) shouldBe true
-            }
-        }
-
-        test("(b) a top-level PAGE whose frontmatter says slug: guides - a check listing directories sails past this") {
-            world { w ->
-                Files.writeString(w.content.resolve("anything.md"), "---\ntitle: A\nslug: guides\n---\n\n# A\n")
-                captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                Files.exists(w.rootsConf) shouldBe false
-            }
-        }
-
-        test("(c) a top-level FOLDER whose _folder.yaml says slug: guides") {
-            world { w ->
-                Files.createDirectories(w.content.resolve("Whatever"))
-                Files.writeString(w.content.resolve("Whatever/_folder.yaml"), "slug: guides\n")
-                Files.writeString(w.content.resolve("Whatever/p.md"), "---\ntitle: P\n---\n\n# P\n")
-                captureStderr { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 }
-                Files.exists(w.rootsConf) shouldBe false
-            }
-        }
-
-        test("the negative control: a name that matches NOTHING is added with no --force") {
-            world { w ->
-                Files.writeString(w.content.resolve("readme.md"), "---\ntitle: R\n---\n\n# R\n")
-                captureStdout { w.root("add", "unrelated", w.tmp("u").toString()) shouldBe 0 }
-                Files.exists(w.rootsConf) shouldBe true
-            }
-        }
-
-        test("(d) a main root it cannot READ fails the check CLOSED - an unscannable tree proves nothing") {
-            // The classified-read boundary, at the one decision site left that did not use it. A page read on a
-            // root that has gone away returns no bytes, and a scan that reads no frontmatter finds no `slug:`
-            // shadow - so a raw read would report "shadows nothing" from a tree it never actually read, and a
-            // shadowing topology would be written on the strength of it. RootDown is not Absent.
-            //
-            // main is DECLARED here so the unreadable-path refusal sits in the BASELINE as well as the candidate:
-            // it is then the operator's pre-existing fault (warned, not refused), and the add runs on to the
-            // shadow check, which is the code under test.
-            world(plainbaseConf = """roots { main { path = "CONTENT" } }""") { w ->
-                w.rewriteMain()
-                Files.writeString(w.content.resolve("anything.md"), "---\ntitle: A\nslug: guides\n---\n\n# A\n")
-                if (!w.data.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
-                // r-- : the names still list (the read bit), but nothing under them can be opened (no search bit)
-                // - which is exactly what `rootIsTraversable` calls a downed root.
-                Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
-                try {
-                    if (Files.isExecutable(w.content)) return@world // running as root: the permission drop is inert
-                    val err = captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString()) shouldBe 1 } }
-                    err shouldContain "not readable right now"
-                    Files.exists(w.rootsConf) shouldBe false
-                    // --force is still the escape: it declines the check outright rather than trusting a bad answer.
-                    captureStderr { captureStdout { w.root("add", "guides", w.tmp("g").toString(), "--force") shouldBe 0 } }
-                    Files.exists(w.rootsConf) shouldBe true
-                } finally {
-                    Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("rwxr-xr-x"))
-                }
-            }
-        }
-    }
-
     // --- the server's WARNINGS, not just its refusals ----------------------------------------------------
 
     test("a typo'd path is added (it may be an unmounted volume) but the boot WARNING is surfaced, not swallowed") {
@@ -375,7 +346,7 @@ class RootCommandTest : FunSpec({
             captureStdout { w.root("remove", "alpha") shouldBe 0 }
 
             Files.exists(w.rootsConf) shouldBe true
-            w.config().roots.list.map { it.name.value } shouldBe listOf("main", "beta")
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "beta")
         }
     }
 
@@ -408,7 +379,7 @@ class RootCommandTest : FunSpec({
                 w.data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main  { path = "${w.content}" }
+                  docs  { path = "${w.content}" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -423,7 +394,7 @@ class RootCommandTest : FunSpec({
                 err shouldContain "nested inside"
             }
             withClue("and the add SUCCEEDED - the CLI never made this config less bootable") {
-                w.config().roots.list.map { it.name.value } shouldBe listOf("main", "outer", "inner", "notes")
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs", "outer", "inner", "notes")
             }
         }
     }
@@ -431,8 +402,7 @@ class RootCommandTest : FunSpec({
     test("T-CLI-12 sibling: a LEGACY install whose CONTENT_DIR lost its search bit is warned, not held hostage") {
         // The arm-switch trap, end to end. The baseline is SYNTHESIZED (no roots block anywhere); the candidate
         // carries a roots.conf and is therefore EXPLICIT. Both must key the operator's own broken permissions the
-        // same way, or the CLI reads a pre-existing fault as one it introduced and refuses. --force isolates the
-        // gate: the shadow scan cannot read this tree either, and fails closed on its own (test (d) above).
+        // same way, or the CLI reads a pre-existing fault as one it introduced and refuses.
         world { w ->
             if (!w.content.fileSystem.supportedFileAttributeViews().contains("posix")) return@world
             Files.setPosixFilePermissions(w.content, PosixFilePermissions.fromString("r--r--r--"))
@@ -440,7 +410,7 @@ class RootCommandTest : FunSpec({
             try {
                 val extra = Files.createDirectory(w.tmp("notes"))
                 val err = captureStderr {
-                    captureStdout { w.root("add", "notes", extra.toString(), "--force") shouldBe 0 }
+                    captureStdout { w.root("add", "notes", extra.toString()) shouldBe 0 }
                 }
                 withClue("the permission fault is the operator's - warned, naming it, and blocking nothing") {
                     err shouldContain "WARNING"
@@ -464,7 +434,7 @@ class RootCommandTest : FunSpec({
                 w.data.resolve("plainbase.conf"),
                 """
                 roots {
-                  main  { path = "${w.content}" }
+                  docs  { path = "${w.content}" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -486,7 +456,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main { path = "CONTENT" }
+                  docs { path = "CONTENT" }
                   hand { path = "/roots/hand" }
                 }
             """.trimIndent(),
@@ -508,7 +478,7 @@ class RootCommandTest : FunSpec({
     }
 
     test("T-CLI-9b: a SYNTHESIZED main is reported as coming from CONTENT_DIR, not from plainbase.conf") {
-        // Provenance is a pure function of the ONE snapshot the loader built - `mainDeclared` + `managed` - never a
+        // Provenance is a pure function of the ONE snapshot the loader built - `primaryDeclared` + `managed` - never a
         // second parse of roots.conf and never a path comparison. There is exactly ONE read, which is the whole
         // reason `list` is safe without a lock.
         world(rootsConf = """roots { notes { path = "/roots/notes" } }""") { w ->
@@ -579,7 +549,7 @@ class RootCommandTest : FunSpec({
         world(
             plainbaseConf = """
                 roots {
-                  main { path = "CONTENT" }
+                  docs { path = "CONTENT" }
                   hand { path = "/roots/hand" }
                 }
             """.trimIndent(),
@@ -591,19 +561,22 @@ class RootCommandTest : FunSpec({
     }
 
     test("every legal root name ROUND-TRIPS through the real loader - including the HOCON directives among them") {
-        // `include` is a legal RootName ([a-z0-9][a-z0-9-]*) AND a HOCON keyword. Written as a bare key,
+        // `include` is a legal RootName ([a-z][a-z0-9]*(-[a-z0-9]+)*) AND a HOCON keyword. Written as a bare key,
         // `include {` is read as an include DIRECTIVE, not a key, and the file `plainbase root` had just
         // certified bootable does not parse - the one thing this command exists to make impossible.
         //
         // The assertion is the ROUND TRIP, deliberately: a test that asserted on serialize()'s STRING would have
         // watched this go past, because the string looked fine. What HOCON DOES with those bytes is the bug, so
         // the real loader has to be the one to answer.
+        //
+        // A digit-leading key (`9lives`) used to be in this list. The grammar no longer admits one, so that
+        // hazard is unreachable rather than untested; `RootNameTest` pins the rejection.
         world { w ->
-            val names = listOf("include", "9lives", "a-b-c", "true")
+            val names = listOf("include", "a-b-c", "true")
             names.forEach { name ->
                 captureStdout { w.root("add", name, Files.createDirectory(w.tmp(name)).toString()) shouldBe 0 }
             }
-            w.config().roots.list.map { it.name.value } shouldBe listOf("main") + names
+            w.config().roots.list.map { it.name.value } shouldBe listOf("docs") + names
             names.forEach { name ->
                 w.config().roots.extras.single { it.name.value == name }.localPath shouldBe w.tmp(name)
             }

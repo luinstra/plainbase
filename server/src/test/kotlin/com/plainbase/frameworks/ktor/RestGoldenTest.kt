@@ -38,17 +38,19 @@ class RestGoldenTest : FunSpec({
     val welcomeId = "0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d01"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("guides/deploy-guide.md")),
             PageId.require(deployGuideId),
             materialized = false,
         )
-        idMap.bind(RootedPath(RootName.MAIN, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
+        idMap.bind(RootedPath(RootName.PRIMARY, TreePath.require("index.md")), PageId.require(welcomeId), materialized = false)
     }
     val deployGuideHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("guides/deploy-guide.md"))
     val welcomeHash = RestGolden.contentHashOf(Fixtures.demoDocs.resolve("index.md"))
 
     // The §A4 citation-uri grammar: plainbase://{root}/{lowercase-uuid}["#"heading]"@"(git-sha | sha256:hex),
-    // root-qualified (per-root identity, C5); {root} is the [a-z0-9][a-z0-9-]* slug.
+    // root-qualified (per-root identity, C5). The {root} alternation is deliberately LOOSER than the root-name
+    // grammar: it only has to recognize the segment, and a matcher that tracked every tightening would go red
+    // on the tightening rather than on a broken citation.
     val uriGrammar = Regex(
         "^plainbase://[a-z0-9][a-z0-9-]*/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" +
             "(#[^@]+)?@([0-9a-f]{7,40}|sha256:[0-9a-f]{64})$",
@@ -94,7 +96,7 @@ class RestGoldenTest : FunSpec({
 
     test("GET /api/v1/pages/by-path/{path} returns the IDENTICAL shape and values as by-id") {
         goldenTest {
-            val byPath = client.get("/api/v1/pages/by-path/guides/deploy-guide").jsonBody()
+            val byPath = client.get("/api/v1/pages/by-path/docs/guides/deploy-guide").jsonBody()
             val byId = client.get("/api/v1/pages/$deployGuideId").jsonBody()
 
             byPath shouldBe byId
@@ -113,8 +115,8 @@ class RestGoldenTest : FunSpec({
             html.shouldNotBeBlank()
             html shouldContain "id=\"deploy-guide\""
             html shouldContain "id=\"prerequisites\""
-            html shouldContain "href=\"/docs/main/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
-            html shouldContain "src=\"/assets/main/infra/assets/diagram.svg\""
+            html shouldContain "href=\"/docs/infra/kubernetes\"" // §A2: hrefs are root-qualified path URLs (C3)
+            html shouldContain "src=\"/assets/docs/infra/assets/diagram.svg\""
 
             val normalized = JsonObject(body + ("html" to JsonPrimitive("{{html}}")))
             normalized shouldBe RestGolden.load("page-html-deploy-guide.json", mapOf("content_hash" to deployGuideHash))
@@ -166,7 +168,7 @@ class RestGoldenTest : FunSpec({
             Json.parseToJsonElement(unknown.bodyAsText()) shouldBe RestGolden.load("error-page-not-found.json")
 
             // Unknown by-path -> 404 page_not_found.
-            val unknownPath = client.get("/api/v1/pages/by-path/no/such/page")
+            val unknownPath = client.get("/api/v1/pages/by-path/docs/no/such/page")
             unknownPath.status shouldBe HttpStatusCode.NotFound
             Json.parseToJsonElement(unknownPath.bodyAsText()) shouldBe RestGolden.load("error-by-path-not-found.json")
 

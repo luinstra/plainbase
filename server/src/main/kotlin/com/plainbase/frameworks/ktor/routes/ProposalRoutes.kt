@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.ktor.routes
 
 import com.plainbase.domain.page.ProposalId
+import com.plainbase.domain.root.ServerTopLevel
 import com.plainbase.domain.service.ApplyOutcome
 import com.plainbase.domain.service.ProposeOutcome
 import com.plainbase.domain.service.RebaseOutcome
@@ -49,7 +50,7 @@ import kotlinx.serialization.SerializationException
  *    NotConflicted->409, Gone->422, NotFound->404.
  */
 fun Route.proposalRoutes(ctx: RouteContext) {
-    route("/api/v1/changes") {
+    route("/${ServerTopLevel.API}/v1/changes") {
         proposeRoute(ctx)
         listProposalsRoute(ctx)
         getProposalRoute(ctx)

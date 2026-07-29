@@ -16,6 +16,7 @@ import io.ktor.http.withCharset
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
+import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.utils.io.ByteReadChannel
@@ -168,12 +169,21 @@ internal suspend fun ApplicationCall.pinnedRootOrRefuse(): PinResolved? = when (
 internal data class PinResolved(val root: RootName?)
 
 /**
- * The ONE first-segment rule every root-scoped route grammar shares (C3, ADR-0011 D3): if the
- * decoded tail's first segment names a [known] registry root, that root scopes the remainder
- * (null remainder = a bare-root tail); otherwise null - the WHOLE tail is a legacy main-relative
- * path. One implementation so the docs/assets/by-path/browse grammars can never drift; how a
- * non-root answer responds (301 on browser surfaces, resolve-under-main on API surfaces) is the
- * caller's decision, never encoded here.
+ * The ONE first-segment rule every root-scoped route grammar shares: if the decoded tail's first
+ * segment names a [known] registry root, that root scopes the remainder (null remainder = a
+ * bare-root tail); otherwise null - the tail addresses no root, and therefore no content. One
+ * implementation so the docs/assets/by-path/browse grammars can never drift.
+ *
+ * All four callers answer null the SAME way now: a miss, in each surface's own idiom (the browser
+ * surface the shell body at 404, the rest their error envelope). None of them reinterprets the tail
+ * as a path under the primary root - a first segment that does not name a root is not a root decision
+ * that defaulted, it is the absence of one, and guessing made a tail like `eng/setup` mean two
+ * different pages depending on whether a root named `eng` happened to be registered.
+ *
+ * Since commit 6 the root segment is TOP-LEVEL (`/{root}/...`), so this split is the whole address
+ * grammar rather than the tail of a constant `/docs` prefix. The example above is deliberately written
+ * as a bare tail: `/docs/eng/...` would now read as the PRIMARY root `docs` plus a path `eng/...`,
+ * which is a different (and legitimate) address, not the ambiguity this rule exists to prevent.
  */
 internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName, TreePath?>? {
     val root = RootName.of(path.segments.first())?.takeIf { it in known } ?: return null
@@ -185,12 +195,24 @@ internal fun splitRootTail(path: TreePath, known: Set<RootName>): Pair<RootName,
  * Serves the embedded SPA shell (the Phase-0 `frontend/dist` index.html bundled under `static/`).
  * The shell is one immutable resource per binary, so its bytes are read once and cached.
  */
-internal suspend fun ApplicationCall.respondSpaShell() {
+internal suspend fun ApplicationCall.respondSpaShell() = respondShell(HttpStatusCode.OK)
+
+/**
+ * The shell at 404: the answer on the browser surface whenever the request names no root, so there
+ * is no root decision to serve a page under. The BODY is the shell because the address is still a
+ * browser navigation - the SPA renders its own not-found view - while the STATUS stays honest, so a
+ * crawler or a script is never told the address exists.
+ */
+internal suspend fun ApplicationCall.respondShellNotFound() = respondShell(HttpStatusCode.NotFound)
+
+private suspend fun ApplicationCall.respondShell(status: HttpStatusCode) {
     val shell = SpaShell.bytes
     if (shell == null) {
         respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "SPA shell is not bundled")
     } else {
-        respondBytes(shell, ContentType.Text.Html.withCharset(Charsets.UTF_8))
+        // The content type is load-bearing, not cosmetic: shellSecurityHeadersPlugin gates the shell
+        // CSP on it alone, so bytes emitted without it render the shell with no CSP at all.
+        respondBytes(shell, ContentType.Text.Html.withCharset(Charsets.UTF_8), status)
     }
 }
 
@@ -209,6 +231,21 @@ private object SpaShell {
  */
 internal fun staticResourceBytes(relativePath: String): ByteArray? =
     SpaShell::class.java.classLoader.getResourceAsStream("static/assets/$relativePath")?.use { it.readBytes() }
+
+/** Reads a top-level embedded bundle file. This namespace is separate from the asset bundle lookup above. */
+internal fun bundleResourceBytes(relative: String): ByteArray? =
+    SpaShell::class.java.classLoader.getResourceAsStream("static/$relative")?.use { it.readBytes() }
+
+/** Serves a trusted top-level bundle file with its emitted content type and MIME-sniff defense. */
+internal suspend fun ApplicationCall.respondBundleFile(relative: String) {
+    val bytes = bundleResourceBytes(relative)
+    if (bytes == null) {
+        respondError(HttpStatusCode.NotFound, ErrorCodes.NOT_FOUND, "not bundled: $relative")
+    } else {
+        response.header(X_CONTENT_TYPE_OPTIONS, "nosniff")
+        respondBytes(bytes, assetContentType(relative))
+    }
+}
 
 /**
  * The `Content-Security-Policy` header name (not a named constant in this Ktor). ONE literal, shared by

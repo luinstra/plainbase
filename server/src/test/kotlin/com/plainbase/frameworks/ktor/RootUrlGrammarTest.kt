@@ -18,71 +18,85 @@ import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 
 /**
- * The C3 root-segment grammar (ADR-0011 D3, D-C3-3): ONE first-segment rule across every
- * root-scoped surface, two response styles. Browser address surfaces (`/docs`, `/assets`) answer a
- * non-root first segment with a query-preserving 301 to the main-qualified URL built from the RAW
- * tail; API surfaces (`by-path`, `/browse`) resolve it under main directly, no hop. A KNOWN root
- * scopes the remainder; an unknown root is never a distinct error (D-C3-4). Bundle-wins precedes
- * the root parse on `/assets` (a root name cannot contain a dot, a bundle file name always does).
+ * The root-segment grammar: ONE first-segment rule across every root-scoped surface, and now ONE
+ * answer when it finds no root. A tail whose first segment does not name a registered root names
+ * nothing at all - it is never reinterpreted as a path under the primary - so every surface answers
+ * a miss in its own idiom (`/docs` the shell body at 404, the rest their error envelope). A KNOWN
+ * root scopes the remainder; an unknown root is never a distinct error (D-C3-4). Bundle-wins
+ * precedes the root parse on `/assets`, and cannot collide with a SINGLE-segment tail: a root name
+ * carries no dot and a bundle file name always does. That argument is narrower than it looks, and
+ * `AssetRoute`'s own comment carries the rest of it: the check runs on the WHOLE tail, so a nested
+ * bundle entry would answer under a same-named root. `FrontendBundleTest` is what keeps the bundle
+ * flat enough for the short version to hold.
  */
 class RootUrlGrammarTest : FunSpec({
 
-    test("a legacy /docs/{seg} tail 301s to /docs/main/{tail} with the query preserved") {
+    test("a rootless /nope tail is 404 with the shell body: no root named, so no root decision") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
+            val shell = client.get("/docs").bodyAsText()
 
-            val plain = client.get("/docs/guides/deploy-guide")
-            plain.status shouldBe HttpStatusCode.MovedPermanently
-            plain.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            val plain = client.get("/nope/guides/deploy-guide")
+            plain.status shouldBe HttpStatusCode.NotFound
+            plain.bodyAsText() shouldBe shell
+            plain.headers[HttpHeaders.Location] shouldBe null
 
-            // The ?mode=edit ride-along (the RestRedirectTest idiom): a cold hit on a legacy edit
-            // URL must land in the editor after the hop, not the read view.
-            val edit = client.get("/docs/guides/deploy-guide?mode=edit")
-            edit.status shouldBe HttpStatusCode.MovedPermanently
-            edit.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide?mode=edit"
+            // The ?mode=edit ride-along (the RestRedirectTest idiom): a query cannot supply the
+            // root the path segment failed to name.
+            client.get("/nope/guides/deploy-guide?mode=edit").status shouldBe HttpStatusCode.NotFound
         }
     }
 
-    test("the legacy 301 target is built from the RAW tail: original percent-encoding survives, never re-encoded") {
+    test("the rootless answer does not depend on the raw tail's percent-encoding") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            val unicode = client.get("/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89")
-            unicode.status shouldBe HttpStatusCode.MovedPermanently
-            unicode.headers[HttpHeaders.Location] shouldBe "/docs/main/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89"
+            val unicode = client.get("/nope/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89")
+            unicode.status shouldBe HttpStatusCode.NotFound
+            unicode.bodyAsText() shouldBe client.get("/docs").bodyAsText()
         }
     }
 
-    test("known-root scoping: /docs/main/{path} and the bare /docs/main serve the shell, never a redirect") {
+    test("known-root scoping: /docs/{path} and the bare /docs serve the shell, never a redirect") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            client.get("/docs/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
-            client.get("/docs/main").status shouldBe HttpStatusCode.OK // the SPA's root landing view
-            client.get("/docs/main/no/such/page").status shouldBe HttpStatusCode.OK // SPA owns not-found
+            client.get("/docs/guides/deploy-guide").status shouldBe HttpStatusCode.OK
+            client.get("/docs").status shouldBe HttpStatusCode.OK // the SPA's root landing view
+            client.get("/docs/no/such/page").status shouldBe HttpStatusCode.OK // SPA owns not-found
+
+            val formerGrammar = client.get("/docs/main/guides/deploy-guide")
+            formerGrammar.status shouldBe HttpStatusCode.OK
+            formerGrammar.headers[HttpHeaders.Location] shouldBe null
+
+            // The TRAILING SLASH resolves to the same landing view, which is what makes B8 a real back-out:
+            // without this row, deleting `removeSuffix("/")` at RootContentRoute.kt's tail strip has no
+            // falsifier anywhere, because every other address here is slash-free. The strip lives on the
+            // ROUTE, not in `TreePath.of` (which merely rejects the empty trailing segment); naming the
+            // wrong site would send the next back-out to the wrong file.
+            client.get("/docs/").status shouldBe HttpStatusCode.OK
         }
     }
 
-    test("an undecodable tail serves the shell: no decodable first segment means no root decision (%2F rejected)") {
+    test("an encoded slash is rejected inside a known root (%2F rejected)") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
             val response = client.get("/docs/a%2Fb")
-            response.status shouldBe HttpStatusCode.OK
+            response.status shouldBe HttpStatusCode.NotFound
             response.bodyAsText() shouldBe client.get("/docs").bodyAsText()
         }
     }
 
-    test("assets mirror the grammar: legacy 301 (query preserved), bare known root 404, rooted form serves") {
+    test("assets mirror the grammar: a rootless tail 404s, bare known root 404s, the rooted form serves") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
 
-            val legacy = client.get("/assets/infra/assets/diagram.svg")
-            legacy.status shouldBe HttpStatusCode.MovedPermanently
-            legacy.headers[HttpHeaders.Location] shouldBe "/assets/main/infra/assets/diagram.svg"
+            val rootless = client.get("/assets/infra/assets/diagram.svg")
+            rootless.status shouldBe HttpStatusCode.NotFound
+            rootless.headers[HttpHeaders.Location] shouldBe null
 
-            val query = client.get("/assets/infra/assets/diagram.svg?v=2")
-            query.headers[HttpHeaders.Location] shouldBe "/assets/main/infra/assets/diagram.svg?v=2"
+            client.get("/assets/infra/assets/diagram.svg?v=2").status shouldBe HttpStatusCode.NotFound
 
-            client.get("/assets/main/infra/assets/diagram.svg").status shouldBe HttpStatusCode.OK
-            client.get("/assets/main").status shouldBe HttpStatusCode.NotFound // a bare root names no asset
+            client.get("/assets/docs/infra/assets/diagram.svg").status shouldBe HttpStatusCode.OK
+            client.get("/assets/docs").status shouldBe HttpStatusCode.NotFound // a bare root names no asset
         }
     }
 
@@ -92,29 +106,29 @@ class RootUrlGrammarTest : FunSpec({
             val shell = client.get("/docs").bodyAsText()
             val jsRef = Regex("src=\"(/assets/[^\"]+\\.js)\"").find(shell)?.groupValues?.get(1)
             jsRef.shouldNotBeNull()
-            // A rootless bundle tail would 301 under the mirrored grammar; the upfront bundle check
-            // must answer it directly (the shell's <script src> cannot afford a hop).
+            // A rootless bundle tail would 404 under the mirrored grammar; the upfront bundle check
+            // must answer it directly (the shell's <script src> cannot afford a miss).
             client.get(jsRef).status shouldBe HttpStatusCode.OK
         }
     }
 
-    test("by-path accepts both the root-qualified and the legacy tail; a bare known root is a 404 miss, not a 400") {
+    test("by-path requires the root segment; a bare known root is a 404 miss, not a 400") {
         restTest(Fixtures.demoDocs) {
-            client.get("/api/v1/pages/by-path/main/guides/deploy-guide").status shouldBe HttpStatusCode.OK
-            client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.OK
+            client.get("/api/v1/pages/by-path/docs/guides/deploy-guide").status shouldBe HttpStatusCode.OK
+            client.get("/api/v1/pages/by-path/guides/deploy-guide").status shouldBe HttpStatusCode.NotFound
             // A bare root is a well-formed MISS: the SPA's folder-landing fallthrough branches on
-            // 404 only (PageView), so invalid_path here would break the /docs/{root} landing.
-            val bare = client.get("/api/v1/pages/by-path/main")
+            // 404 only (PageView), so invalid_path here would break the /{root} landing.
+            val bare = client.get("/api/v1/pages/by-path/docs")
             bare.status shouldBe HttpStatusCode.NotFound
             bare.bodyAsText().contains("page_not_found") shouldBe true
         }
     }
 
     test("an EXTRA registry root is never treated as a legacy segment: its URL space misses cleanly (D12/D-C3-4)") {
-        // A registry with a validated-but-unserved extra root: /docs/extra/... must scope to that
-        // root and MISS (shell / 404) - never 301-to-main as if 'extra' were a legacy path segment.
-        // The shadow consequence is D3(b)'s accepted residual: a MAIN page at path extra/shadowed.md
-        // is unreachable via its legacy form (the segment now names the root).
+        // A registry with a validated-but-unserved extra root: /extra/... must scope to that
+        // root and MISS (shell / 404) - a REGISTERED root's URL space answers a miss under itself,
+        // never the no-root answer. Note what registering `extra` does NOT do to main's own page at
+        // extra/shadowed.md: nothing. Its address is /docs/extra/shadowed.
         withTempTree(seed = { root ->
             writePage(root, "guides/page.md", "---\ntitle: Page\n---\n\n# Page\n")
             writePage(root, "extra/shadowed.md", "---\ntitle: Shadowed\n---\n\n# Shadowed\n")
@@ -122,7 +136,7 @@ class RootUrlGrammarTest : FunSpec({
             val extraDir = Files.createTempDirectory("plainbase-extra-root")
             try {
                 val store = LocalContentStore(root)
-                val registry = RootRegistry.of(listOf(localRoot("main", root), localRoot("extra", extraDir)))
+                val registry = RootRegistry.of(listOf(localRoot("docs", root), localRoot("extra", extraDir)))
                 IndexHarness(root, contentStore = store, rootRegistry = registry).use { harness ->
                     harness.builder.rebuild()
                     val ctx = harness.testRouteContext(searchProvider = noopSearchProvider())
@@ -130,14 +144,14 @@ class RootUrlGrammarTest : FunSpec({
                         application { plainbaseModule(ctx) }
                         val client = restClient()
 
-                        // Root-scoped, main-only snapshot: a clean miss on every surface.
-                        client.get("/docs/extra/anything").status shouldBe HttpStatusCode.OK // shell, NOT 301
+                        // Root-scoped, extra-only snapshot: a clean miss on every surface.
+                        client.get("/extra/anything").status shouldBe HttpStatusCode.OK // shell, NOT 301
                         client.get("/api/v1/pages/by-path/extra/anything").status shouldBe HttpStatusCode.NotFound
                         client.get("/assets/extra/anything.png").status shouldBe HttpStatusCode.NotFound
 
-                        // The accepted D3(b) shadow: the main page at extra/shadowed resolves ONLY
-                        // through its root-qualified form now.
-                        client.get("/api/v1/pages/by-path/main/extra/shadowed").status shouldBe HttpStatusCode.OK
+                        // And it resolves through its own root-qualified form, unaffected by the root
+                        // whose name its first path segment happens to match.
+                        client.get("/api/v1/pages/by-path/docs/extra/shadowed").status shouldBe HttpStatusCode.OK
                         client.get("/api/v1/pages/by-path/extra/shadowed").status shouldBe HttpStatusCode.NotFound
                     }
                 }
@@ -150,10 +164,26 @@ class RootUrlGrammarTest : FunSpec({
     test("/browse splits the root segment: rooted resolves, a bare root is invalid_path, an extra-root file 404s") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            val rooted = client.get("/browse/main/guides/deploy-guide.md")
+            val rooted = client.get("/browse/docs/guides/deploy-guide.md")
             rooted.status shouldBe HttpStatusCode.Found
-            rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
-            client.get("/browse/main").status shouldBe HttpStatusCode.BadRequest // a bare root names no file
+            rooted.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+            client.get("/browse/docs").status shouldBe HttpStatusCode.BadRequest // a bare root names no file
+        }
+    }
+    test("the root landing redirects to the primary root, carrying any query through") {
+        restTest(Fixtures.demoDocs) {
+            val client = restClient()
+            val response = client.get("/")
+            response.status shouldBe HttpStatusCode.Found
+            response.headers[HttpHeaders.Location] shouldBe "/docs"
+
+            // The query rides the hop, same as the alias and browse redirects. Without this row
+            // reverting `respondRedirectPreservingQuery` to a bare `respondRedirect` stays GREEN,
+            // because every other assertion on this arm is query-free: a pasted `/?mode=edit` would
+            // silently land in the read view.
+            val withQuery = client.get("/?mode=edit")
+            withQuery.status shouldBe HttpStatusCode.Found
+            withQuery.headers[HttpHeaders.Location] shouldBe "/docs?mode=edit"
         }
     }
 })

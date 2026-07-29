@@ -39,7 +39,7 @@ class RenderCorpusPerfTest : FunSpec({
                 // ONE renderer over the published snapshot — exactly what a rebuild's rendererFactory
                 // binds per pass (IndexModule/IndexBuilder). The sampled bytes are the UTF-8 round-trip
                 // of the same bytes production renders (IndexedPage.markdown IS the decode of them).
-                val renderer = FlexmarkRenderer(snapshot.view(RootName.MAIN))
+                val renderer = FlexmarkRenderer(snapshot.view(RootName.PRIMARY))
                 val (large, generated) = snapshot.pages.sortedBy { it.path.value }.partition { it.path.value.startsWith("large/") }
                 large.size shouldBe largeCount
 

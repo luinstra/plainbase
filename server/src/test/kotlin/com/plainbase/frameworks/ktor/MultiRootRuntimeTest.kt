@@ -76,17 +76,31 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("both roots serve: pages, tree entries in D7 order, and cross-root search hits") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
-                client.get("/api/v1/pages/by-path/main/guides/deploy").status shouldBe HttpStatusCode.OK
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
+                client.get("/api/v1/pages/by-path/docs/guides/deploy").status shouldBe HttpStatusCode.OK
                 withClue("the extra root's page is served under its OWN root segment") {
                     client.get("/api/v1/pages/by-path/extra/notes/rollback").status shouldBe HttpStatusCode.OK
                 }
-                treeRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("main", "extra")
+                treeRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("docs", "extra")
                 treeRoots().forEach { it.jsonObject.getValue("available").jsonPrimitive.content shouldBe "true" }
 
                 val hits = Json.parseToJsonElement(client.get("/api/v1/search?q=body").bodyAsText())
                     .jsonObject.getValue("hits").jsonArray
-                hits.map { it.jsonObject.getValue("root").jsonPrimitive.content }.toSet() shouldBe setOf("main", "extra")
+                hits.map { it.jsonObject.getValue("root").jsonPrimitive.content }.toSet() shouldBe setOf("docs", "extra")
+            }
+        }
+    }
+
+    test("the tree's `primary` flag is the REGISTRY's primary, never the list's first entry") {
+        // Declared extra-FIRST on purpose. D7 order is the operator's, so `roots[0]` is not the primary, and this is
+        // the only row in the tree that separates the three wrong implementations from the right one: a constant
+        // `true` reads ["true","true"], a constant `false` reads ["false","false"], and a `roots[0]` proxy reads
+        // ["true","false"]. The single-root goldens cannot see the constant-`true` or `roots[0]` arms, which is why
+        // this row exists; a constant `false` they DO catch, since `golden/rest/tree.json` now pins `"primary": true`.
+        twoRoots { main, extra ->
+            multiRootTest(listOf(testRoot("extra", extra), testRoot("docs", main))) { _ ->
+                treeRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("extra", "docs")
+                treeRoots().map { it.jsonObject.getValue("primary").jsonPrimitive.content } shouldContainExactly listOf("false", "true")
             }
         }
     }
@@ -95,7 +109,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("an extra root vanishing mid-run is marked, its section is CARRIED, and no durable row is deleted for it") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 val idMapBefore = harness.idMap.bindings().size
                 val checkpointsBefore = harness.checkpoints.load().size
@@ -116,7 +130,7 @@ class MultiRootRuntimeTest : FunSpec({
                     harness.searchProvider.indexedState().keys shouldBe engineBefore
                 }
                 withClue("the OTHER root is entirely unaffected") {
-                    client.get("/api/v1/pages/by-path/main/guides/deploy").status shouldBe HttpStatusCode.OK
+                    client.get("/api/v1/pages/by-path/docs/guides/deploy").status shouldBe HttpStatusCode.OK
                 }
             }
         }
@@ -124,7 +138,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("a read of a vanished root answers 503 root_unavailable with Retry-After - NEVER a 404") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 extra.toFile().deleteRecursively()
                 harness.builder.rebuild()
@@ -148,7 +162,7 @@ class MultiRootRuntimeTest : FunSpec({
             // Here the root is still marked AVAILABLE when the request starts (nothing has probed it yet), so the
             // gate passes and the git call is what discovers the loss - the exact window nine rounds of
             // ContentStore work closed on reads and left open on history.
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 extra.toFile().deleteRecursively() // the disk goes; nothing has marked it
 
@@ -165,7 +179,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("a root that vanishes DURING diff() takes the same exit boundary as history()") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 extra.toFile().deleteRecursively()
 
@@ -183,7 +197,7 @@ class MultiRootRuntimeTest : FunSpec({
             // The other side of the two-sided rule, and the one that makes the rule safe to have: the disk is FINE,
             // so this is a corrupt repo / an unknown flag / a broken binary. Answering 503 root_unavailable here
             // would be the mirror-image lie, and it would leave a perfectly healthy root permanently Unavailable.
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), histories = { FailingGitReads }) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
 
                 val response = client.get("/api/v1/pages/${extraPage.value}/history")
@@ -198,7 +212,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("the tree flips its entry to available:false with an EMPTY subtree - never the stale carried listing") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 extra.toFile().deleteRecursively()
                 harness.builder.rebuild()
 
@@ -213,7 +227,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("health lists the root as unavailable with its CAUSE token, and the top-level status stays ok") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 extra.toFile().deleteRecursively()
                 harness.builder.rebuild()
 
@@ -240,7 +254,7 @@ class MultiRootRuntimeTest : FunSpec({
     // broken invariant. So the test drives nothing, and waits.
     test("an IDLE root that vanishes is marked, 503s and reports unavailable - with NO write, NO rescan and NO manual rebuild") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), liveWatchers = true) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), liveWatchers = true) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
 
                 Files.move(extra, extra.resolveSibling("${extra.fileName}-unmounted"))
@@ -258,7 +272,7 @@ class MultiRootRuntimeTest : FunSpec({
                     entry.getValue("reason").jsonPrimitive.content shouldBe "vanished"
                 }
                 withClue("the OTHER root keeps serving - one lost root is never a corpus outage") {
-                    client.get("/api/v1/pages/by-path/main/guides/deploy").status shouldBe HttpStatusCode.OK
+                    client.get("/api/v1/pages/by-path/docs/guides/deploy").status shouldBe HttpStatusCode.OK
                 }
             }
         }
@@ -266,21 +280,21 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("search DROPS hits from a root that is not serving (a live search must never surface stale content)") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 extra.toFile().deleteRecursively()
                 harness.builder.rebuild()
 
                 val hits = Json.parseToJsonElement(client.get("/api/v1/search?q=body").bodyAsText())
                     .jsonObject.getValue("hits").jsonArray
                 hits.shouldNotBeEmpty()
-                hits.map { it.jsonObject.getValue("root").jsonPrimitive.content }.toSet() shouldBe setOf("main")
+                hits.map { it.jsonObject.getValue("root").jsonPrimitive.content }.toSet() shouldBe setOf("docs")
             }
         }
     }
 
     test("unavailability is STICKY: restoring the path does NOT bring the root back without a restart") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 extra.toFile().deleteRecursively()
                 harness.builder.rebuild()
 
@@ -299,7 +313,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("a root whose watcher cannot see its whole tree is AVAILABLE and honest - coverage partial, pages still 200") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), liveWatchers = true) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), liveWatchers = true) { harness ->
                 // The fact a real watcher reports when a subtree will not register (the inotify watch limit; a
                 // `chmod 000` directory), recorded through the SAME holder `serve()` wires the callback into. The
                 // watcher's own end of that wire - PARTIAL on a tree it cannot cover, WHOLE again on a retry that
@@ -319,7 +333,7 @@ class MultiRootRuntimeTest : FunSpec({
                     entry.getValue("coverage").jsonPrimitive.content shouldBe "partial"
                 }
                 withClue("a fully-watched root says nothing at all - silence is whole coverage") {
-                    healthRoots().single { it.jsonObject.getValue("root").jsonPrimitive.content == "main" }
+                    healthRoots().single { it.jsonObject.getValue("root").jsonPrimitive.content == "docs" }
                         .jsonObject["coverage"] shouldBe null
                 }
 
@@ -351,7 +365,7 @@ class MultiRootRuntimeTest : FunSpec({
     // So both halves ship, and they differ in exactly one fact.
     test("an EXISTING root drained under an UNBROKEN epoch REAPS - this is the online delete converging again") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 harness.searchProvider.indexedState().keys.map { it.id }.contains(extraPage).shouldBeTrue()
 
@@ -379,7 +393,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("the SAME drain past a BREAK reaps NOTHING and lands in limbo - past the overflow bound, `rm -rf` IS an unmount") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
 
                 // Byte for byte the same deletion as the row above. The ONLY difference is that the watcher admits it
@@ -403,7 +417,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("an UNMOUNTED root looks empty and is NOT: it is marked, carried, and nothing is deleted for it") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
                 val checkpointsBefore = harness.checkpoints.load().size
                 val engineBefore = harness.searchProvider.indexedState().keys
@@ -435,13 +449,13 @@ class MultiRootRuntimeTest : FunSpec({
         twoRoots(seedExtra = false) { main, extra ->
             val missing = extra.resolve("gone-forever")
             val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", missing))).use { harness ->
                 // The binding survives the outage (D16 never touches an unscanned-but-configured root's rows), which
                 // is the ONLY reason the server can tell this page apart from one that never existed.
                 harness.idMapOnly("extra", "notes/rollback.md", pageId)
                 harness.boot()
 
-                withClue("nothing to watch") { harness.watched shouldContainExactly listOf(RootName.MAIN) }
+                withClue("nothing to watch") { harness.watched shouldContainExactly listOf(RootName.PRIMARY) }
                 harness.availability.current().unavailable.getValue(RootName.require("extra")).cause shouldBe
                     UnavailableCause.MISSING_AT_BOOT
 
@@ -470,7 +484,7 @@ class MultiRootRuntimeTest : FunSpec({
         twoRoots(seedExtra = false) { main, extra ->
             val missing = extra.resolve("gone-forever")
             val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", missing))).use { harness ->
                 harness.idMapOnly("extra", "notes/rollback.md", pageId)
                 harness.checkpoints.replace(
                     harness.checkpoints.load() +
@@ -492,23 +506,23 @@ class MultiRootRuntimeTest : FunSpec({
         twoRoots(seedExtra = false) { main, extra ->
             val missing = extra.resolve("gone-forever")
             val deadId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b70")
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", missing))).use { harness ->
                 harness.boot()
                 // The alias row LINGERS after its target page was deleted (no live binding anywhere). Its stored root
                 // being down must not resurrect the row into a 503 or a redirect-to-nowhere: the row's root is only a
                 // CLAIM about where the target lives, and only a target that still durably binds there earns the 503.
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/dead")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/dead")),
                     RootedPageId(RootName.require("extra"), deadId),
                 )
                 io.ktor.server.testing.testApplication {
                     application { plainbaseModule(harness.services) }
                     withClue("by-path: a dangling alias is the plain 404, not the stored root's 503") {
-                        client.get("/api/v1/pages/by-path/main/old/dead").status shouldBe HttpStatusCode.NotFound
+                        client.get("/api/v1/pages/by-path/docs/old/dead").status shouldBe HttpStatusCode.NotFound
                     }
                     withClue("/docs: a dangling alias falls through to the shell, never a redirect to a permalink that 404s") {
                         val noFollow = createClient { followRedirects = false }
-                        noFollow.get("/docs/main/old/dead").status shouldBe HttpStatusCode.OK // the SPA shell
+                        noFollow.get("/docs/old/dead").status shouldBe HttpStatusCode.OK // the SPA shell
                     }
                 }
             }
@@ -519,25 +533,25 @@ class MultiRootRuntimeTest : FunSpec({
         twoRoots(seedExtra = false) { main, extra ->
             val missing = extra.resolve("gone-forever")
             val liveId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b71")
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", missing))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", missing))).use { harness ->
                 // The target still durably binds under the boot-down extra (the idMapOnly boot arm) - the alias's
                 // stored root claim is PROVEN, so the honest answer is retryable, never "gone".
                 harness.idMapOnly("extra", "notes/live.md", liveId)
                 harness.boot()
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/live")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/live")),
                     RootedPageId(RootName.require("extra"), liveId),
                 )
                 io.ktor.server.testing.testApplication {
                     application { plainbaseModule(harness.services) }
                     withClue("by-path: the alias target's root is down - 503 root_unavailable, never 404") {
-                        val res = client.get("/api/v1/pages/by-path/main/old/live")
+                        val res = client.get("/api/v1/pages/by-path/docs/old/live")
                         res.status shouldBe HttpStatusCode.ServiceUnavailable
                         res.errorCode() shouldBe "root_unavailable"
                     }
                     withClue("/docs: the redirect-then-honest-503 two-step - the alias 301s to the permalink, which 503s") {
                         val noFollow = createClient { followRedirects = false }
-                        val redirect = noFollow.get("/docs/main/old/live")
+                        val redirect = noFollow.get("/docs/old/live")
                         redirect.status shouldBe HttpStatusCode.MovedPermanently
                         // The alias target is a RootedPageId in 'extra', so the permalink it 301s to is rooted (R25).
                         redirect.headers[HttpHeaders.Location] shouldBe "/p/extra/${liveId.value}"
@@ -551,7 +565,7 @@ class MultiRootRuntimeTest : FunSpec({
     test("a LIVE cross-root alias whose target root is UP but whose page is unwitnessed: by-path 503 absence_unverified") {
         twoRoots { main, extra ->
             val limboId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b72")
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
                 // Both roots are SERVING, so the root-down arm has nothing to say - and the alias target is bound in
                 // `extra` yet in no section (bound after the publish, never witnessed by a scan). That is LIMBO, and
@@ -559,12 +573,12 @@ class MultiRootRuntimeTest : FunSpec({
                 // is the retryable 503 `absence_unverified`, NOT the plain 404 this arm used to fall through to.
                 harness.idMapOnly("extra", "notes/limbo.md", limboId)
                 harness.index.registry.register(
-                    com.plainbase.domain.root.RootedPath(RootName.MAIN, TreePath.require("old/limbo")),
+                    com.plainbase.domain.root.RootedPath(RootName.PRIMARY, TreePath.require("old/limbo")),
                     RootedPageId(RootName.require("extra"), limboId),
                 )
                 io.ktor.server.testing.testApplication {
                     application { plainbaseModule(harness.services) }
-                    val res = client.get("/api/v1/pages/by-path/main/old/limbo")
+                    val res = client.get("/api/v1/pages/by-path/docs/old/limbo")
                     res.status shouldBe HttpStatusCode.ServiceUnavailable
                     res.errorCode() shouldBe "absence_unverified"
                 }
@@ -577,7 +591,7 @@ class MultiRootRuntimeTest : FunSpec({
     test("a DETACHED root (rows in the DB, name gone from roots{}) serves 404 on its permalink and boots cleanly") {
         twoRoots { main, extra ->
             val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 harness.detachedRoot("archive", "old/thing.md", pageId)
 
                 withClue(
@@ -586,7 +600,7 @@ class MultiRootRuntimeTest : FunSpec({
                     client.get("/p/${pageId.value}").status shouldBe HttpStatusCode.NotFound
                 }
                 withClue("health reports the CONFIGURED topology; a detached root is not part of it") {
-                    healthRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("main", "extra")
+                    healthRoots().map { it.jsonObject.getValue("root").jsonPrimitive.content } shouldContainExactly listOf("docs", "extra")
                 }
             }
         }
@@ -595,7 +609,7 @@ class MultiRootRuntimeTest : FunSpec({
     test("the first publish after a root is DETACHED does not delete its page_checkpoint rows") {
         twoRoots { main, extra ->
             val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5d")
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 harness.detachedRoot("archive", "old/thing.md", pageId)
                 val before = harness.checkpoints.load().size
 
@@ -616,7 +630,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("a CREATE into a vanished root is 503 root_unavailable - NOT content_unreadable, and the dir is not recreated") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 extra.toFile().deleteRecursively()
                 // NO rebuild: the root is physically gone but NOT YET MARKED - the unmarked window, where a status
                 // check cannot help and only a probe at the failure can answer.
@@ -646,7 +660,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("an EDIT into a vanished root is 503 root_unavailable - NEVER 409 page_deleted - and the journal is untouched") {
         twoRoots { main, extra ->
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val page = harness.builder.current.byPath.getValue(
                     com.plainbase.domain.root.RootedPath(RootName.require("extra"), TreePath.require("notes/rollback.md")),
                 )
@@ -681,7 +695,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("a dirty-page journal row under a root that is not serving is SKIPPED, never CLEARED") {
         twoRoots { main, extra ->
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
                 val page = harness.builder.current.byPath.getValue(
                     com.plainbase.domain.root.RootedPath(RootName.require("extra"), TreePath.require("notes/rollback.md")),
@@ -715,11 +729,11 @@ class MultiRootRuntimeTest : FunSpec({
             // as the route used to - tells a client "no history here" for a page whose history the server is holding
             // in the very same response, and would tell it the opposite lie in the mirrored config.
             val perRoot: (RootName) -> com.plainbase.domain.history.HistoryProvider = { root ->
-                if (root == RootName.MAIN) NoOpHistoryProvider else EnabledStubHistory
+                if (root == RootName.PRIMARY) NoOpHistoryProvider else EnabledStubHistory
             }
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra)), histories = perRoot) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra)), histories = perRoot) { harness ->
                 val extraPage = pageIdIn(harness, "extra", "notes/rollback.md")
-                val mainPage = pageIdIn(harness, "main", "guides/deploy.md")
+                val mainPage = pageIdIn(harness, "docs", "guides/deploy.md")
 
                 fun flagOf(body: String) =
                     Json.parseToJsonElement(body).jsonObject.getValue("git_enabled").jsonPrimitive.content
@@ -748,7 +762,7 @@ class MultiRootRuntimeTest : FunSpec({
             Files.createDirectories(extra.resolve("notes"))
             Files.writeString(extra.resolve("notes/rollback.md"), body)
 
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val id = PageId.require(pageId)
                 harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull()
                 val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull().contentHash
@@ -769,7 +783,7 @@ class MultiRootRuntimeTest : FunSpec({
                 Files.createDirectories(main.resolve("notes"))
                 Files.writeString(main.resolve("notes/rollback.md"), body)
                 harness.builder.rebuild()
-                harness.builder.current.pageAt(RootedPageId(RootName.MAIN, id)).shouldNotBeNull() // main holds its own copy...
+                harness.builder.current.pageAt(RootedPageId(RootName.PRIMARY, id)).shouldNotBeNull() // main holds its own copy...
                 harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull() // ...extra keeps its own
 
                 val approved = client.post("/api/v1/changes/$proposalId/approve")
@@ -794,7 +808,7 @@ class MultiRootRuntimeTest : FunSpec({
             Files.createDirectories(extra.resolve("notes"))
             Files.writeString(extra.resolve("notes/rollback.md"), body)
 
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val id = PageId.require(pageId)
                 val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), id)).shouldNotBeNull().contentHash
                 val proposal = client.post("/api/v1/changes") {
@@ -834,7 +848,7 @@ class MultiRootRuntimeTest : FunSpec({
             Files.createDirectories(extra.resolve("notes"))
             Files.writeString(extra.resolve("notes/rollback.md"), body)
 
-            multiRootTest(listOf(testRoot("main", main), testRoot("extra", extra))) { harness ->
+            multiRootTest(listOf(testRoot("docs", main), testRoot("extra", extra))) { harness ->
                 val hash = harness.builder.current.pageAt(RootedPageId(RootName.require("extra"), PageId.require(pageId)))
                     .shouldNotBeNull().contentHash
                 val proposal = client.post("/api/v1/changes") {
@@ -876,7 +890,7 @@ class MultiRootRuntimeTest : FunSpec({
     // sentence unless both arms of it are exercised.
     test("a dirty row whose FILE is gone with NO proof is KEPT - an unproven absence never destroys a recovery record") {
         twoRoots { main, extra ->
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
                 val page = harness.builder.current.byPath.getValue(
                     com.plainbase.domain.root.RootedPath(RootName.require("extra"), TreePath.require("notes/rollback.md")),
@@ -902,7 +916,7 @@ class MultiRootRuntimeTest : FunSpec({
 
     test("...and a dirty row whose page an EPOCH PROVED gone is cleared - inside the proof-apply transaction, with its binding") {
         twoRoots { main, extra ->
-            MultiRootRestHarness(listOf(testRoot("main", main), testRoot("extra", extra))).use { harness ->
+            MultiRootRestHarness(listOf(testRoot("docs", main), testRoot("extra", extra))).use { harness ->
                 harness.boot()
                 val page = harness.builder.current.byPath.getValue(
                     com.plainbase.domain.root.RootedPath(RootName.require("extra"), TreePath.require("notes/rollback.md")),

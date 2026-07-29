@@ -33,7 +33,7 @@ class AbsenceClassifierTest : FunSpec({
 
     val doc = TreePath.require("doc.md")
     val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
-    val bound = RootedPath(RootName.MAIN, doc)
+    val bound = RootedPath(RootName.PRIMARY, doc)
 
     // ---- the rule itself, in the one place it exists -----------------------------------------------------
 
@@ -96,18 +96,18 @@ class AbsenceClassifierTest : FunSpec({
                 override fun readClassified(path: TreePath): StoreRead = StoreRead.NoBytes
             }
             val pass = AdoptionPass(
-                sources = listOf(AdoptionPass.Source(RootName.MAIN, vanishing)),
+                sources = listOf(AdoptionPass.Source(RootName.PRIMARY, vanishing)),
                 idMap = world.idMap,
                 identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
                 rootLoss = RootLossClassifier(world.availability),
                 citations = CitationFactory(),
                 rootRank = { 0 },
-                registeredRoots = setOf(RootName.MAIN),
+                registeredRoots = setOf(RootName.PRIMARY),
             )
 
             val abort = shouldThrow<AbsenceUnverified> { pass.run(AdoptionPass.Mode.RECORD) { _, _ -> } }
-            abort.root shouldBe RootName.MAIN
+            abort.root shouldBe RootName.PRIMARY
             withClue("and it destroyed nothing on the way out - the binding it could not read is exactly as it was") {
                 world.idMap.livePathOf(id) shouldBe bound
             }

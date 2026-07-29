@@ -168,7 +168,7 @@ class SearchGrammarTest : FunSpec({
                 // endpoint must not 500 either.
                 expectInvalidQuery("/api/v1/tree?x=%")
             } finally {
-                server.stop()
+                server.stopSuspend()
             }
         }
     }

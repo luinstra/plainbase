@@ -35,7 +35,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
     val dupId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val id = PageId.require(dupId)
     val notes = RootName.require("notes")
-    val main = RootName.MAIN
+    val main = RootName.PRIMARY
 
     fun oneRoot(block: (Path) -> Unit) {
         val parent = Files.createTempDirectory("pb-authdefer")
@@ -67,7 +67,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
 
     test("denied anonymous naming ?root=ghost gets 401 (deferred registration), never 404/invalid_root") {
         oneRoot { mainDir ->
-            multiRootTest(listOf(testRoot("main", mainDir)), enforced = true) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir)), enforced = true) { harness ->
                 withClue("READ ?root=ghost -> 401, not 404") {
                     client.get("/api/v1/pages/$dupId?root=ghost").status shouldBe HttpStatusCode.Unauthorized
                 }
@@ -109,7 +109,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
             // The extract lambda runs per REQUEST, so it can hand back an agent minted only after the harness booted.
             var caller: Principal = Principal.Anonymous
             val extract: io.ktor.server.application.ApplicationCall.() -> PrincipalExtraction = { PrincipalExtraction.Resolved(caller) }
-            multiRootTest(listOf(testRoot("main", mainDir)), enforced = true, extract = extract) { harness ->
+            multiRootTest(listOf(testRoot("docs", mainDir)), enforced = true, extract = extract) { harness ->
                 caller = Principal.Agent(harness.index.apiTokens.mint(label = "ci", mode = AgentMode.PROPOSE).id)
                 val baseHash = harness.builder.current.byPath.getValue(RootedPath(main, TreePath.require("a.md"))).contentHash
                 val res = client.put("/api/v1/pages/$dupId") {
@@ -123,7 +123,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
                     rows shouldHaveSize 1
                     with(rows.single()) {
                         action shouldBe "EDIT"
-                        resource shouldBe "main:proposal"
+                        resource shouldBe "docs:proposal"
                         decision shouldBe "allowed"
                     }
                 }
@@ -133,7 +133,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
 
     test("a MALFORMED root slug is answered pre-auth (400 invalid_root), the sole exception") {
         oneRoot { mainDir ->
-            multiRootTest(listOf(testRoot("main", mainDir)), enforced = true) { _ ->
+            multiRootTest(listOf(testRoot("docs", mainDir)), enforced = true) { _ ->
                 client.get("/api/v1/pages/$dupId?root=a/b").status shouldBe HttpStatusCode.BadRequest
             }
         }
@@ -142,7 +142,7 @@ class WriteAuthzOrderAndAuditOnceTest : FunSpec({
     test("a denied bare PUT of a FAKE-ambiguous id is 401, NEVER 409 (auth gate before the ambiguity throw)") {
         twoRoots { mainDir, notesDir ->
             multiRootTest(
-                listOf(testRoot("main", mainDir), testRoot("notes", notesDir)),
+                listOf(testRoot("docs", mainDir), testRoot("notes", notesDir)),
                 enforced = true,
                 resolverFactory = { idx ->
                     PageRootResolver(AmbiguousIdMap(idx.idMap, id, liveRoots = listOf(main, notes)), idx.rootRegistry)

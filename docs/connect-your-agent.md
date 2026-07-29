@@ -62,13 +62,13 @@ Once connected, `listTools` returns exactly these seven:
 A typical search → read → propose flow:
 
 ```jsonc
-// search the docs - hits carry the page's root (the /docs/{root}/... URL segment)
+// search the docs - hits carry the page's root (the /{root}/... URL segment)
 → search            { "q": "kubernetes deploy" }
-← { "query": "...", "hits": [ { "page_id": "0197…", "root": "main", "snippet": "…", "citation": {…} }, … ] }
+← { "query": "...", "hits": [ { "page_id": "0197…", "root": "docs", "snippet": "…", "citation": {…} }, … ] }
 
 // read the whole verbatim page (frontmatter header + body) - content_hash is your edit base
 → read_page         { "id": "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a" }
-← { "id": "0197…", "root": "main", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
+← { "id": "0197…", "root": "docs", "markdown": "---\ntitle: …\n---\n\n# …", "content_hash": "sha256:…", … }
 
 // propose an edit - proposed_content is the FULL UTF-8 markdown of the page after your change
 // (frontmatter header included), NOT a diff and NOT base64
@@ -84,7 +84,7 @@ A typical search → read → propose flow:
 
 The response is a **proposal id** in `PENDING` - a human reviews and approves it in the web UI. Agents cannot
 approve their own (or any) proposals. To create a NEW page instead of editing, use
-`{ "operation": "create", "root": "main", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
+`{ "operation": "create", "root": "docs", "target_path": "notes/new.md", "proposed_content": "…", "rationale": "…" }`
 (no `page_id`/`base_hash`). A create must name its `root` - there is no default, and an omitted one is
 `invalid_root`: which root a page lands in decides whose tree it joins and whose policy accepts it. An edit does
 not need one - the root comes from the page - but it MAY name `root` as an optional disambiguation pin, which is
@@ -97,12 +97,12 @@ detail + diff + decision state).
 
 Every page lives under a named **root** - a document directory the server is configured to serve
 ([ADR-0011](decisions/0011-multi-root-document-directories.md)). A single-root install has exactly
-one, named `main`; a multi-root install can have more (`memoria`, `handbook`, whatever the operator
+one, named `docs`; a multi-root install can have more (`memoria`, `handbook`, whatever the operator
 named them). `search` and `read_page` already carry the root in their responses (see the worked
-session above); the URL grammar is always `/docs/{root}/{path}`, and a `create` (or a REST direct
+session above); the URL grammar is always `/{root}/{path}`, and a `create` (or a REST direct
 commit) **names its root explicitly, with no default** - `propose_change`'s `root` field on a `create`
 operation, or `CreatePageRequest.root` over REST. Omitting it is a 400 `invalid_root` (above), never
-permission to write into `main`.
+permission to write into `docs`.
 
 A root can be unavailable or read-only, and a page id can be held by more than one root - the server tells you
 which with a code, not a guess. Four wire shapes to recognize:

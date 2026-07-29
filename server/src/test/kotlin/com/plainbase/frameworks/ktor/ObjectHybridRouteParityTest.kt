@@ -51,7 +51,7 @@ class ObjectHybridRouteParityTest : FunSpec({
     val deployGuideId = "0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a"
     val seed: (IdMapRepository) -> Unit = { idMap ->
         idMap.bind(
-            RootedPath(RootName.MAIN, TreePath.require("guides/deploy-guide.md")),
+            RootedPath(RootName.PRIMARY, TreePath.require("guides/deploy-guide.md")),
             PageId.require(deployGuideId),
             materialized = false,
         )
@@ -183,7 +183,7 @@ class ObjectHybridRouteParityTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider(), storeOverride = hybridOverride) { harness ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"guides","title":"Hybrid Page","body":"# Hybrid\n\nbody.\n"}""")
+                setBody("""{"root":"docs","folder":"guides","title":"Hybrid Page","body":"# Hybrid\n\nbody.\n"}""")
             }
             post.status shouldBe HttpStatusCode.Created
             val body = post.json()
@@ -201,7 +201,7 @@ class ObjectHybridRouteParityTest : FunSpec({
             val before = harness.diskBytes("guides/deploy-guide.md")
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"guides","slug":"deploy-guide","title":"Clash"}""")
+                setBody("""{"root":"docs","folder":"guides","slug":"deploy-guide","title":"Clash"}""")
             }
             post.status shouldBe HttpStatusCode.Conflict
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "page_exists"
@@ -213,7 +213,7 @@ class ObjectHybridRouteParityTest : FunSpec({
         writeRestTest(Fixtures.demoDocs, idProvider = TestIdProvider(), storeOverride = hybridOverride) { _ ->
             val post = client.post("/api/v1/pages") {
                 contentType(ContentType.Application.Json)
-                setBody("""{"root":"main","folder":"../escape","title":"Escape"}""")
+                setBody("""{"root":"docs","folder":"../escape","title":"Escape"}""")
             }
             post.status shouldBe HttpStatusCode.BadRequest
             post.errorJson().getValue("code").jsonPrimitive.content shouldBe "invalid_create_request"
@@ -227,7 +227,7 @@ class ObjectHybridRouteParityTest : FunSpec({
             writeRestTest(tree, idProvider = TestIdProvider(), storeOverride = hybridOverride) { harness ->
                 val post = client.post("/api/v1/pages") {
                     contentType(ContentType.Application.Json)
-                    setBody("""{"root":"main","folder":"","slug":"foo","title":"Foo"}""")
+                    setBody("""{"root":"docs","folder":"","slug":"foo","title":"Foo"}""")
                 }
                 post.status shouldBe HttpStatusCode.Conflict
                 post.errorJson().getValue("code").jsonPrimitive.content shouldBe "slug_conflict"

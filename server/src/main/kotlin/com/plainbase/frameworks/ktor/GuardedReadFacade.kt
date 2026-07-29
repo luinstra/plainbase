@@ -336,8 +336,8 @@ class GuardedReadFacade(
         return PermalinkResolution.Retired(here, claims.live.filter { it != root })
     }
 
-    override fun resolveDocsRedirect(principal: Principal, root: RootName, path: TreePath): String? {
-        // Deny → null (NOT a throw): the docsRoutes shell-fallback arm is public, so an unauthorized caller must
+    override fun resolveRootContentRedirect(principal: Principal, root: RootName, path: TreePath): String? {
+        // Deny → null (NOT a throw): the rootContentRoutes shell-fallback arm is public, so an unauthorized caller must
         // fall through to the shell exactly like any unknown path (a 401 here would leak that an alias exists).
         try {
             policy.checkRead(principal, RootedResource(root, path.value).audit)

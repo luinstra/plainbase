@@ -33,7 +33,7 @@ class FrontmatterIdWireTest : FunSpec({
             writePage(root, "owner.md", "---\nid: $claimedId\ntitle: Owner\n---\n\n# Owner\n")
         }) { root ->
             restTest(root) {
-                val body = client.get("/api/v1/pages/by-path/owner").jsonBody()
+                val body = client.get("/api/v1/pages/by-path/docs/owner").jsonBody()
                 body.getValue("id_materialized").jsonPrimitive.boolean shouldBe true
                 body.getValue("id").jsonPrimitive.content shouldBe claimedId
                 body.getValue("frontmatter").jsonObject.getValue("id").jsonPrimitive.content shouldBe claimedId
@@ -49,7 +49,7 @@ class FrontmatterIdWireTest : FunSpec({
             writePage(root, "b-thief.md", "---\nid: $claimedId\ntitle: Thief\n---\n\n# Thief\n")
         }) { root ->
             restTest(root) {
-                val thief = client.get("/api/v1/pages/by-path/b-thief").jsonBody()
+                val thief = client.get("/api/v1/pages/by-path/docs/b-thief").jsonBody()
                 thief.getValue("id_materialized").jsonPrimitive.boolean shouldBe false
                 thief.getValue("id").jsonPrimitive.content shouldNotBe claimedId // the resolved (minted) id
                 thief.getValue("frontmatter").jsonObject.containsKey("id") shouldBe false
@@ -57,7 +57,7 @@ class FrontmatterIdWireTest : FunSpec({
                 thief.getValue("markdown").jsonPrimitive.content shouldContain "id: $claimedId"
 
                 // And the legitimate owner still echoes it.
-                val owner = client.get("/api/v1/pages/by-path/a-owner").jsonBody()
+                val owner = client.get("/api/v1/pages/by-path/docs/a-owner").jsonBody()
                 owner.getValue("id").jsonPrimitive.content shouldBe claimedId
                 owner.getValue("frontmatter").jsonObject.getValue("id").jsonPrimitive.content shouldBe claimedId
             }

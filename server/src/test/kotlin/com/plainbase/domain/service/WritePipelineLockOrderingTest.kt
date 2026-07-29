@@ -30,7 +30,7 @@ import kotlin.concurrent.thread
  */
 class WritePipelineLockOrderingTest : FunSpec({
 
-    fun mainPath(path: String) = RootedPath(RootName.MAIN, TreePath.require(path))
+    fun mainPath(path: String) = RootedPath(RootName.PRIMARY, TreePath.require(path))
 
     test("a watcher rebuild racing a save cannot deadlock, and the save re-syncs search") {
         val dir = Files.createTempDirectory("pb-write-lock")
@@ -80,7 +80,7 @@ class WritePipelineLockOrderingTest : FunSpec({
                     var outcome: WriteOutcome? = null
                     val saver = thread(name = "save") {
                         outcome =
-                            pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
+                            pipeline.write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, saveBytes))
                     }
                     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
                     while (saver.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)

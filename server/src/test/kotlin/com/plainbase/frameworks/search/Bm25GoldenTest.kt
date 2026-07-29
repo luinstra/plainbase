@@ -33,7 +33,7 @@ class Bm25GoldenTest : FunSpec({
                 withProvider { provider, _ ->
                     provider.rebuild(snapshot.pages.asSequence().map(splitter::split))
                     val top = provider.search(query(text)).hits.first()
-                    val page = snapshot.pageAt(RootedPageId(RootName.MAIN, top.pageId))!!
+                    val page = snapshot.pageAt(RootedPageId(RootName.PRIMARY, top.pageId))!!
                     page.path.value shouldBe expectedPath
                     (top.headingId ?: "-") shouldBe expectedHeading
                 }

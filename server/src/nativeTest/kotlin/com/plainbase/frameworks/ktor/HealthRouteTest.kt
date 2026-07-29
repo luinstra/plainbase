@@ -4,6 +4,7 @@ import com.plainbase.BuildInfo
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
@@ -15,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 // Lives in the `nativeTest` source set: runs in the JVM `test` suite AND as native code via
-// `nativeTest`. The root-route check validates that the SPA shell under static/ is embedded in the
+// `nativeTest`. The root-route check validates the explicit primary-root redirect in the
 // native test image. On kotlin.test (not Kotest/MockK) because only that can run in a closed-world
 // native image; @Tag("native") documents the intent and keeps the smoke set greppable.
 @Tag("native")
@@ -39,15 +40,15 @@ class HealthRouteTest {
     }
 
     @Test
-    fun `spa shell is served at root`() = withRestServices { services ->
+    fun `root redirects to the primary root`() = withRestServices { services ->
         testApplication {
             application { plainbaseModule(services) }
 
-            val response = client.get("/")
+            val noRedirectClient = createClient { followRedirects = false }
+            val response = noRedirectClient.get("/")
 
-            assertEquals(HttpStatusCode.OK, response.status)
-            val html = response.bodyAsText()
-            assertEquals(true, html.contains("<div id=\"root\">"), "expected SPA shell HTML, got: $html")
+            assertEquals(HttpStatusCode.Found, response.status)
+            assertEquals("/docs", response.headers[HttpHeaders.Location])
         }
     }
 }

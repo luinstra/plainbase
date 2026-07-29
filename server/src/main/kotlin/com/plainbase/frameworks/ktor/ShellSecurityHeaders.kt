@@ -14,7 +14,7 @@ import java.util.Base64
 
 /*
  * The SPA shell's Content-Security-Policy (C1a items 3-7). Stamped on every text/html response — the shell
- * is served by TWO paths (staticResources("/", "static") and respondSpaShell), so a single content-type-
+ * is served by the explicit bundle and shell routes, so a single content-type-
  * gated createApplicationPlugin choke point covers both and is the single source of the CSP string.
  *
  * script-src is HASH-pinned (never 'unsafe-inline', which would defeat the XSS goal): the shell's one inline
@@ -60,7 +60,7 @@ internal fun Application.installShellSecurityHeaders() {
  * No path exclusion (B4): an `/api/` path is naturally `application/json` (never text/html) and an `/assets/` one is
  * js/css/octet-stream (+ its own sandbox CSP when scriptable) — both skip the gate — so a prefix exclusion
  * (`startsWith("/api"|"/assets")`) would only mis-handle a shell path like `/apiary` or `/assetsx` (served
- * the shell HTML by `staticResources`), which now CORRECTLY receives the CSP. The safe-`as?` is fail-SAFE:
+ * the shell HTML), which now CORRECTLY receives the CSP. The safe-`as?` is fail-SAFE:
  * a non-`OutgoingContent`/typeless message yields null → no stamp (the cold-200 shell tests catch a
  * regression that ever dropped it from the shell). A 304 carries no text/html body, so it skips naturally;
  * the browser reuses the stored 200's CSP (RFC 7232 §4.1).

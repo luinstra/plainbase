@@ -62,7 +62,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
     val limbo = RootLimbo()
 
     private val root = Root(
-        name = RootName.MAIN,
+        name = RootName.PRIMARY,
         backend = RootBackend.Object(bucket = "docs", prefix = ""),
         editable = true,
         history = HistoryMode.OFF,
@@ -98,7 +98,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         )
         // The boot seam, in the order `Application.kt` runs it: record the binding, and an UNVERIFIED one re-derives
         // the mirror from the bucket it now names - a witness must be made of bytes we fetched, not bytes we kept.
-        if (BindingLatch(topology).observe(RootName.MAIN, binding) != BindingStatus.TRUSTED) store.rebind()
+        if (BindingLatch(topology).observe(RootName.PRIMARY, binding) != BindingStatus.TRUSTED) store.rebind()
         if (hydrate) store.hydrate()
         return builder()
     }
@@ -119,7 +119,7 @@ internal class ObjectAbsenceWorld : AutoCloseable {
         checkpoint = checkpoints,
         citations = CitationFactory(),
         rootRank = registry::rank,
-        registeredRoots = setOf(RootName.MAIN),
+        registeredRoots = setOf(RootName.PRIMARY),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoints::replaceFrom)),
         retirements = retirements,
         limbo = limbo,
@@ -129,8 +129,8 @@ internal class ObjectAbsenceWorld : AutoCloseable {
     /** Main's durable rows + binding_epoch - the same boundary `contentModule` wires as the LIST's `rowsAtStart`
      *  (epoch co-read FIRST, revoke-before-stamp C5). */
     fun rowsOfMain(): RowsAtStart {
-        val bindingEpoch = retirements.bindingEpoch(RootName.MAIN)
-        val rows = idMap.bindings().filter { it.path.root == RootName.MAIN }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+        val bindingEpoch = retirements.bindingEpoch(RootName.PRIMARY)
+        val rows = idMap.bindings().filter { it.path.root == RootName.PRIMARY }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
         return RowsAtStart(rows, bindingEpoch)
     }
 

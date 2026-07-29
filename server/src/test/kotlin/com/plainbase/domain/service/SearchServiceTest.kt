@@ -26,7 +26,7 @@ import io.mockk.mockk
  */
 class SearchServiceTest : FunSpec({
 
-    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0, root: RootName = RootName.MAIN) =
+    fun hit(pageId: PageId, headingId: String?, score: Double = 1.0, root: RootName = RootName.PRIMARY) =
         SearchHit(pageId = pageId, root = root, headingId = headingId, snippet = "…body…", highlights = emptyList(), score = score)
 
     fun providerReturning(vararg hits: SearchHit): SearchProvider = mockk {
@@ -64,7 +64,7 @@ class SearchServiceTest : FunSpec({
                 // No rebuild: an unavailable root's section is CARRIED FORWARD, so the page is still in `byRootedId` and the
                 // engine still returns it. The liveness filter is the ONLY thing standing between a downed root and a
                 // live search result served from its stale index rows.
-                harness.availability.markUnavailable(RootName.MAIN, UnavailableCause.VANISHED)
+                harness.availability.markUnavailable(RootName.PRIMARY, UnavailableCause.VANISHED)
 
                 val payload = resultsOf(service.search("shared"))
                 payload.hits shouldBe emptyList()
@@ -124,14 +124,14 @@ class SearchServiceTest : FunSpec({
                 val assembled = resultsOf(SearchService(provider, harness.builder).search("shared")).hits.single()
 
                 assembled.title shouldBe "Alpha Guide"
-                assembled.url shouldBe "/docs/main/alpha"
+                assembled.url shouldBe "/docs/alpha"
                 assembled.headingId shouldBe "wiring"
                 assembled.headingText shouldBe "Wiring"
                 // Ancestor = nearest preceding heading of a LOWER level: the sibling "Deep Dive"
                 // (level 3 under the same H1) must not appear in the trail.
                 assembled.headingPath shouldBe listOf("Alpha", "Setup", "Wiring")
                 assembled.citation.headingId shouldBe "wiring"
-                assembled.citation.uri shouldBe "plainbase://main/${alpha.id.value}#wiring@${alpha.contentHash}"
+                assembled.citation.uri shouldBe "plainbase://docs/${alpha.id.value}#wiring@${alpha.contentHash}"
             }
         }
     }

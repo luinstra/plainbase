@@ -45,7 +45,10 @@ class WritePipelineReconcileTest : FunSpec({
                 // A history hook that throws AFTER the CAS write succeeds (a post-write step failure).
                 val pipeline = harness.writePipeline(historyHook = { _, _, _, _, _ -> error("commit blew up") })
 
-                val outcome = pipeline.write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, saveBytes))
+                val outcome = pipeline.write(
+                    grantForTests(),
+                    WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, saveBytes),
+                )
 
                 val unindexed = outcome.shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 unindexed.newHash shouldBe citations.contentHash(saveBytes)
@@ -71,7 +74,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // leaving a dirty row whose expectedHash = hash(B).
                 val bytesB = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes B on disk, unindexed.\n".toByteArray()
                 harness.writePipeline(historyHook = { _, _, _, _, _ -> error("commit blew up") })
-                    .write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, page.contentHash, bytesB))
+                    .write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, page.contentHash, bytesB))
                     .shouldBeInstanceOf<WriteOutcome.WrittenButUnindexed>()
                 val hashB = citations.contentHash(bytesB)
                 harness.dirtyPages.all().single().expectedHash shouldBe hashB
@@ -80,7 +83,7 @@ class WritePipelineReconcileTest : FunSpec({
                 // row must survive: same expectedHash = hash(B), not this attempt's hash, not cleared.
                 val bytesC = "---\ntitle: Doc\n---\n\n# Doc\n\nbytes C never written.\n".toByteArray()
                 harness.writePipeline()
-                    .write(grantForTests(), WriteIntent(page.id, RootName.MAIN, page.path, "sha256:stale-base", bytesC))
+                    .write(grantForTests(), WriteIntent(page.id, RootName.PRIMARY, page.path, "sha256:stale-base", bytesC))
                     .shouldBeInstanceOf<WriteOutcome.Conflict>().reason shouldBe "content_changed"
                 val afterConflict = harness.dirtyPages.all().single()
                 afterConflict.expectedHash shouldBe hashB // not poisoned to hash(C), not cleared
@@ -146,8 +149,8 @@ class WritePipelineReconcileTest : FunSpec({
         }) { root ->
             IndexHarness(root).use { harness ->
                 harness.builder.rebuild()
-                val match = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("match.md")))
-                val drift = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("drift.md")))
+                val match = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("match.md")))
+                val drift = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("drift.md")))
 
                 // match.md: the on-disk bytes match the recorded hash (a write that completed but did not clear).
                 val matchOnDisk = Files.readAllBytes(root.resolve("match.md"))

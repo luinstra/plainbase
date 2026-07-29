@@ -16,8 +16,8 @@ import kotlin.io.path.readText
  * extending [DomainPurityTest]'s idiom. Two guarantees a route-walk cannot make and the compiler cannot fully
  * make (the test-only mint factories are PUBLIC in src/main):
  *
- *  1. **Routes touch ONLY the guarded facades.** No file under `frameworks/ktor/routes/` (or a future
- *     `frameworks/mcp/`) references a raw mutator TYPE (`WritePipeline`/`ContentStore`/`IndexBuilder`) NOR a
+ *  1. **Routes touch ONLY the guarded facades.** No file under `frameworks/ktor/routes/` or `frameworks/mcp/`
+ *     references a raw mutator TYPE (`WritePipeline`/`ContentStore`/`IndexBuilder`) NOR a
  *     facade IMPL (`GuardedReadFacade`/`GuardedMutatingFacade`) NOR `RestServices`'s old bundle — only the
  *     `ReadFacade`/`MutatingFacade` interfaces via the `RouteContext`. This makes "check() precedes the call"
  *     MOOT: there is no raw mutator call site in a route to mis-order.
@@ -27,8 +27,8 @@ import kotlin.io.path.readText
  */
 class ChokePointArchitectureTest : FunSpec({
 
-    // The choke-point guarantee covers EVERY route-facing surface: `frameworks/ktor/routes` today, plus a future
-    // `frameworks/mcp` the moment it lands (KDoc §1) — so the scan walks a LIST of roots, extending automatically.
+    // The choke-point guarantee covers both registered route-facing surfaces, `frameworks/ktor/routes` and
+    // `frameworks/mcp` (KDoc §1), so the scan walks this fixed LIST of roots.
     val roots = routeFacingSourceRoots()
     val mainRoot = mainSourceRoot()
     val files = roots.flatMap { root ->
@@ -65,10 +65,13 @@ class ChokePointArchitectureTest : FunSpec({
         names.containsAll(
             setOf(
                 "PageRoutes.kt", "PageWriteRoutes.kt", "PageCreateRoutes.kt", "AdminRoute.kt",
-                "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "AliasRoute.kt",
+                "AssetRoute.kt", "PermalinkRoute.kt", "BrowseRedirectRoute.kt", "RootContentRoute.kt",
                 "HistoryRoutes.kt", "SearchRoute.kt", "TreeRoute.kt", "PreviewRoute.kt",
                 "AuthRoutes.kt", "SessionRoutes.kt", "SetupRoutes.kt", "AdminUserRoutes.kt",
                 "AdminTokenRoutes.kt", "ProposalRoutes.kt",
+                // Commit 6: the static mount was replaced by explicit routes, so the bundle and the
+                // SPA's own top-level paths are route SOURCE now and belong under the same scan.
+                "FrontendStaticRoute.kt", "SpaShellRoute.kt",
             ),
         ).shouldBeTrue()
     }
@@ -111,13 +114,13 @@ internal fun routesSourceRoot(): Path = mainSourceRoot().resolve("frameworks/kto
 
 /**
  * Every route-facing source root the choke-point scan must cover: `frameworks/ktor/routes` always, plus
- * `frameworks/mcp` IF it exists (it does not yet — the scan extends automatically the moment it lands, per KDoc §1).
+ * `frameworks/mcp`; both are listed explicitly so the scan cannot silently omit either surface.
  */
 internal fun routeFacingSourceRoots(): List<Path> {
     val main = mainSourceRoot()
-    return listOfNotNull(
+    return listOf(
         main.resolve("frameworks/ktor/routes"),
-        main.resolve("frameworks/mcp").takeIf { Files.isDirectory(it) },
+        main.resolve("frameworks/mcp"),
     )
 }
 

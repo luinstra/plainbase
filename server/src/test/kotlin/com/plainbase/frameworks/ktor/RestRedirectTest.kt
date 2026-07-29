@@ -18,8 +18,8 @@ import io.ktor.server.testing.testApplication
 import java.nio.file.Files
 
 /**
- * §A4 alias/redirect semantics over HTTP: move aliases (301, one hop from a canonical-era alias;
- * a LEGACY-prefix hit chains two hops since C3, ADR-0011 D3), `redirect_from` (301, incl. the
+ * §A4 alias/redirect semantics over HTTP: move aliases (301, always one hop - an alias lives under a
+ * root, and a tail that names no root never reaches one), `redirect_from` (301, incl. the
  * collision-loser permalink fallback), and `/browse/{file-path}` (302, decode-once + NFC) -
  * including the encoded-space and unicode filename rows.
  */
@@ -34,37 +34,36 @@ class RestRedirectTest : FunSpec({
         }) { root ->
             restTest(root) {
                 val client = restClient()
-                client.get("/docs/main/guides/movable").status shouldBe HttpStatusCode.OK // canonical: shell
+                client.get("/docs/guides/movable").status shouldBe HttpStatusCode.OK // canonical: shell
 
                 Files.createDirectories(root.resolve("archive"))
                 Files.move(root.resolve("guides/movable.md"), root.resolve("archive/movable.md"))
                 client.post("/api/v1/admin/rescan").status shouldBe HttpStatusCode.OK
 
-                val old = client.get("/docs/main/guides/movable")
+                val old = client.get("/docs/guides/movable")
                 old.status shouldBe HttpStatusCode.MovedPermanently // 301 — aliases are stable
-                old.headers[HttpHeaders.Location] shouldBe "/docs/main/archive/movable"
+                old.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable"
 
                 // A direct hit on an alias edit URL (cold load / refresh / pasted link) carries
                 // ?mode=edit verbatim through the 301, so the SPA lands in the editor, not the
                 // read view — the server-side half of rename-stability.
-                val edit = client.get("/docs/main/guides/movable?mode=edit")
+                val edit = client.get("/docs/guides/movable?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
-                edit.headers[HttpHeaders.Location] shouldBe "/docs/main/archive/movable?mode=edit"
+                edit.headers[HttpHeaders.Location] shouldBe "/docs/archive/movable?mode=edit"
             }
         }
     }
 
-    test("redirect_from: a LEGACY /docs/old/deployment chains two 301 hops to the canonical URL (ADR-0011 D3, accepted)") {
+    test("redirect_from: a root-qualified alias URL is ONE 301 hop to the canonical URL; the rootless form is a miss") {
         restTest(Fixtures.demoDocs) {
             val client = restClient()
-            // Hop 1: the legacy-prefix 301 (a non-root first segment is a main-relative path).
-            val legacy = client.get("/docs/old/deployment")
-            legacy.status shouldBe HttpStatusCode.MovedPermanently
-            legacy.headers[HttpHeaders.Location] shouldBe "/docs/main/old/deployment"
-            // Hop 2: the alias 301 under the root, landing on the root-qualified canonical URL.
-            val alias = client.get("/docs/main/old/deployment")
+            val alias = client.get("/docs/old/deployment")
             alias.status shouldBe HttpStatusCode.MovedPermanently
-            alias.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            alias.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
+
+            // An alias is looked up UNDER a root, so a tail naming no root reaches no alias registry
+            // to hit. This used to chain a second hop through the main-relative guess.
+            client.get("/nope/old/deployment").status shouldBe HttpStatusCode.NotFound
         }
     }
 
@@ -78,16 +77,16 @@ class RestRedirectTest : FunSpec({
         }) { root ->
             restTest(root) { harness ->
                 val client = restClient()
-                val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.MAIN, TreePath.require("a-b.md")))
+                val loser = harness.builder.current.byPath.getValue(RootedPath(RootName.PRIMARY, TreePath.require("a-b.md")))
 
-                val response = client.get("/docs/main/old/loser")
+                val response = client.get("/docs/old/loser")
                 response.status shouldBe HttpStatusCode.MovedPermanently
-                response.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}"
+                response.headers[HttpHeaders.Location] shouldBe "/p/docs/${loser.id.value}"
 
                 // The query rides the permalink fallback redirect too — same class, same hop.
-                val edit = client.get("/docs/main/old/loser?mode=edit")
+                val edit = client.get("/docs/old/loser?mode=edit")
                 edit.status shouldBe HttpStatusCode.MovedPermanently
-                edit.headers[HttpHeaders.Location] shouldBe "/p/main/${loser.id.value}?mode=edit"
+                edit.headers[HttpHeaders.Location] shouldBe "/p/docs/${loser.id.value}?mode=edit"
             }
         }
     }
@@ -114,8 +113,23 @@ class RestRedirectTest : FunSpec({
                     client.get("/docs/guides/deploy-guide").status shouldBe misdirected
                     client.get("/docs/anything").status shouldBe misdirected // even the shell-fallback arm refuses
                     client.get("/docs").status shouldBe misdirected // the bare /docs shell arm refuses too
+                    // The bare `/` REDIRECT arm refuses too. A3 names redirect arms explicitly: the 302 to the
+                    // primary is a downgrade, not a deny behavior, so the guard runs BEFORE respondRedirect.
+                    // This row is the falsifier that arm had none of when it was added.
+                    client.get("/").status shouldBe misdirected
+                    client.get("/admin").status shouldBe misdirected
+                    client.get("/index.html").status shouldBe misdirected
                     client.get("/browse/guides/deploy-guide.md").status shouldBe misdirected
                     client.get("/p/$id").status shouldBe misdirected
+
+                    // The OTHER half of the same contract, and the half that had no row: the bundle's
+                    // non-shell files are deliberately UNGATED and must still answer 200 here. They are
+                    // install-invariant build artifacts carrying nothing about the corpus or the tenant,
+                    // and the login view cannot render without them - gating them to look consistent
+                    // would lock an operator out with a green floor. `FrontendStaticRoute`'s comment says
+                    // exactly that; this is what makes the claim falsifiable.
+                    client.get("/favicon.svg").status shouldBe HttpStatusCode.OK
+                    client.get("/fonts/ibm-plex-sans-400.woff2").status shouldBe HttpStatusCode.OK
                 }
             }
         } finally {
@@ -127,34 +141,33 @@ class RestRedirectTest : FunSpec({
         restTest(Fixtures.demoDocs) {
             val client = restClient()
 
-            // A LEGACY (rootless) file path resolves under main with NO extra hop (D-C3-3: API
-            // surfaces resolve, never redirect, legacy input) - the 302 target is root-qualified.
-            val plain = client.get("/browse/guides/deploy-guide.md")
-            plain.status shouldBe HttpStatusCode.Found
-            plain.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            // A ROOTLESS file path names no root, so it names no file: 404, never a resolve under
+            // the primary. The query does not change that.
+            client.get("/browse/guides/deploy-guide.md").status shouldBe HttpStatusCode.NotFound
+            client.get("/browse/guides/deploy-guide.md?mode=edit").status shouldBe HttpStatusCode.NotFound
 
-            // The root-qualified form resolves identically.
-            val rooted = client.get("/browse/main/guides/deploy-guide.md")
+            val rooted = client.get("/browse/docs/guides/deploy-guide.md")
             rooted.status shouldBe HttpStatusCode.Found
-            rooted.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide"
+            rooted.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide"
 
             // A query on the browse redirect is preserved; with no query the Location stays clean
             // (no trailing `?`) — same byte-for-byte value the no-query golden pins.
-            val edit = client.get("/browse/guides/deploy-guide.md?mode=edit")
+            val edit = client.get("/browse/docs/guides/deploy-guide.md?mode=edit")
             edit.status shouldBe HttpStatusCode.Found
-            edit.headers[HttpHeaders.Location] shouldBe "/docs/main/guides/deploy-guide?mode=edit"
+            edit.headers[HttpHeaders.Location] shouldBe "/docs/guides/deploy-guide?mode=edit"
 
-            // Encoded space: decode-once yields the on-disk name `release notes 2026.md`.
-            val spaced = client.get("/browse/notes/release%20notes%202026.md")
+            // Encoded space: decode-once yields the on-disk name `release notes 2026.md`. Decoding
+            // runs on the whole tail before the root split, so the rooted form exercises it too.
+            val spaced = client.get("/browse/docs/notes/release%20notes%202026.md")
             spaced.status shouldBe HttpStatusCode.Found
-            spaced.headers[HttpHeaders.Location] shouldBe "/docs/main/notes/release-notes-2026"
+            spaced.headers[HttpHeaders.Location] shouldBe "/docs/notes/release-notes-2026"
 
             // Unicode filename: percent-decoded once to NFC; the Location re-encodes on emit.
-            val unicode = client.get("/browse/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89.md")
+            val unicode = client.get("/browse/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89.md")
             unicode.status shouldBe HttpStatusCode.Found
-            unicode.headers[HttpHeaders.Location] shouldBe "/docs/main/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89"
+            unicode.headers[HttpHeaders.Location] shouldBe "/docs/notes/%E6%97%A5%E6%9C%AC%E8%AA%9E%E3%82%AC%E3%82%A4%E3%83%89"
 
-            client.get("/browse/no/such/file.md").status shouldBe HttpStatusCode.NotFound
+            client.get("/browse/docs/no/such/file.md").status shouldBe HttpStatusCode.NotFound
             client.get("/browse/%2e%2e/escape.md").status shouldBe HttpStatusCode.BadRequest
         }
     }

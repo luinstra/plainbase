@@ -101,12 +101,15 @@ class AppDbMigrationNativeTest {
                 val db = DatabaseFactory.createDatabase(driver)
                 val repo = SqlDelightIdMapRepository(db)
                 val pageId = PageId.require("01010101-0101-0101-0101-010101010101")
-                val migrated = RootedPath(RootName.MAIN, TreePath.require("guides/a.md"))
+                val migrated = RootedPath(RootName.require("main"), TreePath.require("guides/a.md"))
 
-                assertEquals(migrated, repo.bindingInRoot(RootName.MAIN, pageId)?.path) // stamped 'main', decodes through the typed layer
+                assertEquals(
+                    migrated,
+                    repo.bindingInRoot(RootName.require("main"), pageId)?.path, // stamped 'main', decodes through the typed layer
+                )
                 assertEquals("reason", (repo.issues().single() as com.plainbase.domain.model.IdentityIssue.PatchRefused).message)
-                assertEquals(RootName.MAIN, db.pageCheckpointQueries.selectAll().executeAsOne().root)
-                assertEquals(RootName.MAIN, db.dirtyPageQueries.selectAll().executeAsOne().root)
+                assertEquals(RootName.require("main"), db.pageCheckpointQueries.selectAll().executeAsOne().root)
+                assertEquals(RootName.require("main"), db.dirtyPageQueries.selectAll().executeAsOne().root)
                 assertEquals(1L, driver.queryLongNative("SELECT count(*) FROM proposals WHERE root = 'main'"))
                 assertEquals(18L, driver.queryLongNative("PRAGMA user_version"))
                 // C4 (15.sqm): the retired_binding_id index exists in-image after the full chain.
@@ -157,8 +160,8 @@ class AppDbMigrationNativeTest {
                 // url_alias.target_root round-trips: the seeded ('guides/old', idX) alias backfills to idX's REAL
                 // root (main, from id_map), and find() carries it back as the target's rooted id.
                 assertEquals(
-                    RootedPageId(RootName.MAIN, pageId),
-                    SqlDelightUrlAliasRepository(db).find(RootedPath(RootName.MAIN, TreePath.require("guides/old"))),
+                    RootedPageId(RootName.require("main"), pageId),
+                    SqlDelightUrlAliasRepository(db).find(RootedPath(RootName.require("main"), TreePath.require("guides/old"))),
                 )
 
                 // The composite PK is live: the same relative path inserts under another root...
@@ -181,13 +184,13 @@ class AppDbMigrationNativeTest {
                 // ...but re-claiming it under its OWN root at a new path still raises - one id per root.
                 assertFails {
                     db.idMapQueries.upsertBinding(
-                        root = RootName.MAIN,
+                        root = RootName.require("main"),
                         path = TreePath.require("guides/copy2.md"),
                         id = pageId,
                         materialized = false,
                     )
                 }
-                assertTrue(repo.roots().contains(RootName.MAIN))
+                assertTrue(repo.roots().contains(RootName.require("main")))
             }
         } finally {
             Files.walk(dir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -225,8 +228,8 @@ class AppDbMigrationNativeTest {
                 assertEquals(18L, driver.queryLongNative("PRAGMA user_version")) // 16.sqm + 17.sqm applied in-image
                 // The pre-flip row survives the id_map rebuild under its own (root, path).
                 assertEquals(
-                    RootedPath(RootName.MAIN, TreePath.require("guides/a.md")),
-                    repo.bindingInRoot(RootName.MAIN, pageId)?.path,
+                    RootedPath(RootName.require("main"), TreePath.require("guides/a.md")),
+                    repo.bindingInRoot(RootName.require("main"), pageId)?.path,
                 )
                 // The flip's headline: the SAME id under a DIFFERENT root now inserts, where UNIQUE(id) forbade it.
                 db.idMapQueries.upsertBinding(
@@ -264,10 +267,10 @@ class AppDbMigrationNativeTest {
                 assertEquals(5L, driver.queryLongNative("SELECT observation_id FROM root_observation WHERE root = 'main'"))
                 // binding_epoch back-filled by the DEFAULT.
                 assertEquals(0L, driver.queryLongNative("SELECT binding_epoch FROM root_observation WHERE root = 'main'"))
-                assertEquals(BindingEpoch(0), repo.bindingEpoch(RootName.MAIN)) // the typed port reads it through the JNI seam
+                assertEquals(BindingEpoch(0), repo.bindingEpoch(RootName.require("main"))) // the typed port reads it through the JNI seam
 
-                db.rootObservationQueries.incrementBindingEpoch(RootName.MAIN)
-                assertEquals(BindingEpoch(1), repo.bindingEpoch(RootName.MAIN))
+                db.rootObservationQueries.incrementBindingEpoch(RootName.require("main"))
+                assertEquals(BindingEpoch(1), repo.bindingEpoch(RootName.require("main")))
                 assertEquals(5L, driver.queryLongNative("SELECT observation_id FROM root_observation WHERE root = 'main'")) // untouched
             }
         } finally {

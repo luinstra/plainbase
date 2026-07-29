@@ -74,19 +74,19 @@ val contentModule = module {
     single<LocalContentStore> {
         val config = get<PlainbaseConfig>()
         contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
-        val main = get<RootRegistry>().main
+        val primary = get<RootRegistry>().primary
         // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
         // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
         // and its writes would re-trigger every rebuild.
         LocalContentStore(
-            root = requireNotNull(main.localPath),
+            root = requireNotNull(primary.localPath),
             ignoreRules = get(),
             exclusions = listOf(config.dataDir),
-            rootName = main.name,
-            onRootUnavailable = { get<RootAvailability>().markUnavailable(main.name, UnavailableCause.VANISHED) },
+            rootName = primary.name,
+            onRootUnavailable = { get<RootAvailability>().markUnavailable(primary.name, UnavailableCause.VANISHED) },
             // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
             // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
-            onIdentityRebind = { get<ObservationEpoch>().broke(main.name, BreakCause.IDENTITY_REBIND) },
+            onIdentityRebind = { get<ObservationEpoch>().broke(primary.name, BreakCause.IDENTITY_REBIND) },
         )
     }
     // The per-root content trees. Construction for a configured root is ALWAYS allowed and is INERT for a missing
@@ -98,16 +98,16 @@ val contentModule = module {
         val registry = get<RootRegistry>()
         val availability = get<RootAvailability>()
         val ignoreRules = get<IgnoreRules>()
-        // Main rides the backend-selected store (object mode included), taken EXPLICITLY - the fold sees ONLY extras,
-        // never re-selecting main by name (the C4 HistoryModule bug shape; `RootWiringArchitectureTest` pins it out).
-        // Extras are LOCAL-only in v1 (D10 keeps object mode single-root), and they inherit main's DATA_DIR exclusion
-        // so a legally-nested data dir is never walked as content.
+        // The primary rides the backend-selected store, taken EXPLICITLY; this fold sees ONLY extras (the C4
+        // HistoryModule bug shape, which RootWiringArchitectureTest pins out).
         RootStores(
-            mapOf(registry.main.name to get<ContentStore>()) +
+            mapOf(registry.primary.name to get<ContentStore>()) +
                 registry.extras.associate { root ->
                     root.name to LocalContentStore(
                         root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
                         ignoreRules = ignoreRules,
+                        // Extras inherit the primary's DATA_DIR exclusion so a legally-nested data dir is never walked
+                        // as content.
                         exclusions = listOf(config.dataDir),
                         rootName = root.name,
                         onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
@@ -123,7 +123,7 @@ val contentModule = module {
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
-        val main = get<RootRegistry>().main.name
+        val primary = get<RootRegistry>().primary.name
         ObjectContentStoreFactory.build(
             config,
             ignoreRules = get(),
@@ -131,15 +131,15 @@ val contentModule = module {
             // wants bare TreePaths of the main mirror.
             dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
             // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
-            isDirty = { dirtyPages.isDirty(RootedPath(RootName.MAIN, it)) },
+            isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
             // C3: the pagination boundary. Read FRESH before each LIST (never captured here), so a page created while
             // a LIST paginates is not in the generation's rows and can never be covered by its proof. The binding_epoch
             // is co-read HERE (revoke-before-stamp, C5), and FIRST: a bind landing between it and the row read advances
             // the epoch past this value, so the OBJECT_LIST proof stamped from this snapshot fails the two-token compare
             // rather than reaping a binding a restore re-created between this poll and the reap.
             rowsAtStart = {
-                val bindingEpoch = retirements.bindingEpoch(main)
-                val rows = idMap.bindings().filter { it.path.root == main }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
+                val bindingEpoch = retirements.bindingEpoch(primary)
+                val rows = idMap.bindings().filter { it.path.root == primary }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
                 RowsAtStart(rows, bindingEpoch)
             },
         )

@@ -43,12 +43,12 @@ class BootGateTest : FunSpec({
 
     // --- T-GATE-1: the gate produces the same refusals boot raises, with the right KIND -----------------
 
-    test("T-GATE-1: a missing CONTENT_DIR is MAIN_UNUSABLE, with the message requireContentDir throws") {
+    test("T-GATE-1: a missing CONTENT_DIR is PRIMARY_UNUSABLE, with the message requireContentDir throws") {
         withDataDir { _, env ->
             val config = PlainbaseConfig.fromEnvAndFile(env + ("CONTENT_DIR" to "/nope/not/here"))
             val refusal = config.bootRefusals().single()
-            refusal.kind shouldBe BootRefusal.Kind.MAIN_UNUSABLE
-            refusal.roots shouldBe setOf(RootName.MAIN)
+            refusal.kind shouldBe BootRefusal.Kind.PRIMARY_UNUSABLE
+            refusal.roots shouldBe setOf(RootName.PRIMARY)
             // Message EQUALITY, not similarity: a paraphrase would mean somebody re-implemented something.
             refusal.message shouldBe shouldThrow<IllegalArgumentException> { config.requireContentDir() }.message
         }
@@ -61,7 +61,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main  { path = "$outer" }
+                  docs  { path = "$outer" }
                   inner { path = "$inner" }
                 }
                 """.trimIndent(),
@@ -69,7 +69,7 @@ class BootGateTest : FunSpec({
                 val refusal = PlainbaseConfig.fromEnvAndFile(env).bootRefusals().single()
                 refusal.kind shouldBe BootRefusal.Kind.ROOT_PAIR
                 // Keyed by the PAIR, so a pre-existing violation between (a, b) cannot mask a new one on (a, c).
-                refusal.roots shouldBe setOf(RootName.MAIN, RootName.require("inner"))
+                refusal.roots shouldBe setOf(RootName.PRIMARY, RootName.require("inner"))
                 refusal.message shouldContain "nested inside"
             }
         } finally {
@@ -83,7 +83,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main { path = "$shared" }
+                  docs { path = "$shared" }
                   twin { path = "$shared" }
                 }
                 """.trimIndent(),
@@ -127,7 +127,7 @@ class BootGateTest : FunSpec({
             withDataDir(
                 """
                 roots {
-                  main  { path = "/nope/not/a/directory" }
+                  docs  { path = "/nope/not/a/directory" }
                   outer { path = "$outer" }
                   inner { path = "$inner" }
                 }
@@ -135,7 +135,7 @@ class BootGateTest : FunSpec({
             ) { _, env ->
                 val refusals = PlainbaseConfig.fromEnvAndFile(env).bootRefusals()
                 refusals.map { it.kind } shouldContainExactly listOf(
-                    BootRefusal.Kind.MAIN_UNUSABLE, // main is not a directory
+                    BootRefusal.Kind.PRIMARY_UNUSABLE, // primary is not a directory
                     BootRefusal.Kind.ROOT_PAIR, // AND outer/inner nest - a fault BEHIND the first one
                 )
                 withClue("boot must still refuse with the FIRST message, byte-identical to what it always printed") {
@@ -153,7 +153,7 @@ class BootGateTest : FunSpec({
 
     test("T-GATE-3b: the same DATA_DIR fault keeps its KEY across the legacy/explicit arm switch, with DIFFERENT prose") {
         // THE REASON KINDS EXIST. A legacy `DATA_DIR == CONTENT_DIR` says "DATA_DIR and CONTENT_DIR must be
-        // different directories"; the SAME install after one `root add` is EXPLICIT and says "roots.main and
+        // different directories"; the SAME install after one `root add` is EXPLICIT and says "roots.docs and
         // DATA_DIR must be different directories". Same fault, same root, DIFFERENT PROSE - so a diff over
         // messages would call it NEW and refuse an add that introduced nothing, trapping exactly the operator the
         // policy exists to protect. Diff the KEY.
@@ -175,12 +175,12 @@ class BootGateTest : FunSpec({
 
             withClue("equal KEYS: the diff must see one unchanged fault, not a new one") {
                 legacyRefusal.key shouldBe explicitRefusal.key
-                legacyRefusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.MAIN))
+                legacyRefusal.key shouldBe (BootRefusal.Kind.ROOT_VS_DATA_DIR to setOf(RootName.PRIMARY))
             }
             withClue("DIFFERENT prose: this is what proves a message diff would have called it new") {
                 legacyRefusal.message shouldNotBe explicitRefusal.message
                 legacyRefusal.message shouldContain "DATA_DIR and CONTENT_DIR"
-                explicitRefusal.message shouldContain "roots.main and DATA_DIR"
+                explicitRefusal.message shouldContain "roots.docs and DATA_DIR"
             }
         } finally {
             Files.walk(data).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
@@ -190,7 +190,7 @@ class BootGateTest : FunSpec({
     test("T-GATE-3b: a READABLE-BUT-NOT-SEARCHABLE main keys the same across the arm switch, in BOTH arms") {
         // The other half of T-GATE-3b, and the half that was WRONG: equal KINDS are only equal KEYS if both arms
         // raise the fault on the same CONDITION. The legacy arm probed `isDirectory` alone, so a main with no
-        // search bit was silently fine there and MAIN_UNUSABLE in the explicit matrix - and `root add` on a
+        // search bit was silently fine there and PRIMARY_UNUSABLE in the explicit matrix - and `root add` on a
         // synthesized-main install then saw a key its baseline structurally could not produce, called the
         // operator's own broken permissions a fault IT had introduced, and refused an add that introduced nothing.
         val data = Files.createTempDirectory("pb-gate-perm-data")
@@ -208,16 +208,16 @@ class BootGateTest : FunSpec({
             )
             val explicit = PlainbaseConfig.fromEnvAndFile(env)
 
-            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
-            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.MAIN_UNUSABLE }
+            val legacyRefusal = legacy.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
+            val explicitRefusal = explicit.bootRefusals().single { it.kind == BootRefusal.Kind.PRIMARY_UNUSABLE }
 
             withClue("equal KEYS: one unchanged fault, so `root add` warns and proceeds instead of taking a hostage") {
                 legacyRefusal.key shouldBe explicitRefusal.key
-                legacyRefusal.key shouldBe (BootRefusal.Kind.MAIN_UNUSABLE to setOf(RootName.MAIN))
+                legacyRefusal.key shouldBe (BootRefusal.Kind.PRIMARY_UNUSABLE to setOf(RootName.PRIMARY))
             }
             withClue("DIFFERENT prose: each arm still names the key the operator actually wrote") {
                 legacyRefusal.message shouldContain "CONTENT_DIR is not readable/searchable"
-                explicitRefusal.message shouldContain "roots.main.path is not readable/searchable"
+                explicitRefusal.message shouldContain "roots.docs.path is not readable/searchable"
             }
         } finally {
             Files.setPosixFilePermissions(content, PosixFilePermissions.fromString("rwxr-xr-x"))
