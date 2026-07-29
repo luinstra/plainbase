@@ -521,16 +521,18 @@ export function NewPage({ root }: { root?: string }) {
   const targetRoot = root ?? primaryEntry(tree.data?.roots ?? [])?.root;
 
   const create = useMutation({
-    mutationFn: () =>
-      createPage({
-        root: targetRoot!,
+    mutationFn: () => {
+      if (targetRoot === undefined) throw new Error("Cannot create a page before the target root is known");
+      return createPage({
+        root: targetRoot,
         folder: folderPath || undefined,
         title: title.trim(),
         // Section forces `index`; else forward the user's slug VERBATIM (case-preserving — the server is the
         // slug authority and slugifies it). Blank → undefined → the server slugifies the title.
         slug: section ? "index" : slug.trim() || undefined,
         body: body || undefined,
-      }),
+      });
+    },
     onSuccess: (result) => {
       if (result.kind === "created") {
         invalidateAfterWrite(queryClient, { id: result.created.id, url: result.created.url });

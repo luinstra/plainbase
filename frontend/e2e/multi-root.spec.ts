@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoReload, expectReloaded, plantNoReloadMarker } from "./helpers";
+import { expectNoReload, expectReloaded, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
 
 /**
  * The two-root SPA, against a real two-root server (playwright.config.ts `multi-root` project:
@@ -29,8 +29,7 @@ const MIN_MAIN_WIDTH = 900;
 const LOSER = "01970000-0000-7000-8000-00000000f003";
 
 test("one sidebar, one section per root: <main> keeps its width", async ({ page }) => {
-  const response = await page.goto("/docs/welcome");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   await expect(page.locator("aside[data-pb-sidebar]")).toHaveCount(1);
@@ -149,8 +148,7 @@ test("the same id in two roots resolves to ITS OWN root across a client-side nav
   // here, because a full document load discards the react-query cache and the row would pass with the
   // root dropped from the key: vacuous. The no-reload marker is the positive evidence the hop stayed
   // client-side rather than the hope that it did.
-  const response = await page.goto(`/p/docs/${LOSER}`);
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, `/p/docs/${LOSER}`);
   await expect(page.locator(".pb-prose h1")).toContainText("Shadowed Loser");
   await expect(page.locator("[data-pb-breadcrumbs] li").first()).toContainText("docs");
 
@@ -168,12 +166,10 @@ test("an ordinary root-qualified view of a duplicated id renders in BOTH roots",
   // `?root=` on the REQUEST, which the server answers 409 on a duplicated id, so a cold cache
   // strengthens it. The hub page (id ...f001) is duplicated across both roots exactly like the loser,
   // and it is addressed here by its hardcoded PATH, which 404s if the fixture is not mounted.
-  const docsResponse = await page.goto("/docs/permalink/hub");
-  expect(docsResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/permalink/hub");
   await expect(page.locator(".pb-prose h1")).toContainText("Permalink Hub");
 
-  const extraResponse = await page.goto("/extra/permalink/hub");
-  expect(extraResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, "/extra/permalink/hub");
   await expect(page.locator(".pb-prose h1")).toContainText("Permalink Hub");
   await expect(page).toHaveURL("/extra/permalink/hub");
   await expect(page.locator("[data-pb-edit-page]")).toHaveAttribute("href", "/extra/permalink/hub?mode=edit");

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AUTH_PORT } from "../playwright.config";
+import { gotoExpectStatus } from "./helpers";
 
 /**
  * P4 review-queue E2E against the REAL server in ENFORCED builtin mode (the ci-runs-auth-off-blind lesson).
@@ -48,13 +49,11 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
   const changeA = ((await proposeA.json()) as { id: string }).id;
 
   // 3. As the reviewer (browser): the queue lists the pending change; open it, see the diff, approve.
-  const reviewResponse = await page.goto("/review");
-  expect(reviewResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, "/review");
   await expect(page.locator("[data-pb-review-nav]")).toBeVisible(); // the session-gated chrome link
   await expect(page.locator(`[data-pb-review-row]`).first()).toBeVisible();
 
-  const detailResponseA = await page.goto(`/review/${changeA}`);
-  expect(detailResponseA?.status()).toBe(200);
+  await gotoExpectStatus(page, `/review/${changeA}`);
   await expect(page.locator("[data-pb-diff]")).toBeVisible();
   await expect(page.locator("[data-pb-review-rationale]")).toContainText("tighten the guide");
   const approve = page.locator("[data-pb-review-approve]");
@@ -82,8 +81,7 @@ test("agent proposes → reviewer approves → applied; a drifted proposal block
   });
   expect(drift.ok()).toBe(true);
 
-  const detailResponseB = await page.goto(`/review/${changeB}`);
-  expect(detailResponseB?.status()).toBe(200);
+  await gotoExpectStatus(page, `/review/${changeB}`);
   await expect(page.locator("[data-pb-review-drift-banner]")).toBeVisible();
   await expect(page.locator("[data-pb-review-approve]")).toBeDisabled();
 });

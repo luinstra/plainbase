@@ -180,6 +180,15 @@ function renderAt(initialPath: string, prime: (qc: QueryClient) => void) {
 }
 
 describe("routing flows", () => {
+  it.each(["/new/", "/admin/", "/review/"])("renders NotFound for the server-rejected trailing-slash spelling %s", async (path) => {
+    const { view } = renderAt(path, () => {});
+
+    await waitFor(() => expect(view.container.querySelector("[data-pb-not-found]")).not.toBeNull());
+    expect(view.container.querySelector("[data-pb-new-page-form]")).toBeNull();
+    expect(view.container.querySelector("[data-pb-admin]")).toBeNull();
+    expect(view.container.querySelector("[data-pb-review-queue]")).toBeNull();
+  });
+
   it("redirects / to /docs and renders the root folder landing", async () => {
     const { history, view } = renderAt("/", () => {});
 

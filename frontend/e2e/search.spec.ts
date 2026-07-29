@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { gotoExpectStatus } from "./helpers";
 
 /**
  * Chunk-S7 search-UI acceptance flow against the real server (CIO + embedded SPA + FTS5)
@@ -151,8 +152,7 @@ test("a deep link to a missing fragment lands at top with no error", async ({ pa
     errors.push(msg.text());
   });
   await page.setViewportSize({ width: 1280, height: 380 });
-  const response = await page.goto("/docs/guides/deploy-guide#does-not-exist");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/guides/deploy-guide#does-not-exist");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   expect(errors).toEqual([]);

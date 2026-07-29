@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoReload, plantNoReloadMarker } from "./helpers";
+import { expectNoReload, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
 
 /**
  * Chunk-7 acceptance smoke flow, driven against the real server (CIO + embedded SPA)
@@ -7,8 +7,7 @@ import { expectNoReload, plantNoReloadMarker } from "./helpers";
  */
 
 test("sidebar links are root-qualified URLs from the tree; clicking navigates without reload", async ({ page }) => {
-  const response = await page.goto("/docs/welcome");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   const sidebar = page.locator(".pb-sidebar");
@@ -42,8 +41,7 @@ test("internal links inside server-rendered HTML navigate via the SPA router", a
 // first NON-redirect response, so this row can only observe where the browser LANDS.
 test("an alias URL follows through to the canonical /docs page and its content", async ({ page }) => {
   // guides/deploy-guide.md declares redirect_from: [/old/deployment.md]
-  const response = await page.goto("/docs/old/deployment");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/old/deployment");
   await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 });
@@ -55,22 +53,19 @@ test("the alias URL answers 301 with the canonical Location", async ({ request }
 });
 
 test("a primary /docs URL serves content after the URL flip", async ({ page }) => {
-  const response = await page.goto("/docs/guides/deploy-guide");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 });
 
 test("a missing page beneath a registered root answers 200 and renders the SPA NotFound view", async ({ page }) => {
-  const response = await page.goto("/docs/nope/never-existed");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/nope/never-existed");
   await expect(page.locator("[data-pb-not-found]")).toBeVisible();
   await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
   await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
 });
 
 test("an UNKNOWN ROOT returns HTTP 404 with the SPA shell and NotFound view", async ({ page, request }) => {
-  const response = await page.goto("/nope/guides/deploy-guide");
-  expect(response?.status()).toBe(404);
+  await gotoExpectStatus(page, "/nope/guides/deploy-guide", 404);
   await expect(page.locator("[data-pb-not-found]")).toBeVisible();
   await expect(page.locator("[data-pb-not-found]")).toContainText("Page not found");
   await expect(page.locator("[data-pb-folder]")).toHaveCount(0);
@@ -81,6 +76,16 @@ test("an UNKNOWN ROOT returns HTTP 404 with the SPA shell and NotFound view", as
   // An alias is registered under a root, so an unknown-root alias reaches no alias registry either.
   const alias = await request.get("/nope/old/deployment", { maxRedirects: 0 });
   expect(alias.status()).toBe(404);
+});
+
+test("trailing-slash SPA routes keep the server's 404 verdict after hydration", async ({ page }) => {
+  for (const path of ["/new/", "/admin/", "/review/"]) {
+    await gotoExpectStatus(page, path, 404);
+    await expect(page.locator("[data-pb-not-found]"), path).toBeVisible();
+    await expect(page.locator("[data-pb-new-page-form]"), path).toHaveCount(0);
+    await expect(page.locator("[data-pb-admin]"), path).toHaveCount(0);
+    await expect(page.locator("[data-pb-review-queue]"), path).toHaveCount(0);
+  }
 });
 
 test("a bare permalink answers 302 with the canonical Location", async ({ request }) => {
@@ -102,19 +107,16 @@ test("a bare /p/{id} permalink follows through to the canonical page (stale slug
   expect(byPath.ok()).toBe(true);
   const { id } = (await byPath.json()) as { id: string };
 
-  const canonicalResponse = await page.goto(`/p/${id}`);
-  expect(canonicalResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, `/p/${id}`);
   await expect(page).toHaveURL("/docs/guides/deploy-guide");
   await expect(page.locator(".pb-prose h1")).toContainText("Deploy Guide");
 
-  const staleSlugResponse = await page.goto(`/p/${id}/some-stale-slug`);
-  expect(staleSlugResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, `/p/${id}/some-stale-slug`);
   await expect(page).toHaveURL("/docs/guides/deploy-guide");
 });
 
 test("the bare /docs/ URL answers 200 and renders the primary root folder landing", async ({ page }) => {
-  const response = await page.goto("/docs/");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/");
   // demo-docs has an authored root index, so its folder landing is PageContent rather than the generated
   // listing. The reading rail and the landing page heading are the positive markers for that branch.
   await expect(page.locator("[data-pb-rail]")).toBeVisible();
@@ -126,8 +128,7 @@ test("the bare /docs/ URL answers 200 and renders the primary root folder landin
 test("a folder URL renders the generated landing view; breadcrumbs link back to it", async ({ page }) => {
   // fixtures/demo-docs has no README/index children inside folders, so smoke exercises
   // the listing fallback; the README-preference path is covered by the unit suite.
-  const folderResponse = await page.goto("/docs/guides");
-  expect(folderResponse?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/guides");
   const listing = page.locator("[data-pb-folder]");
   await expect(listing).toBeVisible();
   await expect(listing.locator("h1")).toHaveText("Guides"); // _folder.yaml title
@@ -170,8 +171,7 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
   const dir = `runbooks-${stamp}`;
   const sectionTitle = `Runbooks ${stamp}`;
 
-  const response = await page.goto("/new");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/new");
   await expect(page.locator("[data-pb-new-page-form]")).toBeVisible();
   await page.locator("[data-pb-new-section]").check();
   await page.locator("[data-pb-new-folder]").fill(dir);
@@ -192,8 +192,7 @@ test("the new-section affordance creates <dir>/index.md and the folder landing r
 
 test("a deep link with #fragment scrolls to the anchor", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 380 });
-  const response = await page.goto("/docs/guides/deploy-guide#rollback");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/guides/deploy-guide#rollback");
   const heading = page.locator("#rollback");
   await expect(heading).toBeInViewport();
   expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
@@ -216,15 +215,13 @@ test("dark-mode toggle swaps data-theme, restyles via tokens, and persists", asy
 });
 
 test("code blocks are highlighted client-side", async ({ page }) => {
-  const response = await page.goto("/docs/infra/terraform");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/infra/terraform");
   const code = page.locator('.pb-prose pre code[class*="language-"]');
   await expect(code).toHaveClass(/hljs/);
 });
 
 test("broken links carry the server marker and the broken-link token color", async ({ page }) => {
-  const response = await page.goto("/docs/notes/broken-links");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/notes/broken-links");
   const broken = page.locator('[data-pb-link-error="broken_missing"]').first();
   await expect(broken).toBeVisible();
   const [brokenColor, liveColor] = await page.evaluate(() => {
@@ -236,8 +233,7 @@ test("broken links carry the server marker and the broken-link token color", asy
 });
 
 test("the root path lands on the root folder landing at /docs", async ({ page }) => {
-  const response = await page.goto("/");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/");
   await expect(page).toHaveURL("/docs");
   // demo-docs has BOTH index.md and README.md at the root — index wins, so the root
   // landing renders the welcome page's content at /docs (the listing branch is unit-covered).

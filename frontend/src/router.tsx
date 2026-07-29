@@ -4,6 +4,7 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  notFound,
   redirect,
   useRouterState,
   type RouterHistory,
@@ -50,7 +51,7 @@ const indexRoute = createRoute({
     const tree = await context.queryClient.ensureQueryData(treeQuery);
     const primary = primaryEntry(tree.roots);
     if (!primary?.tree.url) throw new Error("The primary root has no server-issued URL");
-    throw redirect({ to: primary.tree.url as never, replace: true });
+    throw redirect({ href: primary.tree.url, replace: true });
   },
 });
 
@@ -117,6 +118,7 @@ const newRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
   component: NewSplat,
+  beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
   // A non-string `root` coerces to undefined. An unknown name is not decided here: the server owns the registry
   // and answers 400 `invalid_root`, so the client never guesses.
   validateSearch: (search: Record<string, unknown>): NewSearch =>
@@ -133,23 +135,31 @@ const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
   component: Admin,
+  beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 const reviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review",
   component: ReviewQueue,
+  beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 const reviewDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/review/$id",
   component: ReviewDetailSplat,
+  beforeLoad: ({ location }) => rejectTrailingSlash(location.pathname),
 });
 
 function ReviewDetailSplat() {
   const { id } = reviewDetailRoute.useParams();
   return <ReviewDetail id={id} />;
+}
+
+/** The server deliberately rejects trailing-slash spellings of exact SPA routes with a 404 shell. */
+function rejectTrailingSlash(pathname: string): void {
+  if (pathname.endsWith("/")) throw notFound();
 }
 
 const permalinkRoute = createRoute({

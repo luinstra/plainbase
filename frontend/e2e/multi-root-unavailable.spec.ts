@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { gotoExpectStatus } from "./helpers";
 
 /**
  * A configured root that is NOT SERVING, against a real server booted with its second root's tree
@@ -11,8 +12,7 @@ import { expect, test } from "@playwright/test";
  * test is that the SPA says so. An empty list would tell the reader their docs are gone.
  */
 test("the unavailable root's section shows the outage notice, and docs still browses", async ({ page }) => {
-  const response = await page.goto("/docs/welcome");
-  expect(response?.status()).toBe(200);
+  await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   // Still ONE aside with both roots' sections: a down root is LISTED, never dropped — so the reader

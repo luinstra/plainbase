@@ -22,8 +22,8 @@ export function Breadcrumbs({ root, path, title }: { root: string; path: string;
   const folders = entryTree ? foldersByPath(entryTree) : new Map<string, TreeFolder>();
 
   const segments = path.split("/").slice(0, -1);
-  // The crumb names THIS page's root and links to that root's own server-issued URL. A hardcoded `/docs`
-  // crumb would name the wrong tree and walk an extra-root reader into the primary tree.
+  // The crumb names THIS page's root and links to that root's own server-issued URL. A hardcoded primary-root
+  // address would name the wrong tree and walk an extra-root reader into the primary tree.
   const rootCrumb = { key: `root:${root}`, label: root, url: entry?.tree.url ?? null };
   const ancestors = segments.map((name, i) => {
     const folderPath = segments.slice(0, i + 1).join("/");
