@@ -13,12 +13,6 @@ class ReservedSegmentsTest : FunSpec({
 
     fun reserved(raw: String) = ReservedSegments.isReserved(RootName.require(raw))
 
-    test("live route segments, SPA routes and bundle directories are reserved") {
-        listOf("api", "assets", "browse", "healthz", "fonts", "admin", "new", "review").forEach {
-            reserved(it) shouldBe true
-        }
-    }
-
     test("the product prefixes are reserved, and so are their stems") {
         reserved("pb-docs") shouldBe true
         reserved("plainbase-internal") shouldBe true

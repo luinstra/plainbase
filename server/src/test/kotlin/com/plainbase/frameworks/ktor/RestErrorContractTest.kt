@@ -74,7 +74,7 @@ class RestErrorContractTest : FunSpec({
                 // is a 400 here too — pinned deliberately (200 + shell is unreachable).
                 expectInvalidPath("/docs/%GG")
             } finally {
-                server.stop()
+                server.stopSuspend()
             }
         }
     }
@@ -98,10 +98,11 @@ class RestErrorContractTest : FunSpec({
         }
     }
 
-    test("a CANCELLED call still answers the frozen envelope, never Ktor's stack-trace page") {
-        // The real shape is an SSE client (the in-binary MCP transport) hanging up, which cancels the
-        // serving coroutine and reaches the `exception<Throwable>` catch-all. A route that throws is
-        // the honest stand-in: the catch-all is the code under test, not CIO.
+    test("a thrown CancellationException is classified by the frozen-envelope catch-all") {
+        // Throwing from a handler leaves the call's Job active, so this proves only that the
+        // `exception<Throwable>` catch-all classifies CancellationException and answers the frozen envelope.
+        // UNGATED: a real CIO/SSE socket disconnect cancels the call's Job itself, so the response write is
+        // cancelled too and there is no client left to receive it. A real-socket row would add flake, not proof.
         //
         // This pins the TRAP: treating cancellation as "control flow, so answer NOTHING" looks right
         // and is worse, because a StatusPages handler that writes no response hands the call to Ktor's

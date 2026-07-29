@@ -62,6 +62,11 @@ class RootUrlGrammarTest : FunSpec({
             client.get("/docs/guides/deploy-guide").status shouldBe HttpStatusCode.OK
             client.get("/docs").status shouldBe HttpStatusCode.OK // the SPA's root landing view
             client.get("/docs/no/such/page").status shouldBe HttpStatusCode.OK // SPA owns not-found
+
+            val formerGrammar = client.get("/docs/main/guides/deploy-guide")
+            formerGrammar.status shouldBe HttpStatusCode.OK
+            formerGrammar.headers[HttpHeaders.Location] shouldBe null
+
             // The TRAILING SLASH resolves to the same landing view, which is what makes B8 a real back-out:
             // without this row, deleting `removeSuffix("/")` at RootContentRoute.kt's tail strip has no
             // falsifier anywhere, because every other address here is slash-free. The strip lives on the

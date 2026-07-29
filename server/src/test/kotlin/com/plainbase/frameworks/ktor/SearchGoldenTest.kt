@@ -132,7 +132,7 @@ class SearchGoldenTest : FunSpec({
                 val body = response.substringAfter("\r\n\r\n")
                 Json.parseToJsonElement(body) shouldBe RestGolden.load("error-invalid-query-encoding.json")
             } finally {
-                server.stop()
+                server.stopSuspend()
             }
         }
     }
