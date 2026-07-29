@@ -14,19 +14,35 @@ import kotlin.concurrent.getOrSet
  * SQLDelight 2.3.2's JDBC SQLite driver with its connection manager forked to issue `BEGIN IMMEDIATE`.
  *
  * This is a pinned copy of SQLDelight's `JdbcSqliteDriver`. Compare the connection managers with the upstream
- * `JdbcSqliteDriver` whenever the SQLDelight dependency is bumped. `BEGIN IMMEDIATE` uses the xerial default 3000 ms
- * busy-handler budget; the explicit app-DB pin guards that default against a future dependency bump. Unlike the stock
- * driver's deferred read-to-write promotion, which returns SQLITE_BUSY without waiting, it acquires the write lock at
- * BEGIN. It also serializes read-only transactions, including transactions that do not reach a write statement.
+ * `JdbcSqliteDriver` whenever the SQLDelight dependency is bumped; nothing automated detects that drift. Unlike the
+ * stock driver's deferred read-to-write promotion, which returns SQLITE_BUSY WITHOUT waiting, this acquires the write
+ * lock at BEGIN, so the xerial 3000 ms busy-handler budget is actually consulted. `DatabaseFactory` also sets that
+ * value explicitly; note that the pin is value-identical to xerial's own default, so NO test distinguishes the pinned
+ * value from the default and removing the pin would go unnoticed until a bump changed it.
  *
- * The `beginTransaction()` hook is the ONE deliberate divergence from upstream: SQLDelight installs its
- * `Transaction` before invoking the connection hook, so this fork clears the manager's installed transaction when
- * `BEGIN IMMEDIATE` fails and rethrows. This retains the upstream guards and connection-closing setter.
+ * `beginTransaction()` is the ONE deliberate divergence from upstream; its own KDoc carries the reason and the invariant.
  *
- * With `BEGIN IMMEDIATE`, the write lock is held from BEGIN. Checkpoint replacement deletes and inserts every page in
- * one transaction, and retirement proof application applies a proof batch in one transaction; both are known
- * corpus-scaled holders whose lock duration is not measured here. New app-DB transactions should remain bounded. No
- * expensive non-DB work such as Argon2-class password hashing, blocking crypto, IO, or network calls may sit inside
+ * WHAT HOLDING THE LOCK FROM BEGIN COSTS, enumerated rather than exemplified, because the affected sets are small
+ * enough to name and a reader needs to know whether their site is in one:
+ *
+ * Holds that got LONGER (a read prefix now runs under the write lock): `RootTopologyRepository.observeBinding`'s
+ * change and first-sight branch, which scans all bindings before its first write and is the one genuinely lengthened
+ * hold; `IdMapRepository.bind`, three point reads; `RetirementRepository.applyProofs`, point reads before a batch that
+ * dominates either way. Separately, `bind` runs inside the pipeline's `@Synchronized create`, so a contended bind now
+ * holds THAT monitor for up to the busy budget instead of failing instantly, stalling other creates and edits behind it.
+ *
+ * Transactions NEWLY exposed to SQLITE_BUSY (they never reach a write, so they previously took only SHARED and
+ * coexisted with a RESERVED holder): `bind`'s two `Refused` early returns, `observeBinding`'s unchanged-binding return,
+ * `RetirementRepository.observation()` in steady state, `UrlAliasRepository.dropShadowed` when nothing is shadowed, and
+ * `LoginService`'s failure early-returns. Splitting these back to DEFERRED is NOT the fix: read-then-maybe-write cannot
+ * know at BEGIN that the write is unreachable, and doing so would re-open the skipped-busy-handler hole the moment
+ * anyone added a write.
+ *
+ * UNBOUNDED, and tracked separately: checkpoint replacement deletes and re-inserts every page in one transaction, and
+ * retirement applies a whole proof batch in another. Their duration scales with corpus size and is NOT measured here.
+ * New app-DB transactions should stay bounded.
+ *
+ * No expensive non-DB work such as Argon2-class password hashing, blocking crypto, IO, or network calls may sit inside
  * an app-DB transaction. Cheap per-call crypto needed for a transaction's DB result, such as session minting, is
  * permitted.
  */
@@ -101,17 +117,43 @@ private fun connectionManager(url: String, properties: Properties): ConnectionMa
 }
 
 private abstract class JdbcSqliteDriverConnectionManager : ConnectionManager {
+    /**
+     * THE FORK'S ONE DELIBERATE DIVERGENCE FROM UPSTREAM. Everything else in this file is a verbatim copy.
+     *
+     * Upstream's body is `autoCommit = false`, which cannot realistically throw. `BEGIN IMMEDIATE` CAN, because a
+     * contended write lock past the busy timeout is SQLITE_BUSY by design. That matters because
+     * `JdbcDriver.newTransaction()` installs the [Transaction] BEFORE calling this hook, and only wraps the transaction
+     * BODY in its own try/finally. So a throw out of here leaves an installed transaction that nothing will ever end:
+     * the next `newTransaction()` on this thread sees an enclosing transaction, skips BEGIN, and its `endTransaction`
+     * skips both END and ROLLBACK, silently discarding writes it reported as successful.
+     *
+     * TWO flags, because one cannot answer both questions. [began] is "did the real SQLite transaction open", which
+     * decides whether there is anything to roll back. [completed] is "did this function return normally", which decides
+     * whether to clean up at all. Collapsing them either strands an open transaction (when a throwing `close()` reads as
+     * a failed BEGIN) or orphans an installed one (when it reads as a live BEGIN). On any abnormal exit the invariant is
+     * BOTH: no installed transaction, and no open real transaction.
+     *
+     * The rollback must precede `transaction = null`, because [ThreadedConnectionManager]'s setter CLOSES the
+     * connection when nulled and a rollback after that cannot land. It is wrapped so a failing rollback cannot mask the
+     * original failure, and the `finally` covers every throwable rather than just SQLException.
+     *
+     * GATED: the SQLITE_BUSY path (a BEGIN that never opens) is pinned by the recovery row in
+     * `SqliteBusyBeginImmediateNativeTest`. UNGATED: the throwing-`close()`-after-a-successful-BEGIN path. There is no
+     * seam to inject it without giving the managers a connection factory, and that second structural divergence would
+     * cost more than it buys on a trigger xerial does not exhibit in practice. Stated rather than implied complete.
+     */
     override fun Connection.beginTransaction() {
         var began = false
+        var completed = false
         try {
-            // Flag inside `use`, not after it: a throw from the statement's own close() must NOT be read as a
-            // failed BEGIN, or the finally below would clear a transaction that is actually live.
             prepareStatement("BEGIN IMMEDIATE").use { statement ->
                 statement.execute()
                 began = true
             }
+            completed = true
         } finally {
-            if (!began) {
+            if (!completed) {
+                if (began) runCatching { rollbackTransaction() }
                 transaction = null
             }
         }

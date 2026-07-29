@@ -27,10 +27,16 @@ private const val SQLITE_BUSY_TIMEOUT_MS = 3_000L
 private const val SQLITE_BUSY_BINDER_THREAD_NAME = "sqlite-busy-binder"
 
 /**
- * Native companion to [SqliteBusyBeginImmediateTest]. It keeps the xerial JDBC/JNI falsifier in the native gate as
- * well as the JVM suite, while remaining a file-backed, two-thread test wired through [DatabaseFactory.createDriver].
- * The JVM and native harnesses are intentional copies; changes to contention barriers or assertions must be made
- * together.
+ * THE PRIMARY falsifier for the SQLITE_BUSY promotion, holding both positive rows: a file-backed bind waiting out a
+ * real writer, and a failed BEGIN leaving the same thread's next transaction clean.
+ *
+ * It lives in `nativeTest` rather than `src/test` because this is the xerial JDBC/JNI seam, and because that source set
+ * is folded into the JVM `test` task (see server/build.gradle.kts), so these rows run on the JVM AND in the native
+ * image. That fold is what makes a single copy sufficient; the JVM duplicates were deleted rather than kept in step.
+ *
+ * `SqliteBusyBeginImmediateTest` holds only the differential STOCK-driver control, which cannot live here: the stock
+ * driver is `testImplementation` and is deliberately off the native classpath. The two harnesses are independent by
+ * construction (this source set must stay free of Kotest and MockK), NOT copies to synchronize.
  */
 @Tag("native")
 class SqliteBusyBeginImmediateNativeTest {

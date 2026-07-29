@@ -37,7 +37,9 @@ private const val SQLITE_BUSY_BINDER_THREAD_NAME = "sqlite-busy-binder"
  * `testImplementation` only and is deliberately absent from the native classpath, which is what keeps
  * `JdbcSqliteDriver` unreachable from main source.
  *
- * [runRace] is kept identical to the native companion's copy; change the two together.
+ * The native companion inlines its own harness rather than sharing this one; the two source sets cannot see each other
+ * (`nativeTest` must stay free of Kotest and MockK), so they are independent by construction, not copies to keep in
+ * step.
  */
 class SqliteBusyBeginImmediateTest : FunSpec({
 
@@ -60,7 +62,6 @@ private data class RaceResult(
     val holderFailure: Throwable?,
     val bindFailure: Throwable?,
     val bindOutcome: BindOutcome?,
-    val binderAliveBeforeRelease: Boolean,
     val binderBeginReturnedBeforeRelease: Boolean,
 )
 
@@ -82,7 +83,7 @@ private class TransactionStartSignalDriver(
 }
 
 private fun runRace(
-    waitForBindFailureBeforeRelease: Boolean = false,
+    waitForBindFailureBeforeRelease: Boolean,
     driverFactory: (Path) -> SqlDriver,
 ): RaceResult {
     val directory = Files.createTempDirectory("pb-sqlite-busy")
@@ -145,7 +146,6 @@ private fun runRace(
                 if (waitForBindFailureBeforeRelease) {
                     check(bindDone.await(10, TimeUnit.SECONDS)) { "stock binder did not finish while the holder was held" }
                 }
-                val binderAliveBeforeRelease = runningBinder.isAlive
                 releaseHolder.countDown()
                 check(binderBeginReturned.await(10, TimeUnit.SECONDS)) {
                     "binder did not return from BEGIN after holder release"
@@ -160,7 +160,6 @@ private fun runRace(
                     holderFailure.get(),
                     bindFailure.get(),
                     bindOutcome.get(),
-                    binderAliveBeforeRelease,
                     binderBeginReturnedBeforeRelease,
                 )
             } finally {

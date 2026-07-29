@@ -96,6 +96,12 @@ object DatabaseFactory {
      * cannot corrupt anything, and `adopt --dry-run`'s nothing-was-written promise is exactly what
      * this method exists for. The forward-only refusal is [migrate]'s job (the WRITABLE path), not
      * this one's.
+     *
+     * Because this routes through [BeginImmediateSqliteDriver] like the writable factories do (so tests exercise the
+     * begin statement the binary ships), any TRANSACTION opened on it issues `BEGIN IMMEDIATE`. A read-only open defers
+     * the write-lock failure to the first write, so a pure-read transaction still succeeds, but callers here should keep
+     * to bare statements: today nothing transactional reaches this driver, and a future transactional read would be the
+     * first thing to test against `adopt --dry-run`.
      */
     fun createReadOnlyDriver(path: Path): SqlDriver {
         if (Files.notExists(path)) return createInMemoryDriver()

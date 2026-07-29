@@ -53,7 +53,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * down, or for a scripted operational reindex.
  *
  * **It refuses to run while a server is up.** The two would be separate JVM processes with separate
- * write monitors, and while SQLite WAL + `busy_timeout` prevent corruption they do NOT prevent the
+ * write monitors, and while SQLite's own locking prevents corruption it does NOT prevent the
  * CLI silently publishing an OLDER generation over the server's newer one (a freshness regression,
  * the cross-process twin of the in-process stale-snapshot defect). So it acquires the DATA_DIR
  * advisory lock ([DataDirLock]) FIRST and exits 1 if a server holds it.
