@@ -278,9 +278,9 @@ class GitAbsenceConvergenceTest : FunSpec({
                 git.deleted = setOf(rollback)
                 // The root VANISHES after the scan fixed this pass's evidence, and is restored before the apply. Neither
                 // stamp can see that: a bindless restore moves no binding_epoch, and publishing an availability mark
-                // deliberately does not revoke (a revoke is a transaction, and the loss paths run on request and write
-                // threads where a second BEGIN on the shared driver is a 500). The MARK is the evidence, so the apply
-                // reads it as late as it can and refuses to cash a proof about a tree it has lost standing on.
+                // deliberately does not revoke. The late unavailableNow read inside apply is the safety gate: the MARK
+                // is evidence that can land after the scan, so apply reads it as late as it can and refuses to cash a
+                // proof about a tree it has lost standing on.
                 val vanishing = MarkUnavailableAtScanEnd(LocalContentStore(extraDir)) {
                     world.availability.markUnavailable(extra, UnavailableCause.VANISHED)
                 }

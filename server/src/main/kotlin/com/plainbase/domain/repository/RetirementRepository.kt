@@ -82,9 +82,11 @@ interface RetirementRepository {
      * that has been marked unavailable has a HOLE in what we know about it - it vanished, its watcher died, or a probe
      * could not traverse it - and evidence gathered before that hole cannot be cashed after it. The dangerous shape is
      * vanish-and-RESTORE inside one pass: the tree comes back with the page on it, a bindless restore moves no
-     * [BindingEpoch], and a mark moves no [ObservationId] (`RootAvailability.markUnavailable` publishes the mark and
-     * nothing else - deliberately, because a revoke is a transaction and the loss paths run on request and write
-     * threads, where a second BEGIN on the shared driver is a 500). So neither stamp catches it, and this does.
+     * [BindingEpoch], and a mark moves no [ObservationId]. `RootAvailability.markUnavailable` publishes only the mark,
+     * deliberately: a revoke transaction on this loss path would take the BEGIN IMMEDIATE write lock in front of
+     * request and write threads and burn the busy budget, so safety stays in the late [unavailableNow] function read
+     * inside the apply transaction. A mark can land after evidence is gathered, and that read must refuse the inferred
+     * proof even though neither durable stamp moved, which is exactly why the read exists.
      * Asked here, at the door of the only deleter, for the same reason as the witness: a caller that cannot say which
      * roots it still has standing on must not be able to retire anything.
      *

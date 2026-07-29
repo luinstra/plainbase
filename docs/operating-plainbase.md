@@ -102,9 +102,9 @@ content root - matching the running server for the same `DATA_DIR`. A file-confi
 block likewise makes them operate on `roots.docs.path`, not an ignored `CONTENT_DIR`.
 
 **Do not run `plainbase reindex` against a live server** - use the endpoint instead. The CLI and a
-running server are separate processes with separate write monitors; while SQLite WAL +
-`busy_timeout` prevent *corruption*, they do not prevent the CLI silently publishing an *older*
-generation over the server's newer one (a freshness regression). To make this safe, both the server
+running server are separate processes with separate write monitors; while SQLite's own locking
+prevents *corruption*, it does not prevent the CLI silently publishing an *older* generation over the
+server's newer one (a freshness regression). To make this safe, both the server
 and the CLI take an advisory lock on `DATA_DIR/plainbase.lock`: the server holds it for its lifetime,
 and the CLI **refuses to run while a server holds it**, exiting with:
 
@@ -113,6 +113,13 @@ reindex: a Plainbase server is holding /abs/path/to/data - stop it, or use POST 
 ```
 
 Exit codes: `0` success, `1` runtime failure (including the lock refusal), `2` usage error.
+
+**If a write fails with `database is locked`:** every app DB (`DATA_DIR/plainbase.db`) transaction
+takes SQLite's write lock the moment it opens, so concurrent writers queue rather than interleave. The
+driver waits up to `busy_timeout=3000` ms before giving up, and a publication that rewrites every page
+holds the lock for as long as it runs. Retry the operation; if it keeps failing, a reindex or a large
+publication is probably still in flight. The app DB is **not** WAL - only the derived `search.db` is,
+and it pins its own busy timeout separately.
 
 ## `search.db` is derived state
 

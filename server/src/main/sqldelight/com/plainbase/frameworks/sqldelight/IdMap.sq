@@ -215,13 +215,14 @@ SELECT *
 FROM retired_binding
 WHERE id = :id;
 
--- C5: BOTH claimant lists for an id in ONE statement, so claimantState reads them WITHOUT a transaction. The app DB is
--- one shared non-thread-safe JdbcSqliteDriver (a statement per read), and a BEGIN on that connection races a concurrent
--- bare resolve's BEGIN into "cannot start a transaction within a transaction". A single SQLite SELECT is already a
--- consistent cross-table snapshot, so this keeps the torn-read atomicity the wrapping transaction gave WITHOUT the
--- BEGIN. The typed retired_binding SELECT leads so the shared columns inherit its path/id/materialized/retired_at
--- adapters; the live SELECT carries NULLs there. kind: 1 = a retired tombstone (its columns non-null), 0 = a live
--- claimant (root only). Index-served both sides (retired_binding_id; the id-leading UNIQUE(id, root)).
+-- C5: BOTH claimant lists for an id in ONE statement, so claimantState reads them WITHOUT a transaction. Because BEGIN
+-- IMMEDIATE takes the app DB write lock at transaction start, wrapping this read would put that global lock in front of
+-- every bare-id read and consume the busy budget. The file-backed driver uses one connection per thread for transaction
+-- scope. A single SQLite SELECT is already a consistent cross-table snapshot, so this keeps the torn-read atomicity the
+-- wrapping transaction gave WITHOUT the BEGIN. The
+-- typed retired_binding SELECT leads so the shared columns inherit its path/id/materialized/retired_at adapters; the
+-- live SELECT carries NULLs there. kind: 1 = a retired tombstone (its columns non-null), 0 = a live claimant (root
+-- only). Index-served both sides (retired_binding_id; the id-leading UNIQUE(id, root)).
 selectClaimantsById:
 SELECT 1 AS kind, root, path, id, materialized, retired_at
 FROM retired_binding

@@ -90,12 +90,12 @@ class RootAvailability(private val clock: Clock) {
      *
      * **A MARK IS FOREVER, AND SOMETHING ELSE'S SAFETY LEANS ON THAT. Read this before adding a way to CLEAR one.**
      *
-     * A mark does not revoke any freshness token - deliberately, because a revoke is a transaction and the loss paths
-     * run on request and write threads, where a second BEGIN on the shared driver is a 500. So the reaper compensates
-     * by refusing INFERRED proofs for a currently-marked root
-     * ([com.plainbase.domain.repository.RetirementRepository.applyProofs]'s `unavailableNow`), read INSIDE the apply
-     * transaction. That works only because marks are MONOTONIC and STICKY-until-restart: a late read is guaranteed to
-     * see every mark that landed since the pass began gathering evidence.
+     * A mark does not revoke any freshness token. A revoke transaction on this loss path would take the BEGIN IMMEDIATE
+     * write lock in front of request and write threads and burn the busy budget, so safety stays in the late read of
+     * [com.plainbase.domain.repository.RetirementRepository.applyProofs]'s `unavailableNow` inside its transaction.
+     * That late read catches a mark that lands after evidence is gathered even though neither freshness stamp moves. It
+     * works only because marks are MONOTONIC and STICKY-until-restart: a late read is guaranteed to see every mark that
+     * landed since the pass began gathering evidence.
      *
      * The moment a mark can be CLEARED - which "recoverable availability" is named as a plan in
      * [com.plainbase.domain.root.ObservationEpoch]'s `Unobserved` KDoc - a root that is lost and recovers WITHIN one

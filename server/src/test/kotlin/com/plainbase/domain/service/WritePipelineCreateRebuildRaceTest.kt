@@ -36,7 +36,9 @@ import kotlin.concurrent.thread
  *
  * Latches only — no `Thread.sleep`; every `await` asserts its boolean. The main thread orchestrates
  * and holds no lock, so the one-directional pipeline→IndexBuilder lock order (Resolution 5) stays
- * deadlock-free. JVM-only Kotest, the [WritePipelineConcurrencyTest] sibling idiom.
+ * deadlock-free. JVM-only Kotest, the [WritePipelineConcurrencyTest] sibling idiom. This pins snapshot
+ * staleness and convergence ONLY on the in-memory driver; SQLite lock contention is pinned by
+ * [com.plainbase.frameworks.sqldelight.SqliteBusyBeginImmediateTest].
  */
 class WritePipelineCreateRebuildRaceTest : FunSpec({
 
