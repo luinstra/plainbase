@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.principal.MintedSetupToken
 import com.plainbase.domain.principal.PasswordHasher
 import com.plainbase.domain.principal.Principal
 import com.plainbase.domain.principal.manageGrantForTests
@@ -17,9 +18,12 @@ import com.plainbase.domain.service.SessionService
 import com.plainbase.domain.service.SetupService
 import com.plainbase.domain.service.UuidV7IdProvider
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.mockk.every
 import io.mockk.mockk
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
 
 /**
@@ -63,5 +67,60 @@ class GuardedAdminFacadeTest : FunSpec({
 
         facade.createUser(Principal.Human("builtin", "admin"), "taken", displayName = null, role = Role.EDITOR)
             .shouldBeInstanceOf<CreateUserOutcome.UsernameExists>()
+    }
+
+    // Pins the hoist, not just the current line order. Under BeginImmediateSqliteDriver the write lock is taken at
+    // BEGIN, so an Argon2id hash (m=64 MiB, t=3) inside the transaction holds it for hundreds of milliseconds and eats
+    // the busy budget every other app-DB transaction waits on. Moving the hash back inside reds this row.
+    test("hashes the placeholder password OUTSIDE the create transaction, so the write lock is not held across argon2") {
+        val insideTransaction = AtomicBoolean(false)
+        val hashCalls = AtomicInteger(0)
+        val hashedInsideTransaction = AtomicBoolean(false)
+
+        val users = mockk<UserRepository>(relaxed = true) { every { findByUsername(any()) } returns null }
+        val roles = mockk<RoleRepository>(relaxed = true)
+        val policy = mockk<PolicyService> { every { checkManage(any()) } returns manageGrantForTests() }
+        val hasher = mockk<PasswordHasher> {
+            every { hash(any()) } answers {
+                hashCalls.incrementAndGet()
+                if (insideTransaction.get()) hashedInsideTransaction.set(true)
+                "\$argon2id\$x"
+            }
+        }
+        val setup = mockk<SetupService> {
+            every { mintResetToken(any()) } returns MintedSetupToken("reset-plaintext", ByteArray(0))
+        }
+        // Records whether control is inside the transaction rather than assuming the call order from the source.
+        val transactions = object : TransactionRunner {
+            override fun <T> inTransaction(block: () -> T): T {
+                insideTransaction.set(true)
+                return try {
+                    block()
+                } finally {
+                    insideTransaction.set(false)
+                }
+            }
+        }
+
+        val facade = GuardedAdminFacade(
+            policy = policy,
+            users = users,
+            roles = roles,
+            setup = setup,
+            sessions = mockk<SessionService>(relaxed = true),
+            passwordHasher = hasher,
+            idProvider = UuidV7IdProvider(),
+            transactions = transactions,
+            clock = Clock.System,
+            tokens = mockk<ApiTokenService>(relaxed = true),
+            audit = mockk<AuditRepository>(relaxed = true),
+        )
+
+        facade.createUser(Principal.Human("builtin", "admin"), "fresh", displayName = null, role = Role.EDITOR)
+            .shouldBeInstanceOf<CreateUserOutcome.Created>()
+
+        // Anti-vacuity: a hash that never ran would leave hashedInsideTransaction false and pass for the wrong reason.
+        hashCalls.get() shouldBe 1
+        hashedInsideTransaction.get() shouldBe false
     }
 })

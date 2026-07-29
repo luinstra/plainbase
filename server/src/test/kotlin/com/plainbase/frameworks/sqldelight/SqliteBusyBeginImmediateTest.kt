@@ -21,29 +21,25 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
-private const val SQLITE_BUSY_TIMEOUT_MS = 3_000L
 private const val SQLITE_BUSY_BINDER_THREAD_NAME = "sqlite-busy-binder"
 
 /**
- * The file-backed, two-thread falsifier for deferred transaction promotion.
+ * The STOCK-DRIVER CONTROL for the SQLITE_BUSY falsifier, and the only row of it that cannot live in `nativeTest`.
  *
- * Thread A reads, writes, and holds its transaction after acquiring SQLite's RESERVED lock. Thread B calls the real
- * repository through [DatabaseFactory.createDriver]. With the stock SQLDelight driver, B's deferred read-to-write
- * promotion returns SQLITE_BUSY immediately. With [BeginImmediateSqliteDriver], B waits for A and returns [BindOutcome.Bound].
- * The native companion intentionally mirrors this harness; changes to its contention barriers or assertions must be
- * made together.
+ * The positive rows (a file-backed bind waiting out a real writer, and a failed BEGIN leaving the thread's next
+ * transaction clean) live in `SqliteBusyBeginImmediateNativeTest`. That source set is folded into the JVM `test` task
+ * (see server/build.gradle.kts), so those rows ALREADY run on both the JVM and the native image; duplicating them here
+ * would buy nothing and add two harnesses to keep in step.
+ *
+ * This row is the differential half. The same race on the STOCK SQLDelight driver returns SQLITE_BUSY without waiting,
+ * because a deferred read-to-write promotion skips the busy handler. It proves the harness can OBSERVE the defect, so a
+ * green positive row is evidence rather than an assumption. It lives here because the stock driver is
+ * `testImplementation` only and is deliberately absent from the native classpath, which is what keeps
+ * `JdbcSqliteDriver` unreachable from main source.
+ *
+ * [runRace] is kept identical to the native companion's copy; change the two together.
  */
 class SqliteBusyBeginImmediateTest : FunSpec({
-
-    test("should wait for the holder when a file-backed bind races a real writer") {
-        val result = runRace(driverFactory = DatabaseFactory::createDriver)
-
-        result.holderFailure shouldBe null
-        result.bindFailure shouldBe null
-        result.bindOutcome shouldBe BindOutcome.Bound
-        result.binderAliveBeforeRelease shouldBe true
-        result.binderBeginReturnedBeforeRelease shouldBe false
-    }
 
     test("stock SQLDelight driver should report SQLITE_BUSY for the same race") {
         val result = runRace(waitForBindFailureBeforeRelease = true) { databasePath ->
@@ -58,16 +54,6 @@ class SqliteBusyBeginImmediateTest : FunSpec({
         result.bindOutcome shouldBe null
         result.binderBeginReturnedBeforeRelease shouldBe true
     }
-
-    test("clears a failed begin before the same thread's next transaction") {
-        val result = runBeginFailureRecovery(DatabaseFactory::createDriver)
-
-        result.holderFailure shouldBe null
-        val firstFailure = checkNotNull(result.firstFailure) { "the first transaction unexpectedly completed" }
-        firstFailure.message shouldContain SQLiteErrorCode.SQLITE_BUSY.toString()
-        result.secondFailure?.message shouldBe "rollback probe"
-        result.recoveryPersisted shouldBe false
-    }
 })
 
 private data class RaceResult(
@@ -76,13 +62,6 @@ private data class RaceResult(
     val bindOutcome: BindOutcome?,
     val binderAliveBeforeRelease: Boolean,
     val binderBeginReturnedBeforeRelease: Boolean,
-)
-
-private data class RecoveryResult(
-    val holderFailure: Throwable?,
-    val firstFailure: Throwable?,
-    val secondFailure: Throwable?,
-    val recoveryPersisted: Boolean,
 )
 
 private class TransactionStartSignalDriver(
@@ -188,102 +167,6 @@ private fun runRace(
                 releaseHolder.countDown()
                 holder.join(10_000)
                 binder?.join(10_000)
-            }
-        }
-    } finally {
-        Files.walk(directory).use { paths ->
-            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-        }
-    }
-}
-
-private fun runBeginFailureRecovery(driverFactory: (Path) -> SqlDriver): RecoveryResult {
-    val directory = Files.createTempDirectory("pb-sqlite-busy-recovery")
-    val databasePath = directory.resolve("plainbase.db")
-    val holderReady = CountDownLatch(1)
-    val releaseHolder = CountDownLatch(1)
-    val firstFailureObserved = CountDownLatch(1)
-    val allowSecond = CountDownLatch(1)
-    val secondDone = CountDownLatch(1)
-    val holderFailure = AtomicReference<Throwable?>()
-    val firstFailure = AtomicReference<Throwable?>()
-    val secondFailure = AtomicReference<Throwable?>()
-    val holderPath = RootedPath(RootName.PRIMARY, TreePath.require("recovery-holder.md"))
-    val recoveryPath = RootedPath(RootName.PRIMARY, TreePath.require("recovery-probe.md"))
-    val holderId = PageId.require("01900000-0000-7000-8000-0000000000f3")
-    val recoveryId = PageId.require("01900000-0000-7000-8000-0000000000f4")
-
-    try {
-        driverFactory(databasePath).use { driver ->
-            driver.queryLong("PRAGMA busy_timeout") shouldBe SQLITE_BUSY_TIMEOUT_MS
-            val db = DatabaseFactory.createDatabase(driver)
-            val holder = thread(name = "sqlite-busy-recovery-holder") {
-                runCatching {
-                    db.transactionWithResult {
-                        db.idMapQueries.upsertBinding(
-                            root = holderPath.root,
-                            path = holderPath.path,
-                            id = holderId,
-                            materialized = true,
-                        )
-                        holderReady.countDown()
-                        check(releaseHolder.await(10, TimeUnit.SECONDS)) { "releaseHolder never fired" }
-                    }
-                }.onFailure {
-                    holderFailure.set(it)
-                    holderReady.countDown()
-                }
-            }
-
-            var worker: Thread? = null
-            try {
-                check(holderReady.await(10, TimeUnit.SECONDS)) { "holder never acquired its write lock" }
-                val runningWorker = thread(name = "sqlite-busy-recovery-worker") {
-                    val first = runCatching {
-                        db.transactionWithResult {
-                            db.idMapQueries.selectAllBindings().executeAsList()
-                        }
-                    }
-                    firstFailure.set(first.exceptionOrNull())
-                    firstFailureObserved.countDown()
-                    check(allowSecond.await(10, TimeUnit.SECONDS)) { "the recovery transaction was not released" }
-
-                    val second = runCatching {
-                        db.transactionWithResult {
-                            db.idMapQueries.upsertBinding(
-                                root = recoveryPath.root,
-                                path = recoveryPath.path,
-                                id = recoveryId,
-                                materialized = true,
-                            )
-                            error("rollback probe")
-                        }
-                    }
-                    secondFailure.set(second.exceptionOrNull())
-                    secondDone.countDown()
-                }
-                worker = runningWorker
-                check(firstFailureObserved.await(10, TimeUnit.SECONDS)) { "the first begin did not finish" }
-                releaseHolder.countDown()
-                holder.join(10_000)
-                check(!holder.isAlive) { "holder did not finish" }
-                allowSecond.countDown()
-
-                check(secondDone.await(10, TimeUnit.SECONDS)) { "the recovery transaction did not finish" }
-                runningWorker.join(10_000)
-                check(!runningWorker.isAlive) { "recovery worker did not finish" }
-
-                val recoveryPersisted = db.idMapQueries.selectAllBindings().executeAsList().any { it.id == recoveryId }
-                return RecoveryResult(
-                    holderFailure = holderFailure.get(),
-                    firstFailure = firstFailure.get(),
-                    secondFailure = secondFailure.get(),
-                    recoveryPersisted = recoveryPersisted,
-                )
-            } finally {
-                releaseHolder.countDown()
-                holder.join(10_000)
-                worker?.join(10_000)
             }
         }
     } finally {
