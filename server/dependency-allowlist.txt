@@ -1,7 +1,6 @@
 app.cash.sqldelight:jdbc-driver
 app.cash.sqldelight:runtime
 app.cash.sqldelight:runtime-jvm
-app.cash.sqldelight:sqlite-driver
 ch.qos.logback:logback-classic
 ch.qos.logback:logback-core
 co.touchlab:stately-concurrency

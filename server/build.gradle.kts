@@ -97,7 +97,8 @@ dependencies {
     implementation(libs.kotlinx.datetime)
 
     // Persistence — SQLDelight on xerial sqlite-jdbc (FTS5 included)
-    implementation(libs.sqldelight.sqlite.driver)
+    implementation(libs.sqldelight.jdbc.driver)
+    testImplementation(libs.sqldelight.sqlite.driver)
     implementation(libs.sqlite.jdbc)
 
     // DI — Koin constructor DSL only

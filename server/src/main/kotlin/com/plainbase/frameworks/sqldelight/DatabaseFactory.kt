@@ -2,13 +2,14 @@ package com.plainbase.frameworks.sqldelight
 
 import app.cash.sqldelight.db.QueryResult.Value
 import app.cash.sqldelight.db.SqlDriver
-import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import org.sqlite.SQLiteConfig
 import java.nio.file.Files
 import java.nio.file.Path
 
 /** Opens, creates, and migrates the app-state SQLite database via SQLDelight's JDBC driver. */
 object DatabaseFactory {
+
+    private const val SQLITE_BUSY_TIMEOUT_MS = 3_000
 
     /**
      * Opens (and creates/migrates if needed) the app-state SQLite database at [path].
@@ -17,7 +18,9 @@ object DatabaseFactory {
      */
     fun createDriver(path: Path): SqlDriver {
         path.parent?.let(Files::createDirectories)
-        return migrateOrClose(JdbcSqliteDriver("jdbc:sqlite:$path"))
+        return migrateOrClose(
+            BeginImmediateSqliteDriver("jdbc:sqlite:$path", appDatabaseProperties()),
+        )
     }
 
     /** Migrate [driver], closing the handle before rethrowing on ANY failure: a rejected boot must not leak the open connection. */
@@ -77,7 +80,10 @@ object DatabaseFactory {
 
     /** In-memory database for tests and the spike. */
     fun createInMemoryDriver(): SqlDriver =
-        JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { PlainbaseDb.Schema.create(it) }
+        BeginImmediateSqliteDriver(
+            BeginImmediateSqliteDriver.IN_MEMORY,
+            appDatabaseProperties(),
+        ).also { PlainbaseDb.Schema.create(it) }
 
     /**
      * Opens the database at [path] for reading with ZERO on-disk effect: no file or directory
@@ -93,7 +99,10 @@ object DatabaseFactory {
      */
     fun createReadOnlyDriver(path: Path): SqlDriver {
         if (Files.notExists(path)) return createInMemoryDriver()
-        val driver = JdbcSqliteDriver("jdbc:sqlite:$path", SQLiteConfig().apply { setReadOnly(true) }.toProperties())
+        val driver = BeginImmediateSqliteDriver(
+            "jdbc:sqlite:$path",
+            appDatabaseProperties(readOnly = true),
+        )
         if (driver.userVersion() >= PlainbaseDb.Schema.version) return driver
         driver.close()
         return createInMemoryDriver()
@@ -114,8 +123,8 @@ object DatabaseFactory {
         // of their own, so a crash mid-way through a multi-statement rebuild (10.sqm's
         // CREATE/INSERT/DROP/RENAME chain) would otherwise strand a half-rebuilt DB still stamped
         // with the OLD version - unable to retry, unable to boot. The DRIVER-managed transaction is
-        // load-bearing: it pins one connection for every statement inside the block, where a raw
-        // BEGIN would die with the per-statement connection the file-backed driver borrows.
+        // load-bearing: it pins one connection for every statement inside the block, which is required by this
+        // multi-statement migration chain.
         createDatabase(driver).transaction {
             if (current == 0L) {
                 PlainbaseDb.Schema.create(driver)
@@ -125,6 +134,13 @@ object DatabaseFactory {
             driver.execute(null, "PRAGMA user_version = $target;", 0)
         }
     }
+
+    private fun appDatabaseProperties(readOnly: Boolean = false) = SQLiteConfig().apply {
+        // SQLiteConfig emits transaction_mode=DEFERRED in this properties bag; it is inert because this fork issues
+        // BEGIN IMMEDIATE directly and never uses setAutoCommit(false).
+        setBusyTimeout(SQLITE_BUSY_TIMEOUT_MS)
+        if (readOnly) setReadOnly(true)
+    }.toProperties()
 
     private fun newerSchemaError(current: Long, target: Long): IllegalStateException = IllegalStateException(
         "database schema v$current is NEWER than this binary understands (v$target); a newer Plainbase wrote it. " +
