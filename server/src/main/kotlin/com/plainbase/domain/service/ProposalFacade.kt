@@ -101,12 +101,12 @@ sealed interface ProposeCommand {
      * degrade path (the create route already minted it + baked it into the bytes — the facade stores both verbatim,
      * no re-mint).
      *
-     * [root] is an EXPLICIT wire field, defaulted to `main`, never inferred from the first path segment — the same
-     * rule `POST /pages` follows, for the same reason (silently retargeting a WRITE because a folder name matches a
-     * root name is not acceptable where bytes land). The SHARED parser validates it against the registry, so both
-     * wire entries — the REST propose route and the MCP `propose_change` tool — answer one `invalid_root` and cannot
-     * drift; the degrade path is the third construction site and sees no wire string at all (it inherits a legal root
-     * from the already-validated CreateIntent).
+     * [root] is a REQUIRED, EXPLICIT wire field with no default, and is never inferred from the first path segment —
+     * the same rule `POST /pages` follows, for the same reason (silently retargeting a WRITE because a field was
+     * omitted or a folder name matches a root name is not acceptable where bytes land). The SHARED parser validates
+     * it against the registry, so both wire entries — the REST propose route and the MCP `propose_change` tool —
+     * answer one `invalid_root` and cannot drift; the degrade path is the third construction site and sees no wire
+     * string at all (it inherits a legal root from the already-validated CreateIntent).
      *
      * Contract: when non-null, [pageId] MUST already be materialized into [proposedContent]'s `id:` frontmatter line —
      * the row stores the bytes verbatim and apply writes them verbatim, so the stored id and the on-disk id can only
