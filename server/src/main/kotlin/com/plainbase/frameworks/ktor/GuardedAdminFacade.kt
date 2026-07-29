@@ -54,6 +54,7 @@ class GuardedAdminFacade(
         // Insert the user + grant the role in ONE transaction; the user starts with an UNUSABLE random password
         // (no plaintext exists for it), and an admin-issued reset token is the ONLY way to set a real one — so the
         // create response conveys that token ONCE and the new user logs in by consuming it.
+        val passwordHash = passwordHasher.hash(unusablePassword())
         val userId = try {
             transactions.inTransaction {
                 val id = idProvider.next().value
@@ -62,7 +63,7 @@ class GuardedAdminFacade(
                     UserRow(
                         id = id,
                         username = username,
-                        passwordHash = passwordHasher.hash(unusablePassword()),
+                        passwordHash = passwordHash,
                         displayName = displayName,
                         disabled = false,
                         createdAt = now,
