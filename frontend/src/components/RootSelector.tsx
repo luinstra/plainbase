@@ -79,6 +79,11 @@ export function RootSelector({
   };
 
   const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     openMenu();
@@ -102,6 +107,13 @@ export function RootSelector({
         event.preventDefault();
         setActiveIndex(selectableIndexes.at(-1) ?? selectedIndex);
         break;
+      case "Enter":
+      case " ": {
+        event.preventDefault();
+        const entry = entries[activeIndex];
+        if (entry) choose(entry);
+        break;
+      }
       case "Escape":
         event.preventDefault();
         closeMenu(true);
@@ -157,6 +169,7 @@ export function RootSelector({
                   aria-selected={active}
                   aria-disabled={disabled || undefined}
                   disabled={disabled}
+                  tabIndex={index === activeIndex ? 0 : -1}
                   onClick={() => choose(entry)}
                   onMouseMove={() => {
                     if (!disabled) setActiveIndex(index);

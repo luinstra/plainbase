@@ -28,23 +28,9 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <a
-          class="flex flex-1 items-center gap-2 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+          class="flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
           href="/docs/guides"
         >
-          <span
-            aria-hidden="true"
-            class="pb-tree-kind"
-            data-pb-tree-kind="folder"
-          >
-            <svg
-              focusable="false"
-              viewBox="0 0 16 16"
-            >
-              <path
-                d="M1.75 4.5A1.75 1.75 0 0 1 3.5 2.75h3l1.5 1.5h4.5A1.75 1.75 0 0 1 14.25 6v6.25H1.75V4.5Z"
-              />
-            </svg>
-          </span>
           <span
             class="min-w-0"
           >
@@ -64,27 +50,10 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           >
             <a
               aria-current="page"
-              class="flex items-center gap-2 rounded px-2 py-1 text-ink"
+              class="flex items-center rounded px-2 py-1 text-ink"
               data-pb-status="active"
               href="/docs/guides/deploy-guide"
             >
-              <span
-                aria-hidden="true"
-                class="pb-tree-kind"
-                data-pb-tree-kind="page"
-              >
-                <svg
-                  focusable="false"
-                  viewBox="0 0 16 16"
-                >
-                  <path
-                    d="M4 1.75h5.25L12 4.5v9.75H4V1.75Z"
-                  />
-                  <path
-                    d="M9.25 1.75V4.5H12"
-                  />
-                </svg>
-              </span>
               <span
                 class="min-w-0"
               >
@@ -103,8 +72,8 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
       >
         <button
           aria-controls="pb-folder-children-shadowed-folder"
-          aria-expanded="false"
-          aria-label="Expand shadowed-folder"
+          aria-expanded="true"
+          aria-label="Collapse shadowed-folder"
           class="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
           data-pb-folder-toggle="true"
           type="button"
@@ -115,28 +84,38 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <span
-          class="flex flex-1 items-center gap-2 px-2 py-1 font-semibold text-ink"
+          class="flex flex-1 items-center px-2 py-1 font-semibold text-ink"
         >
-          <span
-            aria-hidden="true"
-            class="pb-tree-kind"
-            data-pb-tree-kind="folder"
-          >
-            <svg
-              focusable="false"
-              viewBox="0 0 16 16"
-            >
-              <path
-                d="M1.75 4.5A1.75 1.75 0 0 1 3.5 2.75h3l1.5 1.5h4.5A1.75 1.75 0 0 1 14.25 6v6.25H1.75V4.5Z"
-              />
-            </svg>
-          </span>
           <span
             class="min-w-0"
           >
             shadowed-folder
           </span>
         </span>
+      </div>
+      <div
+        class="ml-3 border-l border-edge pl-2"
+        id="pb-folder-children-shadowed-folder"
+      >
+        <ul
+          class="space-y-0.5"
+        >
+          <li
+            data-pb-nav-item="page"
+          >
+            <a
+              class="flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"
+              data-pb-status="active"
+              href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+            >
+              <span
+                class="min-w-0"
+              >
+                Shadowed Page
+              </span>
+            </a>
+          </li>
+        </ul>
       </div>
     </li>
   </ul>

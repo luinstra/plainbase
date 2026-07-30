@@ -76,7 +76,7 @@ body {
   outline-offset: 2px;
 }
 
-/* ---- sidebar tree (.pb-sidebar, .pb-folder-caret, .pb-tree-kind are stable selectors) --- */
+/* ---- sidebar tree (.pb-sidebar, .pb-folder-caret, .pb-root-selector-caret are stable selectors) --- */
 
 /* Sidebar disclosure caret. Drawn with borders on ::before; rotation is driven by the
    toggle button's aria-expanded (the React tree's single open/closed signal). */
@@ -105,26 +105,6 @@ body {
   transform: rotate(45deg);
   left: 1px;
   top: 2px;
-}
-.pb-tree-kind {
-  display: inline-flex;
-  flex: none;
-  width: 0.875rem;
-  height: 0.875rem;
-  color: var(--pb-text-faint);
-}
-.pb-tree-kind[data-pb-tree-kind="folder"] {
-  color: var(--pb-text-muted);
-}
-.pb-tree-kind svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.35;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .pb-root-selector-caret {
   width: 0.5rem;

@@ -23,8 +23,9 @@ import { RootSelector } from "./RootSelector";
  * ONE `<aside>` and one visible root section however many roots are configured: a themed selector
  * switches the section when multiple roots exist. The aside remains one fixed slice of the Shell's
  * flex row, so additional roots never squeeze `<main>` off the screen. `.pb-sidebar`,
- * `data-pb-sidebar`, `data-pb-root-section` and `data-pb-root-label` are stable selectors
- * (public customization API).
+ * `data-pb-sidebar` and `data-pb-root-section` are stable selectors (public customization API).
+ * `data-pb-root-label` moved to `RootSelector.tsx`; it marks listbox options only while the menu is
+ * open, so customization CSS must not expect a persistent sidebar label node.
  *
  * The selector appears only with 2+ roots: with the single root every legacy install has, a control
  * containing an internal root name is noise. A root that is not SERVING gets the outage notice
@@ -72,9 +73,11 @@ export function Sidebar() {
           selected={selectedEntry}
           onSelect={(entry) => {
             if (!entry.tree.url) return;
-            const next = { ...preferences, selectedRoot: entry.root };
-            writeSidebarPreferences(next);
-            setPreferences(next);
+            setPreferences((current) => {
+              const next = { ...current, selectedRoot: entry.root };
+              writeSidebarPreferences(next);
+              return next;
+            });
             router.history.push(entry.tree.url);
           }}
         />
@@ -163,6 +166,7 @@ export function SidebarNav({
   useEffect(() => {
     const ancestors = ancestorFolderPaths(tree, root, currentPathname);
     if (ancestors.length === 0) return;
+    // Navigation-derived ancestor opens are deliberately ephemeral; only explicit user toggles persist.
     setOpenFolders((current) => {
       if (ancestors.every((path) => current.has(path))) return current;
       return new Set([...current, ...ancestors]);
@@ -255,37 +259,15 @@ function NodeRows({
   );
 }
 
-const SIDEBAR_LABEL_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
-
 /**
- * Navigation order follows the visual taxonomy rather than the server's wire order: folders first,
- * then pages, alphabetized within each group by the label the reader actually sees. The path is the
- * deterministic tie-breaker for duplicate titles.
+ * Group folders before pages while retaining the server's wire order within each group. That order
+ * already carries `_folder.yaml order:` when present and the server's title fallback otherwise.
  */
 function sidebarOrder(nodes: TreeNode[]): TreeNode[] {
-  return [...nodes].sort((left, right) => {
-    if (left.type !== right.type) return left.type === "folder" ? -1 : 1;
-    const leftLabel = left.type === "folder" ? folderTitle(left) : left.title;
-    const rightLabel = right.type === "folder" ? folderTitle(right) : right.title;
-    return SIDEBAR_LABEL_COLLATOR.compare(leftLabel, rightLabel) || left.path.localeCompare(right.path);
-  });
-}
-
-function TreeKindIcon({ kind }: { kind: TreeNode["type"] }) {
-  return (
-    <span className="pb-tree-kind" data-pb-tree-kind={kind} aria-hidden="true">
-      {kind === "folder" ? (
-        <svg viewBox="0 0 16 16" focusable="false">
-          <path d="M1.75 4.5A1.75 1.75 0 0 1 3.5 2.75h3l1.5 1.5h4.5A1.75 1.75 0 0 1 14.25 6v6.25H1.75V4.5Z" />
-        </svg>
-      ) : (
-        <svg viewBox="0 0 16 16" focusable="false">
-          <path d="M4 1.75h5.25L12 4.5v9.75H4V1.75Z" />
-          <path d="M9.25 1.75V4.5H12" />
-        </svg>
-      )}
-    </span>
-  );
+  return [
+    ...nodes.filter((node) => node.type === "folder"),
+    ...nodes.filter((node) => node.type === "page"),
+  ];
 }
 
 /**
@@ -326,12 +308,7 @@ function FolderItem({
   // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
   // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
   const childrenId = `pb-folder-children-${encodeURIComponent(folder.path)}`;
-  const labelContent = (
-    <>
-      <TreeKindIcon kind="folder" />
-      <span className="min-w-0">{label}</span>
-    </>
-  );
+  const labelContent = <span className="min-w-0">{label}</span>;
   return (
     <li data-pb-nav-item="folder">
       <div className="flex items-center">
@@ -353,14 +330,14 @@ function FolderItem({
             aria-current={active ? "page" : undefined}
             className={
               active
-                ? "flex flex-1 items-center gap-2 rounded px-2 py-1 font-semibold text-ink"
-                : "flex flex-1 items-center gap-2 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+                ? "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink"
+                : "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
             }
           >
             {labelContent}
           </a>
         ) : (
-          <span className="flex flex-1 items-center gap-2 px-2 py-1 font-semibold text-ink">{labelContent}</span>
+          <span className="flex flex-1 items-center px-2 py-1 font-semibold text-ink">{labelContent}</span>
         )}
       </div>
       {open && expandable && (
@@ -407,11 +384,10 @@ function PageRow({
         aria-current={active ? "page" : undefined}
         className={
           active
-            ? "flex items-center gap-2 rounded px-2 py-1 text-ink"
-            : "flex items-center gap-2 rounded px-2 py-1 text-ink hover:bg-hovered"
+            ? "flex items-center rounded px-2 py-1 text-ink"
+            : "flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"
         }
       >
-        <TreeKindIcon kind="page" />
         <span className="min-w-0">{label}</span>
       </a>
     </li>

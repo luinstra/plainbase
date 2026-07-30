@@ -9,6 +9,10 @@ import { SidebarNav } from "../components/Sidebar";
 import { writeSidebarPreferences } from "../lib/sidebarPreferences";
 import { createAppRouter } from "../router";
 
+afterEach(() => {
+  sessionStorage.clear();
+});
+
 /**
  * Stable-selector guard (§5.9): `.pb-sidebar` + `data-pb-*` are a public customization
  * API. The snapshot pins the emitted markup so refactors can't silently break user CSS.
@@ -181,7 +185,7 @@ describe("SidebarNav", () => {
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
   });
 
-  it("groups folders before files, sorts each group by its displayed label, and marks both kinds", () => {
+  it("groups folders before pages while preserving the server wire order within each group", () => {
     const mixed: TreeFolder = {
       type: "folder",
       name: "",
@@ -192,18 +196,17 @@ describe("SidebarNav", () => {
       page_count: 2,
       children: [
         { type: "page", id: "id-zulu-page", title: "Zulu page", slug: "zulu", path: "zulu.md", url: "/docs/zulu", status: "active", updated: null },
-        { type: "folder", name: "zulu-folder", title: "Zulu folder", description: null, path: "zulu-folder", url: "/docs/zulu-folder", page_count: 0, children: [] },
+        { type: "folder", name: "guides", title: "Guides", description: null, path: "guides", url: "/docs/guides", page_count: 0, children: [] },
         { type: "page", id: "id-alpha-page", title: "Alpha page", slug: "alpha", path: "alpha.md", url: "/docs/alpha", status: "active", updated: null },
-        { type: "folder", name: "alpha-folder", title: "Alpha folder", description: null, path: "alpha-folder", url: "/docs/alpha-folder", page_count: 0, children: [] },
+        { type: "folder", name: "api", title: "API", description: null, path: "api", url: "/docs/api", page_count: 0, children: [] },
       ],
     };
     const { container } = render(<SidebarNav tree={mixed} root="docs" currentPathname="/docs" />);
     const rows = [...container.querySelector("nav > ul")!.children];
 
     expect(rows.map((row) => row.getAttribute("data-pb-nav-item"))).toEqual(["folder", "folder", "page", "page"]);
-    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Alpha folder", "Zulu folder", "Alpha page", "Zulu page"]);
-    expect(container.querySelectorAll('[data-pb-tree-kind="folder"]')).toHaveLength(2);
-    expect(container.querySelectorAll('[data-pb-tree-kind="page"]')).toHaveLength(2);
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Guides", "API", "Zulu page", "Alpha page"]);
+    expect(container.querySelector("[data-pb-tree-kind]")).toBeNull();
     expect(container.querySelector('a[href="/docs/alpha"]')?.className).toContain("text-ink");
     expect(container.querySelector('a[href="/docs/alpha"]')?.className).not.toContain("text-muted");
   });
@@ -342,7 +345,14 @@ describe("SidebarNav", () => {
   });
 
   it("matches the stable-markup snapshot", () => {
-    const { container } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(
+      <SidebarNav
+        tree={tree}
+        root="docs"
+        currentPathname="/docs/guides/deploy-guide"
+        initialOpenFolders={["shadowed-folder"]}
+      />,
+    );
     expect(container.firstChild).toMatchSnapshot();
   });
 });
@@ -432,10 +442,6 @@ function renderShell(roots: RootTree[], initialEntry = "/docs") {
   );
 }
 
-afterEach(() => {
-  sessionStorage.clear();
-});
-
 describe("Sidebar (the tree-fed parent)", () => {
   it("renders one selector and only the route-owned root's tree when multiple roots exist", async () => {
     const { container } = renderShell([DOCS, EXTRA]);
@@ -475,12 +481,55 @@ describe("Sidebar (the tree-fed parent)", () => {
     const docs = container.querySelector<HTMLButtonElement>('[data-pb-root-option="docs"]')!;
     const extra = container.querySelector<HTMLButtonElement>('[data-pb-root-option="extra"]')!;
     await waitFor(() => expect(document.activeElement).toBe(docs));
+    expect(docs.tabIndex).toBe(0);
+    expect(extra.tabIndex).toBe(-1);
 
     fireEvent.keyDown(docs, { key: "ArrowDown" });
     await waitFor(() => expect(document.activeElement).toBe(extra));
+    expect(docs.tabIndex).toBe(-1);
+    expect(extra.tabIndex).toBe(0);
 
     fireEvent.keyDown(extra, { key: "Escape" });
     expect(container.querySelector("[data-pb-root-menu]")).toBeNull();
+    expect(document.activeElement).toBe(selector);
+  });
+
+  it("confirms the active root option with Enter", async () => {
+    const { container } = renderShell([DOCS, EXTRA]);
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    const docs = container.querySelector<HTMLButtonElement>('[data-pb-root-option="docs"]')!;
+    const extra = container.querySelector<HTMLButtonElement>('[data-pb-root-option="extra"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(docs));
+    fireEvent.keyDown(docs, { key: "ArrowDown" });
+    await waitFor(() => expect(document.activeElement).toBe(extra));
+
+    fireEvent.keyDown(extra, { key: "Enter" });
+    await waitFor(() => expect(selector.getAttribute("data-pb-selected-root")).toBe("extra"));
+    expect(container.querySelector("[data-pb-root-menu]")).toBeNull();
+    expect(container.querySelector('[data-pb-root-section="extra"]')).not.toBeNull();
+  });
+
+  it("closes an open root menu when Escape is pressed on the trigger", async () => {
+    const { container } = renderShell([DOCS, EXTRA]);
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+
+    fireEvent.click(selector);
+    await waitFor(() => expect(container.querySelector("[data-pb-root-menu]")).not.toBeNull());
+    selector.focus();
+    fireEvent.keyDown(selector, { key: "Escape" });
+
+    expect(container.querySelector("[data-pb-root-menu]")).toBeNull();
+    expect(selector.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(selector);
   });
 

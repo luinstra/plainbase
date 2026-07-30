@@ -34,7 +34,7 @@ export async function expectReloaded(page: Page) {
 export async function expandAllSidebarFolders(scope: Locator): Promise<void> {
   await expect(scope).toBeVisible();
   // The Shell renders a visible empty aside while its independent tree query is still loading.
-  // Wait for the navigation itself or a fast page response can make this helper return too early.
+  // Wait for the navigation itself; otherwise a fast page response can make this helper return too early.
   await expect(scope.getByRole("navigation", { name: "Documentation tree" })).toBeVisible();
   for (let expanded = 0; expanded < 100; expanded += 1) {
     const collapsed = scope.locator('[data-pb-folder-toggle][aria-expanded="false"]');
