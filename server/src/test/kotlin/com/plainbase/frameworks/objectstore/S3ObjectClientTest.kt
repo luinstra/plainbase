@@ -6,6 +6,7 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
@@ -46,6 +47,11 @@ class S3ObjectClientTest : FunSpec({
                         method = call.request.httpMethod.value,
                         uri = call.request.uri,
                         headers = call.request.headers.entries().associate { it.key.lowercase() to it.value.joinToString(",") },
+                        // UNCOLLAPSED: one pair per wire value. The collapsed map above once hid a real 403:
+                        // the client emitted Content-Type twice (case-variant names), `associate` kept one,
+                        // and verifySignature recomputed from the collapsed view - green over a signature R2
+                        // rejects. Multiplicity must be recorded, or it cannot be asserted.
+                        wireHeaders = call.request.headers.entries().flatMap { entry -> entry.value.map { entry.key to it } },
                         body = call.receiveChannel().toByteArray(),
                     )
                     recorded += request
@@ -349,7 +355,7 @@ class S3ObjectClientTest : FunSpec({
             val get = it.signedRequest(HttpMethod.Get, "dir/a.md")
             get.host shouldBe "scratch.127.0.0.1"
             get.encodedPath shouldBe "/dir/a.md" // bucket is NOT in the path under virtual-host
-            get.signedHeaders["host"] shouldBe "scratch.127.0.0.1:$port" // the signed host == the connect host
+            get.signedHeaders[HttpHeaders.Host] shouldBe "scratch.127.0.0.1:$port" // the signed host == the connect host
             get.verifySignature()
 
             val list = it.signedRequest(HttpMethod.Get, key = null, query = listOf("list-type" to "2"))
@@ -364,6 +370,8 @@ private class RecordedRequest(
     val uri: String,
     /** Names lowercased at capture (HTTP header names are case-insensitive). */
     val headers: Map<String, String>,
+    /** Every wire value as its own pair, duplicates preserved - the view [headers] collapses. */
+    val wireHeaders: List<Pair<String, String>>,
     val body: ByteArray,
 )
 
@@ -385,6 +393,14 @@ private fun RecordedRequest.verifySignature() {
     val query = url.parameters.entries().flatMap { (name, values) -> values.map { name to it } }
     val authorization = checkNotNull(headers["authorization"])
     val signedHeaderNames = authorization.substringAfter("SignedHeaders=").substringBefore(",").split(";")
+    // Every signed header must arrive EXACTLY once. A duplicate is a signature break even when each copy
+    // carries the signed value: the endpoint canonicalizes all copies joined, the client signed one. The
+    // recomputation below cannot see this (it reads the collapsed map), so it is asserted on the raw wire
+    // pairs first. This is the check that was missing when a case-variant Content-Type shipped twice.
+    signedHeaderNames.forEach { name ->
+        val copies = wireHeaders.count { (wireName, _) -> wireName.equals(name, ignoreCase = true) }
+        check(copies == 1) { "signed header '$name' appeared $copies times on the wire; signed exactly once" }
+    }
     val recomputed = SigV4Signer("AKIDTEST", "SECRETTEST", "auto", "s3").sign(
         method = method,
         canonicalPath = url.encodedPath,

@@ -202,7 +202,8 @@ class S3ObjectClient(
      * per-request timeout) WITHOUT setting a body - shared by [execute] (ByteArray body) and [putFromFile]
      * (streamed file body). Ktor derives Host from url.host:port, so only host is dropped here. Content-Type,
      * when present, is appended as the RAW signed string (M1): a normalized type would differ from the signed
-     * value and 403; the body carries no content type of its own, so this header is the one on the wire.
+     * value and 403; the body carries no content type of its own, so this header is the one on the wire -
+     * exactly once, which is only true under the exact-case key documented at the signed-headers map.
      */
     private fun HttpRequestBuilder.applySignedRequest(request: SignedRequest, requestTimeoutMillis: Long?) {
         // Per-request timeout override (B-C3): a large bundle transfer must not share the short page-op request
@@ -218,7 +219,7 @@ class S3ObjectClient(
                 encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
             }
         }
-        request.signedHeaders.forEach { (name, value) -> if (name != "host") headers.append(name, value) }
+        request.signedHeaders.forEach { (name, value) -> if (name != HttpHeaders.Host) headers.append(name, value) }
         headers.append(HttpHeaders.Authorization, request.authorization)
     }
 
@@ -286,10 +287,18 @@ class S3ObjectClient(
         val payloadHash = payloadHashOverride ?: SigV4Signer.sha256Hex(body ?: ByteArray(0))
         val signedHeaders = buildMap {
             // Sign the exact host[:port] the engine will send (the port only when non-default).
-            put("host", if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
+            put(HttpHeaders.Host, if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
             put("x-amz-content-sha256", payloadHash)
             put("x-amz-date", amzDate)
-            contentType?.let { put("content-type", it) }
+            // MUST be Ktor's exact-case constant, never a lowercase literal. Ktor's mergeHeaders
+            // (ktor-client-core Utils.kt) skips Content-Type from the request headers with a
+            // CASE-SENSITIVE comparison, then re-emits it from a case-INSENSITIVE fallback lookup - so a
+            // lowercase "content-type" ships TWICE (both case variants), the endpoint canonicalizes the
+            // pair comma-joined, and every body-carrying request 403s with SignatureDoesNotMatch. Found
+            // by the first credentialed s3-smoke against real R2; pinned by verifySignature's
+            // exactly-once wire assertion in S3ObjectClientTest. The signer lowercases names for the
+            // canonical form either way, so the signature itself is unaffected by this key's case.
+            contentType?.let { put(HttpHeaders.ContentType, it) }
             putAll(extraHeaders)
         }
         val signed = signer.sign(method.value, requestPath, query, signedHeaders, payloadHash, amzDate)
