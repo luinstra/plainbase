@@ -537,24 +537,24 @@ class ObjectContentStore(
                 }
             }
             for ((path, entry, body) in fetched) {
-            synchronized(applyLock) {
-                if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
-                // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
-                // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
-                // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
-                // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
-                if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
-                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
-                if (failure == null) {
-                    state.recordConfirmed(path, body.etag)
-                    events.add(path)
-                } else {
-                    // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
-                    // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
-                    state.invalidate(path)
-                    logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+                synchronized(applyLock) {
+                    if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
+                    // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
+                    // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
+                    // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
+                    // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
+                    if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
+                    val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
+                    if (failure == null) {
+                        state.recordConfirmed(path, body.etag)
+                        events.add(path)
+                    } else {
+                        // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
+                        // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
+                        state.invalidate(path)
+                        logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+                    }
                 }
-            }
             }
         }
         // Delete phase: mirror files / map entries absent from LIST (eligible paths only - the mirror
@@ -1177,10 +1177,11 @@ class ObjectContentStore(
         // not only by key count: the mirror funnel admits assets as well as pages, and a count-only
         // chunk of large assets would hold the whole set resident on the boot path. LIST's declared
         // sizes drive the packing; they are advisory (the GET response cap is the per-body
-        // enforcement), so an honest provider's peak buffering is bounded by FETCH_BYTE_BUDGET plus
-        // one body, while the ADVERSARIAL ceiling stays countCap bodies at the response cap. An entry
-        // with no declared size consumes the whole budget. 1000 drill pages declared ~300 B each pack
-        // into 4 chunks, preserving the measured pipeline behavior.
+        // enforcement). A provider that DECLARES sizes honestly is bounded by FETCH_BYTE_BUDGET plus
+        // one body; one that OMITS them is bounded by 64 bodies per chunk (the unknown-size share in
+        // packForFetch); only a MISDECLARING provider reaches the countCap-bodies-at-the-response-cap
+        // ceiling. 1000 drill pages declared ~300 B each pack into 4 chunks, preserving the measured
+        // pipeline behavior.
         private const val FETCH_CHUNK = 256
         private const val FETCH_PARALLELISM = 64
         private const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
@@ -1199,6 +1200,9 @@ class ObjectContentStore(
             byteBudget: Long = FETCH_BYTE_BUDGET,
             countCap: Int = FETCH_CHUNK,
         ): List<List<Map.Entry<K, MirrorListedEntry>>> {
+            // Divides by FETCH_PARALLELISM even under a caller-supplied byteBudget (tests): the share
+            // deliberately tracks the REAL concurrency constant, so 64 unknowns per chunk = one full
+            // wave of in-flight GETs, whatever budget the caller passed.
             val unknownShare = (byteBudget / FETCH_PARALLELISM).coerceAtLeast(1)
             return buildList {
                 var chunk = mutableListOf<Map.Entry<K, MirrorListedEntry>>()

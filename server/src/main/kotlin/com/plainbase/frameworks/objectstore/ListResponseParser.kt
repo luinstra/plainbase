@@ -121,7 +121,8 @@ object ListResponseParser {
      * provider quirk into a server that will not boot. So: exactly one plain `<Size>digits</Size>`
      * extracts; anything else - absent, duplicated, attributed, signed, padded, non-integer, overflow -
      * yields null, and [requireWellFormed] remains the backstop that still refuses genuinely
-     * ill-formed XML.
+     * ill-formed XML. Scope is the WHOLE block substring (descendant included - a nested
+     * `<Owner><Size>` counts as the single occurrence), matching the DOM oracle's descendant scan.
      */
     private fun sizeOf(block: String): Long? {
         val occurrences = buildList {

@@ -114,9 +114,10 @@ binary, macOS Apple Silicon, 1000-page corpus hydrated from Cloudflare R2, stead
 The BOOT peak sits above that: cold hydrate buffers each fetch chunk in memory, packed to a 64 MiB
 DECLARED-size budget per chunk (a chunk holds multiple bodies up to that budget, plus one body that
 may individually exceed it). With a provider that declares sizes honestly, budget roughly serving RSS
-plus 64 MiB plus your largest object for the boot window. The declared sizes are advisory: a bucket
-that misdeclares them weakens the packing bound toward the hard ceiling of 256 bodies at the response
-cap, which only a hostile or broken provider approaches. Numbers vary by platform and corpus;
+plus 64 MiB plus your largest object for the boot window. The declared sizes are advisory: a provider
+that OMITS them is still bounded at 64 bodies per chunk, while one that misdeclares them weakens the
+packing bound toward the hard ceiling of 256 bodies at the response cap, which only a hostile or
+broken provider approaches. Numbers vary by platform and corpus;
 re-measure on your own hardware when sizing tightly (see the
 [pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)).
 

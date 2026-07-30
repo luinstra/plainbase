@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.objectstore
 
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldBeNull
@@ -21,7 +22,10 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.close
 import io.ktor.utils.io.toByteArray
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.time.Instant
@@ -57,11 +61,17 @@ class S3ObjectClientTest : FunSpec({
                     recorded += request
                     val response = respond()
                     response.headers.forEach { (name, value) -> call.response.header(name, value) }
-                    if (response.omitContentLength) {
-                        // Chunked write -> no Content-Length header (the M5 absent-length case); body stays empty.
-                        call.respondBytesWriter(status = response.status) { }
-                    } else {
-                        call.respondBytes(response.body, status = response.status)
+                    when {
+                        response.omitContentLength ->
+                            // Chunked write -> no Content-Length header (the M5 absent-length case); body stays empty.
+                            call.respondBytesWriter(status = response.status) { }
+                        response.declaredLengthOverride != null -> {
+                            // A LYING Content-Length: declare more than the writer sends, then end the
+                            // stream - the wire shape of a truncated transfer surfacing as clean EOF.
+                            call.response.header(HttpHeaders.ContentLength, response.declaredLengthOverride.toString())
+                            call.respondBytesWriter(status = response.status) { writeFully(response.body) }
+                        }
+                        else -> call.respondBytes(response.body, status = response.status)
                     }
                 }
             }
@@ -207,6 +217,38 @@ class S3ObjectClientTest : FunSpec({
         val second = recorded.single()
         second.uri shouldContain "continuation-token=1%2Ftok%2BX%3D"
         second.verifySignature()
+    }
+
+    test("a truncated GET (declared Content-Length, short body) REFUSES - never a silent short body") {
+        // The exact-size read path holds the declared length in hand; returning the short body would
+        // let the caller recordConfirmed corrupt bytes under the REAL etag - a mirror entry that never
+        // self-heals because the etag matches and nothing re-fetches. Mirrors getToFile's guard.
+        // Truncation has TWO wire shapes, and both must refuse:
+        // (1) clean-EOF under-send - a well-behaved Ktor server cannot produce it, so the guard is
+        //     driven directly through the readDeclaredBody seam with a raw channel;
+        val cleanEof = ByteChannel()
+        cleanEof.writeFully("hello".toByteArray())
+        cleanEof.flush()
+        cleanEof.close()
+        shouldThrow<ObjectStoreException> {
+            client.readDeclaredBody(cleanEof, declared = 10, op = "GET", target = "truncated.md", cap = 1024)
+        }.message.orEmpty() shouldContain "truncated"
+        // (2) a killed connection (what the real server produces when it cannot honor its declared
+        //     length) - refused via the engine's own exception; the property is NO silent short body.
+        respond = {
+            FakeResponse(
+                HttpStatusCode.OK,
+                mapOf("ETag" to "\"t1\""),
+                body = "hello".toByteArray(),
+                declaredLengthOverride = 10,
+            )
+        }
+        shouldThrowAny { client.get("truncated.md") }
+    }
+
+    test("the exact-size path round-trips a declared-length body byte-for-byte (the common GET shape)") {
+        respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"x1\""), body = "exact body bytes".toByteArray()) }
+        checkNotNull(client.get("exact.md")).bytes.decodeToString() shouldBe "exact body bytes"
     }
 
     test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {
@@ -401,6 +443,8 @@ private class FakeResponse(
     val body: ByteArray = ByteArray(0),
     /** When true the server writes chunked (no Content-Length header) - the M5 absent-length case. */
     val omitContentLength: Boolean = false,
+    /** When set, the wire declares THIS Content-Length while [body] holds fewer bytes - a truncated transfer. */
+    val declaredLengthOverride: Long? = null,
 )
 
 /**

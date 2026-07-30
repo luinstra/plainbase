@@ -254,14 +254,17 @@ class S3ObjectClient(
         override val contentLength: Long = Files.size(source)
 
         override suspend fun writeTo(channel: ByteWriteChannel) {
+            // The WHOLE loop runs on Dispatchers.IO, not just the open: `input.read` is the blocking
+            // call that matters, and a half-wrap implies an offload the loop never had. writeFully is
+            // suspend-safe from inside the IO context.
             withContext(Dispatchers.IO) {
-                Files.newInputStream(source)
-            }.use { input ->
-                val buffer = ByteArray(READ_CHUNK)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    channel.writeFully(buffer, 0, read)
+                Files.newInputStream(source).use { input ->
+                    val buffer = ByteArray(READ_CHUNK)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        channel.writeFully(buffer, 0, read)
+                    }
                 }
             }
         }
@@ -359,19 +362,42 @@ class S3ObjectClient(
         // hostile over-length bodies fall through to the accumulator, cap still enforced.
         val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
         if (declared != null && declared in 0..minOf(cap, MAX_EXACT_BODY_BYTES)) {
-            val body = ByteArray(declared.toInt())
-            var filled = 0
-            while (filled < body.size) {
-                val read = channel.readAvailable(body, filled, body.size - filled)
-                if (read == -1) return body.copyOf(filled) // truncated: return the bytes that arrived (accumulator parity)
-                filled += read
-            }
-            val probe = ByteArray(1)
-            if (channel.readAvailable(probe, 0, 1) == -1) return body
-            // More bytes than declared: hostile or broken - continue on the accumulator path, cap enforced.
-            return accumulateBody(channel, op, target, cap, seed = body, seedExtra = probe)
+            return readDeclaredBody(channel, declared.toInt(), op, target, cap)
         }
         return accumulateBody(channel, op, target, cap, seed = null, seedExtra = null)
+    }
+
+    /**
+     * The exact-size read: ONE allocation of [declared] bytes. A clean-EOF SHORT body REFUSES,
+     * mirroring getToFile - the declared length is in hand, and a short body silently returned would
+     * be recordConfirmed under the real etag: a corrupt mirror entry that never self-heals (the etag
+     * matches, so nothing re-fetches). Internal seam so the truncation guard is unit-testable with a
+     * raw channel: a well-behaved Ktor test server cannot fake a clean-EOF under-send (it kills the
+     * connection instead, which refuses via the engine's own exception - also covered).
+     */
+    internal suspend fun readDeclaredBody(channel: ByteReadChannel, declared: Int, op: String, target: String, cap: Long): ByteArray {
+        val body = ByteArray(declared)
+        var filled = 0
+        while (filled < body.size) {
+            val read = channel.readAvailable(body, filled, body.size - filled)
+            if (read == -1) {
+                throw ObjectStoreException("$op '$target' truncated: read $filled bytes of a declared $declared")
+            }
+            filled += read
+        }
+        val probe = ByteArray(1)
+        if (channel.readAvailable(probe, 0, 1) == -1) return body
+        // More bytes than declared: hostile or broken. Refuse before another read when the seed
+        // already exceeds the cap (declared == cap plus the probe byte), else keep accumulating
+        // under the cap.
+        if (declared >= cap) {
+            channel.cancel(null)
+            throw ObjectStoreException(
+                "$op '$target' response body exceeds the $cap-byte cap - raise PLAINBASE_MAX_ASSET_BYTES if " +
+                    "this is a legitimate large object, else check for a hostile or misconfigured endpoint",
+            )
+        }
+        return accumulateBody(channel, op, target, cap, seed = body, seedExtra = probe)
     }
 
     private suspend fun accumulateBody(
