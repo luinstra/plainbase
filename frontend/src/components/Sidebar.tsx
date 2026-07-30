@@ -1,52 +1,127 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRouter, useRouterState } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { treeQuery } from "../api/queries";
 import type { RootTree, TreeFolder, TreeNode, TreePage } from "../api/types";
-import { folderTitle, landingPage, nonLandingChildren, pageHref } from "../lib/tree";
+import { readSidebarPreferences, writeSidebarPreferences } from "../lib/sidebarPreferences";
+import {
+  ancestorFolderPaths,
+  entryFor,
+  folderTitle,
+  landingPage,
+  nonLandingChildren,
+  pageHref,
+  primaryEntry,
+  rootOfLocation,
+} from "../lib/tree";
 import { ROOT_UNAVAILABLE } from "./ErrorView";
+import { RootSelector } from "./RootSelector";
 
 /**
  * Tree navigation, fed by `GET /api/v1/tree`; links are the node `url`s verbatim.
  *
- * ONE `<aside>` however many roots are configured, with one `<section>` per root entry inside it: the
- * aside is the layout column (a fixed `w-[clamp(...)]` slice of the Shell's flex row), so a second one
- * is a second column and N roots would squeeze `<main>` off the screen. `.pb-sidebar`, `data-pb-sidebar`,
- * `data-pb-root-section` and `data-pb-root-label` are stable selectors (public customization API).
+ * ONE `<aside>` and one visible root section however many roots are configured: a themed selector
+ * switches the section when multiple roots exist. The aside remains one fixed slice of the Shell's
+ * flex row, so additional roots never squeeze `<main>` off the screen. `.pb-sidebar`,
+ * `data-pb-sidebar` and `data-pb-root-section` are stable selectors (public customization API).
+ * `data-pb-root-label` moved to `RootSelector.tsx`; it marks listbox options only while the menu is
+ * open, so customization CSS must not expect a persistent sidebar label node.
  *
- * Section headers appear only with 2+ roots: with the single root every legacy install has, a header
- * reading an internal root name is noise. A root that is not SERVING gets the outage notice instead of its tree, never
- * an empty list - see [RootSection].
+ * The selector appears only with 2+ roots: with the single root every legacy install has, a control
+ * containing an internal root name is noise. A root that is not SERVING gets the outage notice
+ * instead of its tree, never an empty list - see [RootSection].
  */
 export function Sidebar() {
   const { data } = useQuery(treeQuery);
+  const router = useRouter();
   const currentPathname = useRouterState({ select: (s) => s.location.pathname });
+  const [preferences, setPreferences] = useState(readSidebarPreferences);
+  const roots = data?.roots ?? [];
+  const locationRoot = rootOfLocation(roots, currentPathname);
+  const locationEntry = locationRoot ? entryFor(roots, locationRoot) : null;
+  const storedEntry = preferences.selectedRoot ? entryFor(roots, preferences.selectedRoot) : null;
+  const selectedEntry =
+    locationEntry ?? storedEntry ?? primaryEntry(roots) ?? roots[0] ?? null;
+
+  useEffect(() => {
+    if (!selectedEntry) return;
+    setPreferences((current) => {
+      if (current.selectedRoot === selectedEntry.root) return current;
+      const next = { ...current, selectedRoot: selectedEntry.root };
+      writeSidebarPreferences(next);
+      return next;
+    });
+  }, [selectedEntry]);
+
+  const storeOpenFolders = (root: string, paths: string[]) => {
+    setPreferences((current) => {
+      const next = {
+        ...current,
+        openFolders: { ...current.openFolders, [root]: paths },
+      };
+      writeSidebarPreferences(next);
+      return next;
+    });
+  };
+
   if (!data) return <aside className="pb-sidebar w-[clamp(16rem,20vw,22rem)] shrink-0" data-pb-sidebar />;
   return (
     <aside
       className="pb-sidebar sticky top-14 h-[calc(100vh-3.5rem)] w-[clamp(16rem,20vw,22rem)] shrink-0 overflow-y-auto border-r border-edge bg-raised max-lg:hidden"
       data-pb-sidebar
     >
-      {data.roots.map((entry) => (
-        <RootSection key={entry.root} entry={entry} labeled={data.roots.length > 1} currentPathname={currentPathname} />
-      ))}
+      {data.roots.length > 1 && selectedEntry && (
+        <RootSelector
+          entries={data.roots}
+          selected={selectedEntry}
+          onSelect={(entry) => {
+            if (!entry.tree.url) return;
+            setPreferences((current) => {
+              const next = { ...current, selectedRoot: entry.root };
+              writeSidebarPreferences(next);
+              return next;
+            });
+            router.history.push(entry.tree.url);
+          }}
+        />
+      )}
+      {selectedEntry && (
+        <RootSection
+          key={selectedEntry.root}
+          entry={selectedEntry}
+          currentPathname={currentPathname}
+          initialOpenFolders={preferences.openFolders[selectedEntry.root] ?? []}
+          onOpenFoldersChange={(paths) => storeOpenFolders(selectedEntry.root, paths)}
+        />
+      )}
     </aside>
   );
 }
 
-/** One root's slice of the sidebar: its label (multi-root only) over its tree — or over the outage
- *  notice, because the server EMPTIES a down root's subtree (tree.ts [FolderEntry]) and rendering
- *  those absent children would tell the reader their docs are gone. */
-function RootSection({ entry, labeled, currentPathname }: { entry: RootTree; labeled: boolean; currentPathname: string }) {
+/** The selected root's slice of the sidebar: its tree or the outage notice, because the server
+ *  EMPTIES a down root's subtree (tree.ts [FolderEntry]) and rendering those absent children would
+ *  tell the reader their docs are gone. */
+function RootSection({
+  entry,
+  currentPathname,
+  initialOpenFolders,
+  onOpenFoldersChange,
+}: {
+  entry: RootTree;
+  currentPathname: string;
+  initialOpenFolders: readonly string[];
+  onOpenFoldersChange: (paths: string[]) => void;
+}) {
   return (
     <section data-pb-root-section={entry.root}>
-      {labeled && (
-        <h2 className="px-4 pt-5 font-mono text-xs font-medium uppercase tracking-wide text-faint" data-pb-root-label={entry.root}>
-          {entry.root}
-        </h2>
-      )}
       {entry.available ? (
-        <SidebarNav tree={entry.tree} root={entry.root} currentPathname={currentPathname} />
+        <SidebarNav
+          tree={entry.tree}
+          root={entry.root}
+          currentPathname={currentPathname}
+          initialOpenFolders={initialOpenFolders}
+          onOpenFoldersChange={onOpenFoldersChange}
+        />
       ) : (
         <RootUnavailableNotice root={entry.root} />
       )}
@@ -75,7 +150,48 @@ function RootUnavailableNotice({ root }: { root: string }) {
  * built from the root name (the tree node carries none of its own), and one identifier called `root`
  * meaning both is how a rooted href silently reverts to a bare one.
  */
-export function SidebarNav({ tree, root, currentPathname }: { tree: TreeFolder; root: string; currentPathname: string }) {
+export function SidebarNav({
+  tree,
+  root,
+  currentPathname,
+  initialOpenFolders = [],
+  onOpenFoldersChange,
+}: {
+  tree: TreeFolder;
+  root: string;
+  currentPathname: string;
+  initialOpenFolders?: readonly string[];
+  onOpenFoldersChange?: (paths: string[]) => void;
+}) {
+  const [openFolders, setOpenFolders] = useState(
+    () => new Set([...initialOpenFolders, ...ancestorFolderPaths(tree, root, currentPathname)]),
+  );
+  useEffect(() => {
+    const ancestors = ancestorFolderPaths(tree, root, currentPathname);
+    if (ancestors.length === 0) return;
+    // Navigation-derived ancestor opens are not persisted by this effect, but the next explicit
+    // toggle stores the whole open set, ancestors included.
+    setOpenFolders((current) => {
+      if (ancestors.every((path) => current.has(path))) return current;
+      return new Set([...current, ...ancestors]);
+    });
+  }, [currentPathname, root, tree]);
+
+  // Compute-before-set is deliberate: the persist callback needs the next set, and a functional
+  // updater would either nest the parent's setPreferences inside this updater or move persistence
+  // to an effect that would also store navigation-derived opens. The closure is fresh because the
+  // only other writer (the ancestor effect) commits before any user event can fire.
+  const toggleFolder = (path: string) => {
+    const next = new Set(openFolders);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    setOpenFolders(next);
+    onOpenFoldersChange?.([...next].sort());
+  };
+
   // The root has no folder row of its own, so its landing (index/README) is surfaced as an explicit
   // home link AT THE TOP, pointing at the server-issued folder URL, never the page's bare URL.
   const home = landingPage(tree);
@@ -83,28 +199,83 @@ export function SidebarNav({ tree, root, currentPathname }: { tree: TreeFolder; 
     <nav aria-label="Documentation tree" className="px-4 py-5 text-sm">
       <ul className="space-y-0.5">
         {home && tree.url && <PageRow href={tree.url} status={home.status} label={home.title} currentPathname={currentPathname} />}
-        <NodeRows nodes={nonLandingChildren(tree)} root={root} currentPathname={currentPathname} />
+        <NodeRows
+          nodes={nonLandingChildren(tree)}
+          root={root}
+          currentPathname={currentPathname}
+          openFolders={openFolders}
+          onToggleFolder={toggleFolder}
+        />
       </ul>
     </nav>
   );
 }
 
-function NodeList({ nodes, root, currentPathname }: { nodes: TreeNode[]; root: string; currentPathname: string }) {
+function NodeList({
+  nodes,
+  root,
+  currentPathname,
+  openFolders,
+  onToggleFolder,
+}: {
+  nodes: TreeNode[];
+  root: string;
+  currentPathname: string;
+  openFolders: ReadonlySet<string>;
+  onToggleFolder: (path: string) => void;
+}) {
   return (
     <ul className="space-y-0.5">
-      <NodeRows nodes={nodes} root={root} currentPathname={currentPathname} />
+      <NodeRows
+        nodes={nodes}
+        root={root}
+        currentPathname={currentPathname}
+        openFolders={openFolders}
+        onToggleFolder={onToggleFolder}
+      />
     </ul>
   );
 }
 
-function NodeRows({ nodes, root, currentPathname }: { nodes: TreeNode[]; root: string; currentPathname: string }) {
-  return nodes.map((node) =>
+function NodeRows({
+  nodes,
+  root,
+  currentPathname,
+  openFolders,
+  onToggleFolder,
+}: {
+  nodes: TreeNode[];
+  root: string;
+  currentPathname: string;
+  openFolders: ReadonlySet<string>;
+  onToggleFolder: (path: string) => void;
+}) {
+  return sidebarOrder(nodes).map((node) =>
     node.type === "folder" ? (
-      <FolderItem key={node.path} folder={node} root={root} currentPathname={currentPathname} />
+      <FolderItem
+        key={node.path}
+        folder={node}
+        root={root}
+        currentPathname={currentPathname}
+        open={openFolders.has(node.path)}
+        openFolders={openFolders}
+        onToggleFolder={onToggleFolder}
+      />
     ) : (
       <PageItem key={node.id} page={node} root={root} currentPathname={currentPathname} />
     ),
   );
+}
+
+/**
+ * Group folders before pages while retaining the server's wire order within each group. That order
+ * already carries `_folder.yaml order:` when present and the server's title fallback otherwise.
+ */
+function sidebarOrder(nodes: TreeNode[]): TreeNode[] {
+  return [
+    ...nodes.filter((node) => node.type === "folder"),
+    ...nodes.filter((node) => node.type === "page"),
+  ];
 }
 
 /**
@@ -117,8 +288,21 @@ function NodeRows({ nodes, root, currentPathname }: { nodes: TreeNode[]; root: s
  * nested page row, so a `FolderItem` that drops the root un-roots every page below the top level
  * while the top-level rows keep looking right.
  */
-function FolderItem({ folder, root, currentPathname }: { folder: TreeFolder; root: string; currentPathname: string }) {
-  const [open, setOpen] = useState(true);
+function FolderItem({
+  folder,
+  root,
+  currentPathname,
+  open,
+  openFolders,
+  onToggleFolder,
+}: {
+  folder: TreeFolder;
+  root: string;
+  currentPathname: string;
+  open: boolean;
+  openFolders: ReadonlySet<string>;
+  onToggleFolder: (path: string) => void;
+}) {
   const label = folderTitle(folder);
   const active = folder.url !== null && folder.url === currentPathname;
   // The rows actually rendered under this folder, computed ONCE: a `url`-folder surfaces its landing
@@ -132,6 +316,7 @@ function FolderItem({ folder, root, currentPathname }: { folder: TreeFolder; roo
   // Content paths are unique per folder; encodeURIComponent keeps that uniqueness (injective)
   // while clearing every id-hostile character (whitespace, quotes) from the DOM id.
   const childrenId = `pb-folder-children-${encodeURIComponent(folder.path)}`;
+  const labelContent = <span className="min-w-0">{label}</span>;
   return (
     <li data-pb-nav-item="folder">
       <div className="flex items-center">
@@ -141,7 +326,7 @@ function FolderItem({ folder, root, currentPathname }: { folder: TreeFolder; roo
           aria-expanded={expandable ? open : undefined}
           aria-controls={childrenId}
           aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => onToggleFolder(folder.path)}
           className="rounded p-1 text-faint hover:bg-hovered hover:text-ink disabled:invisible"
           data-pb-folder-toggle
         >
@@ -153,19 +338,25 @@ function FolderItem({ folder, root, currentPathname }: { folder: TreeFolder; roo
             aria-current={active ? "page" : undefined}
             className={
               active
-                ? "block flex-1 rounded px-2 py-1 font-semibold text-ink"
-                : "block flex-1 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+                ? "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink"
+                : "flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
             }
           >
-            {label}
+            {labelContent}
           </a>
         ) : (
-          <span className="block flex-1 px-2 py-1 font-semibold text-ink">{label}</span>
+          <span className="flex flex-1 items-center px-2 py-1 font-semibold text-ink">{labelContent}</span>
         )}
       </div>
       {open && expandable && (
         <div id={childrenId} className="ml-3 border-l border-edge pl-2">
-          <NodeList nodes={visibleChildren} root={root} currentPathname={currentPathname} />
+          <NodeList
+            nodes={visibleChildren}
+            root={root}
+            currentPathname={currentPathname}
+            openFolders={openFolders}
+            onToggleFolder={onToggleFolder}
+          />
         </div>
       )}
     </li>
@@ -179,7 +370,7 @@ function PageItem({ page, root, currentPathname }: { page: TreePage; root: strin
 /**
  * A leaf nav link. `href` is usually the page's own url, but the root landing passes the folder
  * url so a folder's index/README has exactly one path. `data-pb-status` stays a
- * stable selector for the active-tint/slash-bar rule.
+ * stable selector for status-aware customization.
  */
 function PageRow({
   href,
@@ -201,11 +392,11 @@ function PageRow({
         aria-current={active ? "page" : undefined}
         className={
           active
-            ? "block rounded px-2 py-1 text-ink"
-            : "block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
+            ? "flex items-center rounded px-2 py-1 text-ink"
+            : "flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"
         }
       >
-        {label}
+        <span className="min-w-0">{label}</span>
       </a>
     </li>
   );

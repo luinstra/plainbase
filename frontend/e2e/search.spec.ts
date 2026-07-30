@@ -43,6 +43,15 @@ test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", 
 
   // ArrowDown selects the top match, Enter navigates to its node.url.
   await page.keyboard.press("ArrowDown");
+  const selected = page.locator("[data-pb-search-active]");
+  await expect(selected).toHaveCount(1);
+  const selectedStyle = await selected.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    paletteBackground: getComputedStyle(element.closest("[data-pb-search]")!).backgroundColor,
+    marker: getComputedStyle(element, "::before").content,
+  }));
+  expect(selectedStyle.background).not.toBe(selectedStyle.paletteBackground);
+  expect(selectedStyle.marker).toBe("none");
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL("/docs/guides/deploy-guide");
   expect(searchRequests).toBe(0);

@@ -1,14 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { expectNoReload, expectReloaded, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
+import {
+  expandAllSidebarFolders,
+  expectNoReload,
+  expectReloaded,
+  gotoExpectStatus,
+  plantNoReloadMarker,
+  selectSidebarRoot,
+} from "./helpers";
 
 /**
  * The two-root SPA, against a real two-root server (playwright.config.ts `multi-root` project:
  * SMOKE_ROOTS=multi, `docs` + `extra`, both serving).
  *
- * The layout assertion is the point. The sidebar `<aside>` IS a layout column — a fixed
- * `w-[clamp(16rem,20vw,22rem)]` slice of the Shell's flex row — so rendering one per root squeezes
- * `<main>` by 256 px per extra root, and with enough roots off the screen entirely. One aside, N
- * sections inside it.
+ * The sidebar remains one layout column and exposes one root tree at a time. The selector is
+ * navigation: choosing a root pushes its server-issued root URL without reloading the shell.
  */
 
 // The chromium default viewport (1280x720, unoverridden in playwright.config.ts) puts the sidebar
@@ -28,34 +33,50 @@ const MIN_MAIN_WIDTH = 900;
  */
 const LOSER = "01970000-0000-7000-8000-00000000f003";
 
-test("one sidebar, one section per root: <main> keeps its width", async ({ page }) => {
+test("one sidebar, one root selector, and one visible tree: <main> keeps its width", async ({ page }) => {
   await gotoExpectStatus(page, "/docs/welcome");
   await expect(page.locator(".pb-prose h1")).toContainText("Welcome to Demo Docs");
 
   await expect(page.locator("aside[data-pb-sidebar]")).toHaveCount(1);
+  const selector = page.locator("[data-pb-root-selector]");
+  await expect(selector).toHaveAttribute("data-pb-selected-root", "docs");
+  await selector.click();
+  await expect(page.locator("[data-pb-root-menu]")).toBeVisible();
+  await expect(page.locator("[data-pb-root-option]")).toHaveCount(2);
+  await expect(page.locator('[data-pb-root-option="docs"]')).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-pb-root-option="extra"]')).toHaveAttribute("aria-selected", "false");
+
   const sections = page.locator("[data-pb-root-section]");
-  await expect(sections).toHaveCount(2);
+  await expect(sections).toHaveCount(1);
   await expect(sections.nth(0)).toHaveAttribute("data-pb-root-section", "docs");
-  await expect(sections.nth(1)).toHaveAttribute("data-pb-root-section", "extra");
 
   const main = await page.locator("[data-pb-main]").boundingBox();
   expect(main?.width ?? 0).toBeGreaterThanOrEqual(MIN_MAIN_WIDTH);
+
+  const active = page.locator('.pb-sidebar [aria-current="page"]');
+  await expect(active).toHaveCount(1);
+  const activeStyle = await active.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    sidebarBackground: getComputedStyle(element.closest(".pb-sidebar")!).backgroundColor,
+    marker: getComputedStyle(element, "::before").content,
+  }));
+  expect(activeStyle.background).not.toBe(activeStyle.sidebarBackground);
+  expect(activeStyle.marker).toBe("none");
 });
 
-test("both roots are labeled and navigable from the one sidebar", async ({ page }) => {
+test("both roots are selectable and navigable from the one sidebar", async ({ page }) => {
   await page.goto("/docs/welcome");
 
-  // Section headers appear only with 2+ roots. With one root a header reading "docs" is noise.
-  await expect(page.locator('[data-pb-root-label="docs"]')).toHaveText("docs");
-  await expect(page.locator('[data-pb-root-label="extra"]')).toHaveText("extra");
-
-  // Each section's links stay inside its own root: the tree urls are root-qualified verbatim.
   const docs = page.locator('[data-pb-root-section="docs"]');
+  await expandAllSidebarFolders(docs);
   const docsHrefs = await docs.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(docsHrefs.length).toBeGreaterThan(0);
   for (const href of docsHrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/))/);
 
+  await selectSidebarRoot(page, "extra");
+  await expect(page).toHaveURL("/extra");
   const extra = page.locator('[data-pb-root-section="extra"]');
+  await expandAllSidebarFolders(extra);
   const hrefs = await extra.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(0);
   for (const href of hrefs) expect(href).toMatch(/^\/(?:extra(?:$|\/)|p\/extra(?:$|\/))/);
@@ -66,6 +87,9 @@ test("both roots are labeled and navigable from the one sidebar", async ({ page 
 
   // Back into docs from the same aside, with no reload or second nav column.
   await plantNoReloadMarker(page);
+  await selectSidebarRoot(page, "docs");
+  await expect(page).toHaveURL("/docs");
+  await expandAllSidebarFolders(page.locator('[data-pb-root-section="docs"]'));
   await page.locator('[data-pb-root-section="docs"]').getByRole("link", { name: "Getting Started" }).first().click();
   await expect(page).toHaveURL("/docs/guides/getting-started");
   await expect(page.locator(".pb-prose h1")).toContainText("Getting Started");
@@ -78,6 +102,7 @@ test("the sidebar's loser row links to the ROOTED permalink", async ({ page }) =
   // where the sidebar locator would time out whether or not the href is rooted.
   await page.goto("/extra");
 
+  await expandAllSidebarFolders(page.locator('[data-pb-root-section="extra"]'));
   await expect(page.locator(`[data-pb-root-section="extra"] a[href="/p/extra/${LOSER}"]`)).toHaveCount(1);
   // A bare permalink now answers 300 for this id, so it must appear NOWHERE on the page.
   await expect(page.locator(`a[href="/p/${LOSER}"]`)).toHaveCount(0);
@@ -85,6 +110,7 @@ test("the sidebar's loser row links to the ROOTED permalink", async ({ page }) =
 
 test("clicking the loser row renders it, on a corpus where its id is DUPLICATED", async ({ page }) => {
   await page.goto("/extra");
+  await expandAllSidebarFolders(page.locator('[data-pb-root-section="extra"]'));
   await page.locator(`[data-pb-root-section="extra"] a[href="/p/extra/${LOSER}"]`).click();
 
   await expect(page).toHaveURL(`/p/extra/${LOSER}`);
@@ -153,6 +179,9 @@ test("the same id in two roots resolves to ITS OWN root across a client-side nav
   await expect(page.locator("[data-pb-breadcrumbs] li").first()).toContainText("docs");
 
   await plantNoReloadMarker(page);
+  await selectSidebarRoot(page, "extra");
+  await expect(page).toHaveURL("/extra");
+  await expandAllSidebarFolders(page.locator('[data-pb-root-section="extra"]'));
   await page.locator(`[data-pb-root-section="extra"] a[href="/p/extra/${LOSER}"]`).click();
   await expect(page).toHaveURL(`/p/extra/${LOSER}`);
   await expectNoReload(page);

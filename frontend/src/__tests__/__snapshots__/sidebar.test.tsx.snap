@@ -28,10 +28,14 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <a
-          class="block flex-1 rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
+          class="flex flex-1 items-center rounded px-2 py-1 font-semibold text-ink hover:bg-hovered hover:text-ink"
           href="/docs/guides"
         >
-          Guides
+          <span
+            class="min-w-0"
+          >
+            Guides
+          </span>
         </a>
       </div>
       <div
@@ -46,11 +50,15 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           >
             <a
               aria-current="page"
-              class="block rounded px-2 py-1 text-ink"
+              class="flex items-center rounded px-2 py-1 text-ink"
               data-pb-status="active"
               href="/docs/guides/deploy-guide"
             >
-              Deploy Guide
+              <span
+                class="min-w-0"
+              >
+                Deploy Guide
+              </span>
             </a>
           </li>
         </ul>
@@ -76,9 +84,13 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
           />
         </button>
         <span
-          class="block flex-1 px-2 py-1 font-semibold text-ink"
+          class="flex flex-1 items-center px-2 py-1 font-semibold text-ink"
         >
-          shadowed-folder
+          <span
+            class="min-w-0"
+          >
+            shadowed-folder
+          </span>
         </span>
       </div>
       <div
@@ -92,11 +104,15 @@ exports[`SidebarNav > matches the stable-markup snapshot 1`] = `
             data-pb-nav-item="page"
           >
             <a
-              class="block rounded px-2 py-1 text-muted hover:bg-hovered hover:text-ink"
+              class="flex items-center rounded px-2 py-1 text-ink hover:bg-hovered"
               data-pb-status="active"
               href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
             >
-              Shadowed Page
+              <span
+                class="min-w-0"
+              >
+                Shadowed Page
+              </span>
             </a>
           </li>
         </ul>

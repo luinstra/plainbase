@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { expectNoReload, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
+import { expandAllSidebarFolders, expectNoReload, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
 
 /**
  * Chunk-7 acceptance smoke flow, driven against the real server (CIO + embedded SPA)
@@ -12,6 +12,7 @@ test("sidebar links are root-qualified URLs from the tree; clicking navigates wi
 
   const sidebar = page.locator(".pb-sidebar");
   await expect(sidebar).toBeVisible();
+  await expandAllSidebarFolders(sidebar);
   const hrefs = await sidebar.locator("a[href]").evaluateAll((anchors) => anchors.map((a) => a.getAttribute("href")));
   expect(hrefs.length).toBeGreaterThan(30); // the whole fixture tree is in the nav
   for (const href of hrefs) expect(href).toMatch(/^\/(?:docs(?:$|\/)|p\/docs(?:$|\/))/); // tree urls verbatim (incl. bare /docs home); losers via /p/docs/{id}
@@ -151,10 +152,11 @@ test("sidebar folder labels navigate to the landing view; the chevron still coll
   await page.goto("/docs/welcome");
   const sidebar = page.locator(".pb-sidebar");
 
-  await sidebar.getByRole("button", { name: "Collapse Guides" }).click();
   await expect(sidebar.getByRole("link", { name: "Deploy Guide" })).toBeHidden();
   await sidebar.getByRole("button", { name: "Expand Guides" }).click();
   await expect(sidebar.getByRole("link", { name: "Deploy Guide" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Collapse Guides" }).click();
+  await expect(sidebar.getByRole("link", { name: "Deploy Guide" })).toBeHidden();
 
   await plantNoReloadMarker(page);
   await sidebar.getByRole("link", { name: "Guides", exact: true }).click();

@@ -34,8 +34,8 @@ structure, far stronger identity. Five moves:
 2. **JetBrains Mono earns a job** — the voice of *structure*: file paths, tags,
    status, keys, code, breadcrumb separators.
 3. **IBM Plex Sans for everything human** — UI + reading. (Deliberately not Inter.)
-4. **The slash is a motif** — a skewed teal mark = "you are here": active nav,
-   breadcrumb separators, callout bars.
+4. **The slash stays restrained**: it remains in the teal wordmark and as the literal
+   breadcrumb separator. Active and selected rows use quiet tint instead of a slash bar.
 5. **Restraint by default** — type and spacing carry it; decoration is rare.
 
 ---
@@ -120,9 +120,9 @@ alternates on `[data-theme="dark"][data-dark="deep"|"medium"]`.)
 
 ### Spacing / radius / motif
 - 4px base step. Radii small: **4 / 6 / 9px** (`--r-sm/md/lg`). This is a precise tool.
-- **Slash motif:** a 3px-wide bar, `transform: skewX(-12deg)`, in `--pb-accent`.
-  Used as the active-nav indicator, the breadcrumb separator glyph (`/` in mono,
-  skewed, teal), and the left bar on callouts.
+- **Slash cue:** reserve it for the wordmark and the literal breadcrumb separator glyph
+  (`/`). Active navigation and selected search rows use `--pb-accent-soft` with no slash
+  bar. Callouts use a straight left border.
 
 ---
 
@@ -162,17 +162,22 @@ right side = `⌘K` search trigger + theme toggle. Body = sidebar + content.
 
 ### 2. Sidebar — `Sidebar.tsx` / `.pb-sidebar`  → ref: any screen
 **Keep it minimal.** A file tree. The only enrichments that survived review:
+- **Root selector**: with 2+ configured roots, a listbox above the tree switches the
+  displayed root (`RootSelector.tsx`); a single-root install renders no selector.
 - **Disclosure caret**: a CSS chevron (not a glyph dot, not an icon). Draw with
   borders on a `::before`, ~7px box, 2px stroke, `--pb-text-muted`; rotate −45°→45°
-  on open. (Rejected: folder icons, page icons, status dots, a workspace header
-  with a book glyph, a "+ New" button, a git-status footer. Don't add these.)
-- **Folder labels**: `font-weight: 600`, `--pb-text`. Page links: `--pb-text-muted`,
-  normal weight. This contrast is what makes a directory read as a directory.
-- **Active page**: `--pb-accent-soft` background + the teal slash bar (`::before`).
+  on open.
+- **Tree decoration**: sidebar tree rows carry no folder icons, page icons, or status
+  dots. Folder-landing cards keep their established folder icons. A workspace header
+  with a book glyph, a "+ New" button, and a git-status footer remain rejected.
+- **Folder labels**: `font-weight: 600`, `--pb-text`. Page links: `--pb-text`, normal
+  weight, because pages read as first-class entries. Grouping and indentation distinguish
+  folders from pages instead of text brightness.
+- **Active page**: a quiet `--pb-accent-soft` background with no slash bar.
 
 ### 3. Doc reading page — `PageView.tsx` (Breadcrumbs + Prose + Toc)  → ref: `Doc Reading Page.html`
 Three columns: sidebar · reading column (≤720px) · right rail.
-- **Header band (chrome, above the markdown):** breadcrumbs (teal-slash separators).
+- **Header band (chrome, above the markdown):** breadcrumbs with literal `/` separators.
   The markdown body renders **standalone** below it — never inject app chrome
   *inside* the rendered markdown.
 - **Reading column = your `.pb-prose`.** First paragraph is a normal paragraph
@@ -194,7 +199,7 @@ child listing instead:
 - **Subfolders → cards** in a responsive `auto-fill, minmax(216px,1fr)` grid. Card =
   folder icon + name + one-line description (from `_folder.yaml`) + `path/ · N pages`.
 - **Pages → a compact list** in a `auto-fill, minmax(310px,1fr)` grid (flows to
-  columns when long). Row = page icon + title + status dot + date.
+  columns when long). Row = status dot + title + date.
 - These auto-fill grids are what handle all shapes: many folders, many files, or both.
 
 ### 5. Welcome / home  → ref: `Welcome Page.html`
@@ -207,10 +212,12 @@ app-rendered featured chrome.
 ### 6. Search palette — `SearchPalette.tsx` / `.pb-search`  → ref: `Search Palette.html`
 `⌘K` overlay over a dimmed app. Input row (⌕ + input + `esc`) · results · footer hints.
 - Live filter over titles / headings / snippets / paths; title-prefix matches rank first.
-- Each result: page (doc icon) or heading (`#`) + title with the matched substring
-  in `<mark>` (`--pb-accent`) + a snippet line + a mono path. Empty query = a "Recent"
-  group; no match = a "No matches" state.
-- Keyboard: ↑/↓ move (teal-slash marker on the selected row), ↵ open, Esc close.
+- Quick-switch results show a title, optional root badge, and mono path. Full-text
+  results show a title, optional root badge, heading breadcrumb, and snippet with
+  matched fragments in `<mark>` (`--pb-accent`). Empty query = a "Recent" group;
+  no match = a "No matches" state.
+- Keyboard: ↑/↓ move with a quiet `--pb-accent-soft` tint on the selected row, ↵ open,
+  Esc close. There is no slash marker.
 - A "snippets on/off" density option is reasonable to keep.
 
 ### 7. Editor — NEW  → ref: `Editor.html`
@@ -239,8 +246,8 @@ with zero extra wiring. Preview = your server renderer (or `markdown-it`).
 ## Assets
 - **Wordmark:** `frontend/public/plainbase-logo.svg` / `-dark.svg` (already in repo;
   teal slash + JetBrains Mono letters). No new brand assets introduced.
-- **Icons** (folder, page, git, search, sun/moon): simple inline stroke SVGs in the
-  references — swap for your icon set of choice; keep them 1.8px stroke, ~16px.
+- **Icons:** keep simple inline stroke SVGs where the shipped surface calls for them,
+  including folder-landing cards and theme controls. The sidebar tree stays icon-free.
 
 ## Files in this bundle
 - `reference/plainbase.css` — the complete working token + component stylesheet
