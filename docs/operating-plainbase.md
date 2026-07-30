@@ -47,6 +47,18 @@ until you restore it and restart - see
 
 ### Platform note - the 5-second promise binds Linux
 
+Native Windows and direct Windows JVM operation are intentionally deferred. On a Windows host, the
+supported path is the `linux-x64` binary under WSL2, with both `CONTENT_DIR` and `DATA_DIR` inside the
+distribution's Linux filesystem (for example, `/home/<user>/plainbase/content` and
+`/home/<user>/plainbase/data`). Do not place either directory under `/mnt/c`, `/mnt/d`, or another
+Windows-mounted drive: the paths look Linux-like, but the underlying Windows filesystem retains
+different permission, symlink, file-identity, watcher, and performance semantics.
+
+For Docker Desktop, use the same boundary: run Compose from a checkout inside the WSL distribution
+and bind-mount content from that Linux filesystem. A Docker-managed named volume is appropriate for
+`DATA_DIR`; bind-mounting `C:\...` into a Linux container does not turn the underlying filesystem into
+a native Linux filesystem.
+
 - **Linux** (the deployment platform) uses `inotify`: file-change events arrive in milliseconds. The
   "searchable within 5 seconds" promise is an automated test on Linux.
 - **macOS** dev boxes use the JDK's `PollingWatchService` (multi-second poll interval; the

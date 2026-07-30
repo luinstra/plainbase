@@ -4,6 +4,10 @@
 # HOST LOOPBACK only (127.0.0.1), so it is reachable for local dev but NOT exposed to the LAN.
 # This tier runs plaintext with auth.mode=off (no login) — a knowing dev posture, not production.
 #
+# On Windows, run Compose from a WSL2 checkout and keep bind-mounted content in the distribution's
+# Linux filesystem (for example, under /home), not under /mnt/c or another Windows-mounted drive.
+# The DATA_DIR below remains on the Docker-managed `plainbase-data` named volume.
+#
 # For a real MULTI-USER deployment, do NOT publish this app directly: front it with a
 # TLS-terminating reverse proxy that authenticates users. The reference SSO topology
 # (Caddy + oauth2-proxy) is the STANDALONE stack under `deploy/proxy/` — see

@@ -132,10 +132,14 @@ green credentialed `plainbase s3-smoke` from the native binary, cert validation 
 | macos-arm64 | **PROVEN** 2026-07-06 and re-proven 2026-07-29 - real R2, full TLS handshake + signed round-trip, cert validation on (macOS trust store). Both records are true: a header-emission regression landed between them (`063018c`, 2026-07-09) and the 07-29 run - the first credentialed smoke since - caught and fixed it, so the re-proof is load-bearing, not ceremonial. |
 | linux-x64 | TLS + SigV4 **proven credential-free in CI** (the `plainbase spike` 9/9 self-signed-loopback check runs on every PR). The real system-CA-trust-against-R2-under-Linux leg is a documented nice-to-have (owner-deferred 2026-07-07), NOT release-gating. |
 | linux-arm64 | Docs-only until a green native s3-smoke is recorded. |
-| windows-x64 | Docs-only until a green native s3-smoke is recorded. |
 
 Update this table only from a recorded green `s3-smoke` run (per the
 [pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)); it is a docs record, not a code gate.
+
+A WSL2 deployment follows the `linux-x64` row when it runs the Linux binary and keeps `DATA_DIR`
+inside the distribution's Linux filesystem (for example, under `/home`), not under `/mnt/c` or
+another Windows-mounted drive. See the
+[operating guidance](../operating-plainbase.md#platform-note---the-5-second-promise-binds-linux).
 
 **The container tier (universal JAR / `docker compose`) is the documented fallback** and the home of the
 escape hatch: if a platform's native TLS ever regresses, run the JAR under a JVM (whose TLS/crypto is
