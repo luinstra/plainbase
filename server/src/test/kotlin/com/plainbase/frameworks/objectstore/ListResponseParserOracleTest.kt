@@ -24,7 +24,7 @@ import kotlin.random.Random
 /**
  * Differential-oracle fuzz for [ListResponseParser]: the JDK's built-in DOM parser (test-only,
  * never in the native image - JAXP-in-prod was explicitly rejected in the plan's Q7) referees
- * the hand-rolled five-element extractor, hunting extract-the-WRONG-text bugs.
+ * the hand-rolled extractor (Key/ETag/IsTruncated/token fail-closed, Size lenient), hunting extract-the-WRONG-text bugs.
  *
  * **The invariant is one-directional.** The extractor is deliberately a strict-subset
  * recognizer, so a refusal ([ObjectStoreException]) asserts nothing: refusing what a real
@@ -110,6 +110,14 @@ private fun assertOracleAgrees(xml: String, accepted: ListResponseParser.Listing
         withClue("Contents[$index] ETag text disagrees (xml = $xml)") {
             entry.etag shouldBe element.singleChildText("ETag")
         }
+        // Size agreement is ONE-DIRECTIONAL, unlike Key/ETag equality: the lenient extractor may
+        // conservatively yield null on a lexical shape DOM normalizes away (a spaced start tag, a
+        // character reference, element children), but when it DOES extract a number, that number must
+        // be exactly what a real parser reads. Extracting nothing is safe; extracting a WRONG size is
+        // the failure this referees.
+        withClue("Contents[$index] Size extracted a value the DOM oracle disagrees with (xml = $xml)") {
+            (entry.size == null || entry.size == element.domDeclaredSize()) shouldBe true
+        }
     }
 
     val truncated = document.topLevelTexts("IsTruncated")
@@ -123,6 +131,21 @@ private fun assertOracleAgrees(xml: String, accepted: ListResponseParser.Listing
 }
 
 private fun org.w3c.dom.NodeList.asElements(): List<Element> = (0 until length).map { item(it) as Element }
+
+/**
+ * The lenient declared-size spec, re-derived from REAL element structure: exactly one <Size> element
+ * (descendant scope, matching the extractor's whole-block scan), no attributes (the extractor only
+ * reads the plain form), text a plain non-negative Long. Anything else is null, never a failure -
+ * Size is advisory and must not be able to refuse.
+ */
+private fun Element.domDeclaredSize(): Long? {
+    val sizes = getElementsByTagName("Size").asElements()
+    val single = sizes.singleOrNull() ?: return null
+    if (single.attributes.length > 0) return null
+    val text = single.textContent
+    if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
+    return text.toLongOrNull()
+}
 
 /** The oracle's view of a target inside one Contents block: exactly one descendant, its text. */
 private fun Element.singleChildText(tag: String): String {
@@ -247,8 +270,23 @@ private val unicodeSpaceNoise = listOf(
 private val contentsNoise = listOf(
     "",
     "<LastModified>2026-07-01T12:00:00.000Z</LastModified>",
-    "<Size>409</Size>",
     "<StorageClass>STANDARD</StorageClass>",
+    // Size is now a READ (lenient) target, not noise: every well-formed variant must ACCEPT with the
+    // parser and DOM agreeing on the extracted-or-null value (the domDeclaredSize comparison above).
+    "<Size>409</Size>", // plain - extracts
+    "<Size>0</Size>", // zero - extracts
+    "<Size>-1</Size>", // signed - null
+    "<Size>1e3</Size>", // not a plain integer - null
+    "<Size></Size>", // empty - null
+    "<Size>99999999999999999999</Size>", // overflows Long - null
+    "<Size>1</Size><Size>2</Size>", // duplicated - ambiguous, null
+    "<Size unit=\"bytes\">409</Size>", // attributed form - null
+    "<Size/>", // self-closing - null
+    "<Sizes>7</Sizes>", // a DIFFERENT element sharing the prefix - not a Size at all
+    "<Owner><Size>77</Size></Owner>", // nested - descendant scope still extracts, both sides agree
+    "<Size >409</Size>", // spaced start tag - DOM reads 409, the raw scan conservatively abstains
+    "<Size>4&#48;9</Size>", // character reference - DOM decodes to 409, the raw scan abstains
+    "<Size><Depth>1</Depth></Size>", // element children - textContent flattens, the raw scan abstains
     "<Owner><ID>abc123</ID><DisplayName>owner</DisplayName></Owner>",
     // Unbalanced / mis-nested ignorable siblings: the extractor reads only <Key>/<ETag> and would
     // otherwise silently ignore these, but the DOM oracle rejects the whole document - so an ACCEPT

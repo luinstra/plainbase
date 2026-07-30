@@ -1,11 +1,13 @@
 package com.plainbase.frameworks.objectstore
 
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
@@ -20,7 +22,10 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.close
 import io.ktor.utils.io.toByteArray
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.time.Instant
@@ -46,16 +51,27 @@ class S3ObjectClientTest : FunSpec({
                         method = call.request.httpMethod.value,
                         uri = call.request.uri,
                         headers = call.request.headers.entries().associate { it.key.lowercase() to it.value.joinToString(",") },
+                        // UNCOLLAPSED: one pair per wire value. The collapsed map above once hid a real 403:
+                        // the client emitted Content-Type twice (case-variant names), `associate` kept one,
+                        // and verifySignature recomputed from the collapsed view - green over a signature R2
+                        // rejects. Multiplicity must be recorded, or it cannot be asserted.
+                        wireHeaders = call.request.headers.entries().flatMap { entry -> entry.value.map { entry.key to it } },
                         body = call.receiveChannel().toByteArray(),
                     )
                     recorded += request
                     val response = respond()
                     response.headers.forEach { (name, value) -> call.response.header(name, value) }
-                    if (response.omitContentLength) {
-                        // Chunked write -> no Content-Length header (the M5 absent-length case); body stays empty.
-                        call.respondBytesWriter(status = response.status) { }
-                    } else {
-                        call.respondBytes(response.body, status = response.status)
+                    when {
+                        response.omitContentLength ->
+                            // Chunked write -> no Content-Length header (the M5 absent-length case); body stays empty.
+                            call.respondBytesWriter(status = response.status) { }
+                        response.declaredLengthOverride != null -> {
+                            // A LYING Content-Length: declare more than the writer sends, then end the
+                            // stream - the wire shape of a truncated transfer surfacing as clean EOF.
+                            call.response.header(HttpHeaders.ContentLength, response.declaredLengthOverride.toString())
+                            call.respondBytesWriter(status = response.status) { writeFully(response.body) }
+                        }
+                        else -> call.respondBytes(response.body, status = response.status)
                     }
                 }
             }
@@ -190,7 +206,8 @@ class S3ObjectClientTest : FunSpec({
         val page = client.list("smoke-1/", maxKeys = 2)
         page.isTruncated shouldBe true
         page.nextContinuationToken shouldBe "1/tok+X="
-        page.contents shouldBe listOf(ListResponseParser.Entry("smoke-1/a.md", "\"e1\""))
+        // No <Size> in this response: absent stays null (the size is DECLARED data, never invented).
+        page.contents shouldBe listOf(ListResponseParser.Entry("smoke-1/a.md", "\"e1\"", size = null))
         val first = recorded.single()
         first.uri shouldBe "/scratch?list-type=2&encoding-type=url&prefix=smoke-1%2F&max-keys=2"
         first.verifySignature()
@@ -200,6 +217,38 @@ class S3ObjectClientTest : FunSpec({
         val second = recorded.single()
         second.uri shouldContain "continuation-token=1%2Ftok%2BX%3D"
         second.verifySignature()
+    }
+
+    test("a truncated GET (declared Content-Length, short body) REFUSES - never a silent short body") {
+        // The exact-size read path holds the declared length in hand; returning the short body would
+        // let the caller recordConfirmed corrupt bytes under the REAL etag - a mirror entry that never
+        // self-heals because the etag matches and nothing re-fetches. Mirrors getToFile's guard.
+        // Truncation has TWO wire shapes, and both must refuse:
+        // (1) clean-EOF under-send - a well-behaved Ktor server cannot produce it, so the guard is
+        //     driven directly through the readDeclaredBody seam with a raw channel;
+        val cleanEof = ByteChannel()
+        cleanEof.writeFully("hello".toByteArray())
+        cleanEof.flush()
+        cleanEof.close()
+        shouldThrow<ObjectStoreException> {
+            client.readDeclaredBody(cleanEof, declared = 10, op = "GET", target = "truncated.md", cap = 1024)
+        }.message.orEmpty() shouldContain "truncated"
+        // (2) a killed connection (what the real server produces when it cannot honor its declared
+        //     length) - refused via the engine's own exception; the property is NO silent short body.
+        respond = {
+            FakeResponse(
+                HttpStatusCode.OK,
+                mapOf("ETag" to "\"t1\""),
+                body = "hello".toByteArray(),
+                declaredLengthOverride = 10,
+            )
+        }
+        shouldThrowAny { client.get("truncated.md") }
+    }
+
+    test("the exact-size path round-trips a declared-length body byte-for-byte (the common GET shape)") {
+        respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"x1\""), body = "exact body bytes".toByteArray()) }
+        checkNotNull(client.get("exact.md")).bytes.decodeToString() shouldBe "exact body bytes"
     }
 
     test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {
@@ -288,9 +337,13 @@ class S3ObjectClientTest : FunSpec({
             // Bigger than READ_CHUNK so the streaming write AND the streaming file-hash both span >1 chunk.
             val body = ByteArray(200_000) { (it * 31 % 251).toByte() }
             Files.write(source, body)
-            client.putFromFile("bundle.bin", source) shouldBe PutOutcome.Stored("\"e4\"")
+            // contentType rides the STREAMED path too: WriteChannelContent has no contentType of its own,
+            // so the signed header is the one on the wire - same exactly-once + signed==wire guarantees
+            // the byte-array PUT proves, asserted here for the body shape that diverges.
+            client.putFromFile("bundle.bin", source, contentType = "application/x-git-bundle") shouldBe PutOutcome.Stored("\"e4\"")
             val request = recorded.single()
             request.method shouldBe "PUT"
+            request.headers["content-type"] shouldBe "application/x-git-bundle"
             request.body.contentEquals(body).shouldBeTrue() // the streamed body arrived intact
             // LOAD-BEARING: the `body.contentEquals` + `x-amz-content-sha256 == sha256Hex(body)` assertions
             // are what prove the STREAMED body equals the STREAM-computed signed hash. Do NOT drop them and
@@ -330,6 +383,21 @@ class S3ObjectClientTest : FunSpec({
         ("SECRET-TAIL" in message) shouldBe false
     }
 
+    test("a case-variant of an engine-managed header name refuses at the signing seam") {
+        // The exactly-once wire test catches the 403 empirically; this seam guard catches the CLASS at
+        // construction time - Content-Length has the identical case-sensitive skip Content-Type had, so
+        // a future extraHeaders caller must not be able to reintroduce the double emission.
+        shouldThrow<IllegalArgumentException> {
+            client.signedRequest(HttpMethod.Put, "a.md", extraHeaders = mapOf("content-length" to "3"))
+        }.message.orEmpty() shouldContain "exact-case"
+        // Host is in the same class from the SIGNING side: a lowercase "host" would coexist with the
+        // exact-case Host key in the map, sign host twice in canonical form, and 403 - while the
+        // ignoreCase wire drop hides both from the wire, making it invisible to the multiplicity check.
+        shouldThrow<IllegalArgumentException> {
+            client.signedRequest(HttpMethod.Get, "a.md", extraHeaders = mapOf("host" to "evil.example"))
+        }.message.orEmpty() shouldContain "exact-case"
+    }
+
     test("virtual-host addressing: bucket prefixes the host, drops out of the path, and is the signed host") {
         // A virtual-host `bucket.host` does not resolve on the loopback server, so this proves the
         // construction + signature off the wire, through the signedRequest seam. Path-style above
@@ -349,7 +417,7 @@ class S3ObjectClientTest : FunSpec({
             val get = it.signedRequest(HttpMethod.Get, "dir/a.md")
             get.host shouldBe "scratch.127.0.0.1"
             get.encodedPath shouldBe "/dir/a.md" // bucket is NOT in the path under virtual-host
-            get.signedHeaders["host"] shouldBe "scratch.127.0.0.1:$port" // the signed host == the connect host
+            get.signedHeaders[HttpHeaders.Host] shouldBe "scratch.127.0.0.1:$port" // the signed host == the connect host
             get.verifySignature()
 
             val list = it.signedRequest(HttpMethod.Get, key = null, query = listOf("list-type" to "2"))
@@ -364,6 +432,8 @@ private class RecordedRequest(
     val uri: String,
     /** Names lowercased at capture (HTTP header names are case-insensitive). */
     val headers: Map<String, String>,
+    /** Every wire value as its own pair, duplicates preserved - the view [headers] collapses. */
+    val wireHeaders: List<Pair<String, String>>,
     val body: ByteArray,
 )
 
@@ -373,6 +443,8 @@ private class FakeResponse(
     val body: ByteArray = ByteArray(0),
     /** When true the server writes chunked (no Content-Length header) - the M5 absent-length case. */
     val omitContentLength: Boolean = false,
+    /** When set, the wire declares THIS Content-Length while [body] holds fewer bytes - a truncated transfer. */
+    val declaredLengthOverride: Long? = null,
 )
 
 /**
@@ -385,6 +457,18 @@ private fun RecordedRequest.verifySignature() {
     val query = url.parameters.entries().flatMap { (name, values) -> values.map { name to it } }
     val authorization = checkNotNull(headers["authorization"])
     val signedHeaderNames = authorization.substringAfter("SignedHeaders=").substringBefore(",").split(";")
+    // Every signed header must arrive EXACTLY once. A duplicate is a signature break even when each copy
+    // carries the signed value: the endpoint canonicalizes all copies joined, the client signed one. The
+    // recomputation below cannot see this (it reads the collapsed map), so it is asserted on the raw wire
+    // pairs first. This is the check that was missing when a case-variant Content-Type shipped twice.
+    // Scope, stated honestly: only headers named in SignedHeaders= are counted (an unsigned header may
+    // legally repeat), and the VALUE equality of the surviving copy is the collapsed-map recomputation's
+    // job below - with exactly one copy, the collapsed value IS the wire value, so the pair of checks
+    // covers value drift without a separate assertion.
+    signedHeaderNames.forEach { name ->
+        val copies = wireHeaders.count { (wireName, _) -> wireName.equals(name, ignoreCase = true) }
+        check(copies == 1) { "signed header '$name' appeared $copies times on the wire; signed exactly once" }
+    }
     val recomputed = SigV4Signer("AKIDTEST", "SECRETTEST", "auto", "s3").sign(
         method = method,
         canonicalPath = url.encodedPath,

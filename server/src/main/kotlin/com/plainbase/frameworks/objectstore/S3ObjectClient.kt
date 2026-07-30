@@ -19,9 +19,12 @@ import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -202,7 +205,8 @@ class S3ObjectClient(
      * per-request timeout) WITHOUT setting a body - shared by [execute] (ByteArray body) and [putFromFile]
      * (streamed file body). Ktor derives Host from url.host:port, so only host is dropped here. Content-Type,
      * when present, is appended as the RAW signed string (M1): a normalized type would differ from the signed
-     * value and 403; the body carries no content type of its own, so this header is the one on the wire.
+     * value and 403; the body carries no content type of its own, so this header is the one on the wire -
+     * exactly once, which is only true under the exact-case key documented at the signed-headers map.
      */
     private fun HttpRequestBuilder.applySignedRequest(request: SignedRequest, requestTimeoutMillis: Long?) {
         // Per-request timeout override (B-C3): a large bundle transfer must not share the short page-op request
@@ -218,7 +222,12 @@ class S3ObjectClient(
                 encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
             }
         }
-        request.signedHeaders.forEach { (name, value) -> if (name != "host") headers.append(name, value) }
+        // ignoreCase: Host must be dropped whatever case it is keyed under. CIO skips its own derived
+        // Host on a case-INSENSITIVE contains, so an appended variant would not duplicate - it would
+        // silently REPLACE the derived value, overriding the signed connect host on the wire.
+        request.signedHeaders.forEach { (name, value) ->
+            if (!name.equals(HttpHeaders.Host, ignoreCase = true)) headers.append(name, value)
+        }
         headers.append(HttpHeaders.Authorization, request.authorization)
     }
 
@@ -245,12 +254,17 @@ class S3ObjectClient(
         override val contentLength: Long = Files.size(source)
 
         override suspend fun writeTo(channel: ByteWriteChannel) {
-            Files.newInputStream(source).use { input ->
-                val buffer = ByteArray(READ_CHUNK)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read == -1) break
-                    channel.writeFully(buffer, 0, read)
+            // The WHOLE loop runs on Dispatchers.IO, not just the open: `input.read` is the blocking
+            // call that matters, and a half-wrap implies an offload the loop never had. writeFully is
+            // suspend-safe from inside the IO context.
+            withContext(Dispatchers.IO) {
+                Files.newInputStream(source).use { input ->
+                    val buffer = ByteArray(READ_CHUNK)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        channel.writeFully(buffer, 0, read)
+                    }
                 }
             }
         }
@@ -286,11 +300,29 @@ class S3ObjectClient(
         val payloadHash = payloadHashOverride ?: SigV4Signer.sha256Hex(body ?: ByteArray(0))
         val signedHeaders = buildMap {
             // Sign the exact host[:port] the engine will send (the port only when non-default).
-            put("host", if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
-            put("x-amz-content-sha256", payloadHash)
-            put("x-amz-date", amzDate)
-            contentType?.let { put("content-type", it) }
+            put(HttpHeaders.Host, if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
+            put(X_AMZ_CONTENT_SHA, payloadHash)
+            put(X_AMZ_DATE, amzDate)
+            // MUST be Ktor's exact-case constant, never a lowercase literal: mergeHeaders skips
+            // Content-Type from the request headers CASE-SENSITIVELY then re-emits it from a
+            // case-INSENSITIVE fallback, so a lowercase key ships the header TWICE and every
+            // body-carrying request 403s with SignatureDoesNotMatch (the ENGINE_MANAGED_HEADERS guard
+            // below enforces this for the whole class). A raw header append is used, rather than the
+            // Ktor-idiomatic body-carried ContentType, because parse-and-toString normalizes the value
+            // and breaks signed==wire (regressed once, 063018c). The signer lowercases names for the
+            // canonical form, so the signature itself is unaffected by this key's case.
+            contentType?.let { put(HttpHeaders.ContentType, it) }
             putAll(extraHeaders)
+        }
+        // The exact-case rule as CODE, not a comment: any future extraHeaders caller passing a
+        // case-variant of an engine-managed name would reintroduce the double-emission 403 for that
+        // header (Content-Length has the identical case-sensitive skip Content-Type had).
+        signedHeaders.keys.forEach { name ->
+            val managed = ENGINE_MANAGED_HEADERS.firstOrNull { it.equals(name, ignoreCase = true) }
+            require(managed == null || managed == name) {
+                "header '$name' must be keyed by Ktor's exact-case constant '$managed': Ktor's engine " +
+                    "special-cases that name CASE-SENSITIVELY, and any other spelling ships it twice"
+            }
         }
         val signed = signer.sign(method.value, requestPath, query, signedHeaders, payloadHash, amzDate)
         return SignedRequest(
@@ -323,7 +355,62 @@ class S3ObjectClient(
      */
     private suspend fun readBody(response: HttpResponse, op: String, target: String, cap: Long): ByteArray {
         val channel = response.bodyAsChannel()
+        // Exact-size fast path: with a trusted-shape Content-Length, ONE allocation holds the body. The
+        // accumulator path below peaks at ~2x the body (the growing buffer plus the final copy), which
+        // matters on the boot path where hydrate buffers a whole chunk of bodies - "budget plus one
+        // body" is only an honest bound when a body costs one body. Length-less/chunked responses and
+        // hostile over-length bodies fall through to the accumulator, cap still enforced.
+        val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+        if (declared != null && declared in 0..minOf(cap, MAX_EXACT_BODY_BYTES)) {
+            return readDeclaredBody(channel, declared.toInt(), op, target, cap)
+        }
+        return accumulateBody(channel, op, target, cap, seed = null, seedExtra = null)
+    }
+
+    /**
+     * The exact-size read: ONE allocation of [declared] bytes. A clean-EOF SHORT body REFUSES,
+     * mirroring getToFile - the declared length is in hand, and a short body silently returned would
+     * be recordConfirmed under the real etag: a corrupt mirror entry that never self-heals (the etag
+     * matches, so nothing re-fetches). Internal seam so the truncation guard is unit-testable with a
+     * raw channel: a well-behaved Ktor test server cannot fake a clean-EOF under-send (it kills the
+     * connection instead, which refuses via the engine's own exception - also covered).
+     */
+    internal suspend fun readDeclaredBody(channel: ByteReadChannel, declared: Int, op: String, target: String, cap: Long): ByteArray {
+        val body = ByteArray(declared)
+        var filled = 0
+        while (filled < body.size) {
+            val read = channel.readAvailable(body, filled, body.size - filled)
+            if (read == -1) {
+                throw ObjectStoreException("$op '$target' truncated: read $filled bytes of a declared $declared")
+            }
+            filled += read
+        }
+        val probe = ByteArray(1)
+        if (channel.readAvailable(probe, 0, 1) == -1) return body
+        // More bytes than declared: hostile or broken. Refuse before another read when the seed
+        // already exceeds the cap (declared == cap plus the probe byte), else keep accumulating
+        // under the cap.
+        if (declared >= cap) {
+            channel.cancel(null)
+            throw ObjectStoreException(
+                "$op '$target' response body exceeds the $cap-byte cap - raise PLAINBASE_MAX_ASSET_BYTES if " +
+                    "this is a legitimate large object, else check for a hostile or misconfigured endpoint",
+            )
+        }
+        return accumulateBody(channel, op, target, cap, seed = body, seedExtra = probe)
+    }
+
+    private suspend fun accumulateBody(
+        channel: ByteReadChannel,
+        op: String,
+        target: String,
+        cap: Long,
+        seed: ByteArray?,
+        seedExtra: ByteArray?,
+    ): ByteArray {
         val out = ByteArrayOutputStream()
+        seed?.let { out.write(it) }
+        seedExtra?.let { out.write(it) }
         val chunk = ByteArray(READ_CHUNK)
         while (true) {
             val read = channel.readAvailable(chunk, 0, chunk.size)
@@ -338,6 +425,12 @@ class S3ObjectClient(
                 )
             }
             out.write(chunk, 0, read)
+        }
+        if (out.size().toLong() > cap) {
+            throw ObjectStoreException(
+                "$op '$target' response body exceeds the $cap-byte cap - raise PLAINBASE_MAX_ASSET_BYTES if " +
+                    "this is a legitimate large object, else check for a hostile or misconfigured endpoint",
+            )
         }
         return out.toByteArray()
     }
@@ -384,6 +477,20 @@ class S3ObjectClient(
     }
 
     companion object {
+        /**
+         * Header names Ktor's client engine special-cases with CASE-SENSITIVE comparisons
+         * (mergeHeaders' skip list plus writeHeaders' Expect/Transfer-Encoding handling): a signed
+         * map keyed by any other case-variant of these ships the header twice and 403s.
+         */
+        private val ENGINE_MANAGED_HEADERS =
+            listOf(HttpHeaders.ContentType, HttpHeaders.ContentLength, HttpHeaders.TransferEncoding, HttpHeaders.Expect, HttpHeaders.Host)
+
+        private const val X_AMZ_CONTENT_SHA = "x-amz-content-sha256"
+        private const val X_AMZ_DATE = "x-amz-date"
+
+        /** The exact-size read path needs a JVM array, so a declared length past Int range takes the accumulator. */
+        private const val MAX_EXACT_BODY_BYTES = Int.MAX_VALUE.toLong()
+
         private const val MAX_UTF8_CONTINUATION_BYTES = 3
         private const val UTF8_LEAD_MASK = 0xC0
         private const val UTF8_CONTINUATION_PREFIX = 0x80

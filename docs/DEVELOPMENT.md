@@ -59,7 +59,8 @@ gate a *release* that ships (or touches) the object-storage backend.
 1. **Credentialed `plainbase s3-smoke` from the NATIVE binary, per release platform** (R2 primary; S3
    compat when creds exist), certificate validation ON (the command has no insecure flag). Record green
    runs in the deploy guide's [platform table](deploy/object-storage.md#platform-support-honestly).
-   Current honest state: macos-arm64 PROVEN 2026-07-06 (real R2); linux-x64 credential-free TLS+SigV4
+   Current honest state: macos-arm64 PROVEN 2026-07-06, re-proven 2026-07-29 after the Content-Type
+   emission regression the second run caught (see the platform table); linux-x64 credential-free TLS+SigV4
    spike banked in CI; the linux-x64 **real-R2** credentialed smoke is a documented nice-to-have
    (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 / windows-x64 docs-only
    until proven.
@@ -78,7 +79,8 @@ gate a *release* that ships (or touches) the object-storage backend.
 3. **The two required DR drills**, if the release touched storage / git / DR code paths: content restore
    and bundle-history restore (recipes in
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse
-   each for real and fill in its "not yet rehearsed" placeholder in the ops doc.
+   each for real and REFRESH its dated "Rehearsed for real" record in the ops doc (date, provider,
+   what was observed) - the record reflects the most recent rehearsal, not a one-time checkbox.
 4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build`, the native
    gate (`nativeCompile` -> `nativeTest` -> spike 9/9).
 

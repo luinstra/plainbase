@@ -517,37 +517,43 @@ class ObjectContentStore(
             return
         }
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
-        val fetched = changed.mapNotNull { (path, entry) ->
-            runCatching {
-                // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
-                // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
-                // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
-                runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
-            }.getOrElse { failure ->
-                rethrowError(failure)
-                logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
-                null
-            }
-        }
 
         val events = mutableListOf<TreePath>()
-        for ((path, entry, body) in fetched) {
-            synchronized(applyLock) {
-                if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
-                // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
-                // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
-                // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
-                // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
-                if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
-                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
-                if (failure == null) {
-                    state.recordConfirmed(path, body.etag)
-                    events.add(path)
-                } else {
-                    // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
-                    // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
-                    state.invalidate(path)
-                    logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+        // Fetch-then-apply PER PACKED CHUNK, exactly like hydrate: a poll after a bulk bucket restore
+        // sees the whole corpus as changed, and an unchunked fetch would hold every body in memory at
+        // once - the same buffering packForFetch exists to bound. GETs stay sequential (poll is a
+        // background cadence, not a boot race); only the buffering is chunked.
+        for (chunk in packForFetch(changed.entries.toList())) {
+            val fetched = chunk.mapNotNull { (path, entry) ->
+                runCatching {
+                    // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
+                    // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
+                    // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
+                    runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
+                }.getOrElse { failure ->
+                    rethrowError(failure)
+                    logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
+                    null
+                }
+            }
+            for ((path, entry, body) in fetched) {
+                synchronized(applyLock) {
+                    if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
+                    // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
+                    // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
+                    // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
+                    // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
+                    if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
+                    val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
+                    if (failure == null) {
+                        state.recordConfirmed(path, body.etag)
+                        events.add(path)
+                    } else {
+                        // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
+                        // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
+                        state.invalidate(path)
+                        logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+                    }
                 }
             }
         }
@@ -609,7 +615,7 @@ class ObjectContentStore(
         // self-heal on boot (never vanish from the rebuilt index until mirror-state is also wiped).
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
         var healed = 0
-        for (chunk in changed.entries.chunked(FETCH_CHUNK)) {
+        for (chunk in packForFetch(changed.entries.toList())) {
             // Bounded-parallel GETs, then the chunk's applies strictly AFTER the fetches complete. Each
             // result is (path, fetched-or-null): a null is a GET failure OR a 404-while-LIST-reported-it.
             val gate = Semaphore(FETCH_PARALLELISM)
@@ -1160,8 +1166,65 @@ class ObjectContentStore(
         /** Bulk drift folds into one synthetic overflow event - consumers only schedule (§B2). */
         private const val OVERFLOW_THRESHOLD = 16
 
-        private const val FETCH_CHUNK = 64
-        private const val FETCH_PARALLELISM = 16
+        // Sized by the 2026-07-29 credentialed budget drill (R2, 1000 pages, residential link). At
+        // 16-way lockstep (chunk == parallelism) cold hydrate paid the slowest GET's tail latency on
+        // every wave; 64-way concurrency plus a larger chunk keeps 64 GETs continuously in flight
+        // within a chunk (the semaphore refills as fetches finish), so the straggler tail is paid per
+        // chunk, not per 64 keys. Together: cold boot 25.3s -> 9.6s in that drill, hydrate being ~8.5s
+        // of the 9.6s (the rest is rebuild+serve).
+        //
+        // A chunk retains every fetched body until its applies run, so the chunk is bounded by BYTES,
+        // not only by key count: the mirror funnel admits assets as well as pages, and a count-only
+        // chunk of large assets would hold the whole set resident on the boot path. LIST's declared
+        // sizes drive the packing; they are advisory (the GET response cap is the per-body
+        // enforcement). A provider that DECLARES sizes honestly is bounded by FETCH_BYTE_BUDGET plus
+        // one body; one that OMITS them is bounded by 64 bodies per chunk (the unknown-size share in
+        // packForFetch); only a MISDECLARING provider reaches the countCap-bodies-at-the-response-cap
+        // ceiling. 1000 drill pages declared ~300 B each pack into 4 chunks, preserving the measured
+        // pipeline behavior.
+        private const val FETCH_CHUNK = 256
+        private const val FETCH_PARALLELISM = 64
+        private const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
+
+        /**
+         * Greedy chunking of [entries] for the fetch-then-apply loops (hydrate and poll): a chunk
+         * closes when adding the next entry would push its DECLARED byte sum past [byteBudget] or its
+         * count past [countCap]. A single entry always gets a chunk (even oversized - the GET cap
+         * enforces the real per-body bound). An entry with an unknown declared size counts as a
+         * 1/[FETCH_PARALLELISM] share of the budget: a chunk holds at most 64 unknowns (the
+         * pre-packer exposure ceiling) with no all-or-nothing cliff - one sized entry in a null-heavy
+         * listing must not force every unknown to pack alone.
+         */
+        internal fun <K> packForFetch(
+            entries: List<Map.Entry<K, MirrorListedEntry>>,
+            byteBudget: Long = FETCH_BYTE_BUDGET,
+            countCap: Int = FETCH_CHUNK,
+        ): List<List<Map.Entry<K, MirrorListedEntry>>> {
+            // Divides by FETCH_PARALLELISM even under a caller-supplied byteBudget (tests): the share
+            // deliberately tracks the REAL concurrency constant, so 64 unknowns per chunk = one full
+            // wave of in-flight GETs, whatever budget the caller passed.
+            val unknownShare = (byteBudget / FETCH_PARALLELISM).coerceAtLeast(1)
+            return buildList {
+                var chunk = mutableListOf<Map.Entry<K, MirrorListedEntry>>()
+                var bytes = 0L
+                for (entry in entries) {
+                    val declared = entry.value.declaredSize ?: unknownShare
+                    // Overflow-safe close check: `bytes + declared` wraps negative after a huge declared
+                    // size and would never exceed the budget again, voiding the bound. Both operands of
+                    // the subtraction form are non-negative only when bytes <= byteBudget, so an already
+                    // over-budget chunk (a lone oversized entry) closes on ANY follower.
+                    val wouldExceed = bytes > byteBudget || declared > byteBudget - bytes
+                    if (chunk.isNotEmpty() && (wouldExceed || chunk.size == countCap)) {
+                        add(chunk)
+                        chunk = mutableListOf()
+                        bytes = 0L
+                    }
+                    chunk.add(entry)
+                    bytes = if (declared > Long.MAX_VALUE - bytes) Long.MAX_VALUE else bytes + declared
+                }
+                if (chunk.isNotEmpty()) add(chunk)
+            }
+        }
 
         private val logger = KotlinLogging.logger {}
     }

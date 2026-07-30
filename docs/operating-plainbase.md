@@ -534,14 +534,17 @@ There is no on-demand forced-hydrate admin action today. Restore recipes reflect
   (`rclone copy backup/ <remote>:<bucket>/<prefix>` or `aws s3 sync backup/ s3://<bucket>/<prefix>/
   --endpoint-url <endpoint>`), then EITHER **restart the server** (boot `hydrate()` pulls the restored
   keys) OR **wait up to `PLAINBASE_S3_POLL_SECONDS`** for the background poll to fetch the changed keys.
-  Do NOT expect `rescan` to surface the restored content. _Rehearsed for real: not yet rehearsed_ (an
-  owner-run pre-release gate - see the [pre-release checklist](DEVELOPMENT.md#pre-release-checklist);
-  record the date + provider here once run).
+  Do NOT expect `rescan` to surface the restored content. _Rehearsed for real: 2026-07-29 against
+  Cloudflare R2 (1000-page corpus). The full chain held: the restored page 404'd before the drop,
+  `rescan` answered 200 while the page stayed 404 (proving rescan never reads the bucket), and a
+  restart served it._
 - **Bundle history restore (required drill, `git.enabled=true` only).** Wipe `DATA_DIR`, boot, and
   verify `git -C <DATA_DIR>/mirror log` shows history up to the last shipped bundle plus exactly one
   `reconcile: bucket state at boot` commit for the divergence (the mechanism documented under
   [Object-storage backend](#object-storage-backend-storagebackendobject) above). _Rehearsed for real:
-  not yet rehearsed._
+  2026-07-29 against Cloudflare R2. After a full `DATA_DIR` loss the recovery boot (which pauses
+  visibly for the synchronous DR-bundle re-ship) restored the pre-loss history plus exactly one
+  reconcile commit, and the edited page's content survived byte-for-byte._
 - **Versioned-S3 per-object restore (BONUS tier, documented, never drilled).** On a versioning-enabled
   S3 bucket, `aws s3api list-object-versions` then copy a prior `versionId` over the current key; then
   restart or wait for the poll (same surfacing rule - not `rescan`). Versioned-S3 deployments only; R2
@@ -745,8 +748,13 @@ local tripwire), checked by `scripts/ops/cloud-startup-budget.sh` against a real
   exec -> first 200 `/healthz` INCLUDING that rebuild. At ~1k pages the rebuild can dominate - which is
   why the drill is measured at the ~1k contract, not against a trivial corpus.
 
-Measured medians (provider, platform, corpus size, date): _not yet rehearsed_ - an owner-run pre-release
-gate; record them here once the drill runs.
+Measured medians (provider, platform, corpus size, date): **cold 9562 ms / warm 2106 ms** - Cloudflare
+R2, macOS (Apple Silicon, native binary) over a residential link, 1000-page corpus, 2026-07-29. Both
+under budget (cold < 10 s, warm < 3 s). Read the cold number with its environment in mind: the budget
+models the deployed topology (server adjacent to the bucket, ~1-3 ms RTT), so a residential-link pass
+is the conservative case. The same drill measured 16-way lockstep fetching at ~25 s cold, which is what
+sized the hydrate pipeline (64 concurrent fetches; chunks close at a 64 MiB declared-byte budget or
+256 keys, whichever comes first).
 
 ### Git-write stall bound
 

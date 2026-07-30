@@ -1,18 +1,19 @@
 package com.plainbase.frameworks.objectstore
 
 /**
- * The ListObjectsV2 five-element extractor (plan Q7, theme 4): reads exactly `<Contents>`
- * boundaries and, inside them, `<Key>` + `<ETag>`, plus the top-level `<IsTruncated>` and
- * `<NextContinuationToken>`. Deliberately NOT an XML parser - requests always send
+ * The ListObjectsV2 extractor (plan Q7, theme 4): reads exactly `<Contents>` boundaries and, inside
+ * them, `<Key>` + `<ETag>` (fail-closed) plus the ADVISORY `<Size>` (lenient, see [sizeOf]), plus the
+ * top-level `<IsTruncated>` and `<NextContinuationToken>`. Deliberately NOT an XML parser - requests always send
  * `encoding-type=url`, so `<Key>` (the one externally-influenced field) arrives
  * percent/form-encoded ASCII, and every other target is provider-generated. Keys are returned
  * RAW (still URL-encoded); decoding is the consumer's job, behind the recorded live captures
  * (the C4 percent-decode + `TreePath.require` funnel, R8).
  *
- * Fail-closed, never fail-wrong: anything outside the frozen shape (markup that could make a
- * real parser read DIFFERENT text - CDATA, comments, processing instructions past the XML
- * declaration, attributes on a target element, a missing/duplicated target) throws
- * [ObjectStoreException] rather than extracting a guess. Guarded by golden tests plus a
+ * Fail-closed, never fail-wrong, for every LOAD-BEARING target (Key/ETag/IsTruncated/token):
+ * anything outside the frozen shape (markup that could make a real parser read DIFFERENT text -
+ * CDATA, comments, processing instructions past the XML declaration, attributes on a target
+ * element, a missing/duplicated target) throws [ObjectStoreException] rather than extracting a
+ * guess. The advisory `<Size>` alone is read leniently and can never refuse (see [sizeOf]). Guarded by golden tests plus a
  * differential fuzz against the JDK DOM parser as a test-only oracle (accept implies
  * oracle-agrees; refusing what the oracle can read is always safe).
  */
@@ -34,8 +35,15 @@ object ListResponseParser {
 
     data class Listing(val contents: List<Entry>, val isTruncated: Boolean, val nextContinuationToken: String?)
 
-    /** One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned. */
-    data class Entry(val key: String, val etag: String)
+    /**
+     * One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned.
+     * [size] is the declared object size in bytes, read LENIENTLY (see [sizeOf]): a plain
+     * `<Size>digits</Size>` extracts, every other well-formed shape - absent included - is null,
+     * never a refusal. It is a DECLARED value used to bound the fetch loops' per-chunk buffering;
+     * the GET response cap stays the per-body enforcement, so a lying LIST degrades the bound,
+     * never correctness.
+     */
+    data class Entry(val key: String, val etag: String, val size: Long?)
 
     fun parse(xml: String): Listing {
         // A leading U+FEFF (BOM) is NOT tolerated (P2): the oracle parses a StringReader of already-decoded
@@ -70,7 +78,7 @@ object ListResponseParser {
                     ?: refuse("unclosed <Contents> block")
                 val block = body.substring(open + "<Contents>".length, close)
                 if ("<Contents" in block) refuse("nested <Contents> block")
-                add(Entry(key = requiredText(block, "Key"), etag = requiredText(block, "ETag")))
+                add(Entry(key = requiredText(block, "Key"), etag = requiredText(block, "ETag"), size = sizeOf(block)))
                 from = close + "</Contents>".length
             }
         }
@@ -95,13 +103,48 @@ object ListResponseParser {
         // mis-nested sibling a real DOM parser rejects (a `<Bar>` with no close, a stray `</Bar>`, crossed
         // nesting) would otherwise be silently ignored and a bogus Entry returned. Checked LAST so the
         // specific shape refusals above keep their exact messages; balanced ignorable siblings
-        // (<LastModified>, <Size>, <Owner>...</Owner>, ...) still pass untouched.
+        // (<LastModified>, <Owner>...</Owner>, ...) still pass untouched, and <Size> - read leniently,
+        // never refused - passes through this check like any other element.
         requireWellFormed(body)
         return Listing(contents, truncated, token)
     }
 
     private fun requiredText(scope: String, tag: String): String =
         optionalText(scope, tag) ?: refuse("missing <$tag> element")
+
+    /**
+     * The declared `<Size>` of a `<Contents>` block: LENIENT, never a refusal, unlike every other read
+     * field - deliberately. Size feeds only hydrate's chunk packing (an advisory memory bound), so the
+     * fail-closed rationale does not transfer: for Key/ETag, extracting different text than a real
+     * parser is fail-WRONG; a weird Size merely degrades one chunk's packing. Refusing here would give
+     * an advisory field boot-refusal power (`hydrate` turns a parse refusal into exit(1)), turning one
+     * provider quirk into a server that will not boot. So: exactly one plain `<Size>digits</Size>`
+     * extracts; anything else - absent, duplicated, attributed, signed, padded, non-integer, overflow -
+     * yields null, and [requireWellFormed] remains the backstop that still refuses genuinely
+     * ill-formed XML. Scope is the WHOLE block substring (descendant included - a nested
+     * `<Owner><Size>` counts as the single occurrence), matching the DOM oracle's descendant scan.
+     */
+    private fun sizeOf(block: String): Long? {
+        val occurrences = buildList {
+            var i = block.indexOf("<Size")
+            while (i >= 0) {
+                // Element boundary: "<Sizes>" is a different element and must not count (XML Name
+                // continues through 's'), so only a terminator right after the name is a <Size> element.
+                when (block.getOrNull(i + "<Size".length)) {
+                    '>', '/', ' ', '\t', '\n', '\r' -> add(i)
+                    else -> {}
+                }
+                i = block.indexOf("<Size", i + 1)
+            }
+        }
+        val open = occurrences.singleOrNull() ?: return null
+        if (!block.startsWith("<Size>", open)) return null
+        val start = open + "<Size>".length
+        val close = block.indexOf("</Size>", start).takeIf { it >= 0 } ?: return null
+        val text = block.substring(start, close)
+        if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
+        return text.toLongOrNull()
+    }
 
     /** The single `<tag>text</tag>` inside [scope]: null when absent, refusal on ambiguity. */
     private fun optionalText(scope: String, tag: String): String? {

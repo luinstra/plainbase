@@ -43,7 +43,7 @@ a heavy dependency or silently loses updates under concurrency.
   operators in `configuration.md` and `operating-plainbase.md`.
 - **Hand-rolled SigV4 over the allowlisted Ktor CIO engine.** The client
   (`frameworks/objectstore/S3ObjectClient.kt`) is a hand-written SigV4 signer over the already-present
-  CIO client - **zero new dependencies**. LIST responses are parsed by a hand-rolled five-element
+  CIO client - **zero new dependencies**. LIST responses are parsed by a hand-rolled minimal
   extractor (`frameworks/objectstore/ListResponseParser.kt`) rather than pulling in an XML library. The
   library scout that disqualified MinIO / aws-sdk-kotlin / bluetape4k (and AWS SDK v2 +
   url-connection-client) is recorded in the owner decisions below.

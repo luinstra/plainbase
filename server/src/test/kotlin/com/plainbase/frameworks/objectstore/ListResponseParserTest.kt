@@ -7,7 +7,8 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 
 /**
- * Golden + refusal tests for the five-element ListObjectsV2 extractor. The response bodies here
+ * Golden + refusal tests for the ListObjectsV2 extractor (Key/ETag fail-closed, Size lenient,
+ * IsTruncated/NextContinuationToken top-level). The response bodies here
  * are hand-authored in the documented S3/R2 response shape; the raw per-provider captures the
  * credentialed `s3-smoke` records (plan C0) join them as goldens once the live run happens.
  * The fail-closed grammar boundary itself is fuzzed against the JDK DOM oracle in
@@ -47,8 +48,12 @@ class ListResponseParserTest : FunSpec({
         listing.nextContinuationToken shouldBe null
         listing.contents shouldBe listOf(
             // Keys stay RAW/URL-encoded (encoding-type=url); etags keep their quotes (opaque).
-            ListResponseParser.Entry("notes/a.md", "\"fba9dede5f27731c9771645a39863328\""),
-            ListResponseParser.Entry("notes/sp%20ace%20%26%20unicode%20%E3%82%AC.md", "\"9b2cf535f27731c9771645a39863328c-2\""),
+            ListResponseParser.Entry("notes/a.md", "\"fba9dede5f27731c9771645a39863328\"", size = 409L),
+            ListResponseParser.Entry(
+                "notes/sp%20ace%20%26%20unicode%20%E3%82%AC.md",
+                "\"9b2cf535f27731c9771645a39863328c-2\"",
+                size = 1024L,
+            ),
         )
     }
 
@@ -99,6 +104,38 @@ class ListResponseParserTest : FunSpec({
                 "</ListBucketResult>",
         )
         listing.nextContinuationToken shouldBe null
+    }
+
+    test("<Size> is ADVISORY: a plain integer extracts, every other well-formed shape yields null, never a refusal") {
+        // Size feeds only hydrate's chunk packing, so it must NEVER carry refusal power: before this field
+        // was read at all, a garbage <Size> was an ignorable sibling and the listing still parsed - giving
+        // it exit(1) authority would turn one provider quirk into a server that will not boot. A weird but
+        // well-formed value degrades to null (the packer's conservative arm); only genuine ill-formedness
+        // (which the DOM oracle also rejects) still refuses, via the well-formedness backstop.
+        fun sizeDoc(size: String) = "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+            "<Contents><Key>a.md</Key><ETag>\"x\"</ETag><Size>$size</Size></Contents></ListBucketResult>"
+        listOf(
+            "-1", // signed
+            "+1", // signed
+            " 12", // padded
+            "1e3", // not a plain integer
+            "", // empty element
+            "99999999999999999999", // overflows Long
+        ).forEach { size ->
+            ListResponseParser.parse(sizeDoc(size)).contents.single().size shouldBe null
+        }
+        ListResponseParser.parse(sizeDoc("0")).contents.single().size shouldBe 0L
+        ListResponseParser.parse(sizeDoc("409")).contents.single().size shouldBe 409L
+        // Absent <Size> is null - a declared value is never invented (the packer treats null conservatively).
+        ListResponseParser.parse(
+            "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+                "<Contents><Key>a.md</Key><ETag>\"x\"</ETag></Contents></ListBucketResult>",
+        ).contents.single().size shouldBe null
+        // A DUPLICATED <Size> is ambiguous, so it also degrades to null rather than picking one or refusing.
+        ListResponseParser.parse(
+            "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+                "<Contents><Key>a.md</Key><ETag>\"x\"</ETag><Size>1</Size><Size>2</Size></Contents></ListBucketResult>",
+        ).contents.single().size shouldBe null
     }
 
     test("a leading UTF-8 BOM is REFUSED, matching the StringReader DOM oracle (P2)") {

@@ -189,7 +189,8 @@ private class MiniFakeObjectStore : ObjectStoreClient {
     }
 
     override suspend fun list(prefix: String, continuationToken: String?, maxKeys: Int?): ListResponseParser.Listing {
-        val entries = objects.filterKeys { it.startsWith(prefix) }.map { (k, v) -> ListResponseParser.Entry(k, v.second) }
+        val entries = objects.filterKeys { it.startsWith(prefix) }
+            .map { (k, v) -> ListResponseParser.Entry(k, v.second, size = v.first.size.toLong()) }
         return ListResponseParser.Listing(entries, isTruncated = false, nextContinuationToken = null)
     }
 
