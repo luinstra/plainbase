@@ -49,7 +49,8 @@ Release builds (`.github/workflows/release.yml`) produce the universal JAR
 plus three native binaries: linux-x64, linux-arm64, and macos-arm64.
 
 Native Windows is intentionally deferred until demand justifies the platform-specific filesystem
-contract and a green Windows CI lane. Direct Windows JVM operation is not a documented fallback;
+contract and a green Windows CI lane. Direct Windows JVM operation is not a documented fallback: the
+JVM tarball still ships the Gradle-generated `bin/plainbase.bat` launcher, but running it is unsupported.
 Windows users should run the Linux binary under WSL2 with its content and data in the distribution's
 Linux filesystem. See the
 [platform guidance](operating-plainbase.md#platform-note---the-5-second-promise-binds-linux).

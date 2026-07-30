@@ -52,7 +52,11 @@ supported path is the `linux-x64` binary under WSL2, with both `CONTENT_DIR` and
 distribution's Linux filesystem (for example, `/home/<user>/plainbase/content` and
 `/home/<user>/plainbase/data`). Do not place either directory under `/mnt/c`, `/mnt/d`, or another
 Windows-mounted drive: the paths look Linux-like, but the underlying Windows filesystem retains
-different permission, symlink, file-identity, watcher, and performance semantics.
+different permission, symlink, file-identity, watcher, and performance semantics. For `DATA_DIR` the
+stakes are data integrity, not just semantics: Plainbase relies on cross-process advisory file locks
+(`DataDirLock`), SQLite's locking, and atomic rename plus directory fsync, none of which is reliable
+over the `/mnt/*` 9P translation layer. On the distro filesystem, `inotify` works normally and the
+5-second promise below holds.
 
 For Docker Desktop, use the same boundary: run Compose from a checkout inside the WSL distribution
 and bind-mount content from that Linux filesystem. A Docker-managed named volume is appropriate for
