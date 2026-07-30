@@ -229,6 +229,11 @@ jobs:
           grep -F "\"${VERSION}\"" "$gen" \
             || { echo "::error::BuildInfo.kt did not stamp version '${VERSION}' -- version-stamping regressed."; exit 1; }
 
+      - name: Assert no Windows launcher ships (Windows is unsupported; build.gradle.kts excludes it)
+        run: |
+          test ! -f server/build/install/plainbase/bin/plainbase.bat \
+            || { echo "::error::plainbase.bat is back in the distribution -- the exclusion in server/build.gradle.kts regressed."; exit 1; }
+
       - name: Tar the dist + log its checksum
         run: |
           asset="plainbase-jvm-${VERSION}.tar.gz"

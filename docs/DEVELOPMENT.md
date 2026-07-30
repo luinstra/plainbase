@@ -50,7 +50,8 @@ plus three native binaries: linux-x64, linux-arm64, and macos-arm64.
 
 Native Windows is intentionally deferred until demand justifies the platform-specific filesystem
 contract and a green Windows CI lane. Direct Windows JVM operation is not a documented fallback: the
-JVM tarball still ships the Gradle-generated `bin/plainbase.bat` launcher, but running it is unsupported.
+JVM tarball ships no Windows launcher (the Gradle-generated `.bat` is excluded, and the release
+workflow asserts the exclusion held).
 Windows users should run the Linux binary under WSL2 with its content and data in the distribution's
 Linux filesystem. See the
 [platform guidance](operating-plainbase.md#platform-note---the-5-second-promise-binds-linux).
