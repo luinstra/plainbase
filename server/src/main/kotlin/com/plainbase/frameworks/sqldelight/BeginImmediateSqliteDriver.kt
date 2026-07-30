@@ -26,21 +26,29 @@ import kotlin.concurrent.getOrSet
  * enough to name and a reader needs to know whether their site is in one:
  *
  * Holds that got LONGER (a read prefix now runs under the write lock): `RootTopologyRepository.observeBinding`'s
- * change and first-sight branch, which scans all bindings before its first write and is the one genuinely lengthened
- * hold; `IdMapRepository.bind`, three point reads; `RetirementRepository.applyProofs`, point reads before a batch that
- * dominates either way. Separately, `bind` runs inside the pipeline's `@Synchronized create`, so a contended bind now
- * holds THAT monitor for up to the busy budget instead of failing instantly, stalling other creates and edits behind it.
+ * change and first-sight branch, which scans all bindings before its first write; `RetirementRepository.applyProofs`,
+ * whose per-proof loop can run over a corpus-sized batch before any DML; and `IdMapRepository.bind`, three point reads.
+ * Separately, `bind` runs inside the pipeline's `@Synchronized create`, so a contended bind now holds THAT monitor for
+ * up to the busy budget instead of failing instantly, stalling other creates and edits behind it.
  *
- * Transactions NEWLY exposed to SQLITE_BUSY (they never reach a write, so they previously took only SHARED and
+ * Transactions NEWLY exposed to SQLITE_BUSY (they can reach no write at all, so they previously took only SHARED and
  * coexisted with a RESERVED holder): `bind`'s two `Refused` early returns, `observeBinding`'s unchanged-binding return,
- * `RetirementRepository.observation()` in steady state, `UrlAliasRepository.dropShadowed` when nothing is shadowed, and
- * `LoginService`'s failure early-returns. Splitting these back to DEFERRED is NOT the fix: read-then-maybe-write cannot
- * know at BEGIN that the write is unreachable, and doing so would re-open the skipped-busy-handler hole the moment
- * anyone added a write.
+ * `RetirementRepository.observation()` in steady state, `UrlAliasRepository.dropShadowed` when nothing is shadowed,
+ * `LoginService`'s failure early-returns, and `SetupService`'s token-invalid and wrong-password early returns across
+ * bootstrap, change and reset.
+ *
+ * `applyProofs` is in BOTH sets, and that is the shape worth remembering: a batch in which every proof is unavailable,
+ * refuted, stale or missing executes NO DML, so under DEFERRED it was an entirely SHARED transaction and is now an
+ * unbounded write-lock holder. It is not merely a read prefix in front of a dominating batch.
+ *
+ * Splitting the never-writing cases back to DEFERRED is NOT the fix: read-then-maybe-write cannot know at BEGIN that the
+ * write is unreachable, and doing so would re-open the skipped-busy-handler hole the moment anyone added a write.
  *
  * UNBOUNDED, and tracked separately: checkpoint replacement deletes and re-inserts every page in one transaction, and
  * retirement applies a whole proof batch in another. Their duration scales with corpus size and is NOT measured here.
- * New app-DB transactions should stay bounded.
+ * Checkpoint replacement is materially UNCHANGED by the move to IMMEDIATE because it is write-first (its `deleteAll()`
+ * already took RESERVED at the first statement); `applyProofs` is the one that can genuinely worsen. New app-DB
+ * transactions should stay bounded.
  *
  * No expensive non-DB work such as Argon2-class password hashing, blocking crypto, IO, or network calls may sit inside
  * an app-DB transaction. Cheap per-call crypto needed for a transaction's DB result, such as session minting, is
@@ -120,27 +128,29 @@ private abstract class JdbcSqliteDriverConnectionManager : ConnectionManager {
     /**
      * THE FORK'S ONE DELIBERATE DIVERGENCE FROM UPSTREAM. Everything else in this file is a verbatim copy.
      *
-     * Upstream's body is `autoCommit = false`, which cannot realistically throw. `BEGIN IMMEDIATE` CAN, because a
-     * contended write lock past the busy timeout is SQLITE_BUSY by design. That matters because
-     * `JdbcDriver.newTransaction()` installs the [Transaction] BEFORE calling this hook, and only wraps the transaction
-     * BODY in its own try/finally. So a throw out of here leaves an installed transaction that nothing will ever end:
-     * the next `newTransaction()` on this thread sees an enclosing transaction, skips BEGIN, and its `endTransaction`
-     * skips both END and ROLLBACK, silently discarding writes it reported as successful.
+     * Upstream's body here is `prepareStatement("BEGIN TRANSACTION")`, a DEFERRED begin that acquires NO lock, so
+     * contention cannot fail it. (`autoCommit = false` is `JdbcDriver`'s BASE implementation, which this manager
+     * overrides; that route was evaluated and rejected because it can report failure after a durable commit. Do not
+     * confuse the two.) `BEGIN IMMEDIATE` takes RESERVED at BEGIN, so a contended write lock past the busy timeout is
+     * SQLITE_BUSY BY DESIGN, and a throw out of this hook becomes an expected path rather than a theoretical one.
+     *
+     * That matters because `JdbcDriver.newTransaction()` installs the [Transaction] BEFORE calling this hook, and only
+     * wraps the transaction BODY in its own try/finally. So a throw out of here would leave an installed transaction
+     * that nothing ever ends: the next `newTransaction()` on this thread sees an enclosing transaction, skips BEGIN, and
+     * its `endTransaction` skips both END and ROLLBACK, silently discarding writes it reported as successful.
      *
      * TWO flags, because one cannot answer both questions. [began] is "did the real SQLite transaction open", which
      * decides whether there is anything to roll back. [completed] is "did this function return normally", which decides
      * whether to clean up at all. Collapsing them either strands an open transaction (when a throwing `close()` reads as
-     * a failed BEGIN) or orphans an installed one (when it reads as a live BEGIN). On any abnormal exit the invariant is
-     * BOTH: no installed transaction, and no open real transaction.
+     * a failed BEGIN) or orphans an installed one (when it reads as a live BEGIN).
      *
-     * The rollback must precede `transaction = null`, because [ThreadedConnectionManager]'s setter CLOSES the
-     * connection when nulled and a rollback after that cannot land. It is wrapped so a failing rollback cannot mask the
-     * original failure, and the `finally` covers every throwable rather than just SQLException.
-     *
-     * GATED: the SQLITE_BUSY path (a BEGIN that never opens) is pinned by the recovery row in
-     * `SqliteBusyBeginImmediateNativeTest`. UNGATED: the throwing-`close()`-after-a-successful-BEGIN path. There is no
-     * seam to inject it without giving the managers a connection factory, and that second structural divergence would
-     * cost more than it buys on a trigger xerial does not exhibit in practice. Stated rather than implied complete.
+     * The guarantee, stated no stronger than it is: an abnormal exit ALWAYS leaves no installed transaction, and makes a
+     * BEST-EFFORT attempt to leave no open real one. The rollback must precede `transaction = null`, because
+     * [ThreadedConnectionManager]'s setter CLOSES the connection when nulled and a rollback after that cannot land. It is
+     * wrapped so a failing rollback cannot mask the original failure, which is the deliberate trade: if the rollback
+     * itself fails, a real transaction can survive on the connection. On the threaded manager the subsequent close
+     * collects it; on [StaticConnectionManager] the shared connection is not closed, so there it can persist. The
+     * `finally` covers every throwable rather than just SQLException.
      */
     override fun Connection.beginTransaction() {
         var began = false
