@@ -409,6 +409,16 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
       DIGEST: ${{ needs.image.outputs.digest }}
     steps:
+      # Step 0: check out the repo. Assembly historically needed NO checkout, because it only ever
+      # touched downloaded artifacts and heredoc-generated content. The per-release notes fragment
+      # (step 4) is the first repo FILE this job reads, so without this the required-fragment check
+      # fails on every release with "Missing docs/release-notes/<v>.md" -- the gate firing for the
+      # wrong reason and taking the release with it.
+      #
+      # MUST stay FIRST: `actions/checkout` defaults `clean: true` (a `git clean -ffdx`), so placing it
+      # after the artifact download would delete `staging/`.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       # Step 1: download the uploaded artifacts into one flat staging dir. Scoped to `plainbase-*` (our
       # upload-artifact names) so a `.dockerbuild` build record (BLOCKING 1) can never enter the shipped
       # manifest. The release-compose + SHA256SUMS are GENERATED in staging (not downloaded), so the
