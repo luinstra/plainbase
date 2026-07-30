@@ -39,6 +39,16 @@ application {
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
+// Windows is not a supported runtime (native or JVM), so the distribution ships no Windows
+// launcher. The release workflow's jar job asserts this exclusion held.
+distributions {
+    main {
+        contents {
+            exclude("**/plainbase.bat")
+        }
+    }
+}
+
 kover {
     currentProject {
         sources {

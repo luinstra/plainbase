@@ -46,8 +46,15 @@ Five jobs gate `main` (`.github/workflows/ci.yml`):
   paint the JAR floor red.
 
 Release builds (`.github/workflows/release.yml`) produce the universal JAR
-plus native binaries for linux-x64, linux-arm64, macos-arm64, and
-windows-x64.
+plus three native binaries: linux-x64, linux-arm64, and macos-arm64.
+
+Native Windows is intentionally deferred until demand justifies the platform-specific filesystem
+contract and a green Windows CI lane. Direct Windows JVM operation is not a documented fallback: the
+JVM tarball ships no Windows launcher (the Gradle-generated `.bat` is excluded, and the release
+workflow asserts the exclusion held).
+Windows users should run the Linux binary under WSL2 with its content and data in the distribution's
+Linux filesystem. See the
+[platform guidance](operating-plainbase.md#platform-note---the-5-second-promise-binds-linux).
 
 ## Pre-release checklist
 
@@ -62,8 +69,8 @@ gate a *release* that ships (or touches) the object-storage backend.
    Current honest state: macos-arm64 PROVEN 2026-07-06, re-proven 2026-07-29 after the Content-Type
    emission regression the second run caught (see the platform table); linux-x64 credential-free TLS+SigV4
    spike banked in CI; the linux-x64 **real-R2** credentialed smoke is a documented nice-to-have
-   (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 / windows-x64 docs-only
-   until proven.
+   (owner-deferred, run when convenient, **NOT a release blocker**); linux-arm64 is docs-only until
+   proven.
    - **AWS `%20`-vs-`+` space-encoding is an EXPLICIT gate here** (ADR-0010 SP1, PENDING AWS column).
      `S3WireKey` decodes LIST keys on the R2-proven assumption that `encoding-type=url` emits `%20` for a
      space and never `+`; AWS S3 is unverified and may emit `+`. The smoke's `list-decode-get` probe

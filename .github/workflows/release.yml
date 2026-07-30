@@ -71,7 +71,7 @@ jobs:
           echo "Tag $TAG -> version=$version"
 
   # ---- Per-platform native build+gate+upload jobs (item 2) ---------------------------------------
-  # Four DISCRETE per-OS jobs (shell/.exe/vcvars divergence), gate sequence IDENTICAL to ci.yml's
+  # Three DISCRETE per-OS jobs, with a gate sequence IDENTICAL to ci.yml's
   # native-gate (114-177): nativeCompile -> nativeTest -> spike (9/9, HARD). NO `continue-on-error`
   # anywhere here -- a real spike failure must fail its OWN job hard; fail-isolation lives in the
   # assembly job's `needs`/`if` (item 4), never on these gate steps (callout 5).
@@ -119,7 +119,7 @@ jobs:
   native-linux-arm64:
     # Design Fork A (addendum): REQUIRED per master-plan §6. The `v0.1.0-rc.1` dry-run built this job
     # green end-to-end on the FREE hosted arm64-linux runner (repo is public -- callout 6; `-J-Xmx6g`
-    # rules out QEMU anyway), so it is PROMOTED from best-effort to the assembly required-platform set.
+    # rules out QEMU anyway), so it is part of the assembly required-platform set.
     name: Native gate (linux-arm64)
     runs-on: ubuntu-24.04-arm
     needs: meta
@@ -199,53 +199,6 @@ jobs:
           name: plainbase-macos-arm64
           path: dist/plainbase-macos-arm64
 
-  native-windows-x64:
-    # BEST-EFFORT (per DoD/master plan §6 -- Windows is the one deliberately best-effort platform):
-    # isolated at the assembly job's needs/if level (item 4), never via continue-on-error here.
-    name: Native gate (windows-x64, best-effort)
-    runs-on: windows-latest
-    needs: meta
-    env:
-      VERSION: ${{ needs.meta.outputs.version }}
-    defaults:
-      run:
-        # Uniform shell across all four platform jobs (PowerShell/bash divergence note, addendum item
-        # 2); setup-graalvm still wires the MSVC/vcvars environment native-image needs, and those env
-        # vars are inherited regardless of shell.
-        shell: bash
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - uses: graalvm/setup-graalvm@cabbb10818fabc989d6dbd508e4846596d20dd2d # v1.6.0
-        with:
-          java-version: "25"
-          distribution: graalvm-community
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
-
-      - name: Build native binary (self-reports the tag, item 8)
-        run: ./gradlew :server:nativeCompile -PreleaseVersion="$VERSION" --console=plain
-
-      - name: Run test suite as native image
-        # -PreleaseVersion is passed here too (MINOR fable): otherwise nativeTest regenerates BuildInfo as
-        # the dev SNAPSHOT, so the gate would exercise a DIFFERENT stamp than the shipped binary.
-        run: ./gradlew :server:nativeTest -PreleaseVersion="$VERSION" --console=plain
-
-      - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
-        run: ./server/build/native/nativeCompile/plainbase.exe spike
-
-      - name: Rename asset + log its checksum
-        run: |
-          mkdir -p dist
-          cp server/build/native/nativeCompile/plainbase.exe dist/plainbase-windows-x64.exe
-          sha256sum dist/plainbase-windows-x64.exe
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: plainbase-windows-x64
-          path: dist/plainbase-windows-x64.exe
-
   # ---- Universal-JAR job (item 3) -- the release FLOOR, always required -------------------------
   jar:
     name: Universal JAR
@@ -275,6 +228,11 @@ jobs:
           gen="server/build/generated/source/buildInfo/kotlin/com/plainbase/BuildInfo.kt"
           grep -F "\"${VERSION}\"" "$gen" \
             || { echo "::error::BuildInfo.kt did not stamp version '${VERSION}' -- version-stamping regressed."; exit 1; }
+
+      - name: Assert no Windows launcher ships (Windows is unsupported; build.gradle.kts excludes it)
+        run: |
+          test ! -f server/build/install/plainbase/bin/plainbase.bat \
+            || { echo "::error::plainbase.bat is back in the distribution -- the exclusion in server/build.gradle.kts regressed."; exit 1; }
 
       - name: Tar the dist + log its checksum
         run: |
@@ -394,7 +352,6 @@ jobs:
       - native-linux-x64
       - native-linux-arm64
       - native-macos-arm64
-      - native-windows-x64
       - jar
       - image
     # JAR is the non-negotiable floor: if it never succeeded, don't even attempt assembly.
@@ -434,14 +391,12 @@ jobs:
         run: ls -la staging
 
       # Step 2: required-platform hard check. REQUIRED = linux-x64, linux-arm64, macos-arm64, jar,
-      # image (linux-arm64 PROMOTED after the v0.1.0-rc.1 dry-run proved it green -- Design Fork A).
-      # BEST-EFFORT (windows only) missing = skip silently.
+      # image (linux-arm64 joined the required set after the v0.1.0-rc.1 dry-run proved it green).
       - name: Required-platform hard check
         env:
           LINUX_X64: ${{ needs.native-linux-x64.result }}
           LINUX_ARM64: ${{ needs.native-linux-arm64.result }}
           MACOS_ARM64: ${{ needs.native-macos-arm64.result }}
-          WINDOWS_X64: ${{ needs.native-windows-x64.result }}
           JAR_RESULT: ${{ needs.jar.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
         run: |
@@ -460,13 +415,6 @@ jobs:
           require "macos-arm64" "$MACOS_ARM64"
           require "jar" "$JAR_RESULT"
           require "image" "$IMAGE_RESULT"
-          # BEST-EFFORT platform: log, never fail the release on its absence. Windows is the one
-          # deliberately best-effort platform per §6; linux-arm64 was PROMOTED to REQUIRED (above)
-          # after the v0.1.0-rc.1 dry-run proved it green end-to-end.
-          if [ "$WINDOWS_X64" != "success" ]; then
-            echo "::warning::windows-x64 did not succeed (result: $WINDOWS_X64) -- best-effort by design;" \
-                 "not blocking assembly."
-          fi
           if [ "$fail" = "1" ]; then
             echo "::error::One or more REQUIRED jobs failed -- refusing to assemble a release."
             exit 1
@@ -509,7 +457,9 @@ jobs:
                 PLAINBASE_HOST: 0.0.0.0
                 PLAINBASE_INSECURE_HTTP: "true"
               volumes:
-                # Point this bind mount at your own Markdown tree.
+                # Point this bind mount at your own Markdown tree. On Windows, run Compose from WSL2
+                # with the checkout/content in the distro filesystem, not on /mnt/c or another
+                # Windows-backed path. The DATA_DIR remains on the Docker-managed named volume.
                 - ./content:/content
                 - plainbase-data:/data
               restart: unless-stopped
@@ -572,10 +522,9 @@ jobs:
             echo
             echo "## Unsigned binaries"
             echo
-            echo "The macOS and Windows native binaries are UNSIGNED -- code-signing and notarization are"
-            echo "not yet part of this workflow. Gatekeeper / SmartScreen will warn on first run:"
+            echo "The macOS native binary is UNSIGNED -- code-signing and notarization are"
+            echo "not yet part of this workflow. Gatekeeper may warn on first run:"
             echo "- macOS: \`xattr -d com.apple.quarantine ./plainbase-macos-arm64\`, or right-click -> Open."
-            echo "- Windows: SmartScreen -> \"More info\" -> \"Run anyway\"."
             echo
             echo "On Linux and macOS, set the executable bit on the downloaded binary first:"
             echo "\`chmod +x ./plainbase-linux-x64\` (or whichever file you downloaded)."
@@ -649,8 +598,7 @@ jobs:
       # bytes) -- the image was already attested BY DIGEST in the image job (item 5/6). Driven by
       # `subject-checksums` (SHA256SUMS itself), not a static path/glob list: this is the SAME
       # manifest-driven principle as the rest of assembly -- whatever SHA256SUMS names (i.e. whatever
-      # actually staged, minus itself) is exactly what gets attested, so a missing best-effort
-      # platform is never even a candidate glob-miss.
+      # actually staged, minus itself) is exactly what gets attested.
       - name: Attest build provenance -- binaries, JAR, and release-compose
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:

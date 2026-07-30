@@ -38,8 +38,8 @@ files.
 ## Quickstart (single binary)
 
 Grab a binary from the [latest release](https://github.com/luinstra/plainbase/releases/latest)
-(`linux-x64`, `linux-arm64`, `macos-arm64`, `windows-x64`, or the universal
-JAR for anywhere with Java 21+):
+(`linux-x64`, `linux-arm64`, `macos-arm64`, or the universal JAR for supported
+Linux/macOS environments with Java 21+):
 
 ```sh
 curl -L -o plainbase https://github.com/luinstra/plainbase/releases/latest/download/plainbase-macos-arm64
@@ -49,6 +49,19 @@ chmod +x plainbase
 
 Open http://localhost:8080. Point `CONTENT_DIR` at an existing Markdown tree
 to adopt it as-is.
+
+### Windows via WSL2
+
+Native Windows and direct Windows JVM operation are intentionally deferred. On a Windows host, run
+the `linux-x64` binary under WSL2 and keep both `CONTENT_DIR` and `DATA_DIR` in the distribution's
+Linux filesystem (for example, under `/home/<user>/plainbase`), not under `/mnt/c`, `/mnt/d`, or
+another Windows-mounted drive. Windows-backed mounts retain cross-filesystem differences in
+permissions, symlinks, file identity, watchers, and performance.
+
+The same boundary applies to Docker Desktop: run Compose from a checkout in the WSL distribution and
+bind-mount content from that Linux filesystem rather than from a Windows drive. See
+[Operating Plainbase](docs/operating-plainbase.md#platform-note---the-5-second-promise-binds-linux)
+for the supported layout.
 
 ## Quickstart (Docker Compose)
 
