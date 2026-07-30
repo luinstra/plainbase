@@ -1,9 +1,9 @@
 package com.plainbase.frameworks.objectstore
 
 /**
- * The ListObjectsV2 five-element extractor (plan Q7, theme 4): reads exactly `<Contents>`
- * boundaries and, inside them, `<Key>` + `<ETag>`, plus the top-level `<IsTruncated>` and
- * `<NextContinuationToken>`. Deliberately NOT an XML parser - requests always send
+ * The ListObjectsV2 extractor (plan Q7, theme 4): reads exactly `<Contents>` boundaries and, inside
+ * them, `<Key>` + `<ETag>` (fail-closed) plus the ADVISORY `<Size>` (lenient, see [sizeOf]), plus the
+ * top-level `<IsTruncated>` and `<NextContinuationToken>`. Deliberately NOT an XML parser - requests always send
  * `encoding-type=url`, so `<Key>` (the one externally-influenced field) arrives
  * percent/form-encoded ASCII, and every other target is provider-generated. Keys are returned
  * RAW (still URL-encoded); decoding is the consumer's job, behind the recorded live captures
@@ -101,7 +101,8 @@ object ListResponseParser {
         // mis-nested sibling a real DOM parser rejects (a `<Bar>` with no close, a stray `</Bar>`, crossed
         // nesting) would otherwise be silently ignored and a bogus Entry returned. Checked LAST so the
         // specific shape refusals above keep their exact messages; balanced ignorable siblings
-        // (<LastModified>, <Size>, <Owner>...</Owner>, ...) still pass untouched.
+        // (<LastModified>, <Owner>...</Owner>, ...) still pass untouched, and <Size> - read leniently,
+        // never refused - passes through this check like any other element.
         requireWellFormed(body)
         return Listing(contents, truncated, token)
     }
@@ -110,15 +111,36 @@ object ListResponseParser {
         optionalText(scope, tag) ?: refuse("missing <$tag> element")
 
     /**
-     * The declared `<Size>` of a `<Contents>` block, or null when absent. Present-but-malformed refuses
-     * (fail-closed, like every other read field): a plain base-10 non-negative integer is the only shape
-     * S3/R2 emit, and `toLongOrNull` runs on an already-ASCII-validated string so a signed, spaced, or
-     * overflowing value refuses rather than guessing.
+     * The declared `<Size>` of a `<Contents>` block: LENIENT, never a refusal, unlike every other read
+     * field - deliberately. Size feeds only hydrate's chunk packing (an advisory memory bound), so the
+     * fail-closed rationale does not transfer: for Key/ETag, extracting different text than a real
+     * parser is fail-WRONG; a weird Size merely degrades one chunk's packing. Refusing here would give
+     * an advisory field boot-refusal power (`hydrate` turns a parse refusal into exit(1)), turning one
+     * provider quirk into a server that will not boot. So: exactly one plain `<Size>digits</Size>`
+     * extracts; anything else - absent, duplicated, attributed, signed, padded, non-integer, overflow -
+     * yields null, and [requireWellFormed] remains the backstop that still refuses genuinely
+     * ill-formed XML.
      */
     private fun sizeOf(block: String): Long? {
-        val text = optionalText(block, "Size") ?: return null
-        if (text.isEmpty() || text.any { it !in '0'..'9' }) refuse("unexpected <Size> value '${cap(text)}'")
-        return text.toLongOrNull() ?: refuse("unexpected <Size> value '${cap(text)}'")
+        val occurrences = buildList {
+            var i = block.indexOf("<Size")
+            while (i >= 0) {
+                // Element boundary: "<Sizes>" is a different element and must not count (XML Name
+                // continues through 's'), so only a terminator right after the name is a <Size> element.
+                when (block.getOrNull(i + "<Size".length)) {
+                    '>', '/', ' ', '\t', '\n', '\r' -> add(i)
+                    else -> {}
+                }
+                i = block.indexOf("<Size", i + 1)
+            }
+        }
+        val open = occurrences.singleOrNull() ?: return null
+        if (!block.startsWith("<Size>", open)) return null
+        val start = open + "<Size>".length
+        val close = block.indexOf("</Size>", start).takeIf { it >= 0 } ?: return null
+        val text = block.substring(start, close)
+        if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
+        return text.toLongOrNull()
     }
 
     /** The single `<tag>text</tag>` inside [scope]: null when absent, refusal on ambiguity. */

@@ -341,6 +341,15 @@ class S3ObjectClientTest : FunSpec({
         ("SECRET-TAIL" in message) shouldBe false
     }
 
+    test("a case-variant of an engine-managed header name refuses at the signing seam") {
+        // The exactly-once wire test catches the 403 empirically; this seam guard catches the CLASS at
+        // construction time - Content-Length has the identical case-sensitive skip Content-Type had, so
+        // a future extraHeaders caller must not be able to reintroduce the double emission.
+        shouldThrow<IllegalArgumentException> {
+            client.signedRequest(HttpMethod.Put, "a.md", extraHeaders = mapOf("content-length" to "3"))
+        }.message.orEmpty() shouldContain "exact-case"
+    }
+
     test("virtual-host addressing: bucket prefixes the host, drops out of the path, and is the signed host") {
         // A virtual-host `bucket.host` does not resolve on the loopback server, so this proves the
         // construction + signature off the wire, through the signedRequest seam. Path-style above

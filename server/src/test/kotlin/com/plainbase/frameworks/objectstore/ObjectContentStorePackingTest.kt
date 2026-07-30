@@ -7,7 +7,7 @@ import io.kotest.matchers.shouldBe
  * [ObjectContentStore.packForFetch] bounds hydrate's per-chunk buffering by DECLARED bytes, not only
  * key count: a chunk's fetched bodies all sit in memory until its applies run, and the mirror funnel
  * admits assets as well as pages, so a count-only chunk of large objects would hold the whole set
- * resident on the boot path (PR #25 panel finding, three seats independently).
+ * resident on the boot path.
  */
 class ObjectContentStorePackingTest : FunSpec({
 
@@ -43,6 +43,23 @@ class ObjectContentStorePackingTest : FunSpec({
 
     test("the count cap closes a chunk even when bytes remain") {
         val input = entries(1, 1, 1, 1, 1)
+        val chunks = ObjectContentStore.packForFetch(input, byteBudget = 1000, countCap = 2)
+        chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0", "k1"), listOf("k2", "k3"), listOf("k4"))
+    }
+
+    test("a Long.MAX_VALUE declared size cannot overflow the budget sum and void the bound") {
+        // The naive `bytes + declared > budget` wraps negative after a MAX_VALUE first entry, making the
+        // comparison vacuously false forever - the chunk then fills to countCap, the exact unbounded
+        // buffering the packer exists to prevent. Overflow-safe comparison closes after the giant entry.
+        val input = entries(Long.MAX_VALUE, 300, 300)
+        val chunks = ObjectContentStore.packForFetch(input, byteBudget = 1000, countCap = 10)
+        chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0"), listOf("k1", "k2"))
+    }
+
+    test("when NO entry declares a size, packing falls back to count-only chunks") {
+        // All-null would otherwise pack every entry alone: parallelism collapses to 1 and each one-entry
+        // chunk pays a whole apply pass - O(N^2) boot work for a provider that omits <Size> entirely.
+        val input = entries(null, null, null, null, null)
         val chunks = ObjectContentStore.packForFetch(input, byteBudget = 1000, countCap = 2)
         chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0", "k1"), listOf("k2", "k3"), listOf("k4"))
     }

@@ -294,20 +294,26 @@ class S3ObjectClient(
             put(HttpHeaders.Host, if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
             put("x-amz-content-sha256", payloadHash)
             put("x-amz-date", amzDate)
-            // MUST be Ktor's exact-case constant, never a lowercase literal. Ktor's mergeHeaders
-            // (ktor-client-core Utils.kt) skips Content-Type from the request headers with a
-            // CASE-SENSITIVE comparison, then re-emits it from a case-INSENSITIVE fallback lookup - so a
-            // lowercase "content-type" ships TWICE (both case variants), the endpoint canonicalizes the
-            // pair comma-joined, and every body-carrying request 403s with SignatureDoesNotMatch. This
-            // regressed in 063018c (2026-07-09): the original client carried the type on the
-            // OutgoingContent (one emission, but ContentType.parse normalizes, breaking signed==wire
-            // for e.g. "text/markdown;charset=UTF-8"); the M1 hardening moved it to a raw header
-            // append and picked the lowercase key. The 2026-07-29 credentialed s3-smoke was the first
-            // since that commit, and caught it. Pinned by verifySignature's exactly-once wire
-            // assertion in S3ObjectClientTest. The signer lowercases names for the canonical form
-            // either way, so the signature itself is unaffected by this key's case.
+            // MUST be Ktor's exact-case constant, never a lowercase literal: mergeHeaders skips
+            // Content-Type from the request headers CASE-SENSITIVELY then re-emits it from a
+            // case-INSENSITIVE fallback, so a lowercase key ships the header TWICE and every
+            // body-carrying request 403s with SignatureDoesNotMatch (the ENGINE_MANAGED_HEADERS guard
+            // below enforces this for the whole class). A raw header append is used, rather than the
+            // Ktor-idiomatic body-carried ContentType, because parse-and-toString normalizes the value
+            // and breaks signed==wire (regressed once, 063018c). The signer lowercases names for the
+            // canonical form, so the signature itself is unaffected by this key's case.
             contentType?.let { put(HttpHeaders.ContentType, it) }
             putAll(extraHeaders)
+        }
+        // The exact-case rule as CODE, not a comment: any future extraHeaders caller passing a
+        // case-variant of an engine-managed name would reintroduce the double-emission 403 for that
+        // header (Content-Length has the identical case-sensitive skip Content-Type had).
+        signedHeaders.keys.forEach { name ->
+            val managed = ENGINE_MANAGED_HEADERS.firstOrNull { it.equals(name, ignoreCase = true) }
+            require(managed == null || managed == name) {
+                "header '$name' must be keyed by Ktor's exact-case constant '$managed': Ktor's engine " +
+                    "special-cases that name CASE-SENSITIVELY, and any other spelling ships it twice"
+            }
         }
         val signed = signer.sign(method.value, requestPath, query, signedHeaders, payloadHash, amzDate)
         return SignedRequest(
@@ -401,6 +407,14 @@ class S3ObjectClient(
     }
 
     companion object {
+        /**
+         * Header names Ktor's client engine special-cases with CASE-SENSITIVE comparisons
+         * (mergeHeaders' skip list plus writeHeaders' Expect/Transfer-Encoding handling): a signed
+         * map keyed by any other case-variant of these ships the header twice and 403s.
+         */
+        private val ENGINE_MANAGED_HEADERS =
+            listOf(HttpHeaders.ContentType, HttpHeaders.ContentLength, HttpHeaders.TransferEncoding, HttpHeaders.Expect)
+
         private const val MAX_UTF8_CONTINUATION_BYTES = 3
         private const val UTF8_LEAD_MASK = 0xC0
         private const val UTF8_CONTINUATION_PREFIX = 0x80
