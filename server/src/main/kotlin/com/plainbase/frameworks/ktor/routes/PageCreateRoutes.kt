@@ -38,9 +38,9 @@ import kotlinx.serialization.SerializationException
  * PB-WRITE-1: `POST /api/v1/pages` — new-page creation. A JSON request (`folder`, `title`,
  * optional `slug`/`body`); the SERVER mints the id, derives the on-disk path + filename via the frozen
  * §A4/PB-SLUG-1 machinery (the client never derives a path), composes a YAML-safe frontmatter+body
- * buffer, and writes it VERBATIM through [com.plainbase.domain.service.WritePipeline.create] — the same
- * serialized monitor every edit and watcher rebuild share. A collision is a race-safe pipeline outcome
- * (the filesystem's own exclusive create), never a route pre-check.
+ * buffer, and writes it VERBATIM through [com.plainbase.domain.service.WritePipeline.create] - the same serialized
+ * pipeline monitor every edit uses. Watcher rebuilds use the separate `IndexBuilder` monitor. A collision is a
+ * race-safe pipeline outcome (the filesystem's own exclusive create), never a route pre-check.
  *
  * This route owns its OWN status `when`: a create returns **201** (a new resource), not the PUT's 200,
  * so it does NOT reuse the frozen `WriteDtos.toWire` (which hard-codes `Written → 200` and carries the

@@ -53,9 +53,9 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 class WritePipeline(
     /**
      * The per-root content trees. ONE pipeline, N roots: cross-root writes serialize on the single monitor -
-     * the simple, correct default, matching the one rebuild monitor. The root is never guessed and never taken
-     * from a client path: it rides on the intent, having come from the snapshot page the gate authorized (an
-     * edit) or the validated request field (a create).
+     * the simple, correct default. The [IndexBuilder] monitor is separate from this pipeline monitor. The root is
+     * never guessed and never taken from a client path: it rides on the intent, having come from the snapshot page
+     * the gate authorized (an edit) or the validated request field (a create).
      */
     private val stores: (RootName) -> ContentStore,
     private val indexBuilder: IndexBuilder,
@@ -140,24 +140,25 @@ class WritePipeline(
     }
 
     /**
-     * One new-page creation (PB-WRITE-1), on the SAME monitor as [write] so a create
-     * serializes with every edit and every watcher rebuild. No CAS / edit-classification: a create has
-     * no prior content to classify and no `base_hash` — the collision check is the filesystem's own
+     * One new-page creation (PB-WRITE-1), on the SAME monitor as [write] so a create serializes with every edit through
+     * this pipeline monitor. Watcher rebuilds use the separate [IndexBuilder] monitor. A create has no prior content
+     * to classify and no `base_hash` — the collision check is the filesystem's own
      * exclusive create ([ContentStore.createExclusive]), a pipeline outcome, never a route pre-check.
      *
      * The critical section mirrors [write]'s write-ahead-then-post-steps shape:
      *  0. **Canonical-URL collision guard**: the prospective page/folder canonical URL,
      *     read against the published snapshot, must not be owned by a DIFFERENT page/folder/live-alias —
      *     a hit → [WriteOutcome.SlugConflict], NOTHING written. The race safety is the `@Synchronized`
-     *     monitor (shared with [write] and the watcher rebuild): it serializes WHOLE create sequences, so
+     *     monitor (shared with [write]): it serializes WHOLE create sequences, so
      *     two concurrent colliding creates can't interleave their check-then-create — the second sees the
      *     first's published rebuild and loses cleanly. (The snapshot read itself is lock-free — an
      *     `AtomicReference.get` of a deeply-immutable index — so this is NOT "read under the rebuild's
      *     lock"; correctness comes from serializing the create, not from the read.) The residual window
-     *     is a create racing an EXTERNAL watcher-driven rebuild (a file appearing on disk between our
-     *     read and create) — accepted best-effort like the asset route's write-time TOCTOU (see
-     *     `PageWriteRoutes.kt`): never corruption, because the create's own rebuild + [CanonicalUrlBuilder]
-     *     deterministically resolve the collision afterward; only the HTTP status can be 201-instead-of-409.
+     *     is a create overlapping an EXTERNAL watcher-driven rebuild (the watcher uses the separate IndexBuilder
+     *     monitor and a file can appear on disk between our read and create) - accepted best-effort like the
+     *     asset route's write-time TOCTOU (see `PageWriteRoutes.kt`): never corruption, because the create's own
+     *     rebuild + [CanonicalUrlBuilder] deterministically resolve the collision afterward; only the HTTP status
+     *     can be 201-instead-of-409.
      *     This is the right home for the check (not a route pre-check): slugs/URLs are snapshot-authoritative,
      *     so the verdict belongs inside the serialized create, exactly like the CAS for content.
      *  1. write-ahead dirty mark with the about-to-be-written bytes' hash (a fresh pageId has no prior

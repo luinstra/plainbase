@@ -21,8 +21,8 @@ import com.plainbase.domain.repository.UserRepository
  * the user — a concurrent disable either commits before the re-read (login aborts, no session) or after the insert
  * (its `revokeAllForUser` covers the just-inserted session). The same re-read also guards password-hash drift: a
  * change/reset committing in the verify window already revoked all sessions, so a hash mismatch aborts the login too.
- * The verify stays OUTSIDE the txn (the app DB is a single write connection; holding argon2 in the txn would
- * serialize every other writer for that window).
+ * The verify stays OUTSIDE the txn because Argon2-class work must not hold BEGIN IMMEDIATE's write lock or consume
+ * the busy budget needed by every other app-DB writer.
  */
 class LoginService(
     private val users: UserRepository,

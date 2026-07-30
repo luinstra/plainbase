@@ -32,9 +32,9 @@ import com.plainbase.domain.root.RootedPath
  * only status it needs is DETACHED, which is registry-derived.
  *
  * **A recorded known, flagged for measurement before C5 widens the fan-out (not a task, and deliberately not a
- * gate):** every BARE id read now pays that durable point-SELECT, and `DatabaseFactory` hands SQLDelight a plain
- * `JdbcSqliteDriver` - a connection per statement, outside any transaction - so the per-read cost is connection
- * acquisition plus the indexed lookup, not the lookup alone.
+ * gate):** every BARE id read now pays that durable point-SELECT, and `DatabaseFactory` hands SQLDelight a
+ * `BeginImmediateSqliteDriver`; outside a transaction its file-backed manager acquires and closes a connection for
+ * each statement, so the per-read cost is connection acquisition plus the indexed lookup.
  */
 class PageRootResolver(
     private val idMap: IdMapRepository,

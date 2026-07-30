@@ -100,7 +100,7 @@ class SetupService(
     fun changePassword(userId: String, current: CharArray, new: CharArray): ChangeOutcome {
         val user = users.findById(userId) ?: return ChangeOutcome.UserNotFound
         if (!passwordHasher.verify(current, user.passwordHash)) return ChangeOutcome.WrongCurrentPassword
-        val newHash = passwordHasher.hash(new) // argon2 OUTSIDE the txn (keeps the txn short — single write connection)
+        val newHash = passwordHasher.hash(new) // argon2 OUTSIDE the txn (keeps BEGIN IMMEDIATE's write lock short)
         // The hash-update + revoke-all are ONE transaction (B2b): a crash between them would leave the new password
         // active but the old sessions un-revoked (a stolen session surviving a password change). Re-read inside the
         // txn so a concurrent delete is reported, not silently mis-reported as Changed.

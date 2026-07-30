@@ -4,6 +4,7 @@ kotlinx-serialization = "1.11.0"
 kotlinx-coroutines = "1.11.0"
 kotlinx-datetime = "0.7.0"
 ktor = "3.5.0"
+# Dependency bump checklist: compare BeginImmediateSqliteDriver's copied connection managers against upstream JdbcSqliteDriver.
 sqldelight = "2.3.2"
 sqlite-jdbc = "3.53.2.0"
 koin = "4.2.1"
@@ -60,6 +61,7 @@ kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.
 typesafe-config = { module = "com.typesafe:config" }
 
 # Persistence — SQLDelight (compile-time SQL codegen, zero reflection), NOT Exposed
+sqldelight-jdbc-driver = { module = "app.cash.sqldelight:jdbc-driver", version.ref = "sqldelight" }
 sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 

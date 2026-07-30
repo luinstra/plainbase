@@ -46,10 +46,10 @@ class SqlDelightIdMapRepository(
     override fun retiredBindings(): List<RetiredBinding> = queries.selectAllRetired().executeAsList().map { it.toRetired() }
 
     // ONE statement (selectClaimantsById, IdMap.sq) reads both claimant lists off a single consistent SQLite snapshot,
-    // so the live and retired lists reflect the SAME durable moment WITHOUT opening a transaction. That matters on the
-    // app DB's single non-thread-safe connection: a BEGIN here raced a concurrent bare resolve's BEGIN into "cannot
-    // start a transaction within a transaction" (C5 regression). kind partitions the rows: 1 = a retired tombstone, 0 =
-    // a live claimant (root only).
+    // so the live and retired lists reflect the SAME durable moment WITHOUT opening a transaction. Because BEGIN IMMEDIATE
+    // takes the app DB write lock at transaction start, wrapping this read would put that global lock in front of every
+    // bare-id read and consume the busy budget. The file-backed driver uses one connection per thread for transaction
+    // scope. kind partitions the rows: 1 = a retired tombstone, 0 = a live claimant (root only).
     override fun claimantState(id: PageId): ClaimantState {
         val (retired, live) = queries.selectClaimantsById(id).executeAsList().partition { it.kind == RETIRED_CLAIMANT }
         return ClaimantState(
