@@ -226,12 +226,12 @@ internal class ObjectBucketLister(
                 val path = mirrorFiles.eligibleTreePath(relative) ?: return@forEachListedObject
                 val existing = entries[path]
                 when {
-                    existing == null -> entries[path] = MirrorListedEntry(relative, wire.etag)
+                    existing == null -> entries[path] = MirrorListedEntry(relative, wire.etag, wire.size)
                     RawByteOrder.compare(relative, existing.rawRelative) < 0 -> {
                         logger.warn {
                             "NFC key collision at '${path.value}': winner raw='$relative', loser raw='${existing.rawRelative}'"
                         }
-                        entries[path] = MirrorListedEntry(relative, wire.etag)
+                        entries[path] = MirrorListedEntry(relative, wire.etag, wire.size)
                     }
                     else -> logger.warn {
                         "NFC key collision at '${path.value}': winner raw='${existing.rawRelative}', loser raw='$relative'"
@@ -247,7 +247,8 @@ internal class ObjectBucketLister(
     }
 }
 
-internal data class MirrorListedEntry(val rawRelative: String, val etag: String)
+/** [declaredSize] is LIST's advisory byte count (null when the provider omits it) - see [ListResponseParser.Entry.size]. */
+internal data class MirrorListedEntry(val rawRelative: String, val etag: String, val declaredSize: Long?)
 
 internal data class ObjectGeneration(
     val binding: RootBinding,

@@ -111,8 +111,10 @@ Never disable certificate validation to work around it; install the CA bundle or
 **Memory floor:** size the container for the native binary's serving RSS plus headroom for the hydrated
 mirror. Measured 2026-07-29 during the pre-release drill session: **~120 MiB serving RSS** (native
 binary, macOS Apple Silicon, 1000-page corpus hydrated from Cloudflare R2, steady state after reads).
-Numbers vary by platform and corpus; re-measure on your own hardware when sizing tightly (see the
-[pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)).
+The BOOT peak sits above that: cold hydrate buffers each fetch chunk in memory, bounded by a 64 MiB
+declared-size budget per chunk plus one body, so budget roughly serving RSS + 64 MiB + your largest
+object for the boot window. Numbers vary by platform and corpus; re-measure on your own hardware when
+sizing tightly (see the [pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)).
 
 ## Platform support, honestly
 
@@ -122,7 +124,7 @@ green credentialed `plainbase s3-smoke` from the native binary, cert validation 
 
 | Platform | Status |
 |---|---|
-| macos-arm64 | **PROVEN** 2026-07-06 - real R2, full TLS handshake + signed round-trip, cert validation on (macOS trust store). |
+| macos-arm64 | **PROVEN** 2026-07-06 and re-proven 2026-07-29 - real R2, full TLS handshake + signed round-trip, cert validation on (macOS trust store). Both records are true: a header-emission regression landed between them (`063018c`, 2026-07-09) and the 07-29 run - the first credentialed smoke since - caught and fixed it, so the re-proof is load-bearing, not ceremonial. |
 | linux-x64 | TLS + SigV4 **proven credential-free in CI** (the `plainbase spike` 9/9 self-signed-loopback check runs on every PR). The real system-CA-trust-against-R2-under-Linux leg is a documented nice-to-have (owner-deferred 2026-07-07), NOT release-gating. |
 | linux-arm64 | Docs-only until a green native s3-smoke is recorded. |
 | windows-x64 | Docs-only until a green native s3-smoke is recorded. |

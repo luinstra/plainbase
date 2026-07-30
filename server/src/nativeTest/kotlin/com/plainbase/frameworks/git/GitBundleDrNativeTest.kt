@@ -401,7 +401,10 @@ private class NativeFakeObjectStore : ObjectStoreClient {
 
     override suspend fun list(prefix: String, continuationToken: String?, maxKeys: Int?): ListResponseParser.Listing {
         val entries = objects.keys.filter { it.startsWith(prefix) }.sorted()
-            .map { key -> ListResponseParser.Entry(key = PercentCoding.encodeSegment(key), etag = objects.getValue(key).second) }
+            .map { key ->
+                val (bytes, etag) = objects.getValue(key)
+                ListResponseParser.Entry(key = PercentCoding.encodeSegment(key), etag = etag, size = bytes.size.toLong())
+            }
         return ListResponseParser.Listing(entries, isTruncated = false, nextContinuationToken = null)
     }
 

@@ -78,7 +78,8 @@ gate a *release* that ships (or touches) the object-storage backend.
 3. **The two required DR drills**, if the release touched storage / git / DR code paths: content restore
    and bundle-history restore (recipes in
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse
-   each for real and fill in its "not yet rehearsed" placeholder in the ops doc.
+   each for real and REFRESH its dated "Rehearsed for real" record in the ops doc (date, provider,
+   what was observed) - the record reflects the most recent rehearsal, not a one-time checkbox.
 4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build`, the native
    gate (`nativeCompile` -> `nativeTest` -> spike 9/9).
 

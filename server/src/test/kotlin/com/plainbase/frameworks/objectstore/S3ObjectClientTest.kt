@@ -196,7 +196,8 @@ class S3ObjectClientTest : FunSpec({
         val page = client.list("smoke-1/", maxKeys = 2)
         page.isTruncated shouldBe true
         page.nextContinuationToken shouldBe "1/tok+X="
-        page.contents shouldBe listOf(ListResponseParser.Entry("smoke-1/a.md", "\"e1\""))
+        // No <Size> in this response: absent stays null (the size is DECLARED data, never invented).
+        page.contents shouldBe listOf(ListResponseParser.Entry("smoke-1/a.md", "\"e1\"", size = null))
         val first = recorded.single()
         first.uri shouldBe "/scratch?list-type=2&encoding-type=url&prefix=smoke-1%2F&max-keys=2"
         first.verifySignature()
@@ -294,9 +295,13 @@ class S3ObjectClientTest : FunSpec({
             // Bigger than READ_CHUNK so the streaming write AND the streaming file-hash both span >1 chunk.
             val body = ByteArray(200_000) { (it * 31 % 251).toByte() }
             Files.write(source, body)
-            client.putFromFile("bundle.bin", source) shouldBe PutOutcome.Stored("\"e4\"")
+            // contentType rides the STREAMED path too: WriteChannelContent has no contentType of its own,
+            // so the signed header is the one on the wire - same exactly-once + signed==wire guarantees
+            // the byte-array PUT proves, asserted here for the body shape that diverges.
+            client.putFromFile("bundle.bin", source, contentType = "application/x-git-bundle") shouldBe PutOutcome.Stored("\"e4\"")
             val request = recorded.single()
             request.method shouldBe "PUT"
+            request.headers["content-type"] shouldBe "application/x-git-bundle"
             request.body.contentEquals(body).shouldBeTrue() // the streamed body arrived intact
             // LOAD-BEARING: the `body.contentEquals` + `x-amz-content-sha256 == sha256Hex(body)` assertions
             // are what prove the STREAMED body equals the STREAM-computed signed hash. Do NOT drop them and
@@ -397,6 +402,10 @@ private fun RecordedRequest.verifySignature() {
     // carries the signed value: the endpoint canonicalizes all copies joined, the client signed one. The
     // recomputation below cannot see this (it reads the collapsed map), so it is asserted on the raw wire
     // pairs first. This is the check that was missing when a case-variant Content-Type shipped twice.
+    // Scope, stated honestly: only headers named in SignedHeaders= are counted (an unsigned header may
+    // legally repeat), and the VALUE equality of the surviving copy is the collapsed-map recomputation's
+    // job below - with exactly one copy, the collapsed value IS the wire value, so the pair of checks
+    // covers value drift without a separate assertion.
     signedHeaderNames.forEach { name ->
         val copies = wireHeaders.count { (wireName, _) -> wireName.equals(name, ignoreCase = true) }
         check(copies == 1) { "signed header '$name' appeared $copies times on the wire; signed exactly once" }

@@ -34,8 +34,14 @@ object ListResponseParser {
 
     data class Listing(val contents: List<Entry>, val isTruncated: Boolean, val nextContinuationToken: String?)
 
-    /** One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned. */
-    data class Entry(val key: String, val etag: String)
+    /**
+     * One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned.
+     * [size] is the declared object size in bytes - null when the provider omits `<Size>` (real S3/R2
+     * always send it), refused when present but not a plain non-negative integer. It is a DECLARED
+     * value used to bound hydrate's per-chunk buffering; the GET response cap stays the per-body
+     * enforcement, so a lying LIST degrades the bound, never correctness.
+     */
+    data class Entry(val key: String, val etag: String, val size: Long?)
 
     fun parse(xml: String): Listing {
         // A leading U+FEFF (BOM) is NOT tolerated (P2): the oracle parses a StringReader of already-decoded
@@ -70,7 +76,7 @@ object ListResponseParser {
                     ?: refuse("unclosed <Contents> block")
                 val block = body.substring(open + "<Contents>".length, close)
                 if ("<Contents" in block) refuse("nested <Contents> block")
-                add(Entry(key = requiredText(block, "Key"), etag = requiredText(block, "ETag")))
+                add(Entry(key = requiredText(block, "Key"), etag = requiredText(block, "ETag"), size = sizeOf(block)))
                 from = close + "</Contents>".length
             }
         }
@@ -102,6 +108,18 @@ object ListResponseParser {
 
     private fun requiredText(scope: String, tag: String): String =
         optionalText(scope, tag) ?: refuse("missing <$tag> element")
+
+    /**
+     * The declared `<Size>` of a `<Contents>` block, or null when absent. Present-but-malformed refuses
+     * (fail-closed, like every other read field): a plain base-10 non-negative integer is the only shape
+     * S3/R2 emit, and `toLongOrNull` runs on an already-ASCII-validated string so a signed, spaced, or
+     * overflowing value refuses rather than guessing.
+     */
+    private fun sizeOf(block: String): Long? {
+        val text = optionalText(block, "Size") ?: return null
+        if (text.isEmpty() || text.any { it !in '0'..'9' }) refuse("unexpected <Size> value '${cap(text)}'")
+        return text.toLongOrNull() ?: refuse("unexpected <Size> value '${cap(text)}'")
+    }
 
     /** The single `<tag>text</tag>` inside [scope]: null when absent, refusal on ambiguity. */
     private fun optionalText(scope: String, tag: String): String? {

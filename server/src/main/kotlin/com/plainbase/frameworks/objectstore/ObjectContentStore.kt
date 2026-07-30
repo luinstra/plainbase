@@ -609,7 +609,7 @@ class ObjectContentStore(
         // self-heal on boot (never vanish from the rebuilt index until mirror-state is also wiped).
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
         var healed = 0
-        for (chunk in changed.entries.chunked(FETCH_CHUNK)) {
+        for (chunk in packForFetch(changed.entries.toList())) {
             // Bounded-parallel GETs, then the chunk's applies strictly AFTER the fetches complete. Each
             // result is (path, fetched-or-null): a null is a GET failure OR a 404-while-LIST-reported-it.
             val gate = Semaphore(FETCH_PARALLELISM)
@@ -1160,15 +1160,51 @@ class ObjectContentStore(
         /** Bulk drift folds into one synthetic overflow event - consumers only schedule (§B2). */
         private const val OVERFLOW_THRESHOLD = 16
 
-        // Sized by the first credentialed budget drill (R2, 1000 pages, residential link). At 16-way
-        // lockstep (chunk == parallelism) cold hydrate measured ~19-31s: every chunk's awaitAll waits
-        // for its slowest GET, so per-GET tail latency was paid on every wave. 64-way cut it to ~8.5s;
-        // the 4x chunk then keeps 64 GETs continuously in flight WITHIN a chunk (the semaphore refills
-        // as fetches finish), so the straggler tail is paid once per 256 keys instead of once per 64.
-        // 256 page-sized bodies in memory and 64 concurrent GETs are both trivial, and the apply batch
-        // stays a boot-time transaction nothing contends with.
+        // Sized by the 2026-07-29 credentialed budget drill (R2, 1000 pages, residential link). At
+        // 16-way lockstep (chunk == parallelism) cold hydrate paid the slowest GET's tail latency on
+        // every wave; 64-way concurrency plus a larger chunk keeps 64 GETs continuously in flight
+        // within a chunk (the semaphore refills as fetches finish), so the straggler tail is paid per
+        // chunk, not per 64 keys. Together: cold boot 25.3s -> 9.6s in that drill, hydrate being ~8.5s
+        // of the 9.6s (the rest is rebuild+serve).
+        //
+        // A chunk retains every fetched body until its applies run, so the chunk is bounded by BYTES,
+        // not only by key count: the mirror funnel admits assets as well as pages, and a count-only
+        // chunk of large assets would hold the whole set resident on the boot path (found by the PR
+        // #25 review panel, 3 seats independently). LIST's declared sizes drive the packing; they are
+        // advisory (the GET response cap is the per-body enforcement), so peak buffering is bounded by
+        // FETCH_BYTE_BUDGET plus one body's actual size, and an entry with no declared size is packed
+        // alone (over-refusal is the safe direction). 1000 drill pages declared ~300 B each pack into
+        // 4 chunks, preserving the measured pipeline behavior.
         private const val FETCH_CHUNK = 256
         private const val FETCH_PARALLELISM = 64
+        private const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
+
+        /**
+         * Greedy chunking of [entries] for hydrate's fetch-then-apply loop: a chunk closes when adding
+         * the next entry would push its DECLARED byte sum past [byteBudget] or its count past
+         * [countCap]. A single entry always gets a chunk (even oversized - the GET cap enforces the
+         * real per-body bound), and an entry with an unknown declared size counts as [byteBudget] so it
+         * packs alone rather than hiding in a full chunk.
+         */
+        internal fun <K> packForFetch(
+            entries: List<Map.Entry<K, MirrorListedEntry>>,
+            byteBudget: Long = FETCH_BYTE_BUDGET,
+            countCap: Int = FETCH_CHUNK,
+        ): List<List<Map.Entry<K, MirrorListedEntry>>> = buildList {
+            var chunk = mutableListOf<Map.Entry<K, MirrorListedEntry>>()
+            var bytes = 0L
+            for (entry in entries) {
+                val declared = entry.value.declaredSize ?: byteBudget
+                if (chunk.isNotEmpty() && (bytes + declared > byteBudget || chunk.size == countCap)) {
+                    add(chunk)
+                    chunk = mutableListOf()
+                    bytes = 0L
+                }
+                chunk.add(entry)
+                bytes += declared
+            }
+            if (chunk.isNotEmpty()) add(chunk)
+        }
 
         private val logger = KotlinLogging.logger {}
     }

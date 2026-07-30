@@ -219,7 +219,11 @@ class S3ObjectClient(
                 encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
             }
         }
-        request.signedHeaders.forEach { (name, value) -> if (name != HttpHeaders.Host) headers.append(name, value) }
+        // ignoreCase: Host must be dropped whatever case a future caller keys it under - appending any
+        // variant would put a second Host beside the one Ktor derives from url.host:port.
+        request.signedHeaders.forEach { (name, value) ->
+            if (!name.equals(HttpHeaders.Host, ignoreCase = true)) headers.append(name, value)
+        }
         headers.append(HttpHeaders.Authorization, request.authorization)
     }
 
@@ -294,10 +298,14 @@ class S3ObjectClient(
             // (ktor-client-core Utils.kt) skips Content-Type from the request headers with a
             // CASE-SENSITIVE comparison, then re-emits it from a case-INSENSITIVE fallback lookup - so a
             // lowercase "content-type" ships TWICE (both case variants), the endpoint canonicalizes the
-            // pair comma-joined, and every body-carrying request 403s with SignatureDoesNotMatch. Found
-            // by the first credentialed s3-smoke against real R2; pinned by verifySignature's
-            // exactly-once wire assertion in S3ObjectClientTest. The signer lowercases names for the
-            // canonical form either way, so the signature itself is unaffected by this key's case.
+            // pair comma-joined, and every body-carrying request 403s with SignatureDoesNotMatch. This
+            // regressed in 063018c (2026-07-09): the original client carried the type on the
+            // OutgoingContent (one emission, but ContentType.parse normalizes, breaking signed==wire
+            // for e.g. "text/markdown;charset=UTF-8"); the M1 hardening moved it to a raw header
+            // append and picked the lowercase key. The 2026-07-29 credentialed s3-smoke was the first
+            // since that commit, and caught it. Pinned by verifySignature's exactly-once wire
+            // assertion in S3ObjectClientTest. The signer lowercases names for the canonical form
+            // either way, so the signature itself is unaffected by this key's case.
             contentType?.let { put(HttpHeaders.ContentType, it) }
             putAll(extraHeaders)
         }

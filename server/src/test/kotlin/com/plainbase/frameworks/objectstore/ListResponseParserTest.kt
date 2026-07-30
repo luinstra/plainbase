@@ -47,8 +47,12 @@ class ListResponseParserTest : FunSpec({
         listing.nextContinuationToken shouldBe null
         listing.contents shouldBe listOf(
             // Keys stay RAW/URL-encoded (encoding-type=url); etags keep their quotes (opaque).
-            ListResponseParser.Entry("notes/a.md", "\"fba9dede5f27731c9771645a39863328\""),
-            ListResponseParser.Entry("notes/sp%20ace%20%26%20unicode%20%E3%82%AC.md", "\"9b2cf535f27731c9771645a39863328c-2\""),
+            ListResponseParser.Entry("notes/a.md", "\"fba9dede5f27731c9771645a39863328\"", size = 409L),
+            ListResponseParser.Entry(
+                "notes/sp%20ace%20%26%20unicode%20%E3%82%AC.md",
+                "\"9b2cf535f27731c9771645a39863328c-2\"",
+                size = 1024L,
+            ),
         )
     }
 
@@ -99,6 +103,28 @@ class ListResponseParserTest : FunSpec({
                 "</ListBucketResult>",
         )
         listing.nextContinuationToken shouldBe null
+    }
+
+    test("a present <Size> must be a plain non-negative integer; absent stays null, malformed refuses") {
+        fun sizeDoc(size: String) = "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+            "<Contents><Key>a.md</Key><ETag>\"x\"</ETag><Size>$size</Size></Contents></ListBucketResult>"
+        listOf(
+            "-1", // signed
+            "+1", // signed
+            " 12", // padded
+            "1e3", // not a plain integer
+            "", // empty element
+            "99999999999999999999", // overflows Long
+        ).forEach { size ->
+            shouldThrow<ObjectStoreException> { ListResponseParser.parse(sizeDoc(size)) }
+                .message.orEmpty() shouldContain "<Size>"
+        }
+        ListResponseParser.parse(sizeDoc("0")).contents.single().size shouldBe 0L
+        // Absent <Size> is null - a declared value is never invented (the packer treats null conservatively).
+        ListResponseParser.parse(
+            "<ListBucketResult><IsTruncated>false</IsTruncated>" +
+                "<Contents><Key>a.md</Key><ETag>\"x\"</ETag></Contents></ListBucketResult>",
+        ).contents.single().size shouldBe null
     }
 
     test("a leading UTF-8 BOM is REFUSED, matching the StringReader DOM oracle (P2)") {

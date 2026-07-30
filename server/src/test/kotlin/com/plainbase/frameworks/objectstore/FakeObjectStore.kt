@@ -181,7 +181,7 @@ class FakeObjectStore(
         val truncated = start + page.size < keys.size
         val entries = page.map { key ->
             val stored = synchronized(lock) { objects.getValue(key) }
-            ListResponseParser.Entry(key = wireEncode(key), etag = stored.etag)
+            ListResponseParser.Entry(key = wireEncode(key), etag = stored.etag, size = stored.bytes.size.toLong())
         }
         return ListResponseParser.Listing(entries, truncated, if (truncated) (start + page.size).toString() else null)
     }
