@@ -39,79 +39,107 @@ private const val FIRST_WRITE_SQL =
 private enum class ConnectionEvent {
     BEGIN_PREPARED,
     ROLLBACK_PREPARED,
+    ROLLBACK_EXECUTED,
     CONNECTION_CLOSED,
+}
+
+private enum class ConnectionManagerSelection(
+    val label: String,
+    val urlSuffix: String,
+    val expectsConnectionClosed: Boolean,
+) {
+    THREADED("threaded manager", "", true),
+    STATIC("static manager", "?mode=memory", false),
 }
 
 class BeginImmediateSqliteDriverRecoveryTest : FunSpec({
 
-    test("should clean up when the opened BEGIN statement throws from close") {
-        val directory = Files.createTempDirectory("pb-begin-close-recovery")
-        val databasePath = directory.resolve("plainbase.db")
-        val events = mutableListOf<ConnectionEvent>()
-        val testUrl = "$TEST_URL_PREFIX${databasePath.toAbsolutePath()}"
-        val testDriver = CloseFailingSqliteDriver(databasePath, events)
-        DriverManager.registerDriver(testDriver)
-
-        try {
-            BeginImmediateSqliteDriver(testUrl).use { driver ->
-                PlainbaseDb.Schema.create(driver)
-                events.clear()
-                val db = DatabaseFactory.createDatabase(driver)
-                val firstId = PageId.require("01010101-0101-0101-0101-010101010101")
-                val secondId = PageId.require("02020202-0202-0202-0202-020202020202")
-
-                val firstFailure = runCatching {
-                    db.transactionWithResult {
-                        error("the first transaction body must not run")
-                    }
-                }
-
-                val secondFailure = runCatching {
-                    db.transactionWithResult {
-                        db.idMapQueries.upsertBinding(
-                            root = RootName.PRIMARY,
-                            path = TreePath.require("second-transaction.md"),
-                            id = secondId,
-                            materialized = true,
-                        )
-                        error(SECOND_TRANSACTION_FAILURE_MESSAGE)
-                    }
-                }
-
-                val persistedBindings = db.idMapQueries.selectAllBindings().executeAsList()
-                val firstRollbackIndex = events.indexOf(ConnectionEvent.ROLLBACK_PREPARED)
-                val firstCloseIndex = events.indexOf(ConnectionEvent.CONNECTION_CLOSED)
-
-                assertSoftly {
-                    withClue("the original BEGIN close failure must reach the caller") {
-                        firstFailure.exceptionOrNull()
-                            .shouldBeInstanceOf<SQLException>()
-                            .message shouldBe BEGIN_CLOSE_FAILURE_MESSAGE
-                    }
-                    withClue("the next transaction must perform a fresh BEGIN and roll back its write") {
-                        events.count { it == ConnectionEvent.BEGIN_PREPARED } shouldBe 2
-                        secondFailure.exceptionOrNull()?.message shouldBe SECOND_TRANSACTION_FAILURE_MESSAGE
-                        persistedBindings.any { it.id == secondId } shouldBe false
-                    }
-                    withClue("rollback preparation must precede connection close") {
-                        (firstRollbackIndex >= 0) shouldBe true
-                        (firstCloseIndex >= 0) shouldBe true
-                        (firstRollbackIndex < firstCloseIndex) shouldBe true
-                    }
-                    withClue("the first transaction write must not persist") {
-                        persistedBindings.any { it.id == firstId } shouldBe false
-                    }
-                }
-            }
-        } finally {
-            testDriver.closeConnections()
-            DriverManager.deregisterDriver(testDriver)
-            Files.walk(directory).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-            }
+    ConnectionManagerSelection.values().forEach { selection ->
+        test("should clean up when the opened BEGIN statement throws from close on ${selection.label}") {
+            runRecoveryScenario(selection)
         }
     }
 })
+
+private fun runRecoveryScenario(selection: ConnectionManagerSelection) {
+    val directory = Files.createTempDirectory("pb-begin-close-recovery")
+    val databasePath = directory.resolve("plainbase.db")
+    val events = mutableListOf<ConnectionEvent>()
+    val testUrl = "$TEST_URL_PREFIX${databasePath.toAbsolutePath()}${selection.urlSuffix}"
+    val testDriver = CloseFailingSqliteDriver(databasePath, events)
+
+    try {
+        DriverManager.registerDriver(testDriver)
+        BeginImmediateSqliteDriver(testUrl).use { driver ->
+            PlainbaseDb.Schema.create(driver)
+            events.clear()
+            val db = DatabaseFactory.createDatabase(driver)
+            val firstId = PageId.require("01010101-0101-0101-0101-010101010101")
+            val secondId = PageId.require("02020202-0202-0202-0202-020202020202")
+
+            val firstFailure = runCatching {
+                db.transactionWithResult {
+                    error("the first transaction body must not run")
+                }
+            }
+
+            val secondFailure = runCatching {
+                db.transactionWithResult {
+                    db.idMapQueries.upsertBinding(
+                        root = RootName.PRIMARY,
+                        path = TreePath.require("second-transaction.md"),
+                        id = secondId,
+                        materialized = true,
+                    )
+                    error(SECOND_TRANSACTION_FAILURE_MESSAGE)
+                }
+            }
+
+            val persistedBindings = db.idMapQueries.selectAllBindings().executeAsList()
+            val beginIndices = events.withIndex()
+                .filter { it.value == ConnectionEvent.BEGIN_PREPARED }
+                .map { it.index }
+            val firstRollbackPreparedIndex = events.indexOf(ConnectionEvent.ROLLBACK_PREPARED)
+            val firstRollbackExecutedIndex = events.indexOf(ConnectionEvent.ROLLBACK_EXECUTED)
+            val firstCloseIndex = events.indexOf(ConnectionEvent.CONNECTION_CLOSED)
+
+            assertSoftly {
+                withClue("the original BEGIN close failure must reach the caller") {
+                    firstFailure.exceptionOrNull()
+                        .shouldBeInstanceOf<SQLException>()
+                        .message shouldBe BEGIN_CLOSE_FAILURE_MESSAGE
+                }
+                withClue("rollback must execute before manager cleanup and the next BEGIN") {
+                    (firstRollbackPreparedIndex >= 0) shouldBe true
+                    (firstRollbackExecutedIndex >= 0) shouldBe true
+                    (beginIndices.size >= 2) shouldBe true
+                    (firstRollbackPreparedIndex < firstRollbackExecutedIndex) shouldBe true
+                    (firstRollbackExecutedIndex < beginIndices[1]) shouldBe true
+                    if (selection.expectsConnectionClosed) {
+                        (firstCloseIndex >= 0) shouldBe true
+                        (firstRollbackExecutedIndex < firstCloseIndex) shouldBe true
+                    } else {
+                        firstCloseIndex shouldBe -1
+                    }
+                }
+                withClue("the next transaction must perform a fresh BEGIN and roll back its write") {
+                    beginIndices.size shouldBe 2
+                    secondFailure.exceptionOrNull()?.message shouldBe SECOND_TRANSACTION_FAILURE_MESSAGE
+                    persistedBindings.any { it.id == secondId } shouldBe false
+                }
+                withClue("the first transaction write must not persist") {
+                    persistedBindings.any { it.id == firstId } shouldBe false
+                }
+            }
+        }
+    } finally {
+        testDriver.closeConnections()
+        DriverManager.deregisterDriver(testDriver)
+        Files.walk(directory).use { paths ->
+            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
+        }
+    }
+}
 
 private class CloseFailingSqliteDriver(
     private val databasePath: Path,
@@ -175,6 +203,8 @@ private class CloseFailingSqliteDriver(
                 }
                 if (sql == "ROLLBACK TRANSACTION") {
                     events += ConnectionEvent.ROLLBACK_PREPARED
+                    val statement = invokeDelegate(method, arguments) as PreparedStatement
+                    return rollbackStatement(statement)
                 }
             }
             if (method.name == "close" && method.parameterCount == 0) {
@@ -188,6 +218,13 @@ private class CloseFailingSqliteDriver(
                 PreparedStatement::class.java.classLoader,
                 arrayOf(PreparedStatement::class.java),
                 BeginStatementHandler(statement, failClose),
+            ) as PreparedStatement
+
+        private fun rollbackStatement(statement: PreparedStatement): PreparedStatement =
+            Proxy.newProxyInstance(
+                PreparedStatement::class.java.classLoader,
+                arrayOf(PreparedStatement::class.java),
+                RollbackStatementHandler(statement),
             ) as PreparedStatement
 
         private fun invokeDelegate(method: Method, args: Array<out Any?>): Any? =
@@ -220,6 +257,35 @@ private class CloseFailingSqliteDriver(
                 }
                 if (method.name == "close" && method.parameterCount == 0 && failClose) {
                     throw SQLException(BEGIN_CLOSE_FAILURE_MESSAGE)
+                }
+                return invokeDelegate(method, arguments)
+            }
+
+            private fun invokeDelegate(method: Method, args: Array<out Any?>): Any? =
+                try {
+                    method.invoke(delegate, *args)
+                } catch (exception: InvocationTargetException) {
+                    throw exception.targetException
+                }
+        }
+
+        private inner class RollbackStatementHandler(
+            private val delegate: PreparedStatement,
+        ) : InvocationHandler {
+            override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
+                val arguments = args ?: emptyArray()
+                if (method.declaringClass == Any::class.java) {
+                    return when (method.name) {
+                        "toString" -> "RecordingRollbackStatement"
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "equals" -> proxy === arguments.firstOrNull()
+                        else -> invokeDelegate(method, arguments)
+                    }
+                }
+                if (method.name == "execute" && method.parameterCount == 0) {
+                    val result = invokeDelegate(method, arguments)
+                    events += ConnectionEvent.ROLLBACK_EXECUTED
+                    return result
                 }
                 return invokeDelegate(method, arguments)
             }

@@ -22,24 +22,24 @@ import kotlin.concurrent.getOrSet
  *
  * `beginTransaction()` is the ONE deliberate divergence from upstream; its own KDoc carries the reason and the invariant.
  *
- * WHAT HOLDING THE LOCK FROM BEGIN COSTS, enumerated rather than exemplified, because the affected sets are small
- * enough to name and a reader needs to know whether their site is in one:
+ * WHAT HOLDING THE LOCK FROM BEGIN COSTS. Stated as a RULE, not an inventory: three attempts at listing the affected
+ * sites were each found incomplete, so a hand-maintained list here would be false confidence. The rule classifies every
+ * site, including ones added later:
  *
- * Holds that got LONGER (a read prefix now runs under the write lock): `RootTopologyRepository.observeBinding`'s
- * change and first-sight branch, which scans all bindings before its first write; `RetirementRepository.applyProofs`,
- * whose per-proof loop can run over a corpus-sized batch before any DML; and `IdMapRepository.bind`, three point reads.
- * Separately, `bind` runs inside the pipeline's `@Synchronized create`, so a contended bind now holds THAT monitor for
- * up to the busy budget instead of failing instantly, stalling other creates and edits behind it.
+ * 1. EVERY app-DB transaction holds the write lock for its WHOLE body, so any read prefix that used to run under SHARED
+ *    now runs under the write lock. The longer the prefix, the longer the hold. Apply this to your own site rather than
+ *    looking for it in a list.
+ * 2. EVERY app-DB transaction is exposed to SQLITE_BUSY, INCLUDING one that reaches no write at all. Such a transaction
+ *    previously took only SHARED and coexisted with a RESERVED holder; now it can fail after the busy budget. Any
+ *    read-then-maybe-write body has arms like this, and its early returns are the usual ones.
  *
- * Transactions NEWLY exposed to SQLITE_BUSY (they can reach no write at all, so they previously took only SHARED and
- * coexisted with a RESERVED holder): `bind`'s two `Refused` early returns, `observeBinding`'s unchanged-binding return,
- * `RetirementRepository.observation()` in steady state, `UrlAliasRepository.dropShadowed` when nothing is shadowed,
- * `LoginService`'s failure early-returns, and `SetupService`'s token-invalid and wrong-password early returns across
- * bootstrap, change and reset.
- *
- * `applyProofs` is in BOTH sets, and that is the shape worth remembering: a batch in which every proof is unavailable,
- * refuted, stale or missing executes NO DML, so under DEFERRED it was an entirely SHARED transaction and is now an
- * unbounded write-lock holder. It is not merely a read prefix in front of a dominating batch.
+ * Two consequences worth naming because they are not obvious from the rule. `IdMapRepository.bind` runs inside the write
+ * pipeline's `@Synchronized create`, so a contended bind now holds THAT monitor for up to the busy budget instead of
+ * failing instantly, stalling other creates and edits behind it. And `RetirementRepository.applyProofs` sits in both
+ * halves of the rule at once: when every proof AND every checkpoint advance is rejected, absent, or otherwise
+ * non-writing, its corpus-sized loop executes NO DML, so a transaction that was entirely SHARED under DEFERRED becomes
+ * an unbounded write-lock holder. Note the condition needs BOTH: a proofless baseline batch is normal, and a valid
+ * advance still writes through `upsertHead`.
  *
  * Splitting the never-writing cases back to DEFERRED is NOT the fix: read-then-maybe-write cannot know at BEGIN that the
  * write is unreachable, and doing so would re-open the skipped-busy-handler hole the moment anyone added a write.
