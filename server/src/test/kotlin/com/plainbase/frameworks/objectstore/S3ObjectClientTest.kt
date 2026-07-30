@@ -348,6 +348,12 @@ class S3ObjectClientTest : FunSpec({
         shouldThrow<IllegalArgumentException> {
             client.signedRequest(HttpMethod.Put, "a.md", extraHeaders = mapOf("content-length" to "3"))
         }.message.orEmpty() shouldContain "exact-case"
+        // Host is in the same class from the SIGNING side: a lowercase "host" would coexist with the
+        // exact-case Host key in the map, sign host twice in canonical form, and 403 - while the
+        // ignoreCase wire drop hides both from the wire, making it invisible to the multiplicity check.
+        shouldThrow<IllegalArgumentException> {
+            client.signedRequest(HttpMethod.Get, "a.md", extraHeaders = mapOf("host" to "evil.example"))
+        }.message.orEmpty() shouldContain "exact-case"
     }
 
     test("virtual-host addressing: bucket prefixes the host, drops out of the path, and is the signed host") {

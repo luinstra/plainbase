@@ -517,21 +517,26 @@ class ObjectContentStore(
             return
         }
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
-        val fetched = changed.mapNotNull { (path, entry) ->
-            runCatching {
-                // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
-                // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
-                // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
-                runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
-            }.getOrElse { failure ->
-                rethrowError(failure)
-                logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
-                null
-            }
-        }
 
         val events = mutableListOf<TreePath>()
-        for ((path, entry, body) in fetched) {
+        // Fetch-then-apply PER PACKED CHUNK, exactly like hydrate: a poll after a bulk bucket restore
+        // sees the whole corpus as changed, and an unchunked fetch would hold every body in memory at
+        // once - the same buffering packForFetch exists to bound. GETs stay sequential (poll is a
+        // background cadence, not a boot race); only the buffering is chunked.
+        for (chunk in packForFetch(changed.entries.toList())) {
+            val fetched = chunk.mapNotNull { (path, entry) ->
+                runCatching {
+                    // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
+                    // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
+                    // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
+                    runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
+                }.getOrElse { failure ->
+                    rethrowError(failure)
+                    logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
+                    null
+                }
+            }
+            for ((path, entry, body) in fetched) {
             synchronized(applyLock) {
                 if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
                 // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
@@ -549,6 +554,7 @@ class ObjectContentStore(
                     state.invalidate(path)
                     logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
                 }
+            }
             }
         }
         // Delete phase: mirror files / map entries absent from LIST (eligible paths only - the mirror
@@ -1180,25 +1186,25 @@ class ObjectContentStore(
         private const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
 
         /**
-         * Greedy chunking of [entries] for hydrate's fetch-then-apply loop: a chunk closes when adding
-         * the next entry would push its DECLARED byte sum past [byteBudget] or its count past
-         * [countCap]. A single entry always gets a chunk (even oversized - the GET cap enforces the
-         * real per-body bound), and an entry with an unknown declared size consumes the whole budget,
-         * so nothing with a nonzero declared size can share its chunk. When NO entry declares a size,
-         * packing falls back to count-only chunks: the per-entry conservative arm would otherwise pack
-         * everything alone, collapsing fetch parallelism to 1 and paying one apply pass per key.
+         * Greedy chunking of [entries] for the fetch-then-apply loops (hydrate and poll): a chunk
+         * closes when adding the next entry would push its DECLARED byte sum past [byteBudget] or its
+         * count past [countCap]. A single entry always gets a chunk (even oversized - the GET cap
+         * enforces the real per-body bound). An entry with an unknown declared size counts as a
+         * 1/[FETCH_PARALLELISM] share of the budget: a chunk holds at most 64 unknowns (the
+         * pre-packer exposure ceiling) with no all-or-nothing cliff - one sized entry in a null-heavy
+         * listing must not force every unknown to pack alone.
          */
         internal fun <K> packForFetch(
             entries: List<Map.Entry<K, MirrorListedEntry>>,
             byteBudget: Long = FETCH_BYTE_BUDGET,
             countCap: Int = FETCH_CHUNK,
         ): List<List<Map.Entry<K, MirrorListedEntry>>> {
-            if (entries.none { it.value.declaredSize != null }) return entries.chunked(countCap)
+            val unknownShare = (byteBudget / FETCH_PARALLELISM).coerceAtLeast(1)
             return buildList {
                 var chunk = mutableListOf<Map.Entry<K, MirrorListedEntry>>()
                 var bytes = 0L
                 for (entry in entries) {
-                    val declared = entry.value.declaredSize ?: byteBudget
+                    val declared = entry.value.declaredSize ?: unknownShare
                     // Overflow-safe close check: `bytes + declared` wraps negative after a huge declared
                     // size and would never exceed the budget again, voiding the bound. Both operands of
                     // the subtraction form are non-negative only when bytes <= byteBudget, so an already

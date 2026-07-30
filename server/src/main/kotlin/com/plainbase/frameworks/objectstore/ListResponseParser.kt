@@ -9,10 +9,11 @@ package com.plainbase.frameworks.objectstore
  * RAW (still URL-encoded); decoding is the consumer's job, behind the recorded live captures
  * (the C4 percent-decode + `TreePath.require` funnel, R8).
  *
- * Fail-closed, never fail-wrong: anything outside the frozen shape (markup that could make a
- * real parser read DIFFERENT text - CDATA, comments, processing instructions past the XML
- * declaration, attributes on a target element, a missing/duplicated target) throws
- * [ObjectStoreException] rather than extracting a guess. Guarded by golden tests plus a
+ * Fail-closed, never fail-wrong, for every LOAD-BEARING target (Key/ETag/IsTruncated/token):
+ * anything outside the frozen shape (markup that could make a real parser read DIFFERENT text -
+ * CDATA, comments, processing instructions past the XML declaration, attributes on a target
+ * element, a missing/duplicated target) throws [ObjectStoreException] rather than extracting a
+ * guess. The advisory `<Size>` alone is read leniently and can never refuse (see [sizeOf]). Guarded by golden tests plus a
  * differential fuzz against the JDK DOM parser as a test-only oracle (accept implies
  * oracle-agrees; refusing what the oracle can read is always safe).
  */
@@ -36,10 +37,11 @@ object ListResponseParser {
 
     /**
      * One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned.
-     * [size] is the declared object size in bytes - null when the provider omits `<Size>` (real S3/R2
-     * always send it), refused when present but not a plain non-negative integer. It is a DECLARED
-     * value used to bound hydrate's per-chunk buffering; the GET response cap stays the per-body
-     * enforcement, so a lying LIST degrades the bound, never correctness.
+     * [size] is the declared object size in bytes, read LENIENTLY (see [sizeOf]): a plain
+     * `<Size>digits</Size>` extracts, every other well-formed shape - absent included - is null,
+     * never a refusal. It is a DECLARED value used to bound the fetch loops' per-chunk buffering;
+     * the GET response cap stays the per-body enforcement, so a lying LIST degrades the bound,
+     * never correctness.
      */
     data class Entry(val key: String, val etag: String, val size: Long?)
 

@@ -24,7 +24,7 @@ import kotlin.random.Random
 /**
  * Differential-oracle fuzz for [ListResponseParser]: the JDK's built-in DOM parser (test-only,
  * never in the native image - JAXP-in-prod was explicitly rejected in the plan's Q7) referees
- * the hand-rolled five-element extractor, hunting extract-the-WRONG-text bugs.
+ * the hand-rolled extractor (Key/ETag/IsTruncated/token fail-closed, Size lenient), hunting extract-the-WRONG-text bugs.
  *
  * **The invariant is one-directional.** The extractor is deliberately a strict-subset
  * recognizer, so a refusal ([ObjectStoreException]) asserts nothing: refusing what a real
@@ -110,13 +110,13 @@ private fun assertOracleAgrees(xml: String, accepted: ListResponseParser.Listing
         withClue("Contents[$index] ETag text disagrees (xml = $xml)") {
             entry.etag shouldBe element.singleChildText("ETag")
         }
-        // Size agreement, against the LENIENT spec (sizeOf): exactly one attribute-free <Size> element
-        // anywhere in the block whose text is a plain Long extracts; every other well-formed shape is
-        // null. The DOM side re-derives that spec independently, so a divergence between the substring
-        // scan and real element structure (a <Sizes> sibling, a nested <Size>, a duplicated pair) fails
-        // here rather than shipping.
-        withClue("Contents[$index] Size disagrees (xml = $xml)") {
-            entry.size shouldBe element.domDeclaredSize()
+        // Size agreement is ONE-DIRECTIONAL, unlike Key/ETag equality: the lenient extractor may
+        // conservatively yield null on a lexical shape DOM normalizes away (a spaced start tag, a
+        // character reference, element children), but when it DOES extract a number, that number must
+        // be exactly what a real parser reads. Extracting nothing is safe; extracting a WRONG size is
+        // the failure this referees.
+        withClue("Contents[$index] Size extracted a value the DOM oracle disagrees with (xml = $xml)") {
+            (entry.size == null || entry.size == element.domDeclaredSize()) shouldBe true
         }
     }
 
@@ -284,6 +284,9 @@ private val contentsNoise = listOf(
     "<Size/>", // self-closing - null
     "<Sizes>7</Sizes>", // a DIFFERENT element sharing the prefix - not a Size at all
     "<Owner><Size>77</Size></Owner>", // nested - descendant scope still extracts, both sides agree
+    "<Size >409</Size>", // spaced start tag - DOM reads 409, the raw scan conservatively abstains
+    "<Size>4&#48;9</Size>", // character reference - DOM decodes to 409, the raw scan abstains
+    "<Size><Depth>1</Depth></Size>", // element children - textContent flattens, the raw scan abstains
     "<Owner><ID>abc123</ID><DisplayName>owner</DisplayName></Owner>",
     // Unbalanced / mis-nested ignorable siblings: the extractor reads only <Key>/<ETag> and would
     // otherwise silently ignore these, but the DOM oracle rejects the whole document - so an ACCEPT

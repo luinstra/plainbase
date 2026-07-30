@@ -35,10 +35,20 @@ class ObjectContentStorePackingTest : FunSpec({
         chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0"), listOf("k1"), listOf("k2"))
     }
 
-    test("an unknown declared size counts as the whole budget, so it packs alone") {
+    test("an unknown declared size counts as a 1/64 budget share, bounding unknowns per chunk without solo-packing them") {
+        // Treating null as the WHOLE budget had a cliff: one sized entry in an otherwise-null listing
+        // forced every null to pack alone (parallelism 1, one apply pass per key). A 1/64 share caps a
+        // chunk at 64 unknowns - the pre-packer exposure ceiling - while letting them share chunks.
         val input = entries(50, null, 50)
-        val chunks = ObjectContentStore.packForFetch(input, byteBudget = 1000, countCap = 10)
-        chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0"), listOf("k1"), listOf("k2"))
+        val chunks = ObjectContentStore.packForFetch(input, byteBudget = 6400, countCap = 10)
+        // share = 6400/64 = 100: 50 + 100 + 50 = 200, well under budget - one chunk.
+        chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0", "k1", "k2"))
+    }
+
+    test("unknown sizes close a chunk at 64 entries even when the count cap is higher") {
+        val input = entries(*arrayOfNulls<Long>(70))
+        val chunks = ObjectContentStore.packForFetch(input, byteBudget = 6400, countCap = 256)
+        chunks.map { it.size } shouldBe listOf(64, 6)
     }
 
     test("the count cap closes a chunk even when bytes remain") {
@@ -56,9 +66,7 @@ class ObjectContentStorePackingTest : FunSpec({
         chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0"), listOf("k1", "k2"))
     }
 
-    test("when NO entry declares a size, packing falls back to count-only chunks") {
-        // All-null would otherwise pack every entry alone: parallelism collapses to 1 and each one-entry
-        // chunk pays a whole apply pass - O(N^2) boot work for a provider that omits <Size> entirely.
+    test("an all-null listing still packs multiple entries per chunk (the count cap can close first)") {
         val input = entries(null, null, null, null, null)
         val chunks = ObjectContentStore.packForFetch(input, byteBudget = 1000, countCap = 2)
         chunks.map { chunk -> chunk.map { it.key } } shouldBe listOf(listOf("k0", "k1"), listOf("k2", "k3"), listOf("k4"))

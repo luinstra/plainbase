@@ -19,9 +19,12 @@ import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -219,8 +222,9 @@ class S3ObjectClient(
                 encodedParameters.append(PercentCoding.encodeSegment(name), PercentCoding.encodeSegment(value))
             }
         }
-        // ignoreCase: Host must be dropped whatever case a future caller keys it under - appending any
-        // variant would put a second Host beside the one Ktor derives from url.host:port.
+        // ignoreCase: Host must be dropped whatever case it is keyed under. CIO skips its own derived
+        // Host on a case-INSENSITIVE contains, so an appended variant would not duplicate - it would
+        // silently REPLACE the derived value, overriding the signed connect host on the wire.
         request.signedHeaders.forEach { (name, value) ->
             if (!name.equals(HttpHeaders.Host, ignoreCase = true)) headers.append(name, value)
         }
@@ -250,7 +254,9 @@ class S3ObjectClient(
         override val contentLength: Long = Files.size(source)
 
         override suspend fun writeTo(channel: ByteWriteChannel) {
-            Files.newInputStream(source).use { input ->
+            withContext(Dispatchers.IO) {
+                Files.newInputStream(source)
+            }.use { input ->
                 val buffer = ByteArray(READ_CHUNK)
                 while (true) {
                     val read = input.read(buffer)
@@ -292,8 +298,8 @@ class S3ObjectClient(
         val signedHeaders = buildMap {
             // Sign the exact host[:port] the engine will send (the port only when non-default).
             put(HttpHeaders.Host, if (endpoint.port == endpoint.protocol.defaultPort) requestHost else "$requestHost:${endpoint.port}")
-            put("x-amz-content-sha256", payloadHash)
-            put("x-amz-date", amzDate)
+            put(X_AMZ_CONTENT_SHA, payloadHash)
+            put(X_AMZ_DATE, amzDate)
             // MUST be Ktor's exact-case constant, never a lowercase literal: mergeHeaders skips
             // Content-Type from the request headers CASE-SENSITIVELY then re-emits it from a
             // case-INSENSITIVE fallback, so a lowercase key ships the header TWICE and every
@@ -346,7 +352,39 @@ class S3ObjectClient(
      */
     private suspend fun readBody(response: HttpResponse, op: String, target: String, cap: Long): ByteArray {
         val channel = response.bodyAsChannel()
+        // Exact-size fast path: with a trusted-shape Content-Length, ONE allocation holds the body. The
+        // accumulator path below peaks at ~2x the body (the growing buffer plus the final copy), which
+        // matters on the boot path where hydrate buffers a whole chunk of bodies - "budget plus one
+        // body" is only an honest bound when a body costs one body. Length-less/chunked responses and
+        // hostile over-length bodies fall through to the accumulator, cap still enforced.
+        val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+        if (declared != null && declared in 0..minOf(cap, MAX_EXACT_BODY_BYTES)) {
+            val body = ByteArray(declared.toInt())
+            var filled = 0
+            while (filled < body.size) {
+                val read = channel.readAvailable(body, filled, body.size - filled)
+                if (read == -1) return body.copyOf(filled) // truncated: return the bytes that arrived (accumulator parity)
+                filled += read
+            }
+            val probe = ByteArray(1)
+            if (channel.readAvailable(probe, 0, 1) == -1) return body
+            // More bytes than declared: hostile or broken - continue on the accumulator path, cap enforced.
+            return accumulateBody(channel, op, target, cap, seed = body, seedExtra = probe)
+        }
+        return accumulateBody(channel, op, target, cap, seed = null, seedExtra = null)
+    }
+
+    private suspend fun accumulateBody(
+        channel: ByteReadChannel,
+        op: String,
+        target: String,
+        cap: Long,
+        seed: ByteArray?,
+        seedExtra: ByteArray?,
+    ): ByteArray {
         val out = ByteArrayOutputStream()
+        seed?.let { out.write(it) }
+        seedExtra?.let { out.write(it) }
         val chunk = ByteArray(READ_CHUNK)
         while (true) {
             val read = channel.readAvailable(chunk, 0, chunk.size)
@@ -361,6 +399,12 @@ class S3ObjectClient(
                 )
             }
             out.write(chunk, 0, read)
+        }
+        if (out.size().toLong() > cap) {
+            throw ObjectStoreException(
+                "$op '$target' response body exceeds the $cap-byte cap - raise PLAINBASE_MAX_ASSET_BYTES if " +
+                    "this is a legitimate large object, else check for a hostile or misconfigured endpoint",
+            )
         }
         return out.toByteArray()
     }
@@ -413,7 +457,13 @@ class S3ObjectClient(
          * map keyed by any other case-variant of these ships the header twice and 403s.
          */
         private val ENGINE_MANAGED_HEADERS =
-            listOf(HttpHeaders.ContentType, HttpHeaders.ContentLength, HttpHeaders.TransferEncoding, HttpHeaders.Expect)
+            listOf(HttpHeaders.ContentType, HttpHeaders.ContentLength, HttpHeaders.TransferEncoding, HttpHeaders.Expect, HttpHeaders.Host)
+
+        private const val X_AMZ_CONTENT_SHA = "x-amz-content-sha256"
+        private const val X_AMZ_DATE = "x-amz-date"
+
+        /** The exact-size read path needs a JVM array, so a declared length past Int range takes the accumulator. */
+        private const val MAX_EXACT_BODY_BYTES = Int.MAX_VALUE.toLong()
 
         private const val MAX_UTF8_CONTINUATION_BYTES = 3
         private const val UTF8_LEAD_MASK = 0xC0
