@@ -1160,8 +1160,15 @@ class ObjectContentStore(
         /** Bulk drift folds into one synthetic overflow event - consumers only schedule (§B2). */
         private const val OVERFLOW_THRESHOLD = 16
 
-        private const val FETCH_CHUNK = 64
-        private const val FETCH_PARALLELISM = 16
+        // Sized by the first credentialed budget drill (R2, 1000 pages, residential link). At 16-way
+        // lockstep (chunk == parallelism) cold hydrate measured ~19-31s: every chunk's awaitAll waits
+        // for its slowest GET, so per-GET tail latency was paid on every wave. 64-way cut it to ~8.5s;
+        // the 4x chunk then keeps 64 GETs continuously in flight WITHIN a chunk (the semaphore refills
+        // as fetches finish), so the straggler tail is paid once per 256 keys instead of once per 64.
+        // 256 page-sized bodies in memory and 64 concurrent GETs are both trivial, and the apply batch
+        // stays a boot-time transaction nothing contends with.
+        private const val FETCH_CHUNK = 256
+        private const val FETCH_PARALLELISM = 64
 
         private val logger = KotlinLogging.logger {}
     }
