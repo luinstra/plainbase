@@ -539,12 +539,12 @@ describe("two-stage search palette", () => {
     }
   });
 
-  it("marks exactly the selected row with data-pb-search-active (the slash-marker hook)", async () => {
+  it("marks exactly the selected row with data-pb-search-active (the selection-tint hook)", async () => {
     setup();
     await openPalette();
     await waitFor(() => expect(getInput()).not.toBeNull());
     const input = getInput();
-    // Nothing selected at rest → no row carries the marker hook.
+    // Nothing selected at rest → no row carries the selection-tint hook.
     expect(document.querySelectorAll("[data-pb-search-active]")).toHaveLength(0);
 
     fireEvent.keyDown(input, { key: "ArrowDown" }); // lands on row 0

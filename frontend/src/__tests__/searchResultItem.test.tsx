@@ -58,7 +58,7 @@ describe("SearchResultItem", () => {
     expect(container.querySelector("span.font-mono")?.textContent).toBe("Deploy Guide › Prerequisites");
   });
 
-  it("carries the data-pb-search-active marker hook only when active (slash-marker contract)", () => {
+  it("carries the data-pb-search-active tint hook only when active", () => {
     const props = { hit: hit("s", []), id: "opt", onActivate: noop, onHover: noop };
     const inactive = render(<SearchResultItem {...props} active={false} />);
     expect(inactive.container.querySelector("[data-pb-search-active]")).toBeNull();

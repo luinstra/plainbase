@@ -76,7 +76,7 @@ body {
   outline-offset: 2px;
 }
 
-/* ---- sidebar tree (.pb-sidebar, .pb-folder-caret are stable selectors) ----------------- */
+/* ---- sidebar tree (.pb-sidebar, .pb-folder-caret, .pb-tree-kind are stable selectors) --- */
 
 /* Sidebar disclosure caret. Drawn with borders on ::before; rotation is driven by the
    toggle button's aria-expanded (the React tree's single open/closed signal). */
@@ -106,29 +106,48 @@ body {
   left: 1px;
   top: 2px;
 }
+.pb-tree-kind {
+  display: inline-flex;
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--pb-text-faint);
+}
+.pb-tree-kind[data-pb-tree-kind="folder"] {
+  color: var(--pb-text-muted);
+}
+.pb-tree-kind svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pb-root-selector-caret {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid var(--pb-text-muted);
+  border-bottom: 2px solid var(--pb-text-muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
+}
+[data-pb-root-selector][aria-expanded="true"] .pb-root-selector-caret {
+  transform: translateY(2px) rotate(225deg);
+}
 @media (prefers-reduced-motion: reduce) {
-  .pb-folder-caret::before {
+  .pb-folder-caret::before,
+  .pb-root-selector-caret {
     transition: none;
   }
 }
 
-/* Active nav row: accent-soft tint + the teal slash "you are here" bar (the slash motif).
-   Keyed on aria-current="page"; position:relative anchors the ::before (Tailwind won't supply it). */
+/* Active nav row: a quiet persistent tint. Keyboard focus remains the global :focus-visible ring. */
 .pb-sidebar [aria-current="page"] {
-  position: relative;
   background: var(--pb-accent-soft);
   color: var(--pb-text);
-}
-.pb-sidebar [aria-current="page"]::before {
-  content: "";
-  position: absolute;
-  left: -1px;
-  top: 7px;
-  bottom: 7px;
-  width: 3px;
-  background: var(--pb-accent);
-  border-radius: 2px;
-  transform: skewX(-12deg);
 }
 
 /* ---- prose (.pb-prose is a stable selector; markup comes from the server renderer) ---- */
@@ -427,24 +446,9 @@ body {
   font-weight: 600;
 }
 
-/* Keyboard-selected row: accent-soft tint + the teal slash bar — the same "you are here"
-   motif as the sidebar (see .pb-sidebar [aria-current="page"] above). Keyed on the stable
-   data-pb-search-active hook so all three row types (hit, jump, bridge) get it for free;
-   position:relative anchors the ::before (Tailwind's rounded px-3 py-2 won't supply it). */
+/* Keyboard-selected search row: a quiet persistent tint, shared by hit, jump and bridge rows. */
 .pb-search [data-pb-search-active] {
-  position: relative;
   background: var(--pb-accent-soft);
-}
-.pb-search [data-pb-search-active]::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 9px;
-  bottom: 9px;
-  width: 3px;
-  background: var(--pb-accent);
-  border-radius: 2px;
-  transform: skewX(-12deg);
 }
 
 /* Group label above the empty-query (Stage-1) rows — presentational framing only. */

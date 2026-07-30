@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { sessionQuery, treeQuery } from "../api/queries";
 import type { RootTree, TreeFolder } from "../api/types";
 import { ROOT_UNAVAILABLE } from "../components/ErrorView";
 import { SidebarNav } from "../components/Sidebar";
+import { writeSidebarPreferences } from "../lib/sidebarPreferences";
 import { createAppRouter } from "../router";
 
 /**
@@ -71,7 +72,14 @@ const tree: TreeFolder = {
 
 describe("SidebarNav", () => {
   it("emits the stable selectors and links from node urls", () => {
-    const { container } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
+    const { container } = render(
+      <SidebarNav
+        tree={tree}
+        root="docs"
+        currentPathname="/docs/guides/deploy-guide"
+        initialOpenFolders={["shadowed-folder"]}
+      />,
+    );
 
     // `.pb-sidebar`/`data-pb-sidebar` moved UP to the wrapper's single `<aside>` (multi-root C5) - a nav
     // per root, one aside for all of them. The count guard lives with the wrapper's tests below.
@@ -125,7 +133,41 @@ describe("SidebarNav", () => {
     expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
   });
 
-  it("marks exactly the active row with aria-current (the slash-bar/tint hook)", () => {
+  it("opens the active page's ancestors and leaves unrelated folders collapsed", () => {
+    const { container } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
+    const toggles = container.querySelectorAll("[data-pb-folder-toggle]");
+
+    expect(toggles[0].getAttribute("aria-expanded")).toBe("true");
+    expect(toggles[1].getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('a[href="/docs/guides/deploy-guide"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"]')).toBeNull();
+  });
+
+  it("opens a newly active ancestor after client-side navigation", async () => {
+    const { container, rerender } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs" />);
+    const guidesToggle = container.querySelector<HTMLButtonElement>("[data-pb-folder-toggle]")!;
+    expect(guidesToggle.getAttribute("aria-expanded")).toBe("false");
+
+    rerender(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
+    await waitFor(() => expect(guidesToggle.getAttribute("aria-expanded")).toBe("true"));
+  });
+
+  it("opens the ancestor of an active collision-loser permalink", () => {
+    const { container } = render(
+      <SidebarNav
+        tree={tree}
+        root="docs"
+        currentPathname="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"
+      />,
+    );
+    const toggles = container.querySelectorAll("[data-pb-folder-toggle]");
+
+    expect(toggles[0].getAttribute("aria-expanded")).toBe("false");
+    expect(toggles[1].getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('a[href="/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99"]')).not.toBeNull();
+  });
+
+  it("marks exactly the active row with aria-current (the persistent tint hook)", () => {
     const { container } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
     const active = container.querySelectorAll('[aria-current="page"]');
     expect(active).toHaveLength(1);
@@ -137,6 +179,33 @@ describe("SidebarNav", () => {
     const { container } = render(<SidebarNav tree={tree} root="docs" currentPathname="/docs/guides/deploy-guide" />);
     expect(container.textContent).not.toMatch(/[▾▸]/);
     expect(container.querySelectorAll(".pb-folder-caret").length).toBeGreaterThan(0);
+  });
+
+  it("groups folders before files, sorts each group by its displayed label, and marks both kinds", () => {
+    const mixed: TreeFolder = {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: "/docs",
+      page_count: 2,
+      children: [
+        { type: "page", id: "id-zulu-page", title: "Zulu page", slug: "zulu", path: "zulu.md", url: "/docs/zulu", status: "active", updated: null },
+        { type: "folder", name: "zulu-folder", title: "Zulu folder", description: null, path: "zulu-folder", url: "/docs/zulu-folder", page_count: 0, children: [] },
+        { type: "page", id: "id-alpha-page", title: "Alpha page", slug: "alpha", path: "alpha.md", url: "/docs/alpha", status: "active", updated: null },
+        { type: "folder", name: "alpha-folder", title: "Alpha folder", description: null, path: "alpha-folder", url: "/docs/alpha-folder", page_count: 0, children: [] },
+      ],
+    };
+    const { container } = render(<SidebarNav tree={mixed} root="docs" currentPathname="/docs" />);
+    const rows = [...container.querySelector("nav > ul")!.children];
+
+    expect(rows.map((row) => row.getAttribute("data-pb-nav-item"))).toEqual(["folder", "folder", "page", "page"]);
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["Alpha folder", "Zulu folder", "Alpha page", "Zulu page"]);
+    expect(container.querySelectorAll('[data-pb-tree-kind="folder"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-pb-tree-kind="page"]')).toHaveLength(2);
+    expect(container.querySelector('a[href="/docs/alpha"]')?.className).toContain("text-ink");
+    expect(container.querySelector('a[href="/docs/alpha"]')?.className).not.toContain("text-muted");
   });
 
   it("surfaces the root landing as a home link to the folder URL at the TOP, not the page's bare URL", () => {
@@ -264,7 +333,9 @@ describe("SidebarNav", () => {
         },
       ],
     };
-    const { container } = render(<SidebarNav tree={loserWithIndex} root="docs" currentPathname="/docs" />);
+    const { container } = render(
+      <SidebarNav tree={loserWithIndex} root="docs" currentPathname="/docs" initialOpenFolders={["runbooks"]} />,
+    );
     // The loser folder label is inert (no link), so the index survives as a child row at its permalink.
     expect(container.querySelector('a[href="/p/docs/id-loser-index"]')).not.toBeNull();
     expect(container.querySelectorAll('[data-pb-nav-item="page"]')).toHaveLength(1);
@@ -298,6 +369,48 @@ function entryTree(root: string, pageId: string, title: string): TreeFolder {
 
 const DOCS: RootTree = { root: "docs", available: true, editable: true, primary: true, tree: entryTree("docs", "id-main-intro", "Main Intro") };
 const EXTRA: RootTree = { root: "extra", available: true, editable: true, primary: false, tree: entryTree("extra", "id-extra-intro", "Extra Intro") };
+function entryWithFolder(root: string, primary: boolean): RootTree {
+  const rootUrl = `/${root}`;
+  return {
+    root,
+    available: true,
+    editable: true,
+    primary,
+    tree: {
+      type: "folder",
+      name: "",
+      title: null,
+      description: null,
+      path: "",
+      url: rootUrl,
+      page_count: 0,
+      children: [
+        {
+          type: "folder",
+          name: "notes",
+          title: "Notes",
+          description: null,
+          path: "notes",
+          url: `${rootUrl}/notes`,
+          page_count: 1,
+          children: [
+            {
+              type: "page",
+              id: `id-${root}-note`,
+              title: `${root} note`,
+              slug: "one",
+              path: "notes/one.md",
+              url: `${rootUrl}/notes/one`,
+              status: "active",
+              updated: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 /** What a DOWN root actually ships: listed (it is configured) with an EMPTY subtree - see tree.ts FolderEntry. */
 const DOWN: RootTree = {
   root: "handbook",
@@ -307,11 +420,11 @@ const DOWN: RootTree = {
   tree: { type: "folder", name: "", title: null, description: null, path: "", url: "/handbook", page_count: 0, children: [] },
 };
 
-function renderShell(roots: RootTree[]) {
+function renderShell(roots: RootTree[], initialEntry = "/docs") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryClient.setQueryData(treeQuery.queryKey, { roots });
   queryClient.setQueryData(sessionQuery.queryKey, { authenticated: false, username: null, csrf_token: null, auth_mode: "off" });
-  const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ["/docs"] }));
+  const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: [initialEntry] }));
   return render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -319,40 +432,149 @@ function renderShell(roots: RootTree[]) {
   );
 }
 
+afterEach(() => {
+  sessionStorage.clear();
+});
+
 describe("Sidebar (the tree-fed parent)", () => {
-  it("renders ONE aside for N roots, with a section per entry in wire order", async () => {
+  it("renders one selector and only the route-owned root's tree when multiple roots exist", async () => {
     const { container } = renderShell([DOCS, EXTRA]);
 
-    // DELIBERATELY INVERTED (multi-root C5). This assertion used to read `toHaveLength(2)` and pass:
-    // it pinned the very bug it should have caught - one full-width `<aside>` PER root, so two roots
-    // shoved the document off-screen. The sidebar is ONE aside; the roots are SECTIONS inside it.
-    // Do not "restore" the 2.
     await waitFor(() => expect(container.querySelectorAll("[data-pb-sidebar]")).toHaveLength(1));
     expect(container.querySelectorAll(".pb-sidebar")).toHaveLength(1);
 
+    const selector = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+    expect(selector).not.toBeNull();
+    expect(selector!.tagName).toBe("BUTTON");
+    expect(selector!.getAttribute("data-pb-selected-root")).toBe("docs");
+    expect(selector!.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(selector!);
+    const options = [...container.querySelectorAll<HTMLButtonElement>("[data-pb-root-option]")];
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    expect(options.map((option) => option.getAttribute("data-pb-root-option"))).toEqual(["docs", "extra"]);
+    expect(options.map((option) => option.tagName)).toEqual(["BUTTON", "BUTTON"]);
+    expect(options[0].getAttribute("aria-selected")).toBe("true");
+
     const sections = [...container.querySelectorAll("[data-pb-root-section]")];
-    expect(sections.map((section) => section.getAttribute("data-pb-root-section"))).toEqual(["docs", "extra"]);
-    const [main, extra] = sections;
-    expect(main.querySelector('a[href="/docs/intro"]')).not.toBeNull();
-    expect(extra.querySelector('a[href="/extra/intro"]')).not.toBeNull();
+    expect(sections.map((section) => section.getAttribute("data-pb-root-section"))).toEqual(["docs"]);
+    expect(sections[0].querySelector('a[href="/docs/intro"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/extra/intro"]')).toBeNull();
   });
 
-  it("labels each section when there are 2+ roots, and labels nothing when there is one", async () => {
+  it("opens the themed root listbox from the keyboard, moves by arrow, and restores focus on Escape", async () => {
+    const { container } = renderShell([DOCS, EXTRA]);
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+
+    selector.focus();
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    const docs = container.querySelector<HTMLButtonElement>('[data-pb-root-option="docs"]')!;
+    const extra = container.querySelector<HTMLButtonElement>('[data-pb-root-option="extra"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(docs));
+
+    fireEvent.keyDown(docs, { key: "ArrowDown" });
+    await waitFor(() => expect(document.activeElement).toBe(extra));
+
+    fireEvent.keyDown(extra, { key: "Escape" });
+    expect(container.querySelector("[data-pb-root-menu]")).toBeNull();
+    expect(document.activeElement).toBe(selector);
+  });
+
+  it("uses a valid saved root on rootless routes but lets a rooted URL override it", async () => {
+    writeSidebarPreferences({ selectedRoot: "extra", openFolders: {} });
+
+    const rootless = renderShell([DOCS, EXTRA], "/review");
+    await waitFor(() =>
+      expect(rootless.container.querySelector("[data-pb-root-selector]")?.getAttribute("data-pb-selected-root")).toBe("extra"),
+    );
+    expect(rootless.container.querySelector('[data-pb-root-section="extra"]')).not.toBeNull();
+    rootless.unmount();
+
+    const rooted = renderShell([DOCS, EXTRA], "/p/docs/0197b1c0-5e2a-7b34-9c1d-2f6a8e4b7d99");
+    await waitFor(() =>
+      expect(rooted.container.querySelector("[data-pb-root-selector]")?.getAttribute("data-pb-selected-root")).toBe("docs"),
+    );
+    expect(rooted.container.querySelector('[data-pb-root-section="docs"]')).not.toBeNull();
+  });
+
+  it("falls back to the declared primary rather than wire position when a saved root is stale", async () => {
+    writeSidebarPreferences({ selectedRoot: "removed", openFolders: {} });
+
+    const { container } = renderShell([EXTRA, DOCS], "/review");
+    await waitFor(() =>
+      expect(container.querySelector("[data-pb-root-selector]")?.getAttribute("data-pb-selected-root")).toBe("docs"),
+    );
+    expect(container.querySelector('[data-pb-root-section="docs"]')).not.toBeNull();
+  });
+
+  it("restores folder expansion independently for each root", async () => {
+    const { container } = renderShell([entryWithFolder("docs", true), entryWithFolder("extra", false)]);
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    const selectRoot = (root: string) => {
+      fireEvent.click(selector);
+      const option = container.querySelector<HTMLButtonElement>(`[data-pb-root-option="${root}"]`);
+      expect(option).not.toBeNull();
+      fireEvent.click(option!);
+    };
+
+    const activeToggle = () => container.querySelector<HTMLButtonElement>("[data-pb-folder-toggle]")!;
+    expect(activeToggle().getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(activeToggle());
+    expect(activeToggle().getAttribute("aria-expanded")).toBe("true");
+
+    selectRoot("extra");
+    await waitFor(() => expect(container.querySelector('[data-pb-root-section="extra"]')).not.toBeNull());
+    expect(activeToggle().getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(activeToggle());
+    expect(activeToggle().getAttribute("aria-expanded")).toBe("true");
+
+    selectRoot("docs");
+    await waitFor(() => expect(container.querySelector('[data-pb-root-section="docs"]')).not.toBeNull());
+    expect(activeToggle().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("lists every root in the selector and omits the selector entirely for one root", async () => {
     const many = renderShell([DOCS, EXTRA]);
+    const selector = await waitFor(() => {
+      const element = many.container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    fireEvent.click(selector);
     await waitFor(() => expect(many.container.querySelectorAll("[data-pb-root-label]")).toHaveLength(2));
     const labels = [...many.container.querySelectorAll("[data-pb-root-label]")];
     expect(labels.map((label) => label.textContent)).toEqual(["docs", "extra"]);
 
-    // One root (every legacy install): a header reading "docs" is pure noise, so there is none.
+    // One root (every legacy install): a selector with one choice is pure noise, so there is none.
     const one = renderShell([DOCS]);
     await waitFor(() => expect(one.container.querySelector("[data-pb-root-section]")).not.toBeNull());
-    expect(one.container.querySelectorAll("[data-pb-root-label]")).toHaveLength(0);
+    expect(one.container.querySelector("[data-pb-root-selector]")).toBeNull();
   });
 
   it("shows a DOWN root's section as an outage, never as an empty tree", async () => {
     const { container } = renderShell([DOCS, DOWN]);
 
-    await waitFor(() => expect(container.querySelectorAll("[data-pb-root-section]")).toHaveLength(2));
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    fireEvent.click(selector);
+    expect([...container.querySelectorAll("[data-pb-root-option]")].map((option) => option.textContent)).toEqual([
+      "docs",
+      "handbook (unavailable)",
+    ]);
+
+    fireEvent.click(container.querySelector<HTMLButtonElement>('[data-pb-root-option="handbook"]')!);
+    await waitFor(() => expect(container.querySelector('[data-pb-root-section="handbook"]')).not.toBeNull());
     const down = container.querySelector('[data-pb-root-section="handbook"]')!;
     const notice = down.querySelector("[data-pb-root-section-unavailable]")!;
     expect(notice).not.toBeNull();
@@ -364,7 +586,11 @@ describe("Sidebar (the tree-fed parent)", () => {
     // has no pages" - i.e. "my docs are gone" - over what is an outage.
     expect(down.querySelector("nav")).toBeNull();
     expect(down.querySelector("[data-pb-nav-item]")).toBeNull();
-    // The serving root next to it is untouched.
-    expect(container.querySelector('[data-pb-root-section="docs"] a[href="/docs/intro"]')).not.toBeNull();
+
+    fireEvent.click(selector);
+    fireEvent.click(container.querySelector<HTMLButtonElement>('[data-pb-root-option="docs"]')!);
+    await waitFor(() =>
+      expect(container.querySelector('[data-pb-root-section="docs"] a[href="/docs/intro"]')).not.toBeNull(),
+    );
   });
 });

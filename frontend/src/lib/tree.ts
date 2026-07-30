@@ -26,6 +26,33 @@ export function pageHref(root: string, page: TreePage): string {
   return page.url ?? permalinkOf(root, page.id);
 }
 
+/**
+ * The folder paths that must be open to reveal [pathname] in one root's sidebar tree.
+ * The synthetic root is never returned, and the active folder itself stays closed: only
+ * its parents need opening to make its label visible.
+ */
+export function ancestorFolderPaths(tree: TreeFolder, root: string, pathname: string): string[] {
+  const ancestors: string[] = [];
+
+  function containsActivePath(folder: TreeFolder): boolean {
+    for (const child of folder.children) {
+      if (child.type === "page") {
+        if (pageHref(root, child) === pathname) return true;
+        continue;
+      }
+      if (child.url === pathname) return true;
+      if (containsActivePath(child)) {
+        ancestors.unshift(child.path);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  containsActivePath(tree);
+  return ancestors;
+}
+
 function* walk(nodes: TreeNode[]): Generator<TreeNode> {
   for (const node of nodes) {
     yield node;
