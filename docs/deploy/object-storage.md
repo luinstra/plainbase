@@ -109,8 +109,9 @@ operator-signals section of [operating-plainbase.md](../operating-plainbase.md#o
 Never disable certificate validation to work around it; install the CA bundle or fix the endpoint.
 
 **Memory floor:** size the container for the native binary's serving RSS plus headroom for the hydrated
-mirror. The measured serving RSS is recorded from the pre-release drill session; if none is recorded yet,
-measure it on your own hardware (**not yet rehearsed** - see the
+mirror. Measured 2026-07-29 during the pre-release drill session: **~120 MiB serving RSS** (native
+binary, macOS Apple Silicon, 1000-page corpus hydrated from Cloudflare R2, steady state after reads).
+Numbers vary by platform and corpus; re-measure on your own hardware when sizing tightly (see the
 [pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)).
 
 ## Platform support, honestly
