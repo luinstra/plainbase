@@ -515,6 +515,27 @@ describe("Sidebar (the tree-fed parent)", () => {
     expect(container.querySelector('[data-pb-root-section="extra"]')).not.toBeNull();
   });
 
+  it("confirms the active root option with Space", async () => {
+    const { container } = renderShell([DOCS, EXTRA]);
+    const selector = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>("[data-pb-root-selector]");
+      expect(element).not.toBeNull();
+      return element!;
+    });
+
+    fireEvent.keyDown(selector, { key: "ArrowDown" });
+    const docs = container.querySelector<HTMLButtonElement>('[data-pb-root-option="docs"]')!;
+    const extra = container.querySelector<HTMLButtonElement>('[data-pb-root-option="extra"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(docs));
+    fireEvent.keyDown(docs, { key: "ArrowDown" });
+    await waitFor(() => expect(document.activeElement).toBe(extra));
+
+    fireEvent.keyDown(extra, { key: " " });
+    await waitFor(() => expect(selector.getAttribute("data-pb-selected-root")).toBe("extra"));
+    expect(container.querySelector("[data-pb-root-menu]")).toBeNull();
+    expect(container.querySelector('[data-pb-root-section="extra"]')).not.toBeNull();
+  });
+
   it("closes an open root menu when Escape is pressed on the trigger", async () => {
     const { container } = renderShell([DOCS, EXTRA]);
     const selector = await waitFor(() => {

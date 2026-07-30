@@ -162,6 +162,8 @@ right side = `⌘K` search trigger + theme toggle. Body = sidebar + content.
 
 ### 2. Sidebar — `Sidebar.tsx` / `.pb-sidebar`  → ref: any screen
 **Keep it minimal.** A file tree. The only enrichments that survived review:
+- **Root selector**: with 2+ configured roots, a listbox above the tree switches the
+  displayed root (`RootSelector.tsx`); a single-root install renders no selector.
 - **Disclosure caret**: a CSS chevron (not a glyph dot, not an icon). Draw with
   borders on a `::before`, ~7px box, 2px stroke, `--pb-text-muted`; rotate −45°→45°
   on open.

@@ -44,11 +44,14 @@ export function Sidebar() {
     locationEntry ?? storedEntry ?? primaryEntry(roots) ?? roots[0] ?? null;
 
   useEffect(() => {
-    if (!selectedEntry || preferences.selectedRoot === selectedEntry.root) return;
-    const next = { ...preferences, selectedRoot: selectedEntry.root };
-    writeSidebarPreferences(next);
-    setPreferences(next);
-  }, [preferences, selectedEntry]);
+    if (!selectedEntry) return;
+    setPreferences((current) => {
+      if (current.selectedRoot === selectedEntry.root) return current;
+      const next = { ...current, selectedRoot: selectedEntry.root };
+      writeSidebarPreferences(next);
+      return next;
+    });
+  }, [selectedEntry]);
 
   const storeOpenFolders = (root: string, paths: string[]) => {
     setPreferences((current) => {
@@ -166,13 +169,18 @@ export function SidebarNav({
   useEffect(() => {
     const ancestors = ancestorFolderPaths(tree, root, currentPathname);
     if (ancestors.length === 0) return;
-    // Navigation-derived ancestor opens are deliberately ephemeral; only explicit user toggles persist.
+    // Navigation-derived ancestor opens are not persisted by this effect, but the next explicit
+    // toggle stores the whole open set, ancestors included.
     setOpenFolders((current) => {
       if (ancestors.every((path) => current.has(path))) return current;
       return new Set([...current, ...ancestors]);
     });
   }, [currentPathname, root, tree]);
 
+  // Compute-before-set is deliberate: the persist callback needs the next set, and a functional
+  // updater would either nest the parent's setPreferences inside this updater or move persistence
+  // to an effect that would also store navigation-derived opens. The closure is fresh because the
+  // only other writer (the ancestor effect) commits before any user event can fire.
   const toggleFolder = (path: string) => {
     const next = new Set(openFolders);
     if (next.has(path)) {
