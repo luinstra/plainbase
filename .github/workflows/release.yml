@@ -510,21 +510,32 @@ jobs:
           cat staging/docker-compose.yml
 
       # Step 4: release-notes platform table from ONLY the present artifacts (item 9).
+      #
+      # The per-release PROSE lives in `docs/release-notes/<x.y.z>.md`, never in this heredoc. Two
+      # reasons, both learned the hard way: v0.1.1 shipped a published body still saying "UNSIGNED for
+      # v0.1.0" and still carrying the one-time GHCR maintainer setup, because prose baked into a
+      # generator has no reason to change when the release does. And a REQUIRED file makes "nobody wrote
+      # the notes" a red release instead of a silently generic one. An `-rc.N` tag reads the SAME file as
+      # its final version (an rc is a dry run of that release, not a release of its own).
+      - name: Resolve the per-release notes fragment
+        run: |
+          base="${VERSION%%-rc.*}"
+          fragment="docs/release-notes/${base}.md"
+          if [ ! -f "$fragment" ]; then
+            echo "::error::Missing $fragment. Every release ships hand-written notes; write that file," \
+                 "commit it, and re-tag. (Tag $VERSION resolved to base version $base.)"
+            exit 1
+          fi
+          echo "NOTES_FRAGMENT=$fragment" >> "$GITHUB_ENV"
+          echo "Using $fragment:"
+          cat "$fragment"
+
       - name: Generate release notes
         run: |
           {
             echo "# Plainbase v${VERSION}"
             echo
-            echo "## MVP Definition of Done"
-            echo "- Polished site: a clean, navigable rendered view of the content tree."
-            echo "- Stable identity: pages keep a durable ID/URL across renames and moves."
-            echo "- Full-text search: fast, relevant search over the whole corpus."
-            echo "- Browser editing -> files: edits made in the browser land as real Markdown files."
-            echo "- Optional Git commits: edits can be committed to Git when the content tree is a repo."
-            echo "- History/diffs: page history and diffs are viewable in the browser."
-            echo "- Agent API: search / read / cite / propose over MCP and REST for agent workflows."
-            echo "- Review queue: agent-proposed changes land in a human-reviewable queue before merge."
-            echo "- Self-hosted deploy: a single native binary or container, no external services required."
+            cat "$NOTES_FRAGMENT"
             echo
             echo "## Artifacts"
             echo
@@ -551,21 +562,13 @@ jobs:
             echo
             echo "## Unsigned binaries"
             echo
-            echo "The macOS and Windows native binaries are UNSIGNED for v0.1.0 -- code-signing /"
-            echo "notarization is DEFERRED to v0.1.x. Gatekeeper / SmartScreen will warn on first run:"
+            echo "The macOS and Windows native binaries are UNSIGNED -- code-signing and notarization are"
+            echo "not yet part of this workflow. Gatekeeper / SmartScreen will warn on first run:"
             echo "- macOS: \`xattr -d com.apple.quarantine ./plainbase-macos-arm64\`, or right-click -> Open."
             echo "- Windows: SmartScreen -> \"More info\" -> \"Run anyway\"."
             echo
             echo "On Linux and macOS, set the executable bit on the downloaded binary first:"
             echo "\`chmod +x ./plainbase-linux-x64\` (or whichever file you downloaded)."
-            echo
-            echo "## Setup: GHCR package visibility (maintainers, one-time)"
-            echo
-            echo "GHCR packages default PRIVATE even on a public repo. Before the first release, connect"
-            echo "the \`ghcr.io/luinstra/plainbase\` package to this repository and set its visibility to"
-            echo "Public in package settings (there is no supported per-run visibility flip). This"
-            echo "workflow enforces the result via an unauthenticated-pull gate and fails loudly if the"
-            echo "image isn't public yet."
           } > release-notes.md
           cat release-notes.md
 
