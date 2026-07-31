@@ -4,6 +4,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -29,6 +30,7 @@ import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.time.Instant
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * [S3ObjectClient] against a scripted fake-S3 over a REAL loopback CIO server: URL/addressing
@@ -249,6 +251,81 @@ class S3ObjectClientTest : FunSpec({
     test("the exact-size path round-trips a declared-length body byte-for-byte (the common GET shape)") {
         respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"x1\""), body = "exact body bytes".toByteArray()) }
         checkNotNull(client.get("exact.md")).bytes.decodeToString() shouldBe "exact body bytes"
+    }
+
+    // ---- Bounded backoff on a THROTTLED GET (503/SlowDown, 429) -------------------------------
+    // Each row builds its own client so it can record the sleeps, and CLOSES it: afterSpec closes only the
+    // spec-level client, so an unclosed per-row CIO client leaks its threads for the rest of the run.
+
+    fun throttleClient(sleeps: MutableList<Long>) = S3ObjectClient(
+        S3ClientConfig(
+            endpoint = "http://127.0.0.1:$port",
+            region = "auto",
+            bucket = "scratch",
+            accessKeyId = "AKIDTEST",
+            secretAccessKey = "SECRETTEST",
+        ),
+        clock = { Instant.parse("2026-07-05T12:00:00Z") },
+        sleeper = { sleeps += it },
+    )
+
+    test("B1: a throttled GET (503, 503, 200) succeeds after two bounded backoffs") {
+        val sleeps = mutableListOf<Long>()
+        var call = 0
+        respond = {
+            call++
+            if (call <= 2) {
+                FakeResponse(HttpStatusCode.ServiceUnavailable, body = "<Error><Code>SlowDown</Code></Error>".toByteArray())
+            } else {
+                FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"s1\""), "slowed".toByteArray())
+            }
+        }
+        throttleClient(sleeps).use { checkNotNull(it.get("throttled.md")).bytes.decodeToString() shouldBe "slowed" }
+        recorded.size shouldBe 3
+        sleeps.size shouldBe 2
+        (sleeps[0] in 200L..300L).shouldBeTrue()
+        (sleeps[1] in 400L..600L).shouldBeTrue()
+    }
+
+    test("B2: a persistently throttled GET exhausts the bound and throws, every delay AND the total bounded")
+        .config(timeout = 30.seconds) {
+            // The injected sleeper returns instantly, so an unbounded-retry regression spins rather than waits:
+            // the request count and the timeout are both observing it.
+            val sleeps = mutableListOf<Long>()
+            respond = { FakeResponse(HttpStatusCode.ServiceUnavailable, body = "<Error><Code>SlowDown</Code></Error>".toByteArray()) }
+            throttleClient(sleeps).use {
+                shouldThrow<ObjectStoreException> { it.get("always-throttled.md") }.message.orEmpty() shouldContain "503"
+            }
+            recorded.size shouldBe 1 + S3ObjectClient.THROTTLE_MAX_RETRIES
+            sleeps.size shouldBe S3ObjectClient.THROTTLE_MAX_RETRIES
+            (sleeps[0] in 200L..300L).shouldBeTrue()
+            (sleeps[1] in 400L..600L).shouldBeTrue()
+            (sleeps[2] in 800L..1200L).shouldBeTrue()
+            (sleeps.sum() <= 2100L).shouldBeTrue()
+        }
+
+    test("B3: a non-throttle 5xx does not retry - a misconfiguration must surface at once, not at triple the latency") {
+        val sleeps = mutableListOf<Long>()
+        respond = { FakeResponse(HttpStatusCode.InternalServerError, body = "boom".toByteArray()) }
+        throttleClient(sleeps).use { shouldThrow<ObjectStoreException> { it.get("broken.md") } }
+        recorded.size shouldBe 1
+        sleeps.shouldBeEmpty()
+    }
+
+    test("B4: a 429 retries exactly like a 503") {
+        val sleeps = mutableListOf<Long>()
+        var call = 0
+        respond = {
+            call++
+            if (call == 1) {
+                FakeResponse(HttpStatusCode.TooManyRequests, body = "too many".toByteArray())
+            } else {
+                FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"s2\""), "after 429".toByteArray())
+            }
+        }
+        throttleClient(sleeps).use { checkNotNull(it.get("rate-limited.md")).bytes.decodeToString() shouldBe "after 429" }
+        recorded.size shouldBe 2
+        sleeps.size shouldBe 1
     }
 
     test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {

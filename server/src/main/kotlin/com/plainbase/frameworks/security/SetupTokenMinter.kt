@@ -8,7 +8,9 @@ import com.plainbase.domain.principal.hashCookie
 import java.security.SecureRandom
 
 /**
- * Mints a one-time setup/reset token from `SecureRandom` (the only randomness, native-safe). 32 random bytes
+ * Mints a one-time setup/reset token from `SecureRandom` (the only CRYPTOGRAPHIC randomness in the server, and
+ * native-safe; the object-store's throttle-backoff jitter is the one other random source and deliberately uses
+ * non-crypto `kotlin.random`). 32 random bytes
  * (256 bits) base64url-encoded as the token value; the `setup_tokens` PK is the raw `SHA-256` of that token STRING
  * ([hashCookie] — the same cookie-string → PK convention the session token uses), so on consume the service hashes
  * the presented token string and the digests match. The plaintext is never re-derivable from a row.

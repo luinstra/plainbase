@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.objectstore
 
 import com.plainbase.domain.content.PercentCoding
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -24,6 +25,7 @@ import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
@@ -31,6 +33,7 @@ import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlin.random.Random
 
 /**
  * The five S3 ops over the already-present Ktor CIO client, signed by [SigV4Signer] (plan C0/Q7:
@@ -47,6 +50,8 @@ import java.time.format.DateTimeFormatter
 class S3ObjectClient(
     private val config: S3ClientConfig,
     private val clock: () -> Instant = Instant::now,
+    /** The throttle-backoff sleep, injectable so tests assert retry counts and delay windows without wall-clock waits. */
+    private val sleeper: suspend (Long) -> Unit = { delay(it) },
 ) : ObjectStoreClient {
 
     private val endpoint = Url(config.endpoint)
@@ -84,13 +89,39 @@ class S3ObjectClient(
         }
     }
 
+    /**
+     * GET, with bounded backoff on a THROTTLED response (503/SlowDown, 429) and on nothing else. GET is idempotent
+     * and the status is only in hand here, so this is the one place a retry is both safe and possible; a 403 or a
+     * 500 still surfaces immediately, because retrying a misconfiguration only triples the time it takes to see it.
+     *
+     * The bound is round-trip-inclusive and worth stating plainly: the loop wraps the whole [execute], each of which
+     * is bounded by `requestTimeoutMillis`, so a fully throttled GET costs up to `(1 + THROTTLE_MAX_RETRIES)`
+     * request timeouts plus about 2.1 s of sleeps (~122 s at the 30 s default) before the existing failure paths
+     * see it. Delayed, never unbounded - and only against a provider that is actually throttling.
+     */
     override suspend fun get(key: String, maxBytes: Long?): FetchedObject? {
-        val response = execute(HttpMethod.Get, key)
-        return when {
-            response.status.isSuccess() ->
-                FetchedObject(bytes = readBody(response, "GET", key, maxBytes ?: config.maxResponseBytes), etag = etagOf(response))
-            response.status == HttpStatusCode.NotFound -> null
-            else -> unexpected("GET", key, response)
+        var attempt = 0
+        while (true) {
+            val response = execute(HttpMethod.Get, key)
+            when {
+                response.status.isSuccess() ->
+                    return FetchedObject(
+                        bytes = readBody(response, "GET", key, maxBytes ?: config.maxResponseBytes),
+                        etag = etagOf(response),
+                    )
+                response.status == HttpStatusCode.NotFound -> return null
+                response.status.isThrottle() && attempt < THROTTLE_MAX_RETRIES -> {
+                    response.bodyAsChannel().cancel(null) // release the connection before sleeping (the errorDetail idiom)
+                    val delayMillis = throttleDelayMillis(attempt)
+                    logger.debug {
+                        "GET '$key' throttled (${response.status}); retry ${attempt + 1}/$THROTTLE_MAX_RETRIES in ${delayMillis}ms"
+                    }
+                    sleeper(delayMillis)
+                    attempt++
+                }
+                // Exhausted retries land here too: the last throttled response surfaces with its own detail.
+                else -> unexpected("GET", key, response)
+            }
         }
     }
 
@@ -530,12 +561,33 @@ class S3ObjectClient(
             return maxOf(DEFAULT_MAX_RESPONSE_BYTES, withHeadroom)
         }
 
+        /** How many times a throttled GET is retried before the failure surfaces. Small on purpose: boot waits on this. */
+        internal const val THROTTLE_MAX_RETRIES = 3
+
+        private const val THROTTLE_BASE_DELAY_MILLIS = 200L
+
+        /** S3 says SlowDown with a 503; some providers use 429. No XML sniffing: the status is the whole signal. */
+        private fun HttpStatusCode.isThrottle(): Boolean =
+            this == HttpStatusCode.ServiceUnavailable || this == HttpStatusCode.TooManyRequests
+
+        /**
+         * 200/400/800 ms for attempt 0/1/2, each plus up to half its own value of jitter so a 64-way hydrate wave
+         * does not re-collide in lockstep. `kotlin.random` on purpose: spreading retries is scheduling, not secrecy,
+         * and this file is held to constructing no entropy source of its own (see `MirrorStateChokePointTest`).
+         */
+        private fun throttleDelayMillis(attempt: Int): Long {
+            val delay = THROTTLE_BASE_DELAY_MILLIS shl attempt
+            return delay + Random.nextLong(delay / 2 + 1)
+        }
+
         private const val READ_CHUNK = 64 * 1024
 
         /** Error bodies are only for the operator message; a few KiB is plenty and bounds a hostile error page. */
         private const val ERROR_DETAIL_CAP = 8 * 1024
 
         private val AMZ_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC)
+
+        private val logger = KotlinLogging.logger {}
     }
 }
 

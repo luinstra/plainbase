@@ -8,8 +8,10 @@ import com.plainbase.domain.principal.hashCookie
 import java.security.SecureRandom
 
 /**
- * Mints a session cookie token + its CSRF token from `SecureRandom` (the only randomness, native-safe — the same
- * primitive [ApiTokenMinter] / [Argon2PasswordHasher] use). The session token is 32 random bytes (256 bits of
+ * Mints a session cookie token + its CSRF token from `SecureRandom` (the only CRYPTOGRAPHIC randomness in the
+ * server, native-safe, the same primitive [ApiTokenMinter] / [Argon2PasswordHasher] use; the object-store's
+ * throttle-backoff jitter is the one other random source and deliberately uses non-crypto `kotlin.random`, since
+ * spreading retries is scheduling rather than secrecy). The session token is 32 random bytes (256 bits of
  * entropy) encoded base64url as the cookie VALUE; the `sessions` PK is the raw `SHA-256` of that cookie STRING
  * ([hashCookie]), so on read the service hashes the cookie string it receives and the digests match. The plaintext
  * is never re-derivable from a row. The CSRF token is a separate 32 random bytes, persisted RAW in the row and

@@ -9,8 +9,10 @@ import com.plainbase.domain.principal.encodeTokenSecret
 import java.security.SecureRandom
 
 /**
- * Mints a fresh `pb_<id>_<secret>` agent token from `SecureRandom` (the only randomness, native-safe — the same
- * primitive [Argon2PasswordHasher] uses). The `id` is 8 random bytes (64 bits of public lookup-key space, hex
+ * Mints a fresh `pb_<id>_<secret>` agent token from `SecureRandom` (the only CRYPTOGRAPHIC randomness in the
+ * server, native-safe, the same primitive [Argon2PasswordHasher] uses; the object-store's throttle-backoff jitter
+ * is the one other random source and deliberately uses non-crypto `kotlin.random`). The `id` is 8 random bytes
+ * (64 bits of public lookup-key space, hex
  * for an unambiguous `_`-free boundary) and the `secret` 32 random bytes (256 bits of entropy, base64url), so
  * the token is a clean single-line string. The plaintext rides [MintedToken] ONCE and is never re-derivable
  * from the persisted [MintedToken.secretHash].
