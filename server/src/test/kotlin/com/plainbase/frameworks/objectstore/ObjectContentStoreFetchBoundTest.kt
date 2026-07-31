@@ -214,7 +214,8 @@ class ObjectContentStoreFetchBoundTest : FunSpec({
             // (FETCH_CHUNK is 256, and zero-declared sizes never trip the pack-time budget), and a chunk's applies
             // run strictly after its fetches, so a GET that sees any mirror file already on disk is provably on a
             // later pass. Which key defers is not knowable at parallelism 64, so the assertion is post-hoc rather
-            // than inside the hook, and the flag is atomic because the hook runs on 64 threads.
+            // than inside the hook. The flag is atomic for defense in depth: today the suspension-free fake
+            // confines every coroutine to the runBlocking thread, but nothing pins that.
             val sawAppliedMirror = AtomicBoolean(false)
             hybrid.fake.onGetKey = { if (mirrorFiles.any { Files.exists(it) }) sawAppliedMirror.set(true) }
 

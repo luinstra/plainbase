@@ -616,7 +616,7 @@ class ObjectContentStore(
      * the journal; boot can never reap an unpushed dirty edit before `reconcileDirtyPages` runs.
      *
      * C5 FORK 1 - [strict]: on the RESTORE path (a bundle-restore/reconcile is owed, `Application.kt`
-     * passes `strict = restored.isRestored`), any of the THREE best-effort deferral sites below - (a) a
+     * passes `strict = restored.isRestored`), any of the THREE best-effort failure sites below - (a) a
      * GET failure/404-while-listed, (b) a mirror-WRITE failure after a good GET, (c) a delete-phase
      * failure - THROWS instead of deferring, aborting the boot (which retries via the :128-135 idiom,
      * with the FORK-2 sentinel keeping the reconcile owed until a strict hydrate fully succeeds).
@@ -731,7 +731,7 @@ class ObjectContentStore(
         var healed = 0
         for (outcome in outcomes) {
             when (outcome) {
-                // The byte bound closed the chunk before this key's turn. NOT one of the deferral sites: nothing is
+                // The byte bound closed the chunk before this key's turn. NOT one of the strict failure sites: nothing is
                 // missing yet and nothing is owed to the operator, so it never invalidates and never aborts a strict
                 // boot (that would turn a misdeclaring provider into a boot-abort loop). It is simply owed the next
                 // pass of THIS hydrate.
