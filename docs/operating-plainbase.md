@@ -642,6 +642,13 @@ What the object-mode diagnostics mean and what you do about each:
 - **Q13 outage signature: writes 503 while reads keep serving 200.** The bucket (write authority) is out;
   the app is fine - reads are local by construction. A boot attempted DURING an outage fails fast by
   design (the boot LIST self-check).
+- **A throttled GET (503/SlowDown, 429) takes longer instead of failing.** The in-memory mirror GETs
+  (hydrate and poll) alone retry, up to 3
+  times with short backoff, before the failure paths above see them - a throttled LIST does not (nor
+  does the streaming bundle-restore GET), so a
+  throttled boot still refuses on its LIST self-check (the bullet above). The worst case per GET is round-trip
+  inclusive: up to 4 request timeouts plus about 2 seconds of backoff, so about 2 minutes at the default
+  30 s request timeout. A boot against a throttling provider is slow, never unbounded.
 - **R16 fail-closed signature: an object-mode boot refusing on a TLS or signature rejection.** That is
   the guard working, not a failure to route around. Never disable certificate validation to "fix" it -
   fix the endpoint or install the host CA trust (see
@@ -770,7 +777,8 @@ under budget (cold < 10 s, warm < 3 s). Read the cold number with its environmen
 models the deployed topology (server adjacent to the bucket, ~1-3 ms RTT), so a residential-link pass
 is the conservative case. The same drill measured 16-way lockstep fetching at ~25 s cold, which is what
 sized the hydrate pipeline (64 concurrent fetches; chunks close at a 64 MiB declared-byte budget or
-256 keys, whichever comes first).
+256 keys, whichever comes first, and the fetch loop closes a chunk early once ACTUALLY received bytes
+reach the same budget).
 
 ### Git-write stall bound
 

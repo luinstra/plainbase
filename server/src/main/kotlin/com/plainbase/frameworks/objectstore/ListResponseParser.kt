@@ -39,9 +39,10 @@ object ListResponseParser {
      * One `<Contents>` block: the RAW (still URL-encoded) key and the opaque ETag as returned.
      * [size] is the declared object size in bytes, read LENIENTLY (see [sizeOf]): a plain
      * `<Size>digits</Size>` extracts, every other well-formed shape - absent included - is null,
-     * never a refusal. It is a DECLARED value used to bound the fetch loops' per-chunk buffering;
-     * the GET response cap stays the per-body enforcement, so a lying LIST degrades the bound,
-     * never correctness.
+     * never a refusal. It is a DECLARED value, and it shapes the PRE-FETCH packing only: the fetch loops
+     * enforce their per-chunk byte budget over the bytes they ACTUALLY receive, so a lying LIST can no
+     * longer degrade the memory bound (it costs extra deferral passes), and the GET response cap stays
+     * the per-body enforcement.
      */
     data class Entry(val key: String, val etag: String, val size: Long?)
 
@@ -114,11 +115,12 @@ object ListResponseParser {
 
     /**
      * The declared `<Size>` of a `<Contents>` block: LENIENT, never a refusal, unlike every other read
-     * field - deliberately. Size feeds only hydrate's chunk packing (an advisory memory bound), so the
-     * fail-closed rationale does not transfer: for Key/ETag, extracting different text than a real
-     * parser is fail-WRONG; a weird Size merely degrades one chunk's packing. Refusing here would give
-     * an advisory field boot-refusal power (`hydrate` turns a parse refusal into exit(1)), turning one
-     * provider quirk into a server that will not boot. So: exactly one plain `<Size>digits</Size>`
+     * field - deliberately. Size feeds only the SHAPE of hydrate's chunk packing; the memory bound itself
+     * is enforced at fetch time over actual bytes. So the fail-closed rationale does not transfer, and if
+     * anything it transfers less than it used to: for Key/ETag, extracting different text than a real
+     * parser is fail-WRONG, while a weird Size merely reshapes one chunk's packing and can cost a deferral
+     * pass. Refusing here would give an advisory field boot-refusal power (`hydrate` turns a parse refusal
+     * into exit(1)), turning one provider quirk into a server that will not boot. So: exactly one plain `<Size>digits</Size>`
      * extracts; anything else - absent, duplicated, attributed, signed, padded, non-integer, overflow -
      * yields null, and [requireWellFormed] remains the backstop that still refuses genuinely
      * ill-formed XML. Scope is the WHOLE block substring (descendant included - a nested

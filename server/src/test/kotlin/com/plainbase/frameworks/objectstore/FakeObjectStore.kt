@@ -85,6 +85,19 @@ class FakeObjectStore(
     /** The 1-based `list` CALL that throws instead of answering (then resets) - a mid-pagination page failure. */
     var failListCall: Int? = null
 
+    /**
+     * What `list` DECLARES as each entry's size, given the key and its ACTUAL byte count. Honest by default;
+     * a misdeclaring provider (all-zero, say) is the whole point of the fetch-time byte bound. Null declares
+     * nothing, which is the omitted-`<Size>` shape.
+     */
+    var declaredSizeOf: (key: String, actual: Long) -> Long? = { _, actual -> actual }
+
+    /**
+     * Invoked with the key at the top of every `get`, BEFORE the bucket lookup - so a hook can `remove` the key
+     * and produce a 404 in the LIST-to-GET window, or assert what the mirror already holds mid-fetch.
+     */
+    var onGetKey: (String) -> Unit = {}
+
     override suspend fun head(key: String): ObjectStat? {
         onNetworkOp()
         heads.incrementAndGet()
@@ -100,6 +113,7 @@ class FakeObjectStore(
         // In-memory: no wire body to cap, so [maxBytes] is irrelevant here (the M2/R3-1 cap lives in S3ObjectClient).
         onNetworkOp()
         gets.incrementAndGet()
+        onGetKey(key)
         if (synchronized(lock) { failNextGetFor.remove(key) }) {
             throw ObjectStoreException("simulated one-shot GET failure: $key")
         }
@@ -181,7 +195,7 @@ class FakeObjectStore(
         val truncated = start + page.size < keys.size
         val entries = page.map { key ->
             val stored = synchronized(lock) { objects.getValue(key) }
-            ListResponseParser.Entry(key = wireEncode(key), etag = stored.etag, size = stored.bytes.size.toLong())
+            ListResponseParser.Entry(key = wireEncode(key), etag = stored.etag, size = declaredSizeOf(key, stored.bytes.size.toLong()))
         }
         return ListResponseParser.Listing(entries, truncated, if (truncated) (start + page.size).toString() else null)
     }

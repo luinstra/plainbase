@@ -34,6 +34,12 @@ class HybridFixture(
     val binding: RootBinding = RootBinding("https://fake|bucket|"),
     /** The pagination boundary, read fresh before every LIST (the C3 rows + binding_epoch snapshot). None by default. */
     val rowsAtStart: () -> RowsAtStart = { RowsAtStart(emptySet(), BindingEpoch(0)) },
+    // APPENDED at the end deliberately: `conflictStatus` is passed POSITIONALLY at eight ObjectContentStoreOracleTest
+    // call sites, so a new parameter anywhere near the head would silently rebind them.
+    /** The per-chunk actually-fetched byte bound; a tiny value forces deferral without a large corpus. */
+    fetchByteBudget: Long = ObjectContentStore.FETCH_BYTE_BUDGET,
+    /** Hydrate's fetch concurrency; 1 makes the deferral arithmetic deterministic instead of scheduling-dependent. */
+    fetchParallelism: Int = ObjectContentStore.FETCH_PARALLELISM,
 ) : AutoCloseable {
     val mirrorRoot: Path = Files.createTempDirectory("pb-hybrid-mirror")
     private val stateFile: Path = Files.createTempFile("pb-hybrid-mirror-state", ".json").also { Files.deleteIfExists(it) }
@@ -49,6 +55,8 @@ class HybridFixture(
         rowsAtStart = rowsAtStart,
         keyPrefix = keyPrefix,
         pollSeconds = pollSeconds,
+        fetchByteBudget = fetchByteBudget,
+        fetchParallelism = fetchParallelism,
         dirtyPaths = { dirtyPaths.toSet() },
         isDirty = isDirty ?: { it in dirtyPaths },
         mirrorRoot = mirrorRoot,

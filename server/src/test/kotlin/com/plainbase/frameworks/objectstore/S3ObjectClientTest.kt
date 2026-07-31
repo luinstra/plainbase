@@ -4,6 +4,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -23,12 +24,14 @@ import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.close
 import io.ktor.utils.io.toByteArray
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.time.Instant
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * [S3ObjectClient] against a scripted fake-S3 over a REAL loopback CIO server: URL/addressing
@@ -249,6 +252,115 @@ class S3ObjectClientTest : FunSpec({
     test("the exact-size path round-trips a declared-length body byte-for-byte (the common GET shape)") {
         respond = { FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"x1\""), body = "exact body bytes".toByteArray()) }
         checkNotNull(client.get("exact.md")).bytes.decodeToString() shouldBe "exact body bytes"
+    }
+
+    // ---- Bounded backoff on a THROTTLED GET (503/SlowDown, 429) -------------------------------
+    // Each row builds its own client so it can record the sleeps, and CLOSES it: afterSpec closes only the
+    // spec-level client, so an unclosed per-row CIO client leaks its threads for the rest of the run.
+
+    fun throttleClient(sleeps: MutableList<Long>) = S3ObjectClient(
+        S3ClientConfig(
+            endpoint = "http://127.0.0.1:$port",
+            region = "auto",
+            bucket = "scratch",
+            accessKeyId = "AKIDTEST",
+            secretAccessKey = "SECRETTEST",
+        ),
+        clock = { Instant.parse("2026-07-05T12:00:00Z") },
+        sleeper = { sleeps += it },
+    )
+
+    test("B1: a throttled GET (503, 503, 200) succeeds after two bounded backoffs") {
+        val sleeps = mutableListOf<Long>()
+        var call = 0
+        respond = {
+            call++
+            if (call <= 2) {
+                FakeResponse(HttpStatusCode.ServiceUnavailable, body = "<Error><Code>SlowDown</Code></Error>".toByteArray())
+            } else {
+                FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"s1\""), "slowed".toByteArray())
+            }
+        }
+        throttleClient(sleeps).use { checkNotNull(it.get("throttled.md")).bytes.decodeToString() shouldBe "slowed" }
+        recorded.size shouldBe 3
+        sleeps.size shouldBe 2
+        (sleeps[0] in 200L..300L).shouldBeTrue()
+        (sleeps[1] in 400L..600L).shouldBeTrue()
+    }
+
+    test("B2: a persistently throttled GET exhausts the bound and throws, every delay AND the total bounded")
+        .config(timeout = 30.seconds) {
+            // The injected sleeper returns instantly, so an unbounded-retry regression spins rather than waits:
+            // the request count and the timeout are both observing it.
+            val sleeps = mutableListOf<Long>()
+            respond = { FakeResponse(HttpStatusCode.ServiceUnavailable, body = "<Error><Code>SlowDown</Code></Error>".toByteArray()) }
+            throttleClient(sleeps).use {
+                shouldThrow<ObjectStoreException> { it.get("always-throttled.md") }.message.orEmpty() shouldContain "503"
+            }
+            recorded.size shouldBe 1 + S3ObjectClient.THROTTLE_MAX_RETRIES
+            sleeps.size shouldBe S3ObjectClient.THROTTLE_MAX_RETRIES
+            (sleeps[0] in 200L..300L).shouldBeTrue()
+            (sleeps[1] in 400L..600L).shouldBeTrue()
+            (sleeps[2] in 800L..1200L).shouldBeTrue()
+            (sleeps.sum() <= 2100L).shouldBeTrue()
+        }
+
+    test("B3: a non-throttle 5xx does not retry - a misconfiguration must surface at once, not at triple the latency") {
+        val sleeps = mutableListOf<Long>()
+        respond = { FakeResponse(HttpStatusCode.InternalServerError, body = "boom".toByteArray()) }
+        throttleClient(sleeps).use { shouldThrow<ObjectStoreException> { it.get("broken.md") } }
+        recorded.size shouldBe 1
+        sleeps.shouldBeEmpty()
+    }
+
+    test("B4: a 429 retries exactly like a 503") {
+        val sleeps = mutableListOf<Long>()
+        var call = 0
+        respond = {
+            call++
+            if (call == 1) {
+                FakeResponse(HttpStatusCode.TooManyRequests, body = "too many".toByteArray())
+            } else {
+                FakeResponse(HttpStatusCode.OK, mapOf("ETag" to "\"s2\""), "after 429".toByteArray())
+            }
+        }
+        throttleClient(sleeps).use { checkNotNull(it.get("rate-limited.md")).bytes.decodeToString() shouldBe "after 429" }
+        recorded.size shouldBe 2
+        sleeps.size shouldBe 1
+    }
+
+    // ---- The exact-size read's clamped initial allocation ---------------------------------------
+    // These rows drive readDeclaredBody with a fully materialized ByteReadChannel, NOT the raw ByteChannel +
+    // writeFully idiom above: at clamp scale writeFully fills Ktor's channel buffer and suspends before the read
+    // ever starts, so a sequential write-then-read row would deadlock itself.
+
+    // The timeout bounds a read that STALLS (a channel that never delivers). It cannot bound a growth bug that
+    // spins on zero-length reads: that loop neither suspends nor blocks, so nothing can interrupt it and the run
+    // hangs rather than failing. Verified, not assumed - the honest limit of these two rows.
+    test("C1: a body past the clamp grows to the declared size and round-trips byte-for-byte").config(timeout = 30.seconds) {
+        val body = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP + 3) { (it % 251).toByte() }
+        val read = client.readDeclaredBody(ByteReadChannel(body), body.size, "GET", "grow.md", cap = Long.MAX_VALUE)
+        read.contentEquals(body).shouldBeTrue()
+    }
+
+    test("C2: a body of exactly the clamp round-trips with no growth at all") {
+        val body = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP) { (it % 241).toByte() }
+        val read = client.readDeclaredBody(ByteReadChannel(body), body.size, "GET", "boundary.md", cap = Long.MAX_VALUE)
+        read.contentEquals(body).shouldBeTrue()
+    }
+
+    test("C3: a short body past the clamp still REFUSES - the clamp must not reopen the silent-truncation hole")
+        .config(timeout = 30.seconds) {
+            val declared = 2 * S3ObjectClient.EXACT_READ_INITIAL_CLAMP
+            val sent = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP + 10)
+            shouldThrow<ObjectStoreException> {
+                client.readDeclaredBody(ByteReadChannel(sent), declared, "GET", "short.md", cap = Long.MAX_VALUE)
+            }.message.orEmpty() shouldContain "truncated: read ${sent.size} bytes of a declared"
+        }
+
+    test("C4: the initial capacity is clamped, and a small declared length is left alone") {
+        S3ObjectClient.exactReadInitialCapacity(64 * 1024 * 1024) shouldBe S3ObjectClient.EXACT_READ_INITIAL_CLAMP
+        S3ObjectClient.exactReadInitialCapacity(10) shouldBe 10
     }
 
     test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {
