@@ -407,9 +407,13 @@ class S3ObjectClient(
      * connection instead, which refuses via the engine's own exception - also covered).
      */
     internal suspend fun readDeclaredBody(channel: ByteReadChannel, declared: Int, op: String, target: String, cap: Long): ByteArray {
-        val body = ByteArray(declared)
+        // The declared length is a claim by the sender, so it buys a CLAMPED allocation, not the whole thing: a
+        // hostile 64 MiB Content-Length over an empty body costs 1 MiB and the truncation refusal below. The full
+        // allocation is granted only once the sender has actually delivered the clamp.
+        var body = ByteArray(exactReadInitialCapacity(declared))
         var filled = 0
-        while (filled < body.size) {
+        while (filled < declared) {
+            if (filled == body.size) body = body.copyOf(declared)
             val read = channel.readAvailable(body, filled, body.size - filled)
             if (read == -1) {
                 throw ObjectStoreException("$op '$target' truncated: read $filled bytes of a declared $declared")
@@ -521,6 +525,11 @@ class S3ObjectClient(
 
         /** The exact-size read path needs a JVM array, so a declared length past Int range takes the accumulator. */
         private const val MAX_EXACT_BODY_BYTES = Int.MAX_VALUE.toLong()
+
+        /** 16 x [READ_CHUNK]: every page and most assets still land in ONE allocation, so the common path is unchanged. */
+        internal const val EXACT_READ_INITIAL_CLAMP = 1024 * 1024
+
+        internal fun exactReadInitialCapacity(declared: Int): Int = minOf(declared, EXACT_READ_INITIAL_CLAMP)
 
         private const val MAX_UTF8_CONTINUATION_BYTES = 3
         private const val UTF8_LEAD_MASK = 0xC0

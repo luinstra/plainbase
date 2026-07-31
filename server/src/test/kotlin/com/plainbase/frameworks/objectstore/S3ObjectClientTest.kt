@@ -24,6 +24,7 @@ import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.close
 import io.ktor.utils.io.toByteArray
 import io.ktor.utils.io.writeFully
@@ -326,6 +327,40 @@ class S3ObjectClientTest : FunSpec({
         throttleClient(sleeps).use { checkNotNull(it.get("rate-limited.md")).bytes.decodeToString() shouldBe "after 429" }
         recorded.size shouldBe 2
         sleeps.size shouldBe 1
+    }
+
+    // ---- The exact-size read's clamped initial allocation ---------------------------------------
+    // These rows drive readDeclaredBody with a fully materialized ByteReadChannel, NOT the raw ByteChannel +
+    // writeFully idiom above: at clamp scale writeFully fills Ktor's channel buffer and suspends before the read
+    // ever starts, so a sequential write-then-read row would deadlock itself.
+
+    // The timeout bounds a read that STALLS (a channel that never delivers). It cannot bound a growth bug that
+    // spins on zero-length reads: that loop neither suspends nor blocks, so nothing can interrupt it and the run
+    // hangs rather than failing. Verified, not assumed - the honest limit of these two rows.
+    test("C1: a body past the clamp grows to the declared size and round-trips byte-for-byte").config(timeout = 30.seconds) {
+        val body = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP + 3) { (it % 251).toByte() }
+        val read = client.readDeclaredBody(ByteReadChannel(body), body.size, "GET", "grow.md", cap = Long.MAX_VALUE)
+        read.contentEquals(body).shouldBeTrue()
+    }
+
+    test("C2: a body of exactly the clamp round-trips with no growth at all") {
+        val body = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP) { (it % 241).toByte() }
+        val read = client.readDeclaredBody(ByteReadChannel(body), body.size, "GET", "boundary.md", cap = Long.MAX_VALUE)
+        read.contentEquals(body).shouldBeTrue()
+    }
+
+    test("C3: a short body past the clamp still REFUSES - the clamp must not reopen the silent-truncation hole")
+        .config(timeout = 30.seconds) {
+            val declared = 2 * S3ObjectClient.EXACT_READ_INITIAL_CLAMP
+            val sent = ByteArray(S3ObjectClient.EXACT_READ_INITIAL_CLAMP + 10)
+            shouldThrow<ObjectStoreException> {
+                client.readDeclaredBody(ByteReadChannel(sent), declared, "GET", "short.md", cap = Long.MAX_VALUE)
+            }.message.orEmpty() shouldContain "truncated: read ${sent.size} bytes of a declared"
+        }
+
+    test("C4: the initial capacity is clamped, and a small declared length is left alone") {
+        S3ObjectClient.exactReadInitialCapacity(64 * 1024 * 1024) shouldBe S3ObjectClient.EXACT_READ_INITIAL_CLAMP
+        S3ObjectClient.exactReadInitialCapacity(10) shouldBe 10
     }
 
     test("HEAD on a 2xx with no Content-Length fails closed, never a silent zero-size (M5)") {
