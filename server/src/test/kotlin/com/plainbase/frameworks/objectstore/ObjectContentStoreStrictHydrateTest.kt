@@ -3,6 +3,7 @@ package com.plainbase.frameworks.objectstore
 import com.plainbase.domain.content.TreePath
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 
@@ -55,6 +56,29 @@ class ObjectContentStoreStrictHydrateTest : FunSpec({
 
             val failure = shouldThrow<ObjectStoreException> { hybrid.store.hydrate(strict = true) }
             failure.message shouldContain "deleting bucket-absent mirror file"
+        }
+    }
+
+    test("a budget DEFERRAL is not one of the three sites: strict hydrate completes and heals every key") {
+        // A deferral leaves nothing missing and owes the operator nothing - the same hydrate takes another pass at
+        // it. Wiring it into the abort branch would turn a provider that misdeclares its sizes into a boot-abort
+        // loop, which is the fix-becoming-the-next-bug this row exists to hold shut.
+        HybridFixture(fetchByteBudget = 150, fetchParallelism = 1).use { hybrid ->
+            // FakeObjectStore.list sorts keys, so fetch order is lexical; bucket-only seeds keep `changed` non-empty.
+            val paths = listOf("a.md", "b.md", "c.md").map { TreePath.require(it) }
+            paths.forEach { hybrid.fake.seed(hybrid.mirror.resolveRepoRelativePath(it), ByteArray(100)) }
+            hybrid.fake.declaredSizeOf = { _, _ -> 0L } // one packed chunk; only the fetch-time bound can split it
+            val firstMirrorFile = hybrid.mirrorRoot.resolve(hybrid.mirror.resolveRepoRelativePath(paths[0]))
+            val thirdKey = hybrid.mirror.resolveRepoRelativePath(paths[2])
+            // Non-vacuity: at parallelism 1 with budget 150, c.md's check sees 200 >= 150 and defers, so its GET can
+            // only see a.md's applied mirror file if a real pass boundary preceded it.
+            hybrid.fake.onGetKey = { key -> if (key == thirdKey) Files.exists(firstMirrorFile) shouldBe true }
+
+            hybrid.store.hydrate(strict = true) // must NOT throw
+
+            paths.forEach { path ->
+                Files.exists(hybrid.mirrorRoot.resolve(hybrid.mirror.resolveRepoRelativePath(path))) shouldBe true
+            }
         }
     }
 

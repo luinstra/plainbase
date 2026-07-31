@@ -114,10 +114,16 @@ binary, macOS Apple Silicon, 1000-page corpus hydrated from Cloudflare R2, stead
 The BOOT peak sits above that: cold hydrate buffers each fetch chunk in memory, packed to a 64 MiB
 DECLARED-size budget per chunk (a chunk holds multiple bodies up to that budget, plus one body that
 may individually exceed it). With a provider that declares sizes honestly, budget roughly serving RSS
-plus 64 MiB plus your largest object for the boot window. The declared sizes are advisory: a provider
-that OMITS them is still bounded at 64 bodies per chunk, while one that misdeclares them weakens the
-packing bound toward the hard ceiling of 256 bodies at the response cap, which only a hostile or
-broken provider approaches. Numbers vary by platform and corpus;
+plus 64 MiB plus your largest object for the boot window. Declared sizes only shape the packing: the fetch
+loop also counts the bytes it ACTUALLY receives and closes a chunk early once they reach the same 64 MiB
+budget, so a provider that omits or misdeclares its sizes is bounded the same way and simply costs extra
+fetch passes. The residual worst case is that budget plus up to 64 bodies already in flight when it trips,
+each capped by the response-size cap (64 MiB by default, or your `PLAINBASE_MAX_ASSET_BYTES` plus 1 MiB if
+that is larger; there is no fixed ceiling), and a body whose declared length is wrong or missing can
+transiently cost about twice its size while it is re-buffered. In practice the shipped native binary
+compiles in a 256 MiB max heap, so a provider hostile enough to approach that residual fail-closes with an
+out-of-memory boot crash rather than growing to a large RSS; the bound is what keeps deployments that raise
+the heap safe. Numbers vary by platform and corpus;
 re-measure on your own hardware when sizing tightly (see the
 [pre-release checklist](../DEVELOPMENT.md#pre-release-checklist)).
 

@@ -35,6 +35,7 @@ import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -81,6 +82,10 @@ class ObjectContentStore(
     /** `""`, or the configured `storage.prefix` + `"/"`. */
     private val keyPrefix: String,
     private val pollSeconds: Long,
+    /** The per-chunk ACTUALLY-FETCHED byte bound ([fetchChunkBounded]); injectable so a test can force deferral cheaply. */
+    private val fetchByteBudget: Long = FETCH_BYTE_BUDGET,
+    /** Hydrate's fetch concurrency; injectable so a test can make the deferral arithmetic deterministic (poll is always 1). */
+    private val fetchParallelism: Int = FETCH_PARALLELISM,
     /** The live dirty-journal paths - the hydrate delete phase snapshots this ONCE per boot (R3). */
     private val dirtyPaths: () -> Set<TreePath>,
     /**
@@ -522,40 +527,58 @@ class ObjectContentStore(
         // Fetch-then-apply PER PACKED CHUNK, exactly like hydrate: a poll after a bulk bucket restore
         // sees the whole corpus as changed, and an unchunked fetch would hold every body in memory at
         // once - the same buffering packForFetch exists to bound. GETs stay sequential (poll is a
-        // background cadence, not a boot race); only the buffering is chunked.
-        for (chunk in packForFetch(changed.entries.toList())) {
-            val fetched = chunk.mapNotNull { (path, entry) ->
-                runCatching {
-                    // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
-                    // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
-                    // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
-                    runBlocking { client.get(keyPrefix + entry.rawRelative) }?.let { Triple(path, entry, it) }
-                }.getOrElse { failure ->
-                    rethrowError(failure)
-                    logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
-                    null
+        // background cadence, not a boot race); only the buffering is chunked. The worklist is hydrate's too: a
+        // chunk closes early once its ACTUALLY-FETCHED bytes reach the budget, and its tail comes back for
+        // another pass of THIS cycle. Symmetry is in the accounting, not the concurrency - the shared helper
+        // runs at parallelism 1 here.
+        var pending: List<Map.Entry<TreePath, MirrorListedEntry>> = changed.entries.toList()
+        while (pending.isNotEmpty()) {
+            val deferredEntries = mutableListOf<Map.Entry<TreePath, MirrorListedEntry>>()
+            for (chunk in packForFetch(pending)) {
+                val fetched = fetchChunkBounded(
+                    chunk,
+                    parallelism = 1,
+                    byteBudget = fetchByteBudget,
+                    onFailure = { path, failure ->
+                        logger.warn { "poll GET of '${path.value}' failed (${causeOf(failure)}); retrying next cycle" }
+                    },
+                ) { entry -> client.get(keyPrefix + entry.rawRelative) }.mapNotNull { outcome ->
+                    when (outcome) {
+                        is ChunkFetchOutcome.Fetched -> Triple(outcome.entry.key, outcome.entry.value, outcome.body)
+                        // A key whose GET returns null (a 404 in the LIST->GET window) is silently dropped here, NOT
+                        // state-invalidated - unlike hydrate, which invalidates. Intentional asymmetry: poll is
+                        // best-effort and the NEXT cycle re-LISTs, so the delete phase (or a later cycle) reconciles it.
+                        is ChunkFetchOutcome.Absent -> null
+                        is ChunkFetchOutcome.Failed -> null // already warned by onFailure; the next cycle re-GETs
+                        is ChunkFetchOutcome.Deferred -> {
+                            deferredEntries += outcome.entry
+                            null
+                        }
+                    }
                 }
-            }
-            for ((path, entry, body) in fetched) {
-                synchronized(applyLock) {
-                    if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
-                    // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
-                    // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
-                    // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
-                    // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
-                    if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
-                    val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
-                    if (failure == null) {
-                        state.recordConfirmed(path, body.etag)
-                        events.add(path)
-                    } else {
-                        // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
-                        // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
-                        state.invalidate(path)
-                        logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+                for ((path, entry, body) in fetched) {
+                    synchronized(applyLock) {
+                        if (state.etagOf(path) != before[path]) return@synchronized // entry moved mid-flight - skip (R11)
+                        // LIVE dirty check (O1/MINOR-1): re-query THIS path under applyLock, NOT a top-of-poll snapshot -
+                        // a write-ahead dirty mark added DURING the poll (after the LIST/GET) must still protect the path
+                        // from being overwritten by this stale GET (R3). An indexed single-path EXISTS, not a rebuild of
+                        // the whole dirty set per candidate (which was O(candidates * dirty rows) under the monitor).
+                        if (isDirty(path)) return@synchronized // never overwrite a dirty-ahead write (R3)
+                        val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = false) }
+                        if (failure == null) {
+                            state.recordConfirmed(path, body.etag)
+                            events.add(path)
+                        } else {
+                            // Poll-apply failure (seam g): never recordConfirmed over a failed write; the entry
+                            // goes ABSENT so the next poll re-GETs. The batch continues for other keys.
+                            state.invalidate(path)
+                            logger.warn { "mirror_apply_failed: poll apply of '${path.value}' failed ($failure); retrying next cycle" }
+                        }
                     }
                 }
             }
+            // No per-chunk persist here: the poll keeps its ONE flush per cycle (M1 cadence), below.
+            pending = deferredEntries
         }
         // Delete phase: mirror files / map entries absent from LIST (eligible paths only - the mirror
         // scan is already ignore-filtered, so `.git`/dotfiles never appear here).
@@ -615,75 +638,29 @@ class ObjectContentStore(
         // self-heal on boot (never vanish from the rebuilt index until mirror-state is also wiped).
         val changed = listed.filter { (path, entry) -> before[path] != entry.etag || !mirrorHasRaw(entry.rawRelative) }
         var healed = 0
-        for (chunk in packForFetch(changed.entries.toList())) {
-            // Bounded-parallel GETs, then the chunk's applies strictly AFTER the fetches complete. Each
-            // result is (path, fetched-or-null): a null is a GET failure OR a 404-while-LIST-reported-it.
-            val gate = Semaphore(FETCH_PARALLELISM)
-            val results = runBlocking {
-                chunk.map { (path, entry) ->
-                    async {
-                        gate.withPermit {
-                            runCatching {
-                                path to client.get(keyPrefix + entry.rawRelative)?.let { entry to it }
-                            }.getOrElse { failure ->
-                                rethrowError(failure)
-                                logger.warn {
-                                    "hydrate GET of '${path.value}' failed (${causeOf(failure)}); invalidating so a later poll re-detects"
-                                }
-                                path to null
-                            }
+        // A WORKLIST, not a single sweep: a chunk whose ACTUALLY-FETCHED bytes reach the budget closes early and
+        // hands its tail back here, so a pass fetches what it can and the next pass re-packs what it could not.
+        // Only budget-deferrals come back; failures and 404s are terminal for this hydrate (they invalidate, or
+        // abort under strict), so every pass strictly shrinks `pending`.
+        var pending: List<Map.Entry<TreePath, MirrorListedEntry>> = changed.entries.toList()
+        while (pending.isNotEmpty()) {
+            val deferred = mutableListOf<Map.Entry<TreePath, MirrorListedEntry>>()
+            for (chunk in packForFetch(pending)) {
+                // Bounded-parallel GETs, then the chunk's applies strictly AFTER the fetches complete.
+                val outcomes = fetchChunkBounded(
+                    chunk,
+                    parallelism = fetchParallelism,
+                    byteBudget = fetchByteBudget,
+                    onFailure = { path, failure ->
+                        logger.warn {
+                            "hydrate GET of '${path.value}' failed (${causeOf(failure)}); invalidating so a later poll re-detects"
                         }
-                    }
-                }.awaitAll()
+                    },
+                ) { entry -> client.get(keyPrefix + entry.rawRelative) }
+                healed += applyHydratedChunk(outcomes, strict, deferred)
+                state.persist()
             }
-            // The fetch-apply phase writes the AUTHORITATIVE bucket bytes over the mirror WITHOUT the
-            // dirtyPaths() guard the delete phase below carries - and that asymmetry is correct, not an
-            // omission: mutators PUT to the bucket BEFORE writing the mirror (bucket-first), so the mirror
-            // never holds an edit the bucket lacks. Overwriting a dirty page's mirror bytes with the
-            // bucket's current bytes therefore cannot lose a durable edit (if the edit reached the bucket,
-            // that IS what we write back; if it did not, reconcileDirtyPages drift-skips the stale mark).
-            // The delete phase needs the guard because reaping a just-written page whose LIST entry is
-            // eventually-consistent-lagged WOULD lose it; fetching cannot, so it does not guard.
-            for ((path, fetched) in results) {
-                if (fetched == null) {
-                    // (a) GET failed or 404'd while the mirror file is missing/stale. Best-effort: DROP the
-                    // state entry so the mirror-file-missing / etag diff stays detectable and a later poll
-                    // (whose diff is etag-only) or the next hydrate re-fetches - retaining the old etag here
-                    // would wedge the key absent forever (poll would see before[path] == listed.etag and never
-                    // retry). C5 FORK 1: under `strict`, this leaves the mirror incomplete for a key the
-                    // reconcile enumeration will need - abort the boot instead.
-                    if (strict) {
-                        throw ObjectStoreException(
-                            "strict hydrate (restore path): GET of '${path.value}' failed or 404'd while listed; " +
-                                "the mirror would be incomplete for the boot reconcile",
-                        )
-                    }
-                    state.invalidate(path)
-                    continue
-                }
-                val (entry, body) = fetched
-                // Boot hydrate does a FULL parent scan (fullNfcSweep): it runs once at boot and must catch even a
-                // non-canonically-ordered stale sibling the targeted poll sweep cannot name (MINOR-2).
-                val failure = mirrorWriteFailure { writeMirrorRaw(entry.rawRelative, body.bytes, fullNfcSweep = true) }
-                if (failure == null) {
-                    state.recordConfirmed(path, body.etag)
-                    healed++
-                } else {
-                    // (b) Hydrate-apply failure (seam g). Best-effort: boot does NOT fail on a single-key
-                    // mirror write error - the bucket stays authority; the key stays absent and re-heals
-                    // later. C5 FORK 1: under `strict`, a durable-but-unmirrored key here is exactly the
-                    // HOLE A false-delete class - abort the boot instead.
-                    if (strict) {
-                        throw ObjectStoreException(
-                            "strict hydrate (restore path): mirror write of '${path.value}' failed after a successful " +
-                                "GET ($failure); the mirror would be incomplete for the boot reconcile",
-                        )
-                    }
-                    logger.warn { "mirror_hydrate_failed: '${path.value}' could not be applied ($failure); the poll will retry" }
-                    state.invalidate(path)
-                }
-            }
-            state.persist()
+            pending = deferred
         }
         val dirty = dirtyPaths()
         for (path in (before.keys + mirrorFilePaths()) - listed.keys) {
@@ -715,6 +692,77 @@ class ObjectContentStore(
                     "and the poll keeps retrying"
             }
         }
+    }
+
+    /**
+     * The apply half of one hydrate chunk, in fetch order: returns how many keys HEALED and appends every
+     * budget-deferred entry to [deferred] for the next worklist pass.
+     *
+     * It writes the AUTHORITATIVE bucket bytes over the mirror WITHOUT the `dirtyPaths()` guard the delete phase
+     * carries - and that asymmetry is correct, not an omission: mutators PUT to the bucket BEFORE writing the
+     * mirror (bucket-first), so the mirror never holds an edit the bucket lacks. Overwriting a dirty page's mirror
+     * bytes with the bucket's current bytes therefore cannot lose a durable edit (if the edit reached the bucket,
+     * that IS what we write back; if it did not, `reconcileDirtyPages` drift-skips the stale mark). The delete
+     * phase needs the guard because reaping a just-written page whose LIST entry is eventually-consistent-lagged
+     * WOULD lose it; fetching cannot, so it does not guard.
+     */
+    private fun applyHydratedChunk(
+        outcomes: List<ChunkFetchOutcome<TreePath>>,
+        strict: Boolean,
+        deferred: MutableList<Map.Entry<TreePath, MirrorListedEntry>>,
+    ): Int {
+        // (a) GET failed or 404'd while the mirror file is missing/stale. Best-effort: DROP the state entry so the
+        // mirror-file-missing / etag diff stays detectable and a later poll (whose diff is etag-only) or the next
+        // hydrate re-fetches - retaining the old etag here would wedge the key absent forever (poll would see
+        // before[path] == listed.etag and never retry). C5 FORK 1: under `strict`, this leaves the mirror incomplete
+        // for a key the reconcile enumeration will need - abort the boot instead.
+        val unfetched: (TreePath) -> Unit = { path ->
+            if (strict) {
+                throw ObjectStoreException(
+                    "strict hydrate (restore path): GET of '${path.value}' failed or 404'd while listed; " +
+                        "the mirror would be incomplete for the boot reconcile",
+                )
+            }
+            state.invalidate(path)
+        }
+        var healed = 0
+        for (outcome in outcomes) {
+            when (outcome) {
+                // The byte bound closed the chunk before this key's turn. NOT one of the deferral sites: nothing is
+                // missing yet and nothing is owed to the operator, so it never invalidates and never aborts a strict
+                // boot (that would turn a misdeclaring provider into a boot-abort loop). It is simply owed the next
+                // pass of THIS hydrate.
+                is ChunkFetchOutcome.Deferred -> deferred += outcome.entry
+                is ChunkFetchOutcome.Absent -> unfetched(outcome.key)
+                is ChunkFetchOutcome.Failed -> unfetched(outcome.key)
+                is ChunkFetchOutcome.Fetched -> if (applyHydratedBody(outcome, strict)) healed++
+            }
+        }
+        return healed
+    }
+
+    /** One healed key's mirror write; false when the write failed (best-effort) - `strict` throws instead. */
+    private fun applyHydratedBody(outcome: ChunkFetchOutcome.Fetched<TreePath>, strict: Boolean): Boolean {
+        val path = outcome.entry.key
+        // Boot hydrate does a FULL parent scan (fullNfcSweep): it runs once at boot and must catch even a
+        // non-canonically-ordered stale sibling the targeted poll sweep cannot name (MINOR-2).
+        val failure = mirrorWriteFailure { writeMirrorRaw(outcome.entry.value.rawRelative, outcome.body.bytes, fullNfcSweep = true) }
+        if (failure == null) {
+            state.recordConfirmed(path, outcome.body.etag)
+            return true
+        }
+        // (b) Hydrate-apply failure (seam g). Best-effort: boot does NOT fail on a single-key mirror write error -
+        // the bucket stays authority; the key stays absent and re-heals later. C5 FORK 1: under `strict`, a
+        // durable-but-unmirrored key here is exactly the HOLE A false-delete class - abort the boot instead.
+        if (strict) {
+            throw ObjectStoreException(
+                "strict hydrate (restore path): mirror write of '${path.value}' failed after a successful " +
+                    "GET ($failure); the mirror would be incomplete for the boot reconcile",
+            )
+        }
+        logger.warn { "mirror_hydrate_failed: '${path.value}' could not be applied ($failure); the poll will retry" }
+        state.invalidate(path)
+        return false
     }
 
     // ---- Internals -----------------------------------------------------------------------------
@@ -1176,15 +1224,17 @@ class ObjectContentStore(
         // A chunk retains every fetched body until its applies run, so the chunk is bounded by BYTES,
         // not only by key count: the mirror funnel admits assets as well as pages, and a count-only
         // chunk of large assets would hold the whole set resident on the boot path. LIST's declared
-        // sizes drive the packing; they are advisory (the GET response cap is the per-body
-        // enforcement). A provider that DECLARES sizes honestly is bounded by FETCH_BYTE_BUDGET plus
-        // one body; one that OMITS them is bounded by 64 bodies per chunk (the unknown-size share in
-        // packForFetch); only a MISDECLARING provider reaches the countCap-bodies-at-the-response-cap
-        // ceiling. 1000 drill pages declared ~300 B each pack into 4 chunks, preserving the measured
+        // sizes drive the PRE-FETCH packing only; [fetchChunkBounded] then accounts the bytes it
+        // ACTUALLY receives and closes a chunk early once they reach FETCH_BYTE_BUDGET, deferring the
+        // unfetched tail to a later pass. So whatever a provider declares (honestly, not at all, or
+        // hostilely), a chunk retains at most FETCH_BYTE_BUDGET plus the bodies in flight when the
+        // counter trips: at most FETCH_PARALLELISM of them, each bounded by the GET response cap,
+        // which has no fixed ceiling of its own (it is max(64 MiB, maxAssetBytes + headroom)).
+        // 1000 drill pages declared ~300 B each pack into 4 chunks, preserving the measured
         // pipeline behavior.
         private const val FETCH_CHUNK = 256
-        private const val FETCH_PARALLELISM = 64
-        private const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
+        internal const val FETCH_PARALLELISM = 64
+        internal const val FETCH_BYTE_BUDGET = 64L * 1024 * 1024
 
         /**
          * Greedy chunking of [entries] for the fetch-then-apply loops (hydrate and poll): a chunk
@@ -1202,7 +1252,9 @@ class ObjectContentStore(
         ): List<List<Map.Entry<K, MirrorListedEntry>>> {
             // Divides by FETCH_PARALLELISM even under a caller-supplied byteBudget (tests): the share
             // deliberately tracks the REAL concurrency constant, so 64 unknowns per chunk = one full
-            // wave of in-flight GETs, whatever budget the caller passed.
+            // wave of in-flight GETs, whatever budget the caller passed. It stays pinned to the const
+            // even though the fetch loops take an injectable parallelism: that knob shapes one store's
+            // concurrency, while the packing share is a statement about the production wave size.
             val unknownShare = (byteBudget / FETCH_PARALLELISM).coerceAtLeast(1)
             return buildList {
                 var chunk = mutableListOf<Map.Entry<K, MirrorListedEntry>>()
@@ -1226,6 +1278,73 @@ class ObjectContentStore(
             }
         }
 
+        /**
+         * The chunk-fetch phase both [hydrate] and [pollOnce] run, so the memory bound is enforced by SHARED
+         * code rather than by parallel edits. [packForFetch] shapes the chunk from DECLARED sizes; this counts
+         * the bytes actually received and stops fetching once they reach [byteBudget], returning the unfetched
+         * tail as [ChunkFetchOutcome.Deferred] for the caller's next worklist pass. A misdeclaring provider
+         * therefore costs extra passes, never a chunk full of response-cap bodies.
+         *
+         * The check runs after the permit is acquired and BEFORE the GET, so nothing serializes the pipeline
+         * (one atomic read per launch, one add per completed body) and there is deliberately no reservation:
+         * up to [parallelism] fetches can pass the check before any of their bytes land, which is exactly the
+         * "budget plus the in-flight bodies" residual the docs state.
+         *
+         * Termination is structural: the counter starts at 0 and is read before any fetch, so the first
+         * permit-holder of a non-empty chunk always fetches, and each pass strictly shrinks the caller's
+         * worklist. A non-positive budget would defer everything forever, hence the [require].
+         *
+         * [ChunkFetchOutcome.Fetched] and [ChunkFetchOutcome.Deferred] carry the ORIGINAL map entry because
+         * the callers re-feed deferrals to [packForFetch], which reads entries.
+         */
+        internal fun <K> fetchChunkBounded(
+            chunk: List<Map.Entry<K, MirrorListedEntry>>,
+            parallelism: Int,
+            byteBudget: Long,
+            onFailure: (K, Throwable) -> Unit,
+            get: suspend (MirrorListedEntry) -> FetchedObject?,
+        ): List<ChunkFetchOutcome<K>> {
+            require(byteBudget >= 1) { "fetch byte budget must be at least 1 byte, was $byteBudget" }
+            val fetchedBytes = AtomicLong()
+            val gate = Semaphore(parallelism)
+            return runBlocking {
+                chunk.map { entry ->
+                    async {
+                        gate.withPermit<ChunkFetchOutcome<K>> {
+                            if (fetchedBytes.get() >= byteBudget) {
+                                return@withPermit ChunkFetchOutcome.Deferred(entry)
+                            }
+                            val body = runCatching { get(entry.value) }.getOrElse { failure ->
+                                // The instance-private rethrowError is out of reach from the companion, so the
+                                // Error rethrow is inlined here. It also keeps a test probe's AssertionError from
+                                // being swallowed into a misattributed Failed.
+                                if (failure is Error) throw failure
+                                onFailure(entry.key, failure)
+                                return@withPermit ChunkFetchOutcome.Failed(entry.key)
+                            } ?: return@withPermit ChunkFetchOutcome.Absent(entry.key)
+                            fetchedBytes.addAndGet(body.bytes.size.toLong())
+                            ChunkFetchOutcome.Fetched(entry, body)
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
         private val logger = KotlinLogging.logger {}
     }
+}
+
+/**
+ * What one entry of a [ObjectContentStore.fetchChunkBounded] chunk came to. [Deferred] is NOT a failure and
+ * carries no operator meaning: the per-chunk byte bound tripped before this entry's turn, so it is simply owed
+ * a later pass. Routing it into a failure branch is what would turn a misdeclaring provider into a boot abort.
+ */
+internal sealed interface ChunkFetchOutcome<K> {
+    data class Fetched<K>(val entry: Map.Entry<K, MirrorListedEntry>, val body: FetchedObject) : ChunkFetchOutcome<K>
+
+    data class Absent<K>(val key: K) : ChunkFetchOutcome<K>
+
+    data class Failed<K>(val key: K) : ChunkFetchOutcome<K>
+
+    data class Deferred<K>(val entry: Map.Entry<K, MirrorListedEntry>) : ChunkFetchOutcome<K>
 }

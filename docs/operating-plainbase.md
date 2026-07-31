@@ -770,7 +770,8 @@ under budget (cold < 10 s, warm < 3 s). Read the cold number with its environmen
 models the deployed topology (server adjacent to the bucket, ~1-3 ms RTT), so a residential-link pass
 is the conservative case. The same drill measured 16-way lockstep fetching at ~25 s cold, which is what
 sized the hydrate pipeline (64 concurrent fetches; chunks close at a 64 MiB declared-byte budget or
-256 keys, whichever comes first).
+256 keys, whichever comes first, and the fetch loop closes a chunk early once ACTUALLY received bytes
+reach the same budget).
 
 ### Git-write stall bound
 
