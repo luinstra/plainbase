@@ -23,6 +23,7 @@ import com.plainbase.frameworks.filesystem.isBlank
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.network.sockets.ConnectTimeoutException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -679,15 +680,17 @@ class ObjectContentStore(
         }
         state.persist()
         // Nothing is FLAGGED here any more (C3). A hydrate that left an object behind hands the rebuild a mirror with
-        // holes in it, and a view with holes is not a corpus - but "did THIS hydrate defer something" is a fact about
-        // one moment, and the pass that reads it runs at another. [scan] re-derives it from the generation and the
-        // mirror as they stand WHEN IT IS ASKED, which is the same answer for a fresh deferral and a truthful one for
+        // holes in it, and a view with holes is not a corpus - but "did THIS hydrate leave a key unhealed" is a fact
+        // about one moment, and the pass that reads it runs at another. [scan] re-derives it from the generation and
+        // the mirror as they stand WHEN IT IS ASKED, which is the same answer for a fresh hole and a truthful one for
         // everything that happened afterwards (a key a POLL healed; a mirror file deleted at runtime).
-        val deferred = changed.size - healed
-        logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $deferred deferred" }
-        if (deferred > 0) {
+        // UNHEALED, deliberately not "deferred": a budget deferral (ChunkFetchOutcome.Deferred) comes back for another
+        // pass of this same hydrate and is gone by here, so what is left owes the operator something.
+        val unhealed = changed.size - healed
+        logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $unhealed unhealed" }
+        if (unhealed > 0) {
             logger.warn {
-                "$deferred object(s) could not be hydrated into the mirror: this root serves the pages it DID hydrate " +
+                "$unhealed object(s) could not be hydrated into the mirror: this root serves the pages it DID hydrate " +
                     "but is refused delete authority until the mirror holds the whole listing - nothing of its is deleted, " +
                     "and the poll keeps retrying"
             }
@@ -1319,6 +1322,10 @@ class ObjectContentStore(
                                 // Error rethrow is inlined here. It also keeps a test probe's AssertionError from
                                 // being swallowed into a misattributed Failed.
                                 if (failure is Error) throw failure
+                                // Cancellation is this wave aborting, not this key failing: one sibling's Error
+                                // cancels the rest, and mapping those to Failed spends a misleading per-key WARN on
+                                // a boot that is already unwinding. Rethrow so awaitAll surfaces the real cause.
+                                if (failure is CancellationException) throw failure
                                 onFailure(entry.key, failure)
                                 return@withPermit ChunkFetchOutcome.Failed(entry.key)
                             } ?: return@withPermit ChunkFetchOutcome.Absent(entry.key)

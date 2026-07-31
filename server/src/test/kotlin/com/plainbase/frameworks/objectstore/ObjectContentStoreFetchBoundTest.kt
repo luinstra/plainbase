@@ -5,6 +5,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -162,7 +163,10 @@ class ObjectContentStoreFetchBoundTest : FunSpec({
                 Files.exists(hybrid.mirrorRoot.resolve(hybrid.mirror.resolveRepoRelativePath(path))) shouldBe true
                 hybrid.state.etagOf(path).shouldNotBeNull()
             }
-            events.toSet() shouldBe paths.toSet()
+            // The exact list, not a set: at parallelism 1 with budget 150 the split is forced (a at 0, b at 100,
+            // c sees 200 >= 150 and defers), so the apply order is a, b, then c on the second pass. A set would
+            // accept a key emitted twice, which is exactly what a worklist that re-queued a healed entry would do.
+            events shouldBe paths
         }
     }
 
@@ -204,9 +208,19 @@ class ObjectContentStoreFetchBoundTest : FunSpec({
             val paths = (1..66).map { TreePath.require("p%02d.md".format(it)) }
             paths.forEach { hybrid.fake.seed(hybrid.mirror.resolveRepoRelativePath(it), ByteArray(100)) }
             hybrid.fake.declaredSizeOf = { _, _ -> 0L }
+            val mirrorFiles = paths.map { hybrid.mirrorRoot.resolve(hybrid.mirror.resolveRepoRelativePath(it)) }
+            // Non-vacuity, the F4 probe adapted to a scheduling-dependent row: convergence alone stays green with
+            // the deferral branch deleted, so observe the pass BOUNDARY instead. All 66 entries pack into one chunk
+            // (FETCH_CHUNK is 256, and zero-declared sizes never trip the pack-time budget), and a chunk's applies
+            // run strictly after its fetches, so a GET that sees any mirror file already on disk is provably on a
+            // later pass. Which key defers is not knowable at parallelism 64, so the assertion is post-hoc rather
+            // than inside the hook, and the flag is atomic because the hook runs on 64 threads.
+            val sawAppliedMirror = AtomicBoolean(false)
+            hybrid.fake.onGetKey = { if (mirrorFiles.any { Files.exists(it) }) sawAppliedMirror.set(true) }
 
             hybrid.store.hydrate()
 
+            sawAppliedMirror.get() shouldBe true
             paths.forEach { path ->
                 Files.exists(hybrid.mirrorRoot.resolve(hybrid.mirror.resolveRepoRelativePath(path))) shouldBe true
                 hybrid.state.etagOf(path).shouldNotBeNull()

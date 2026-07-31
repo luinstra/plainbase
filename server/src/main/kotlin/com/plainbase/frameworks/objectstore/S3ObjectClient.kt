@@ -386,11 +386,12 @@ class S3ObjectClient(
      */
     private suspend fun readBody(response: HttpResponse, op: String, target: String, cap: Long): ByteArray {
         val channel = response.bodyAsChannel()
-        // Exact-size fast path: with a trusted-shape Content-Length, ONE allocation holds the body. The
-        // accumulator path below peaks at ~2x the body (the growing buffer plus the final copy), which
-        // matters on the boot path where hydrate buffers a whole chunk of bodies - "budget plus one
-        // body" is only an honest bound when a body costs one body. Length-less/chunked responses and
-        // hostile over-length bodies fall through to the accumulator, cap still enforced.
+        // Exact-size fast path: with a trusted-shape Content-Length the body costs the declared bytes
+        // plus at most the clamped first allocation (see readDeclaredBody), still ~1x against the
+        // accumulator path's ~2x peak (the growing buffer plus the final copy). That matters on the boot
+        // path where hydrate buffers a whole chunk of bodies - "budget plus one body" is only an honest
+        // bound when a body costs about one body. Length-less/chunked responses and hostile over-length
+        // bodies fall through to the accumulator, cap still enforced.
         val declared = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
         if (declared != null && declared in 0..minOf(cap, MAX_EXACT_BODY_BYTES)) {
             return readDeclaredBody(channel, declared.toInt(), op, target, cap)
@@ -399,7 +400,9 @@ class S3ObjectClient(
     }
 
     /**
-     * The exact-size read: ONE allocation of [declared] bytes. A clean-EOF SHORT body REFUSES,
+     * The exact-size read: a first allocation clamped to [EXACT_READ_INITIAL_CLAMP], grown once to [declared]
+     * bytes when the sender actually delivers the clamp - so ~1x the body against the accumulator's ~2x, without
+     * fronting a hostile Content-Length its allocation. A clean-EOF SHORT body REFUSES,
      * mirroring getToFile - the declared length is in hand, and a short body silently returned would
      * be recordConfirmed under the real etag: a corrupt mirror entry that never self-heals (the etag
      * matches, so nothing re-fetches). Internal seam so the truncation guard is unit-testable with a

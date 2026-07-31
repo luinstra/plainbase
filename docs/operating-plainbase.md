@@ -642,8 +642,9 @@ What the object-mode diagnostics mean and what you do about each:
 - **Q13 outage signature: writes 503 while reads keep serving 200.** The bucket (write authority) is out;
   the app is fine - reads are local by construction. A boot attempted DURING an outage fails fast by
   design (the boot LIST self-check).
-- **Throttled reads (503/SlowDown, 429) take longer instead of failing.** A throttled GET retries up to 3
-  times with short backoff before the failure paths above see it. The worst case per GET is round-trip
+- **A throttled GET (503/SlowDown, 429) takes longer instead of failing.** GETs alone retry, up to 3
+  times with short backoff, before the failure paths above see them - a throttled LIST does not, so a
+  throttled boot still refuses on its LIST self-check (the bullet above). The worst case per GET is round-trip
   inclusive: up to 4 request timeouts plus about 2 seconds of backoff, so about 2 minutes at the default
   30 s request timeout. A boot against a throttling provider is slow, never unbounded.
 - **R16 fail-closed signature: an object-mode boot refusing on a TLS or signature rejection.** That is

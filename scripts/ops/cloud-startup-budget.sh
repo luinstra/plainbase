@@ -59,15 +59,22 @@
 #               5 runs (etag-diff LIST, no refetch), so every warm sample is genuinely warm. Median
 #               (the 3rd of 5 sorted) vs the warm budget.
 #
-# EVIDENCE: every boot's stderr (logback) is kept as its own file under a log dir that SURVIVES the
-# run (default: a fresh mktemp dir, path printed; override with PLAINBASE_BUDGET_LOG_DIR). After each
-# run the script prints that run's throttle-retry count and hydrate summary line, so a slow or failing
-# run leaves attributable evidence instead of a bare number. Retry lines log at debug: set
+# EVIDENCE: every boot's stderr (logback) is kept as its own file under a per-invocation subdirectory of a
+# log dir that SURVIVES the run (default: a fresh mktemp dir, resolved path printed; override the parent
+# with PLAINBASE_BUDGET_LOG_DIR). After each run the script prints that run's throttle-retry count and
+# hydrate summary line, so a slow or failing run leaves attributable evidence instead of a bare number.
+#
+# And it GATES on that evidence, not just prints it: a non-strict hydrate serves /healthz after per-key
+# failures, so a throttled cold run would otherwise certify a median measured over a partial mirror. Every
+# cold run must report fetched == listed and zero unhealed; every warm run must report zero fetched and
+# zero unhealed (a warm run that refetches proves the inherited mirror was incomplete). A run whose summary
+# is missing or violates that exits 1 with the offending line. Retry lines log at debug: set
 # PLAINBASE_LOG_LEVEL=debug for an evidence run, and note debug logging itself adds measurable
 # overhead at ~1k GETs, so do not compare a debug run's numbers against a default-level baseline.
 #
 # Usage: cloud-startup-budget.sh <plainbase-launcher> [port=8083] [warm-budget-ms=3000] [cold-budget-ms=10000]
-# Exits non-zero on the corpus-floor preflight, a missing-credentials refusal, or a median budget breach.
+# Exits non-zero on the corpus-floor preflight, a missing-credentials refusal, a run whose hydrate summary
+# fails the completeness gate, or a median budget breach.
 set -euo pipefail
 
 for cmd in curl perl; do
@@ -151,9 +158,12 @@ SERVER_PID=""
 trap '[ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
 # Boot logs live OUTSIDE $tmp so they survive the EXIT trap: a failing run's throttle evidence must
-# outlive the run that produced it.
-LOG_DIR=${PLAINBASE_BUDGET_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/plainbase-budget-logs.XXXXXX")}
-mkdir -p "$LOG_DIR"
+# outlive the run that produced it. Per-invocation subdirectory because the per-run log NAMES are fixed
+# (boot-cold-run-N): a second drill pointed at the same PLAINBASE_BUDGET_LOG_DIR would otherwise
+# overwrite the evidence of the first.
+LOG_ROOT=${PLAINBASE_BUDGET_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/plainbase-budget-logs.XXXXXX")}
+mkdir -p "$LOG_ROOT"
+LOG_DIR=$(mktemp -d "$LOG_ROOT/run-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
 echo "boot logs retained under: $LOG_DIR"
 
 export PLAINBASE_STORAGE_BACKEND=object
@@ -164,12 +174,26 @@ export DATA_DIR="$tmp/data"
 # must measure the hydrate-only READ path and must never ship a bundle to the real bucket.
 export PLAINBASE_GIT_ENABLED=false
 
+# One log PER RUN, under the surviving LOG_DIR - never overwritten, never deleted by the EXIT trap. Named
+# from the label so the gate below can re-open a finished run's log without a second return channel.
+boot_log_path() { printf '%s/boot-%s.log' "$LOG_DIR" "$(printf '%s' "$1" | tr ' ' '-')"; }
+
+# measure_boot's failure exits run inside a command substitution, where the parent EXIT trap cannot see the
+# subshell's SERVER_PID: reap the child HERE or a still-booting server outlives the drill holding the port.
+abort_boot() {
+  local message=$1 boot_log=$2
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  echo "$message" >&2
+  sed 's/^/  boot stderr: /' "$boot_log" >&2
+  exit 1
+}
+
 # Boots the launcher, times exec -> first 200 /healthz, then kills and CONFIRMS exit before returning.
 # Echoes the elapsed milliseconds on stdout; diagnostics go to stderr.
 measure_boot() {
   local label=$1 t0 elapsed deadline boot_log throttles summary
-  # One log PER RUN, under the surviving LOG_DIR - never overwritten, never deleted by the EXIT trap.
-  boot_log="$LOG_DIR/boot-$(printf '%s' "$label" | tr ' ' '-').log"
+  boot_log=$(boot_log_path "$label")
   t0=$(now_ms)
   "$BIN" serve >/dev/null 2>"$boot_log" &
   SERVER_PID=$!
@@ -181,11 +205,9 @@ measure_boot() {
       break
     fi
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      echo "$label: server exited before becoming healthy (a boot refusal? check the endpoint/credentials and the object-mode self-check)" >&2
-      sed 's/^/  boot stderr: /' "$boot_log" >&2
-      exit 1
+      abort_boot "$label: server exited before becoming healthy (a boot refusal? check the endpoint/credentials and the object-mode self-check)" "$boot_log"
     fi
-    [ "$(now_ms)" -lt "$deadline" ] || { echo "$label: server not healthy within ${BOOT_DEADLINE_MS} ms" >&2; sed 's/^/  boot stderr: /' "$boot_log" >&2; exit 1; }
+    [ "$(now_ms)" -lt "$deadline" ] || abort_boot "$label: server not healthy within ${BOOT_DEADLINE_MS} ms" "$boot_log"
     sleep 0.05
   done
   kill "$SERVER_PID" 2>/dev/null || true
@@ -199,12 +221,57 @@ measure_boot() {
   printf '%s' "$elapsed"
 }
 
+# GATES a finished run against its OWN hydrate summary, because a number measured over a partial mirror
+# certifies nothing: a non-strict hydrate that could not fetch every key still serves /healthz 200, so the
+# elapsed time alone cannot tell a full cold hydrate from a throttled one that gave up, nor a genuinely warm
+# boot from one refetching what the inherited DATA_DIR never held. Called from the loops, NOT from inside
+# measure_boot's command substitution, so exit 1 ends the drill instead of the subshell.
+#   cold: fetched == listed objects (and at least one), 0 unhealed - the run really did hydrate the corpus.
+#   warm: 0 fetched, 0 unhealed - nothing was refetched, so the inherited mirror was complete.
+assert_hydrate_summary() {
+  local label=$1 phase=$2 boot_log summaries line objects fetched unhealed
+  boot_log=$(boot_log_path "$label")
+  summaries=$(grep "hydrated mirror from the bucket:" "$boot_log" 2>/dev/null || true)
+  if [ -z "$summaries" ]; then
+    echo "FAIL: $label logged no hydrate summary, so its number certifies nothing (see $boot_log)" >&2
+    exit 1
+  fi
+  while IFS= read -r line; do
+    if ! [[ $line =~ ([0-9]+)\ object\(s\),\ ([0-9]+)\ fetched,\ ([0-9]+)\ unhealed ]]; then
+      echo "FAIL: $label hydrate summary does not match the expected shape: $line" >&2
+      exit 1
+    fi
+    objects=${BASH_REMATCH[1]}
+    fetched=${BASH_REMATCH[2]}
+    unhealed=${BASH_REMATCH[3]}
+    if [ "$unhealed" -ne 0 ]; then
+      echo "FAIL: $label left $unhealed object(s) unhydrated, so the mirror is partial: $line" >&2
+      exit 1
+    fi
+    case "$phase" in
+      cold)
+        if [ "$objects" -lt 1 ] || [ "$fetched" -ne "$objects" ]; then
+          echo "FAIL: $label is not a full cold hydrate ($fetched fetched of $objects listed): $line" >&2
+          exit 1
+        fi
+        ;;
+      warm)
+        if [ "$fetched" -ne 0 ]; then
+          echo "FAIL: $label refetched $fetched object(s), so the inherited mirror was not complete: $line" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done <<< "$summaries"
+}
+
 # COLD phase: a fresh DATA_DIR per run forces a full hydrate (LIST + a GET per object) every time.
 cold=()
 for i in 1 2 3; do
   rm -rf "$tmp/data"
   mkdir -p "$tmp/data"
   cold+=("$(measure_boot "cold run $i")")
+  assert_hydrate_summary "cold run $i" cold
 done
 cold_median=$(printf '%s\n' "${cold[@]}" | sort -n | sed -n '2p')
 
@@ -214,6 +281,7 @@ cold_median=$(printf '%s\n' "${cold[@]}" | sort -n | sed -n '2p')
 warm=()
 for i in 1 2 3 4 5; do
   warm+=("$(measure_boot "warm run $i")")
+  assert_hydrate_summary "warm run $i" warm
 done
 warm_median=$(printf '%s\n' "${warm[@]}" | sort -n | sed -n '3p')
 
