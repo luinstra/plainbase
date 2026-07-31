@@ -55,9 +55,16 @@
 #   COLD phase: for each of 3 runs -> rm -rf $DATA_DIR; mkdir; boot; time exec -> first 200 /healthz;
 #               kill+wait. Full hydrate (LIST + every GET under the prefix) is measured. Median (the 2nd
 #               of 3 sorted) vs the cold budget.
-#   WARM phase: RETAIN $DATA_DIR across 5 runs (etag-diff LIST, no refetch), so only the first run
-#               hydrates and the rest measure warm-mirror boot. Median (the 3rd of 5 sorted) vs the warm
-#               budget.
+#   WARM phase: INHERIT the DATA_DIR the cold phase's last run fully hydrated and RETAIN it across all
+#               5 runs (etag-diff LIST, no refetch), so every warm sample is genuinely warm. Median
+#               (the 3rd of 5 sorted) vs the warm budget.
+#
+# EVIDENCE: every boot's stderr (logback) is kept as its own file under a log dir that SURVIVES the
+# run (default: a fresh mktemp dir, path printed; override with PLAINBASE_BUDGET_LOG_DIR). After each
+# run the script prints that run's throttle-retry count and hydrate summary line, so a slow or failing
+# run leaves attributable evidence instead of a bare number. Retry lines log at debug: set
+# PLAINBASE_LOG_LEVEL=debug for an evidence run, and note debug logging itself adds measurable
+# overhead at ~1k GETs, so do not compare a debug run's numbers against a default-level baseline.
 #
 # Usage: cloud-startup-budget.sh <plainbase-launcher> [port=8083] [warm-budget-ms=3000] [cold-budget-ms=10000]
 # Exits non-zero on the corpus-floor preflight, a missing-credentials refusal, or a median budget breach.
@@ -143,6 +150,12 @@ tmp=$(mktemp -d)
 SERVER_PID=""
 trap '[ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
+# Boot logs live OUTSIDE $tmp so they survive the EXIT trap: a failing run's throttle evidence must
+# outlive the run that produced it.
+LOG_DIR=${PLAINBASE_BUDGET_LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/plainbase-budget-logs.XXXXXX")}
+mkdir -p "$LOG_DIR"
+echo "boot logs retained under: $LOG_DIR"
+
 export PLAINBASE_STORAGE_BACKEND=object
 export PLAINBASE_HOST=127.0.0.1
 export PLAINBASE_PORT="$PORT"
@@ -154,8 +167,9 @@ export PLAINBASE_GIT_ENABLED=false
 # Boots the launcher, times exec -> first 200 /healthz, then kills and CONFIRMS exit before returning.
 # Echoes the elapsed milliseconds on stdout; diagnostics go to stderr.
 measure_boot() {
-  local label=$1 t0 elapsed deadline boot_log
-  boot_log="$tmp/boot.log" # server stderr (logback) - kept so a boot refusal shows its actual reason
+  local label=$1 t0 elapsed deadline boot_log throttles summary
+  # One log PER RUN, under the surviving LOG_DIR - never overwritten, never deleted by the EXIT trap.
+  boot_log="$LOG_DIR/boot-$(printf '%s' "$label" | tr ' ' '-').log"
   t0=$(now_ms)
   "$BIN" serve >/dev/null 2>"$boot_log" &
   SERVER_PID=$!
@@ -177,6 +191,11 @@ measure_boot() {
   kill "$SERVER_PID" 2>/dev/null || true
   wait "$SERVER_PID" 2>/dev/null || true
   SERVER_PID=""
+  # Per-run evidence to stderr (stdout carries only the elapsed number the caller captures). The
+  # throttle count is meaningful only at PLAINBASE_LOG_LEVEL=debug; at default level it prints 0.
+  throttles=$(grep -c "throttled" "$boot_log" 2>/dev/null || true)
+  summary=$(grep "hydrated mirror" "$boot_log" 2>/dev/null | tail -1 || true)
+  echo "$label: ${elapsed} ms; throttled-GET retries logged: ${throttles:-0}; ${summary:-no hydrate summary line}" >&2
   printf '%s' "$elapsed"
 }
 
@@ -189,10 +208,9 @@ for i in 1 2 3; do
 done
 cold_median=$(printf '%s\n' "${cold[@]}" | sort -n | sed -n '2p')
 
-# WARM phase: retain DATA_DIR across runs, so only the first run hydrates and the median lands on a
-# warm-mirror boot.
-rm -rf "$tmp/data"
-mkdir -p "$tmp/data"
+# WARM phase: the cold phase's last run just completed a FULL hydrate, so its DATA_DIR is inherited
+# as-is (wiping it here would pay a fourth full hydrate purely to re-prime what cold run 3 already
+# built). All 5 runs are genuinely warm: etag-diff LIST, no refetch.
 warm=()
 for i in 1 2 3 4 5; do
   warm+=("$(measure_boot "warm run $i")")
