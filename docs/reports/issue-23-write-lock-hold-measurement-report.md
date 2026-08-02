@@ -17,12 +17,15 @@ registers every test disabled unless a `RUN` marker is present; see its file hea
 
 - Run: `run-20260801-221834Z`, preserved as the CSV beside this report.
 - Base commit AS MEASURED: `37b3d528ff98e1e6ba08f6969c0518759fcda631`. This report may land on a
-  later commit; the branch was rebased onto `55e2077` after the run. The intervening change is
-  docs-only (a release-notes fragment), so the measured code is byte-identical to what shipped
-  alongside this report.
-- Probe SHA-256: `ededf37e7d29631e1f4d80a055bbde1c091fa6c6490b3ee1feb8e0dfa1f4c029`, which is the
-  EXACT hash of the reviewed source file. The measured bytes and the reviewed bytes are the same
-  file, with no residual difference.
+  later commit; the branch was rebased onto `55e2077` after the run, and that intervening change is
+  docs-only (a release-notes fragment), so the measured code was byte-identical to the tree this
+  report shipped on. It has diverged since: the change that moved log emission out of these
+  transactions edits the very repositories the H-shapes measured. See the DECISION section below.
+- Probe SHA-256: `ededf37e7d29631e1f4d80a055bbde1c091fa6c6490b3ee1feb8e0dfa1f4c029`, which identifies the
+  probe blob AS MEASURED: an uncommitted snapshot taken alongside base commit `37b3d52`, which carries no
+  probe file. The probe was first committed, already disabled, at `73f2e87`, and the tree file has diverged
+  from the measured bytes twice since - at `73f2e87`, and again in the tree as it stands. The hash records which bytes
+  were measured; it is not a checksum of the current file.
 - Machine: `mini.local`, Apple M4 Pro, 24 GB, JVM 21.0.11, Gradle 9.6.1. A Mac mini on fast local
   SSD, not CI and not production hardware. Sustained thermals are better than a laptop's.
 - Busy budget: 3000 ms (`busy_timeout`, pinned in `DatabaseFactory`).
@@ -193,10 +196,11 @@ currently harmful.
 
 ## An unexpected finding: logging dominates the all-refuted hold
 
-PRE-FIX MEASUREMENT. The emission move described in the Decision section above is expected to
-collapse this differential to about zero; see that section for why it is proceeding.
+PRE-FIX MEASUREMENT. No AFTER measurement is taken: the emission move has landed, and the H3a WARN/QUIET
+side pair that produced this differential measured in-lock emission, so it was retired rather than re-armed
+against a window that no longer holds any.
 
-The H3a WARN/QUIET side pair isolates the cost of log emission INSIDE the write-lock window:
+The H3a WARN/QUIET side pair isolated the cost of log emission INSIDE the write-lock window:
 
 | N | WARN enabled | WARN suppressed | logging cost | share of hold |
 |---:|---:|---:|---:|---:|
@@ -245,20 +249,18 @@ for margin that is not needed.
 DB to WAL (which changes the entire contention picture these numbers describe), or materially slower
 storage than the local SSD used here.
 
-**One change IS proceeding, and NOT on performance grounds.** The per-proof log emission is being
-moved out of these transactions because `BeginImmediateSqliteDriver.kt:53-55` already forbids
+**One change LANDED WITH THIS REPORT, and NOT on performance grounds.** The per-proof log emission
+was moved out of these transactions because `BeginImmediateSqliteDriver.kt:53-55` already forbids
 blocking IO inside an app-DB transaction, and the KDoc at `:48-51` names `applyProofs` as the site
 that "can genuinely worsen" under IMMEDIATE. The logging violates an invariant the codebase had
 already written down. The operative hazard is that `write(2)` to stderr is UNBOUNDED and both
 shipped logback profiles are synchronous, so a stalled log consumer can hold the writer reservation
 indefinitely; the 82 ms measured here is the best case of an unbounded distribution, and a 36x
-margin does not protect against an unbounded syscall. That work is scoped to three transaction
-blocks (`applyProofs`, `revoke`, `RootTopologyRepository.observeBinding`) and is tracked separately.
+margin does not protect against an unbounded syscall. That work was scoped to three transaction
+blocks (`applyProofs`, `revoke`, `RootTopologyRepository.observeBinding`).
 
 **Consequence for this report:** the H3a figures below, and the 81.27 vs 27.31 ms logging split, are
-PRE-FIX measurements. They remain a true record of the code at `37b3d52`. An AFTER measurement will
-be appended once the emission move lands, by re-arming the probe once and recording the collapsed
-differential.
+PRE-FIX measurements. They remain a true record of the code at `37b3d52`.
 
 ## Limits of this measurement, stated plainly
 
