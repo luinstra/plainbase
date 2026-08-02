@@ -33,7 +33,7 @@ kotlin {
 application {
     mainClass.set("com.plainbase.ApplicationKt")
     applicationName = "plainbase"
-    // sqlite-jdbc loads its bundled JNI library via System.load — sanctioned, allowlisted use.
+    // sqlite-jdbc loads its bundled JNI library via System.load - sanctioned, allowlisted use.
     // JEP 472 (JDK 24+) warns on restricted native access unless granted; this carries the grant
     // on the `run`/installDist launchers. The native image bakes the same grant in via buildArgs.
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
@@ -84,34 +84,34 @@ configurations["nativeTestImplementation"].extendsFrom(configurations["implement
 configurations["nativeTestRuntimeOnly"].extendsFrom(configurations["runtimeOnly"])
 
 dependencies {
-    // Ktor server — CIO engine only (native-image constraint; Netty banned)
+    // Ktor server - CIO engine only (native-image constraint; Netty banned)
     implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.server.status.pages)
     // Sessions (A4a's opaque-string cookie); allowlisted + native-proven in A1 (SessionCookieNativeTest).
     implementation(libs.ktor.server.sessions)
-    // SSE — the in-binary MCP transport (P3). The mcp(Route) overload asserts install(SSE); pin it directly (not the
+    // SSE - the in-binary MCP transport (P3). The mcp(Route) overload asserts install(SSE); pin it directly (not the
     // SDK transitive) at the same Ktor version. Already allowlisted (rode the SDK transitively); zero drift expected.
     implementation(libs.ktor.server.sse)
     implementation(libs.ktor.serialization.kotlinx.json)
 
-    // HOCON config (ADR-0009): explicit — already allowlisted transitively, so zero allowlist drift, but the
+    // HOCON config (ADR-0009): explicit - already allowlisted transitively, so zero allowlist drift, but the
     // direct ConfigFactory/Config use in PlainbaseConfig must not ride a transitive a Ktor bump could drop.
     implementation(libs.typesafe.config)
 
-    // kotlinx — the only serializer in the tree
+    // kotlinx - the only serializer in the tree
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
-    // kotlinx-datetime — real ISO calendar validation of the editorial page `updated` field
+    // kotlinx-datetime - real ISO calendar validation of the editorial page `updated` field
     // (LocalDate.parse rejects 2026-02-30; reflection-free / native-image safe).
     implementation(libs.kotlinx.datetime)
 
-    // Persistence — SQLDelight on xerial sqlite-jdbc (FTS5 included)
+    // Persistence - SQLDelight on xerial sqlite-jdbc (FTS5 included)
     implementation(libs.sqldelight.jdbc.driver)
     testImplementation(libs.sqldelight.sqlite.driver)
     implementation(libs.sqlite.jdbc)
 
-    // DI — Koin constructor DSL only
+    // DI - Koin constructor DSL only
     implementation(libs.koin.core)
 
     // Markdown
@@ -121,7 +121,7 @@ dependencies {
     implementation(libs.flexmark.ext.yaml.front.matter)
     implementation(libs.flexmark.ext.anchorlink)
 
-    // argon2 (pure-Java Bouncy Castle — no JNA/JNI)
+    // argon2 (pure-Java Bouncy Castle - no JNA/JNI)
     implementation(libs.bouncycastle)
 
     // MCP Kotlin SDK (spike target; full server lands in Phase 5)
@@ -132,17 +132,17 @@ dependencies {
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
 
-    // Logging — kotlin-logging facade (house style; already transitive via MCP SDK) over logback
+    // Logging - kotlin-logging facade (house style; already transitive via MCP SDK) over logback
     implementation(libs.kotlin.logging)
     runtimeOnly(libs.logback.classic)
 
     // --- Test stack split (native-gate-aware) -------------------------------------------------
     // Two test source sets, split by what can survive a closed-world GraalVM native image:
     //
-    //   src/test       — JVM logic tests on Kotest + MockK. MockK does runtime bytecode generation
+    //   src/test       - JVM logic tests on Kotest + MockK. MockK does runtime bytecode generation
     //                    (ByteBuddy/Objenesis) and Kotest's runner/Arb machinery use reflection that
     //                    native-image cannot satisfy, so these NEVER run natively.
-    //   src/nativeTest — native-smoke tests on kotlin.test (→ junit-jupiter), which compiles and runs
+    //   src/nativeTest - native-smoke tests on kotlin.test (→ junit-jupiter), which compiles and runs
     //                    cleanly inside the native image. This is THE native gate's proof set.
     //
     // The split is by SOURCE SET, not just JUnit tag: the GraalVM native test launcher discovers via
@@ -157,19 +157,19 @@ dependencies {
     testImplementation(libs.kotest.framework.engine)
     testImplementation(libs.kotest.property)
     testImplementation(libs.mockk)
-    // SnakeYAML — JVM-test-ONLY differential oracle for the FrontmatterPatcher fuzz test (the real
+    // SnakeYAML - JVM-test-ONLY differential oracle for the FrontmatterPatcher fuzz test (the real
     // YAML parser the strictest-subset recognizer is checked against). testImplementation-scoped, so
     // it is absent from runtimeClasspath (allowlist unaffected). The nativeTest configurations below
-    // extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so this never reaches the
+    // extend `implementation`/`runtimeOnly` - NOT `testImplementation` - so this never reaches the
     // native test image's classpath; the parser stays off the native gate. See FrontmatterPatcherOracleTest.
     testImplementation(libs.snakeyaml)
-    // JGit — JVM-test-ONLY differential oracle for the W4 Git-history layer (reads commits back via
+    // JGit - JVM-test-ONLY differential oracle for the W4 Git-history layer (reads commits back via
     // RevCommit to assert against the shell-`git` writes the production GitCliHistoryProvider makes).
     // testImplementation-scoped, so it is absent from runtimeClasspath (allowlist unaffected); the
-    // nativeTest configurations extend `implementation`/`runtimeOnly` — NOT `testImplementation` — so
+    // nativeTest configurations extend `implementation`/`runtimeOnly` - NOT `testImplementation` - so
     // it never reaches the native test image. Production ships the system `git` binary, never JGit (ADR-0006).
     testImplementation(libs.jgit)
-    // JUnit Platform launcher API — the chunk-8 acceptance suites (Phase1AcceptanceTest,
+    // JUnit Platform launcher API - the chunk-8 acceptance suites (Phase1AcceptanceTest,
     // ForeverApiGoldenSuite) run existing test classes by SELECTION through an in-process launcher
     // (suite-without-duplication, with executed-test floors against vacuous green). Already in the
     // catalog for nativeTest; testImplementation-scoped, so the runtime allowlist is unaffected.
@@ -180,11 +180,11 @@ dependencies {
     testImplementation(libs.logback.classic)
 
     // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
-    // GraalVM's native JUnit launcher, and the ktor test host ONLY — deliberately no Kotest/MockK, so
+    // GraalVM's native JUnit launcher, and the ktor test host ONLY - deliberately no Kotest/MockK, so
     // the native test image's classpath carries no native-hostile engine. The junit-platform pieces
     // and GraalVM launcher are explicit here because the main `test` set inherited the jupiter engine
     // transitively from Kotest (which this set does not depend on) and the plugin injects its native
-    // launcher only into the default `test` runtime classpath — we wire our own source set by hand.
+    // launcher only into the default `test` runtime classpath - we wire our own source set by hand.
     "nativeTestImplementation"(libs.kotlin.test)
     "nativeTestImplementation"(libs.kotlin.test.junit5)
     "nativeTestImplementation"(libs.junit.jupiter.engine)
@@ -231,7 +231,7 @@ tasks.processResources {
 // ---- Version self-report (C5 item 8): generate `com.plainbase.BuildInfo` from `project.version` -----
 // (root build.gradle.kts derives `version` from `-PreleaseVersion`, SNAPSHOT as the dev fallback) so the
 // binary self-reports the TAG-DRIVEN version with no drift (PlainbaseConfig.VERSION delegates to it). A
-// generated Kotlin `const` needs NO runtime resource lookup/reflection — cleaner for the native bet than a
+// generated Kotlin `const` needs NO runtime resource lookup/reflection - cleaner for the native bet than a
 // classpath `version.properties` (Fork B of the addendum; kept only as a documented fallback).
 val generatedBuildInfoDir = layout.buildDirectory.dir("generated/source/buildInfo/kotlin")
 
@@ -254,7 +254,7 @@ val generateBuildInfo =
                 """
                 |package com.plainbase
                 |
-                |// GENERATED at build time from `project.version` — do not edit (server/build.gradle.kts:generateBuildInfo).
+                |// GENERATED at build time from `project.version` - do not edit (server/build.gradle.kts:generateBuildInfo).
                 |object BuildInfo {
                 |    const val VERSION: String = "$versionValue"
                 |}
@@ -275,7 +275,7 @@ sourceSets {
 // The JVM `test` task runs the FULL suite: its own Kotest/MockK logic tests PLUS the kotlin.test
 // native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
 // always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
-// GraalVM native test image — and ONLY it does, so the closed-world image never sees Kotest/MockK.
+// GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
 tasks.test {
     useJUnitPlatform()
     // Fold the native-smoke source set into the JVM `test` run so the JVM suite stays complete.
@@ -291,7 +291,7 @@ tasks.test {
 // The Phase-1 acceptance gate as one named task (chunk 8). The gate ALREADY runs inside `test`
 // (and therefore `build`/CI) like every other suite; this is the convenience handle to run it
 // alone. The native half of the gate is Phase1AcceptanceNativeTest, which `nativeTest` runs
-// inside the image. Not wired into `check` — that would re-run the same classes twice per build.
+// inside the image. Not wired into `check` - that would re-run the same classes twice per build.
 val acceptanceTest = tasks.register<Test>("acceptanceTest") {
     description = "Runs ONLY the Phase-1 acceptance gate (Phase1AcceptanceTest + ForeverApiGoldenSuite)."
     group = "verification"
@@ -364,7 +364,7 @@ graalvmNative {
             // JEP 472 grant for sqlite-jdbc's System.load, baked into the image at build time
             // (mirrors applicationDefaultJvmArgs above; without it every start warns on stderr).
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
-            // Runtime (-R:) default max heap, compiled into the image — NOT the -J: builder-JVM heap
+            // Runtime (-R:) default max heap, compiled into the image - NOT the -J: builder-JVM heap
             // below, which tunes only the image build. Without it the Serial GC (CE default) lets RSS
             // ratchet toward a large physical-memory-derived default and squat there. 256m boots the
             // ~1k–3k design range with wide margin (measured) and keeps the boot-OOM cliff far from
@@ -378,7 +378,7 @@ graalvmNative {
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
             buildArgs.add("-J-Xmx6g")
             // Deliberately NO -R:MaxHeapSize here: the JUnit test set needs more runtime heap than the
-            // shipped `main` default, and the `spike` gate already runs that capped main binary — so the
+            // shipped `main` default, and the `spike` gate already runs that capped main binary - so the
             // runtime cap stays gated without starving the test image.
             // The test image must also embed classpath resources (the SPA shell
             // under static/) or HealthRouteTest's root-route check 404s natively.
@@ -396,7 +396,7 @@ graalvmNative {
 // `junit.platform.listeners.uid.tracking.{enabled,output.dir}`); `nativeTestCompile`
 // (BuildNativeImageTask) then reads that directory via `testListDirectory` and compiles/runs
 // EXACTLY those tests, against the bound task's classpath. By default the auto-created `test`
-// binary binds to the full JVM `test` task — whose classpath carries the Kotest engine, which the
+// binary binds to the full JVM `test` task - whose classpath carries the Kotest engine, which the
 // native test launcher discovers and chokes on (java.lang.Module.getLayer is unsupported under
 // native). The plugin exposes no DSL to re-point the auto-created `test` binary (re-calling
 // registerTestBinary("test") throws "NativeImageOptions ... already exists"), so we re-point its
@@ -413,7 +413,7 @@ run {
         systemProperty("junit.platform.listeners.uid.tracking.output.dir", nativeTestListDir.get().asFile.absolutePath)
         outputs.dir(nativeTestListDir)
         // Start from a clean dir: the UID listener writes a NEW junit-platform-unique-ids-*.txt each
-        // run, so a prior run's files would otherwise linger — letting nativeTestCompile consume
+        // run, so a prior run's files would otherwise linger - letting nativeTestCompile consume
         // removed/renamed test IDs and letting the guard below pass on a stale list. Clearing first
         // makes the recorded set EXACTLY the current src/nativeTest tests; the listener recreates it.
         doFirst { nativeTestListDir.get().asFile.deleteRecursively() }
@@ -428,12 +428,12 @@ run {
     tasks.named<BuildNativeImageTask>("nativeTestCompile") {
         // Read the native test set from `nativeTestList` (nativeTest source set) instead of the
         // full-suite `test` task. (The plugin leaves a `dependsOn(test)` edge so the JVM suite runs
-        // first; harmless — `testListDirectory` is what decides the image's test set.)
+        // first; harmless - `testListDirectory` is what decides the image's test set.)
         dependsOn(nativeTestList)
         testListDirectory.set(nativeTestListDir)
         options.get().classpath.setFrom(nativeTestSourceSet.runtimeClasspath, nativeTestSourceSet.output)
         // Anti-vacuous-green guard, on the CONSUMER side. The native image is built from EXACTLY the
-        // UID list in testListDirectory; an empty/missing list yields a passing, test-free image — a
+        // UID list in testListDirectory; an empty/missing list yields a passing, test-free image - a
         // silent no-op gate. The guard lives HERE, not on nativeTestList, because Gradle skips that
         // task as NO-SOURCE when src/nativeTest is empty, so a guard there never fires in the exact
         // case it defends against. This task always runs before the image is built. Fail loud.
@@ -469,7 +469,7 @@ run {
 // Adding a server dependency is a deliberate act: justify it against the native gate,
 // then run `./gradlew :server:writeDependencyAllowlist` and commit the updated
 // dependency-allowlist.txt alongside the catalog change. `check` (and therefore CI)
-// fails on any unrecorded drift of the runtime classpath — including transitives.
+// fails on any unrecorded drift of the runtime classpath - including transitives.
 
 // Reflection-heavy / native-image-hostile groups fail resolution outright, even when
 // pulled transitively. See master plan §3.
@@ -486,7 +486,7 @@ configurations.configureEach {
         if (bannedDependencyGroups.any { group == it || group.startsWith("$it.") }) {
             throw GradleException(
                 "Banned dependency group '$group' (via ${requested.name}): reflection-heavy and native-image-hostile. " +
-                    "This ban is load-bearing for the single-binary distribution — see master plan §3.",
+                    "This ban is load-bearing for the single-binary distribution - see master plan §3.",
             )
         }
     }
@@ -505,7 +505,7 @@ fun resolvedRuntimeModules(): List<String> =
 
 tasks.register("writeDependencyAllowlist") {
     group = "verification"
-    description = "Regenerate dependency-allowlist.txt from the resolved runtime classpath (a deliberate act — see comment above)"
+    description = "Regenerate dependency-allowlist.txt from the resolved runtime classpath (a deliberate act - see comment above)"
     doLast {
         dependencyAllowlistFile.writeText(resolvedRuntimeModules().joinToString("\n", postfix = "\n"))
         println("Wrote ${dependencyAllowlistFile.name} (${resolvedRuntimeModules().size} modules)")
