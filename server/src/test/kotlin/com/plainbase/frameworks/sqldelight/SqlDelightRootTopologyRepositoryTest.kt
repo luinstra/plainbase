@@ -1,5 +1,9 @@
 package com.plainbase.frameworks.sqldelight
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.RootTopologyRepository
@@ -16,6 +20,8 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
+import org.slf4j.LoggerFactory
 
 class SqlDelightRootTopologyRepositoryTest : FunSpec({
 
@@ -24,13 +30,13 @@ class SqlDelightRootTopologyRepositoryTest : FunSpec({
     val id = PageId.require("01900000-0000-7000-9000-0000000000d1")
     val ref = BindingRef(TreePath.require("guides/deploy.md"), id)
 
-    test("malformed, future-version, and invalid-binding snapshots all fail closed and can never earn trust") {
-        val corruptSnapshots = listOf(
-            "malformed JSON" to "not-json",
-            "future schema" to """{"version":2,"bindings":[]}""",
-            "invalid binding" to """{"version":1,"bindings":[{"path":"../escape.md","id":"not-an-id"}]}""",
-        )
+    val corruptSnapshots = listOf(
+        "malformed JSON" to "not-json",
+        "future schema" to """{"version":2,"bindings":[]}""",
+        "invalid binding" to """{"version":1,"bindings":[{"path":"../escape.md","id":"not-an-id"}]}""",
+    )
 
+    test("malformed, future-version, and invalid-binding snapshots all fail closed and can never earn trust") {
         corruptSnapshots.forEach { (case, raw) ->
             withClue(case) {
                 DatabaseFactory.createInMemoryDriver().use { driver ->
@@ -56,6 +62,44 @@ class SqlDelightRootTopologyRepositoryTest : FunSpec({
         }
     }
 
+    test("the ERROR level does not change what observeBinding RETURNS: Unreadable whether the level is off or on") {
+        corruptSnapshots.forEach { (case, raw) ->
+            withClue(case) {
+                DatabaseFactory.createInMemoryDriver().use { driver ->
+                    val db = DatabaseFactory.createDatabase(driver)
+                    db.rootTopologyQueries.upsertTopology(
+                        root = root,
+                        binding = binding.value,
+                        status = BindingStatus.UNRESOLVED.name,
+                        atRisk = raw,
+                    )
+                    val repository = SqlDelightRootTopologyRepository(db)
+
+                    // OFF and ERROR run against ONE fixture: the unchanged-binding early return writes nothing, so the
+                    // second call sees exactly the row the first did.
+                    withCapture(Level.OFF) { events ->
+                        // Unreadable is also what proves we are on the unchanged-binding path, where the level flag
+                        // gates the decode failure's capture: a CHANGE re-snapshots from id_map and never calls decode.
+                        repository.observeBinding(root, binding).atRisk shouldBe AtRisk.Unreadable
+                        events() shouldBe emptyList()
+                    }
+
+                    // The control that makes the zero above mean something. ERROR (not DEBUG) leaves WARN off, so a
+                    // fixture that slipped onto the CHANGE path would emit nothing here and fail loudly instead.
+                    withCapture(Level.ERROR) { events ->
+                        repository.observeBinding(root, binding).atRisk shouldBe AtRisk.Unreadable
+                        val captured = events()
+                        captured.size shouldBe 1
+                        captured.single().level shouldBe Level.ERROR
+                        // A prefix, not the whole text: the undecodable case's detail is a kotlinx-serialization
+                        // message, and this control's job is to prove the input emits rather than to freeze texts.
+                        captured.single().formattedMessage shouldStartWith "root '${root.value}''s at-risk snapshot"
+                    }
+                }
+            }
+        }
+    }
+
     test("a manifest from the previous binding cannot promote the currently configured binding") {
         val current = RootBinding("https://objects.example|current|")
         val stale = RootBinding("https://objects.example|previous|")
@@ -73,6 +117,29 @@ class SqlDelightRootTopologyRepositoryTest : FunSpec({
         requireNotNull(repository.topology(root)).status shouldBe BindingStatus.UNRESOLVED
     }
 })
+
+private val captured = ListAppender<ILoggingEvent>()
+
+/**
+ * Levels are set PER CASE and restored, never spec-wide: the level is the variable under test here, and without an
+ * explicit set the coverage would silently follow the ambient PLAINBASE_LOG_LEVEL.
+ */
+private fun withCapture(level: Level, body: (() -> List<ILoggingEvent>) -> Unit) {
+    val logger = LoggerFactory.getLogger(SqlDelightRootTopologyRepository::class.java) as Logger
+    val previousLevel = logger.level
+    captured.list.clear()
+    captured.start()
+    try {
+        logger.level = level
+        logger.addAppender(captured)
+        body { captured.list.toList() }
+    } finally {
+        logger.detachAppender(captured)
+        captured.stop()
+        captured.list.clear()
+        logger.level = previousLevel
+    }
+}
 
 private class RecordingTopologyRepository(private var row: RootTopology) : RootTopologyRepository {
     var trustCalls = 0
