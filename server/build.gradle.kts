@@ -191,6 +191,12 @@ dependencies {
     "nativeTestImplementation"(libs.junit.platform.launcher)
     "nativeTestImplementation"(libs.graalvm.junit.platform.native)
     "nativeTestImplementation"(libs.ktor.server.test.host)
+    // Logback at nativeTest-COMPILE scope, for the same reason it is at test-compile scope above: the
+    // deferred-log-emission falsifier attaches its own blocking appender to the real backend. Logback already
+    // reaches this source set's RUNTIME classpath (`runtimeOnly` above, via nativeTestRuntimeOnly.extendsFrom),
+    // but nativeTestImplementation extends `implementation` only, so the classes are absent at COMPILE time.
+    // Test-scoped, same artifact, so the runtime allowlist is unaffected.
+    "nativeTestImplementation"(libs.logback.classic)
 }
 
 sqldelight {

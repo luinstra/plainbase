@@ -40,8 +40,16 @@ class SqlDelightRootTopologyRepository(private val db: PlainbaseDb) : RootTopolo
             )
         }
 
-    override fun observeBinding(root: RootName, binding: RootBinding): RootTopology =
-        db.transactionWithResult {
+    override fun observeBinding(root: RootName, binding: RootBinding): RootTopology {
+        // Both levels are read HERE, and everything this transaction has to say is captured as fields and rendered
+        // after it returns: an app-DB transaction holds the write lock for its whole body, so a blocked log consumer
+        // inside one would hold the lock too.
+        val warnEnabled = logger.isWarnEnabled()
+        val errorEnabled = logger.isErrorEnabled()
+        var rebind: Rebind? = null
+        var decodeFailure: DecodeFailure? = null
+        var decodeDetail: String? = null
+        val topology = db.transactionWithResult {
             val existing = topologies.selectTopology(root).executeAsOneOrNull()
             if (existing != null && existing.binding == binding.value) {
                 return@transactionWithResult RootTopology(
@@ -50,7 +58,12 @@ class SqlDelightRootTopologyRepository(private val db: PlainbaseDb) : RootTopolo
                     status = if (existing.status == BindingStatus.TRUSTED.name) BindingStatus.TRUSTED else BindingStatus.UNRESOLVED,
                     // An UNCHANGED binding keeps the trust it earned - and the snapshot it earned it against, so a row
                     // that has NOT been promoted yet still has to satisfy the SAME set it was latched with.
-                    atRisk = decode(root, existing.at_risk),
+                    atRisk = decode(root, existing.at_risk) { failure, detail ->
+                        if (errorEnabled) {
+                            decodeFailure = failure
+                            decodeDetail = detail
+                        }
+                    },
                 )
             }
             // First sight (null -> X) or a CHANGE. Both are the same fact: this root now claims to be somewhere we
@@ -71,14 +84,25 @@ class SqlDelightRootTopologyRepository(private val db: PlainbaseDb) : RootTopolo
             // in flight against the old binding cannot be cashed after the new one lands.)
             val revoked = observations.selectObservation(root).executeAsOneOrNull()?.plus(1) ?: 1L
             observations.upsertObservation(root = root, observationId = revoked)
-            logger.warn {
-                "root '$root' is now bound to ${binding.value}" +
-                    (existing?.let { " (it was bound to ${it.binding})" } ?: " (first sight)") +
-                    ": UNRESOLVED, with ${atRisk.refs.size} binding(s) at risk. It proves NOTHING until they are witnessed " +
-                    "BY IDENTITY there - a LIST of the wrong bucket is a perfectly successful LIST"
+            if (warnEnabled) {
+                rebind = Rebind(binding = binding.value, previous = existing?.binding, atRiskCount = atRisk.refs.size)
             }
             RootTopology(root = root, binding = binding, status = BindingStatus.UNRESOLVED, atRisk = atRisk)
         }
+        rebind?.let { change ->
+            logger.warn {
+                "root '$root' is now bound to ${change.binding}" +
+                    (change.previous?.let { " (it was bound to $it)" } ?: " (first sight)") +
+                    ": UNRESOLVED, with ${change.atRiskCount} binding(s) at risk. It proves NOTHING until they are witnessed " +
+                    "BY IDENTITY there - a LIST of the wrong bucket is a perfectly successful LIST"
+            }
+        }
+        decodeFailure?.let { failure -> logDecodeFailure(root, failure, decodeDetail) }
+        return topology
+    }
+
+    /** The [observeBinding] warn's fields, captured inside the transaction and rendered after it returns. */
+    private data class Rebind(val binding: String, val previous: String?, val atRiskCount: Int)
 
     override fun trust(root: RootName) {
         topologies.updateStatus(status = BindingStatus.TRUSTED.name, root = root)
@@ -102,39 +126,60 @@ class SqlDelightRootTopologyRepository(private val db: PlainbaseDb) : RootTopolo
      * A snapshot that does not decode is [AtRisk.Unreadable], NEVER an empty set - an empty set is trivially
      * satisfied, and a corrupt safety latch that promotes itself to TRUSTED is worse than no latch at all.
      */
-    private fun decode(root: RootName, raw: String): AtRisk {
+    private fun decode(
+        root: RootName,
+        raw: String,
+        // [topology] is NOT in a transaction and must keep logging immediately, while [observeBinding] reaches this
+        // from inside one and captures instead. Both render from the ONE `when` below, which is what keeps the three
+        // texts identical between the two routes.
+        onFailure: (DecodeFailure, String?) -> Unit = { failure, detail -> logDecodeFailure(root, failure, detail) },
+    ): AtRisk {
         val document = runCatching {
             Json.decodeFromString<AtRiskDocument>(raw)
         }.getOrElse { failure ->
             when (failure) {
                 is SerializationException -> {
-                    logger.error {
-                        "root '$root''s at-risk snapshot is undecodable (${failure.message}): " +
-                            "it can satisfy NOTHING, so the root stays UNRESOLVED"
-                    }
+                    onFailure(DecodeFailure.UNDECODABLE, failure.message)
                     return AtRisk.Unreadable
                 }
                 else -> throw failure
             }
         }
         if (document.version != AT_RISK_VERSION) {
-            logger.error {
-                "root '$root''s at-risk snapshot is version ${document.version} (expected $AT_RISK_VERSION): it can satisfy " +
-                    "NOTHING, so the root stays UNRESOLVED"
-            }
+            onFailure(DecodeFailure.WRONG_VERSION, document.version.toString())
             return AtRisk.Unreadable
         }
         val refs = document.bindings.map { binding ->
             val path = TreePath.of(binding.path)
             val id = PageId.of(binding.id)
             if (path == null || id == null) {
-                logger.error { "root '$root''s at-risk snapshot names an invalid binding ('${binding.path}'): the root stays UNRESOLVED" }
+                onFailure(DecodeFailure.INVALID_BINDING, binding.path)
                 return AtRisk.Unreadable
             }
             BindingRef(path, id)
         }
         return AtRisk.Bindings(refs.toSet())
     }
+
+    private fun logDecodeFailure(root: RootName, failure: DecodeFailure, detail: String?) {
+        when (failure) {
+            DecodeFailure.UNDECODABLE -> logger.error {
+                "root '$root''s at-risk snapshot is undecodable ($detail): " +
+                    "it can satisfy NOTHING, so the root stays UNRESOLVED"
+            }
+
+            DecodeFailure.WRONG_VERSION -> logger.error {
+                "root '$root''s at-risk snapshot is version $detail (expected $AT_RISK_VERSION): it can satisfy " +
+                    "NOTHING, so the root stays UNRESOLVED"
+            }
+
+            DecodeFailure.INVALID_BINDING -> logger.error {
+                "root '$root''s at-risk snapshot names an invalid binding ('$detail'): the root stays UNRESOLVED"
+            }
+        }
+    }
+
+    private enum class DecodeFailure { UNDECODABLE, WRONG_VERSION, INVALID_BINDING }
 
     @Serializable
     private data class AtRiskDocument(val version: Int, val bindings: List<AtRiskBinding>)
