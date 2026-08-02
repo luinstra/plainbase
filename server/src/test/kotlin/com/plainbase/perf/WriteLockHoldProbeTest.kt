@@ -6,7 +6,6 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.SqlPreparedStatement
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
-import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
@@ -85,10 +84,8 @@ private val registrationInvocations = AtomicInteger()
  *   2. touch .crew/perf/issue-23/RUN
  *   3. ./gradlew :server:test --tests "com.plainbase.perf.WriteLockHoldProbeTest" --rerun-tasks
  * Then restore the annotation. The marker is CONSUMED on the registration that sees it, so the
- * probe runs exactly once per arming and cannot re-fire on a later build. Requires WARN logging
- * enabled (it fails fast if `PLAINBASE_LOG_LEVEL` suppresses WARN, because the logging side-pair
- * measures WARN emission cost inside the lock window). Evidence lands in a fresh run directory
- * under `.crew/perf/issue-23/`, which is gitignored.
+ * probe runs exactly once per arming and cannot re-fire on a later build. Evidence lands in a fresh
+ * run directory under `.crew/perf/issue-23/`, which is gitignored.
  *
  * It measured issue #23: how long corpus-scaled transactions hold the app-DB write lock under the
  * forked `BEGIN IMMEDIATE` driver. Results and their reading are in
@@ -154,11 +151,6 @@ class WriteLockHoldProbeTest : FunSpec({
             requireNotNull(run).runSpotcheck()
         }
 
-    test("H3a logging pipeline side pair")
-        .config(enabled = sideEnabled(markerPresent, "logging")) {
-            requireNotNull(run).runLoggingSidePair()
-        }
-
     afterSpec {
         run?.close()
         check(registrationInvocations.get() == 1) {
@@ -179,8 +171,6 @@ private enum class Holder(val label: String) {
     C2_REFUSED_SPOTCHECK("C2-refused-spotcheck"),
     H1_DEFERRED("H1-DEFERRED"),
     H1_IMMEDIATE_CTL("H1-IMMEDIATE-CTL"),
-    H3A_WARN_CTL("H3a-WARN-CTL"),
-    H3A_QUIET("H3a-QUIET"),
 }
 
 private val H1_HOLDERS = setOf(Holder.H1, Holder.H1_DEFERRED, Holder.H1_IMMEDIATE_CTL)
@@ -258,7 +248,6 @@ private data class NoContenderCell(
     val n: Int,
     val driverMode: DriverMode,
     val contender: Contender = Contender.NONE,
-    val logLevel: Level? = null,
 )
 
 private data class RequiredCell(
@@ -354,7 +343,6 @@ private class ProbeRun private constructor(
     private var firstMeasuredTrialNs: Long? = null
     private var uniformCutReported = seedUniformCut
     private var unsafeCleanup = false
-    private val loggingStatesRecorded = mutableSetOf<String>()
     private val calibrationFailure = AtomicReference<Throwable?>(seedFailure)
     private val runFatalFailure = AtomicReference<Throwable?>()
     private val acceptanceVoids = linkedMapOf<String, String>()
@@ -389,15 +377,6 @@ private class ProbeRun private constructor(
             csv.writeMarker(
                 "unsafe_cleanup=holder=${holder.label},n=${cell.n},contender=${cell.contender.name}," +
                     "trial=$trial,reason=$reason",
-            )
-        }
-    }
-
-    private fun recordLoggingState(state: String, logger: Logger) {
-        if (loggingStatesRecorded.add(state)) {
-            csv.writeMarker(
-                "logging_observed=state=$state,root_level=${logger.level?.levelStr ?: "INHERITED"}," +
-                    "repo_logger_warn_enabled=${repoLogger().isWarnEnabled}",
             )
         }
     }
@@ -483,8 +462,6 @@ private class ProbeRun private constructor(
     private fun expectedPlanP(holder: Holder, n: Int): Int = when (holder) {
         Holder.H2 -> 1
         Holder.H3A,
-        Holder.H3A_WARN_CTL,
-        Holder.H3A_QUIET,
         -> n / 10
 
         Holder.H3B,
@@ -625,14 +602,6 @@ private class ProbeRun private constructor(
                     add(RequiredCell(Holder.C2_REFUSED_SPOTCHECK, n, expectedPlanP(core, n), Contender.SPOTCHECK, 4))
                 }
             }
-            if ("H3a" in ACTIVE_HOLDERS) {
-                ACTIVE_N_SET.filter { it == 1_000 || it == 100_000 }.forEach { n ->
-                    add(RequiredCell(Holder.H3A_WARN_CTL, n, expectedPlanP(Holder.H3A_WARN_CTL, n), Contender.NONE, 8))
-                    add(RequiredCell(Holder.H3A_QUIET, n, expectedPlanP(Holder.H3A_QUIET, n), Contender.NONE, 8))
-                }
-            }
-        } else if (OUTPUT_GATE_ONLY == "QUIET" && "H3a" in ACTIVE_HOLDERS) {
-            add(RequiredCell(Holder.H3A_QUIET, 1_000, expectedPlanP(Holder.H3A_QUIET, 1_000), Contender.NONE, 1))
         }
     }
 
@@ -1041,8 +1010,6 @@ private class ProbeRun private constructor(
                 Holder.H2,
                 Holder.C2_REFUSED_SPOTCHECK,
                 Holder.H3A,
-                Holder.H3A_WARN_CTL,
-                Holder.H3A_QUIET,
                 Holder.H3B,
                 Holder.H4,
                 -> retired.set(
@@ -1094,8 +1061,6 @@ private class ProbeRun private constructor(
         -> 5 * plan.k + 1
 
         Holder.H3A,
-        Holder.H3A_WARN_CTL,
-        Holder.H3A_QUIET,
         -> plan.k
 
         Holder.H3B -> CORPUS_ROOTS.size
@@ -1141,8 +1106,6 @@ private class ProbeRun private constructor(
             }
 
             Holder.H3A,
-            Holder.H3A_WARN_CTL,
-            Holder.H3A_QUIET,
             -> {
                 val observation = retirements.observation(GUIDES)
                 val epoch = retirements.bindingEpoch(GUIDES)
@@ -1248,8 +1211,6 @@ private class ProbeRun private constructor(
     ): String? {
         val expectedFreshnessReads = when (holder) {
             Holder.H3A,
-            Holder.H3A_WARN_CTL,
-            Holder.H3A_QUIET,
             -> plan.k
 
             Holder.H3B -> CORPUS_ROOTS.size
@@ -1388,40 +1349,6 @@ private class ProbeRun private constructor(
         runScheduledNoContenderCells(cells, quota = 4, attemptCap = 12, warmups = 1)
     }
 
-    fun runLoggingSidePair() {
-        refuseIfBlocked("H3a logging side pair")
-        val rootLogger = rootLogger()
-        val previousLevel = rootLogger.level
-        try {
-            if (OUTPUT_GATE_ONLY == "QUIET") {
-                runScheduledNoContenderCells(
-                    cells = listOf(
-                        NoContenderCell(
-                            holder = Holder.H3A_QUIET,
-                            holderCore = Holder.H3A,
-                            n = 1_000,
-                            driverMode = DriverMode.IMMEDIATE,
-                            logLevel = Level.ERROR,
-                        ),
-                    ),
-                    quota = 1,
-                    attemptCap = 1,
-                    warmups = 0,
-                )
-                return
-            }
-            val cells = ACTIVE_N_SET.filter { it == 1_000 || it == 100_000 }.flatMap { n ->
-                listOf(
-                    NoContenderCell(Holder.H3A_WARN_CTL, Holder.H3A, n, DriverMode.IMMEDIATE),
-                    NoContenderCell(Holder.H3A_QUIET, Holder.H3A, n, DriverMode.IMMEDIATE, logLevel = Level.ERROR),
-                )
-            }
-            runScheduledNoContenderCells(cells, quota = 8, attemptCap = 12, warmups = 2)
-        } finally {
-            setRootLevel(rootLogger, previousLevel)
-        }
-    }
-
     fun runCalibration() {
         calibrationFailure.get()?.let { failure ->
             throw IllegalStateException("calibration blocked before execution by seed failure", failure)
@@ -1508,36 +1435,16 @@ private class ProbeRun private constructor(
         cell: NoContenderCell,
         phase: String,
         trial: Int,
-    ): TrialResult {
-        val logger = rootLogger()
-        val previous = logger.level
-        if (cell.logLevel != null) setRootLevel(logger, cell.logLevel)
-        check(logger.level == (cell.logLevel ?: previous)) { "logging level changed before measured call" }
-        if (cell.holder == Holder.H3A_WARN_CTL) {
-            check(repoLogger().isWarnEnabled) { "WARN arm did not enable the repository logger" }
-            recordLoggingState("WARN", logger)
-        }
-        if (cell.holder == Holder.H3A_QUIET) {
-            check(!repoLogger().isWarnEnabled) { "QUIET arm did not disable the repository logger" }
-            recordLoggingState("QUIET", logger)
-        }
-        return try {
-            writeTrial(
-                holder = cell.holder,
-                holderCore = cell.holderCore,
-                cell = Cell(cell.n, cell.contender),
-                snapshot = snapshots.getValue(cell.n),
-                phase = phase,
-                trial = trial,
-                driverMode = cell.driverMode,
-            )
-        } finally {
-            if (cell.logLevel != null) setRootLevel(logger, previous)
-            if (cell.holder == Holder.H3A_WARN_CTL || cell.holder == Holder.H3A_QUIET) {
-                recordLoggingState("RESTORED", logger)
-            }
-        }
-    }
+    ): TrialResult =
+        writeTrial(
+            holder = cell.holder,
+            holderCore = cell.holderCore,
+            cell = Cell(cell.n, cell.contender),
+            snapshot = snapshots.getValue(cell.n),
+            phase = phase,
+            trial = trial,
+            driverMode = cell.driverMode,
+        )
 
     fun close() {
         val observedRegistrations = registrationInvocations.get()
@@ -1681,8 +1588,10 @@ private data class Cell(val n: Int, val contender: Contender)
 private fun rowEnabled(markerPresent: Boolean, holder: String): Boolean =
     markerPresent && holder in ACTIVE_HOLDERS && when (OUTPUT_GATE_ONLY) {
         "OFF" -> true
+        // The only surviving gate-only mode, and the one the reduced-quota branches above are written for: a cheap
+        // single-cell H3a re-run. Its QUIET counterpart and their side pair are retired, so it no longer selects one
+        // half of a comparison, it selects the whole reduced run.
         "WARN" -> holder == "H3a"
-        "QUIET" -> false
         else -> error("unknown OUTPUT_GATE_ONLY=$OUTPUT_GATE_ONLY")
     }
 
@@ -1690,17 +1599,12 @@ private fun controlEnabled(markerPresent: Boolean): Boolean = markerPresent && "
 
 private fun sideEnabled(markerPresent: Boolean, side: String): Boolean = markerPresent && when (side) {
     "spotcheck" -> OUTPUT_GATE_ONLY == "OFF" && ("H2" in ACTIVE_HOLDERS || "H3a" in ACTIVE_HOLDERS)
-    "logging" -> "H3a" in ACTIVE_HOLDERS && (OUTPUT_GATE_ONLY == "OFF" || OUTPUT_GATE_ONLY == "QUIET")
     else -> error("unknown side=$side")
 }
 
 private fun rootLogger(): Logger = LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME) as Logger
 
 private fun repoLogger(): Logger = LoggerFactory.getLogger(SqlDelightRetirementRepository::class.java.name) as Logger
-
-private fun setRootLevel(logger: Logger, level: Level?) {
-    logger.level = level
-}
 
 private class CsvWriter(private val path: Path) {
     private val runId = requireNotNull(path.parent).fileName.toString()
@@ -1730,7 +1634,6 @@ private class CsvWriter(private val path: Path) {
         writer.appendLine("# output_gate_only=$OUTPUT_GATE_ONLY")
         writer.appendLine("# effective_log_level=${rootLogger().level?.levelStr ?: "INHERITED"}")
         writer.appendLine("# repo_logger_warn_enabled=${repoLogger().isWarnEnabled}")
-        writer.appendLine("# quiet_run_log_level=ERROR")
         writer.appendLine("# latch_handoff_l_ns=$LATCH_HANDOFF_L_NS")
         listOf("machine", "os_version", "cpu_model", "mem_gb", "jvm_version", "gradle_version").forEach { key ->
             writer.appendLine("# $key=${environment.getValue(key)}")
@@ -1872,9 +1775,6 @@ private fun markerPresent(): Path? {
     val root = runCatching { findRepoRoot() }.getOrNull() ?: return null
     val marker = root.resolve(".crew/perf/issue-23/RUN")
     if (!Files.deleteIfExists(marker)) return null
-    check(repoLogger().isWarnEnabled) {
-        "repository WARN logging is disabled by PLAINBASE_LOG_LEVEL; the probe requires WARN visibility"
-    }
     return root
 }
 
