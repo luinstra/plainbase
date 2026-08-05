@@ -96,6 +96,12 @@ interface RetirementRepository {
      * a stamp must be read as EARLY as possible (before the evidence), and this must be read as LATE as possible
      * (inside the boundary it is checked against). The implementation therefore calls this INSIDE its transaction, once.
      *
+     * **Because it runs there, it must not LOG and must not block on IO** - an app-DB transaction holds the write lock
+     * for its whole body, and a stalled log consumer or a network read inside one holds it for as long as it stalls.
+     * The rule reaches everything this call hands over that the transaction touches: [unavailableNow] itself, the SET
+     * it returns, and [witnessed], [proofs], [advances] and each proof's `covers`. Custom collection implementations
+     * are the sharp edge here, since `contains`, `isEmpty` and iteration all run under the lock.
+     *
      * It gates the INFERRED sources only, exactly as the witness refutation does. An `OPERATOR` proof is an accepted
      * human decision rather than a conclusion drawn from an observation, so an operator retiring a page in a root they
      * have already been told is unavailable is doing precisely what they asked to do.

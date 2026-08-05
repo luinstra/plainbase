@@ -1,0 +1,63 @@
+# run_id=run-20260804-184228Z
+# base_commit=d11307c3ac14f35cf0a9f889dd794e3f30d74788
+# base_commit_kind=observed_runtime_head
+# probe_sha256=59edc250f317b7ef3903dc483e5f66aa23e16a884d117afaa95a2337a2396396
+# registration_invocations=deferred_until_close
+# duplicate_header_key_policy=last_occurrence_wins
+# phase_enumeration=warmup|measured|calibration (deviation from plan:1395, calibration row must not aggregate as measured)
+# void_rows_supersede_per_row_validity=true
+# utc_date=2026-08-04T18:42:36.724538Z
+# busy_timeout_ms=3000
+# output_gate_only=OFF
+# effective_log_level=INFO
+# repo_logger_warn_enabled=true
+# latch_handoff_l_ns=8667
+# machine=mini.local
+# os_version=Mac OS X 26.5.2
+# cpu_model=Apple M4 Pro
+# mem_gb=24.0
+# jvm_version=21.0.11+10-LTS
+# gradle_version=9.6.1
+# active_n_set=1000,200000
+# active_holders=H2-full
+# scheduler=round_robin_one_measured_trial_per_cell_per_round
+# validity=contender_group_gated_by_holder_valid_with_separate_replenishment
+# uniform_cut_ms=7200000
+# seed_uniform_cut_threshold_ms=600000
+# seed_uniform_cut=false
+# uniform_cut_boundary=not_reached
+# byte_gate_trial_denominator=1_H3a_N1000_WARN_trial
+# byte_gate_n_scaling_assumption=warn_bytes_scale_linearly_with_N_over_1000
+# byte_gate_projected_gate_trial_equivalents=6258
+# byte_gate_projected_gate_trial_equivalents_derivation=3528+1414+1313+3=6258
+# c2_refused_spotcheck_discriminator=p_1_H2_p_equals_k_H3a
+# seed_wallclock_s_1000=0.797775416
+# seed_outer_txn_count_1000=1
+# seed_file_bytes_1000=503808
+# seed_wallclock_s_200000=7.443856292
+# seed_outer_txn_count_200000=1
+# seed_file_bytes_200000=62214144
+run_id,holder,n,k,p,contender,trial,phase,hold_start_ns,hold_end_ns,hold_ms,contender_begin_issue_ns,contender_begin_return_ns,contender_outcome,contender_arm,contender_statements,overlap_verified,completeness_verified,precondition_verified,statements_in_hold,freshness_reads,excluded_reason
+run-20260804-184228Z,CAL-LONG-HOLD,1000,0,0,C1,1,calibration,2893749897578208,2893757926089625,8028.511417,2893749897611833,2893753167015333,busy,write,0,true,true,true,1732426,0,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,1,warmup,2893757950308000,2893757976259500,25.9515,2893757950329958,2893757977557291,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,1,warmup,2893758009345458,2893762095400916,4086.055458,2893758009379541,2893761257143458,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,2,warmup,2893762100987041,2893762121371583,20.384542,2893762101012708,2893762125862250,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,2,warmup,2893762143667041,2893766206118416,4062.451375,2893762143693583,2893765400915791,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,1,measured,2893766211585250,2893766231893166,20.307916,2893766211615625,2893766238823541,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,1,measured,2893766255839583,2893770309505208,4053.665625,2893766255897250,2893769536112083,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,2,measured,2893770314359208,2893770334700791,20.341583,2893770314377125,2893770341509416,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,2,measured,2893770358548875,2893774407140375,4048.5915,2893770358565166,2893773625922250,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,3,measured,2893774412401500,2893774435414666,23.013166,2893774412418166,2893774439622708,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,3,measured,2893774456896583,2893778494119208,4037.222625,2893774456909583,2893777666368291,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,4,measured,2893778498293875,2893778519192666,20.898791,2893778498413083,2893778523764333,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,4,measured,2893778540598791,2893782586423708,4045.824917,2893778540612166,2893781798501166,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,5,measured,2893782590489125,2893782611867875,21.37875,2893782590509666,2893782615899125,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,5,measured,2893782633228708,2893786723333666,4090.104958,2893782633242500,2893785906888583,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,6,measured,2893786727737083,2893786748599666,20.862583,2893786727756291,2893786754956041,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,6,measured,2893786772279333,2893790811727416,4039.448083,2893786772298000,2893790014951083,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,7,measured,2893790816949041,2893790837211083,20.262042,2893790816966416,2893790844130625,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,7,measured,2893790861090083,2893794909665791,4048.575708,2893790861102916,2893794094760583,busy,write,0,true,true,true,1000004,4,
+run-20260804-184228Z,H2-full,1000,1000,4,C1,8,measured,2893794914705250,2893794935387250,20.682,2893794914728875,2893794940346916,bound,write,6,false,true,true,5004,4,
+run-20260804-184228Z,H2-full,200000,200000,4,C1,8,measured,2893794957333666,2893798998633791,4041.300125,2893794957349250,2893798213639333,busy,write,0,true,true,true,1000004,4,
+# no_verified_contention=holder=H2-full;holderCore=H2-full;n=1000;p=4;contender=C1
+# registration_invocations=1
