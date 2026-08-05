@@ -53,6 +53,10 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 private const val BUSY_BUDGET_MS = 3_000L
+
+// 30x headroom over the slowest hold any cell in ACTIVE_N_SET can produce (covers-full at n=100,000 holds about 2s).
+// Widening ACTIVE_N_SET past that means re-checking this, since a hold that outlives the join is a run-fatal, and on
+// the covers-full row a slow hold is the FINDING rather than an infrastructure failure.
 private const val HOLDER_JOIN_TIMEOUT_MS = 60_000L
 private const val LATCH_HANDOFF_L_NS = 8_667L
 private const val FRESHNESS_SQL_FRAGMENT = "SELECT observation_id, binding_epoch"
@@ -65,7 +69,7 @@ private const val SEED_UNIFORM_CUT_THRESHOLD_MS = 10 * 60 * 1_000L
 private const val SEED_DEADLINE_MS = 20 * 60 * 1_000L
 private const val UNIFORM_CUT_TARGET = 5
 private val ACTIVE_N_SET = listOf(1_000, 5_000, 20_000, 100_000)
-private val ACTIVE_HOLDERS = setOf("H1", "H2", "H3a", "H3b", "H4")
+private val ACTIVE_HOLDERS = setOf("H1", "H2", "H2-full", "H3a", "H3b", "H4")
 private const val OUTPUT_GATE_ONLY = "OFF"
 
 private val registrationInvocations = AtomicInteger()
@@ -89,12 +93,19 @@ private val registrationInvocations = AtomicInteger()
  *
  * It measured issue #23: how long corpus-scaled transactions hold the app-DB write lock under the
  * forked `BEGIN IMMEDIATE` driver. Results and their reading are in
- * `docs/reports/issue-23-write-lock-hold-measurement-report.md`, with the raw run beside it. The
- * headline: nothing came within 7x of the 3000 ms busy budget at 100,000 pages, so no remedy was
- * taken. Retained in case that question is ever reopened at a larger corpus.
+ * `docs/reports/issue-23-write-lock-hold-measurement-report.md`, with the raw run beside it.
+ *
+ * The hold scales with `k`, the number of bindings a batch COVERS, not with the corpus size: at a
+ * fixed `k` of 20,000 the hold is the same at n=20,000 and at n=200,000. H2 covers a tenth of one
+ * root, which is why its rows stay far under the 3000 ms busy budget; H2-full covers every durable
+ * binding of every root, which is what a whole-tree deletion plus a scan legally mints, and that
+ * shape does exhaust the budget: the hold passes 3000 ms between 140,000 and 150,000 covers, and the
+ * contender takes an actual SQLITE_BUSY between 160,000 and 180,000, the gap being that the busy
+ * handler gives up nearer 3.2 s than the nominal 3000 ms. Reaching either point needs an
+ * ACTIVE_N_SET past this file's default, since `k` equals `n` on that row.
  *
  * MAINTENANCE WARNING. This probe pins EXACT statement counts against repository internals (H1 is
- * `n+1`, H2 is `5k+1`, H3a is exactly `k` freshness reads, H4 is 0). Those pins are what stop it
+ * `n+1`, the two H2 rows are `5k+p`, H3a is exactly `k` freshness reads, H4 is 0). Those pins are what stop it
  * reporting a number for a transaction that did not do the work. They also mean a refactor of
  * `SqlDelightPageCheckpointRepository` or `SqlDelightRetirementRepository` will make it FAIL rather
  * than silently drift. If that happens and nobody needs the measurement, DELETE THIS FILE; do not
@@ -131,6 +142,11 @@ class WriteLockHoldProbeTest : FunSpec({
             requireNotNull(run).runHolderRow(Holder.H2)
         }
 
+    test("H2-full covers-full applyProofs write-lock hold")
+        .config(enabled = rowEnabled(markerPresent, "H2-full")) {
+            requireNotNull(run).runHolderRow(Holder.H2_FULL)
+        }
+
     test("H3a stale applyProofs write-lock hold")
         .config(enabled = rowEnabled(markerPresent, "H3a")) {
             requireNotNull(run).runHolderRow(Holder.H3A)
@@ -164,6 +180,13 @@ class WriteLockHoldProbeTest : FunSpec({
 private enum class Holder(val label: String) {
     H1("H1"),
     H2("H2"),
+
+    /**
+     * H2's surviving-proof shape at the largest LEGAL cover count: every durable binding of every corpus root.
+     * A whole-tree deletion plus a scan mints one proof per root, so this is p=4 proofs whose covers sum to n,
+     * not H2's single proof over n/10 of one root.
+     */
+    H2_FULL("H2-full"),
     H3A("H3a"),
     H3B("H3b"),
     H4("H4"),
@@ -174,6 +197,10 @@ private enum class Holder(val label: String) {
 }
 
 private val H1_HOLDERS = setOf(Holder.H1, Holder.H1_DEFERRED, Holder.H1_IMMEDIATE_CTL)
+
+// H4 pairs with C1 only because its witnessed shape retires nothing; H2-full because only C1's write can be
+// refused by the lock, and doubling its cells would double the most expensive row in the run.
+private val SINGLE_CONTENDER_HOLDERS = setOf(Holder.H4, Holder.H2_FULL)
 
 private enum class Contender {
     C1,
@@ -384,7 +411,7 @@ private class ProbeRun private constructor(
     fun runHolderRow(holder: Holder) {
         refuseIfBlocked(holder.label)
         val ns = if (holder == Holder.H3B) ACTIVE_N_SET.filter { it == 1_000 || it == 100_000 } else ACTIVE_N_SET
-        val contenders = if (holder == Holder.H4) listOf(Contender.C1) else listOf(Contender.C1, Contender.C2)
+        val contenders = if (holder in SINGLE_CONTENDER_HOLDERS) listOf(Contender.C1) else listOf(Contender.C1, Contender.C2)
         val cells = contenders.flatMap { contender -> ns.map { n -> Cell(n, contender) } }
             .filter { cell -> OUTPUT_GATE_ONLY == "OFF" || (cell.n == 1_000 && cell.contender == Contender.C1) }
         val target = if (OUTPUT_GATE_ONLY == "OFF") 8 else 1
@@ -464,6 +491,7 @@ private class ProbeRun private constructor(
         Holder.H3A,
         -> n / 10
 
+        Holder.H2_FULL,
         Holder.H3B,
         Holder.H4,
         -> CORPUS_ROOTS.size
@@ -573,7 +601,7 @@ private class ProbeRun private constructor(
             } else {
                 ACTIVE_N_SET
             }
-            val contenders = if (holder == Holder.H4) {
+            val contenders = if (holder in SINGLE_CONTENDER_HOLDERS) {
                 listOf(Contender.C1)
             } else {
                 listOf(Contender.C1, Contender.C2)
@@ -588,6 +616,7 @@ private class ProbeRun private constructor(
         if (OUTPUT_GATE_ONLY == "OFF") {
             addHolderRow(Holder.H1)
             addHolderRow(Holder.H2)
+            addHolderRow(Holder.H2_FULL)
             addHolderRow(Holder.H3A)
             addHolderRow(Holder.H3B)
             addHolderRow(Holder.H4)
@@ -1008,6 +1037,7 @@ private class ProbeRun private constructor(
                 )
 
                 Holder.H2,
+                Holder.H2_FULL,
                 Holder.C2_REFUSED_SPOTCHECK,
                 Holder.H3A,
                 Holder.H3B,
@@ -1057,8 +1087,11 @@ private class ProbeRun private constructor(
         Holder.H1_IMMEDIATE_CTL,
         -> n + 1
 
+        // Five statements per retired cover (select, retire, delete binding, delete checkpoint, delete dirty) plus
+        // one freshness read per proof. At H2's p=1 that is the shipped 5k+1; the covers-full row carries p=4.
         Holder.H2,
-        -> 5 * plan.k + 1
+        Holder.H2_FULL,
+        -> 5 * plan.k + plan.p
 
         Holder.H3A,
         -> plan.k
@@ -1103,6 +1136,22 @@ private class ProbeRun private constructor(
                     k = k,
                     p = 1,
                 )
+            }
+
+            Holder.H2_FULL,
+            -> {
+                val proofs = CORPUS_ROOTS.map { root ->
+                    AbsenceProof(
+                        root = root,
+                        source = ProofSource.EPOCH,
+                        observationId = retirements.observation(root),
+                        bindingEpoch = retirements.bindingEpoch(root),
+                        covers = snapshot.bindingsByRoot.getValue(root).toSet(),
+                    )
+                }
+                // Summed from the actual cover sets rather than assumed to be n: the pins downstream compare against
+                // this number, so a seeder that ever splits n unevenly must show up as a pin failure, not as drift.
+                HolderPlan(proofs, emptySet(), proofs.sumOf { it.covers.size }, CORPUS_ROOTS.size)
             }
 
             Holder.H3A,
@@ -1174,7 +1223,7 @@ private class ProbeRun private constructor(
             statements != expectedStatements -> "holder:statements:$statements!=$expectedStatements"
             holder == Holder.H1 || holder == Holder.H1_DEFERRED || holder == Holder.H1_IMMEDIATE_CTL ->
                 checkH1Shape(n, db)
-            holder == Holder.H2 ->
+            holder == Holder.H2 || holder == Holder.H2_FULL ->
                 checkH2Shape(n, plan, returned, freshnessReads, db)
             else -> checkApplyProofsShape(holder, n, plan, returned, freshnessReads, db)
         }
@@ -1193,8 +1242,9 @@ private class ProbeRun private constructor(
         db: SqlDriver,
     ): String? {
         val corpusCount = CORPUS_ROOTS.sumOf { db.countRoot(it) }
+        // One freshness read per proof, which is H2's shipped 1 and the covers-full row's 4.
         return when {
-            freshnessReads != 1 -> "holder:freshness_reads:$freshnessReads!=1"
+            freshnessReads != plan.p -> "holder:freshness_reads:$freshnessReads!=${plan.p}"
             returned?.size != plan.k -> "holder:retired_count:${returned?.size}!=${plan.k}"
             corpusCount != n - plan.k.toLong() -> "holder:corpus_count:$corpusCount!=${n - plan.k}"
             else -> null

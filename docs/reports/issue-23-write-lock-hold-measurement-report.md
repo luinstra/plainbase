@@ -1,6 +1,6 @@
 # Issue #23 — app-DB write-lock hold duration under BEGIN IMMEDIATE
 
-**Date:** 2026-08-01
+**Date:** 2026-08-01, corrected 2026-08-04 (see the CORRECTION below)
 **Scope:** Issue #23, measuring how long the app DB write lock is held by corpus-scaled transactions
 after PR #22 moved the driver to `BEGIN IMMEDIATE`, and whether that change made it worse.
 
@@ -8,12 +8,27 @@ Measurement report. NUMBERS AND AN HONEST READING ONLY. The remedy is deliberate
 the issue forbids precommitting to one and the option space is mapped at the end for a separate
 owner decision.
 
-**Raw evidence:** `issue-23-write-lock-hold-measurement-data.csv` beside this file, the complete
-540-line run output. Every number below is recomputable from it. The instrument that produced it is
-`server/src/test/kotlin/com/plainbase/perf/WriteLockHoldProbeTest.kt`, retained and inert (it
-registers every test disabled unless a `RUN` marker is present; see its file header).
+> **CORRECTION, 2026-08-04. The original headline was wrong and is retracted here, not quietly
+> edited.** The 2026-08-01 matrix fixed every proof batch at `k = n / 10` covers but published a
+> crossover table indexed by PAGES. `applyProofs` takes a flat proof list, and
+> `ObservationEpoch.proofFromScan` (`ObservationEpoch.kt:216`) computes `gone` from the root's ENTIRE
+> durable binding set, so a whole-tree delete plus one scan legally mints a batch covering the whole
+> corpus. Cost tracks COVERS, not pages, so the page-indexed crossover was about 10x too optimistic.
+> A post-fix re-measurement of the `k = n` shape produced real `SQLITE_BUSY` from the ordinary
+> `idMap.bind` writer. **"Zero busy outcomes at any corpus size" is FALSIFIED**, and the margin the
+> DECISION rested on is gone at about 150,000 covers. See "Post-fix re-measurement" below; the
+> corrected decision is at the end. Every pre-fix number in this report is left exactly as measured.
 
-## Provenance
+**Raw evidence:** `issue-23-write-lock-hold-measurement-data.csv` beside this file, the complete
+540-line run output for the 2026-08-01 matrix. Every PRE-FIX number below is recomputable from it;
+the post-fix numbers have their own provenance and their own limits, stated in their section. The
+instrument that produced both is `server/src/test/kotlin/com/plainbase/perf/WriteLockHoldProbeTest.kt`,
+retained and inert. `@Ignored` (`WriteLockHoldProbeTest.kt:118`) is the disable: Kotest never
+instantiates the spec, so nothing registers, runs, or touches the filesystem during an ordinary
+build. Reviving it takes BOTH acts, deliberately - delete the annotation AND arm the
+`.crew/perf/issue-23/RUN` marker. The marker alone does nothing; see the file header at `:77-105`.
+
+## Provenance of the 2026-08-01 matrix
 
 - Run: `run-20260801-221834Z`, preserved as the CSV beside this report.
 - Base commit AS MEASURED: `37b3d528ff98e1e6ba08f6969c0518759fcda631`. This report may land on a
@@ -35,21 +50,25 @@ registers every test disabled unless a `RUN` marker is present; see its file hea
   reading below would change.
 - Wall clock: the whole matrix ran in 1 minute 21 seconds.
 
-## Integrity of the run
+## Integrity of the 2026-08-01 run
 
 - 453 data rows, 368 measured, 1 calibration row.
 - ZERO excluded trials. Every falsifier passed on every trial.
 - `registration_invocations=1` asserted at close; `uniform_cut_boundary=not_reached`.
 - CAL-LONG-HOLD, the busy-observability positive control: an 8003.6 ms synthetic hold produced
   `contender_outcome=busy` with `contender_statements=0` and `overlap_verified=true`.
-  THIS IS THE LOAD-BEARING CONTROL. It is what makes the zero-busy result below a real measurement
-  rather than a broken instrument reporting silence.
+  THIS IS THE LOAD-BEARING CONTROL. It is what makes this matrix's zero-busy result a real
+  measurement rather than a broken instrument reporting silence.
 
-## Hold durations
+## Hold durations (2026-08-01, every batch at `k = n / 10` covers)
 
 Holder shapes: H1 = `PageCheckpointRepository.replace`; H2 = `applyProofs` with a surviving batch;
 H3a = `applyProofs` all-refuted with freshness reads; H3b = all-refuted, small; H4 =
 witness-refuted, zero statements.
+
+THE `N` COLUMN IS CORPUS SIZE, NOT BATCH SIZE. Every proof batch in this table covers `n / 10`
+bindings, and the `applyProofs` shapes cost per COVER, not per page. A table row therefore says what
+a tenth-of-the-corpus batch costs, and nothing about a larger one.
 
 | Holder | N | trials | median (ms) | max (ms) | max as % of 3000 ms |
 |---|---:|---:|---:|---:|---:|
@@ -83,16 +102,21 @@ meaning. The `p` column is the discriminator (`p=1` is the H2 core, `p=k` is the
 | H3a core | 1,000 | 4 | 0.86 | 0.92 |
 | H3a core | 100,000 | 4 | 77.50 | 81.30 |
 
-## The headline
+## The headline, as originally written and now SCOPED
 
-**No holder came close to the 3000 ms budget at any measured corpus size.** The largest hold
-anywhere is H1 at 100,000 pages: a 406.90 ms median, 414.57 ms worst case, 13.8% of the budget.
-100,000 pages is already beyond a realistic deployment.
+**No holder came close to the 3000 ms budget in the shapes this matrix measured.** The largest hold
+anywhere in it is H1 at 100,000 pages: a 406.90 ms median, 414.57 ms worst case, 13.8% of the budget.
+
+RETRACTED SCOPE: the original sentence said "at any measured corpus size", and the table below read
+as a page-indexed bound. Both are wrong for H2/H3a, which are covers-indexed. Every proof batch in
+this matrix carried `k = n / 10` covers, so no row here says anything about a batch that covers a
+whole root. The k = n shape does reach the budget, at about 150,000 covers. See "Post-fix
+re-measurement".
 
 Extrapolating from the per-page cost AT THE LARGEST MEASURED N (100,000), not a fit across all four
 points. The per-page cost is stable enough across the range for this to hold to an order of
 magnitude (H1 costs 4.29 microseconds per page at 1,000 and 4.07 at 100,000), but these are
-projections, not measurements:
+projections, not measurements. AS PUBLISHED 2026-08-01, unchanged:
 
 | Holder | cost per 1,000 pages | reaches 3000 ms at |
 |---|---:|---:|
@@ -100,14 +124,33 @@ projections, not measurements:
 | H2 `applyProofs` surviving | 1.981 ms | about 1,514,000 pages |
 | H3a `applyProofs` all-refuted | 0.822 ms | about 3,649,000 pages |
 
-## Contention: NO VERIFIED CONTENTION at every measured cell
+**THE UNITS ON THE LAST TWO ROWS ARE WRONG, and that is the whole error.** H1 does scale with pages
+in the checkpoint. The two `applyProofs` rows scale with COVERS IN THE BATCH, and every batch in this
+matrix carried `n / 10` covers, so "per 1,000 pages" is really "per 100 covers". Restating the same
+two cells in the unit that governs them, arithmetic only, no new measurement:
 
-Zero busy outcomes across all 368 measured trials. Every cell emitted `no_verified_contention`.
+| Holder | as published | restated in COVERS |
+|---|---|---|
+| H2 `applyProofs` surviving | 1.981 ms per 1,000 pages, 3000 ms at 1,514,000 pages | 19.81 ms per 1,000 covers, 3000 ms at 151,400 covers |
+| H3a `applyProofs` all-refuted | 0.822 ms per 1,000 pages, 3000 ms at 3,649,000 pages | 8.22 ms per 1,000 covers, 3000 ms at 364,900 covers |
 
-This is the EXPECTED result, not a defect, and it is interpretable ONLY because the calibration
-control did produce a busy at an 8-second hold. The instrument can see contention; there was none to
-see. With a worst case of 415 ms against a 3000 ms budget, a contender parked at the start of a hold
-never exhausts its budget, so `SQLITE_BUSY` never fires.
+The restated H2 figure, 151,400 covers, is the one to compare against reality: the post-fix ladder
+brackets the measured over-budget crossover to (140,000, 150,000] covers. The projection was accurate
+in magnitude all along. Only its units were wrong, and the units are what made 1.5 million look
+unreachable.
+
+## Contention: NO VERIFIED CONTENTION at every cell OF THIS MATRIX
+
+Zero busy outcomes across all 368 measured trials OF THE `k = n / 10` MATRIX. Every cell emitted
+`no_verified_contention`. **This is not a corpus-size result and the original section title implied
+it was.** At `k = n` the same contender does take `SQLITE_BUSY`: 24 measured busy rows at k=180,000
+and k=200,000, in the post-fix section below.
+
+This is the EXPECTED result for these cells, not a defect, and it is interpretable ONLY because the
+calibration control did produce a busy at an 8-second hold. The instrument can see contention; in
+these cells there was none to see. With a worst case of 415 ms against a 3000 ms budget, a contender
+parked at the start of a hold does not exhaust its budget, so `SQLITE_BUSY` does not fire HERE. It
+fires once the hold itself passes the budget, which needs a batch this matrix never issued.
 
 Stated honestly and with the limits the plan requires: busy frequency here is a SYNTHETIC
 LATCH-AT-START statistic. The contender is released at the instant the holder acquires the lock.
@@ -120,10 +163,17 @@ aligned to the start of a hold whereas real arrivals are not. Its relationship t
 contention is UNMODELED IN EITHER DIRECTION.
 
 What zero busy outcomes does establish: no synthetic contender, released at the worst possible
-instant, ever exhausted the 3000 ms budget. That is a statement about these holds against this
-budget, not a claim that production sees no contention. A successful contender BEGIN proves nothing
-about whether it waited; only a busy outcome proves contention, and none occurred outside
+instant, exhausted the 3000 ms budget AGAINST A `k = n / 10` HOLD. That is a statement about these
+holds against this budget, not a claim that production sees no contention, and NOT a statement about
+the largest batch the code can legally produce. A successful contender BEGIN proves nothing about
+whether it waited; only a busy outcome proves contention, and in THIS matrix none occurred outside
 calibration.
+
+The read-only side of the contender coverage is PARTIAL, and that is a limit of both matrices.
+`SqlDelightIdMapRepository.bind` has two refusal paths: the tombstone refusal
+(`SqlDelightIdMapRepository.kt:100-103`) and the live-incumbent refusal (`:104-107`). The C2
+spot-check exercises the tombstone one only. The live-incumbent refusal was never measured, in
+either run.
 
 ## The IMMEDIATE-versus-DEFERRED question
 
@@ -191,8 +241,10 @@ would read about 82 ms and mean something entirely different from the same colum
 row. The H1-DEFERRED arm only works because H1 acquires the write lock immediately under DEFERRED
 too.
 
-In absolute terms 82 ms is still 36x under the 3000 ms budget, so this exposure is real but not
-currently harmful.
+In absolute terms 82 ms is still 36x under the 3000 ms budget. That margin belongs to THIS CELL, an
+H3a batch of 10,000 covers, and it does not generalize to the batch size the code permits: H3a is
+covers-linear too, so the same margin shrinks as the batch grows. The exposure is real; the "not
+currently harmful" reading holds only for batches of this size.
 
 ## An unexpected finding: logging dominates the all-refuted hold
 
@@ -217,37 +269,196 @@ captured that through Gradle's stdout plumbing. An async or file appender would 
 materially, possibly most of the way to zero. The finding is "synchronous console logging inside the
 lock window is expensive here", not "logging costs two thirds everywhere".
 
+## Post-fix re-measurement, 2026-08-04: the ladder in COVERS
+
+**DIFFERENT CODE. These numbers are not comparable cell-for-cell with anything above.** Everything
+above ran at `37b3d52`, before per-proof log emission moved out of the transaction. Everything in
+this section ran at `d11307c`, after it. Nothing here is edited into a pre-fix table and no pre-fix
+row was recomputed. Where the two are put side by side, the sentence says so.
+
+The one honest overlap, PER CONTENDER ARM so the two sides are the same statistic: the pre-fix H2
+cell at n=100,000 / k=10,000 measured 197.48 ms (C1) and 200.91 ms (C2); the post-fix cell at the
+same n and k measured 200.45 ms (C1) and 200.27 ms (C2). ACROSS DIFFERENT CODE, so this is a sanity
+check that the shape did not move, not a before/after delta.
+
+### Provenance and its limit
+
+- Four run directories under `.crew/perf/issue-23/`, all at `base_commit=d11307c`, each carrying its
+  own `results.csv` and a `probe-snapshot.kt` of the as-run bytes. SHA-256 of that snapshot, verified
+  from the run directories:
+
+  | run | probe snapshot SHA-256 | cells |
+  |---|---|---|
+  | `run-20260804-184228Z` | `59edc250f317b7ef3903dc483e5f66aa23e16a884d117afaa95a2337a2396396` | k=n at 1,000 and 200,000 |
+  | `run-20260804-184531Z` | `33c4cb535e6d8b98561550119b1fecc8db56ebd6e2440579f0d82da1f313e410` | the k=n/10 ladder, k=n to 200,000, C2 spot-check |
+  | `run-20260804-184840Z` | `8f6cc7103119077f907f57026057f40ccb704ffbfececb2e4d6975809d6faae5` | k=n at 140,000 and 160,000 |
+  | `run-20260804-185117Z` | `10385a6017ff74416e19284b6113ce1775007d4b8a9d0356b5b8ef0250ffd76c` | k=n at 150,000 and 180,000 |
+
+- The four runs are preserved beside this report as `issue-23-postfix-covers-<run>.csv`, copied out
+  of gitignored `.crew/`, so every post-fix number here is recomputable the same way the 2026-08-01
+  matrix is. The hashes identify the probe blob AS RUN; they are not checksums of any committed
+  file, and the as-run probe bytes themselves do NOT ship (the tree's probe hashes to none of the
+  four, since `ACTIVE_N_SET` and `ACTIVE_HOLDERS` were edited between runs).
+- Machine: `mini.local`, Apple M4 Pro, 24 GB, macOS 26.5.2, JVM 21.0.11, Gradle 9.6.1. Same host,
+  same DELETE journal mode, same 3000 ms `busy_timeout` as the pre-fix matrix.
+- AGGREGATION: measured-phase rows only, warmup excluded. VERIFIED to be the same convention the
+  2026-08-01 tables use: re-aggregating the CSV beside this report over measured rows alone
+  reproduces its published cells exactly (H1 1,000 C1 = 4.29, H2 100,000 C1 = 197.48, H3a 100,000
+  C2 = 82.57, H3a-QUIET 100,000 = 27.31). Trial counts are printed per row so the pooling is visible.
+
+### Instrument soundness, so the zeros still mean something
+
+- CAL-LONG-HOLD fired in ALL FOUR runs: holds of 8020.6, 8022.6, 8026.3 and 8028.5 ms, every one
+  producing `contender_outcome=busy` with `contender_statements=0` and `overlap_verified=true`.
+- 250 non-calibration rows (230 on the H2/H2-full core, 20 on the C2 refused spot-check). ZERO with
+  `completeness_verified=false`, ZERO with `precondition_verified=false`, ZERO with any
+  `excluded_reason`.
+
+### Cost tracks COVERS, and this is measured rather than modelled
+
+| shape | n | k | trials | median (ms) |
+|---|---:|---:|---:|---:|
+| H2-full | 20,000 | 20,000 | 8 | 398.00 |
+| H2 | 200,000 | 20,000 | 16 | 398.74 |
+
+Same k, TEN TIMES the corpus, 0.19% apart. Corpus size is not the variable; batch covers is.
+
+Per-1,000-covers cost, flat across a 200x range in k:
+
+| shape | n | k | trials | median (ms) | ms per 1,000 covers |
+|---|---:|---:|---:|---:|---:|
+| H2 | 1,000 | 100 | 16 | 2.77 | 27.72 |
+| H2 | 5,000 | 500 | 16 | 10.34 | 20.68 |
+| H2 | 20,000 | 2,000 | 16 | 40.22 | 20.11 |
+| H2 | 100,000 | 10,000 | 16 | 200.27 | 20.03 |
+| H2 | 200,000 | 20,000 | 16 | 398.74 | 19.94 |
+| H2-full | 200,000 | 200,000 | 16 | 4022.76 | 20.11 |
+
+Across every cell from k=500 to k=200,000, a 400x range, the figure sits between 19.4 and 20.7 ms per
+1,000 covers (from k=1,000 upward, 19.4 to 20.3; the 19.4 is the k=5,000 rung of the ladder below).
+The k=100 cell reads 27.7 because a fixed per-transaction cost of roughly a millisecond is still a
+third of a 2.8 ms hold; it is not degradation. No slope-and-intercept fit is published here, because
+none was reproduced from these rows.
+
+### The k = n ladder, the shape a whole-tree delete legally mints
+
+C1 is the write contender, `SqlDelightIdMapRepository.bind`. Measured rows only.
+
+| k = n | trials | min | median (ms) | IQR | max | over 3000 ms | busy |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 32 | 19.49 | 20.12 | 0.65 | 23.01 | 0/32 | 0/32 |
+| 5,000 | 8 | 96.33 | 97.28 | 1.40 | 98.45 | 0/8 | 0/8 |
+| 20,000 | 8 | 389.39 | 398.00 | 4.06 | 400.50 | 0/8 | 0/8 |
+| 100,000 | 8 | 1965.10 | 1983.96 | 12.48 | 2017.68 | 0/8 | 0/8 |
+| 140,000 | 8 | 2784.90 | 2807.83 | 12.55 | 2871.03 | 0/8 | 0/8 |
+| 150,000 | 8 | 3009.08 | 3038.23 | 21.78 | 3065.35 | **8/8** | 0/8 |
+| 160,000 | 8 | 3191.33 | 3199.20 | 6.00 | 3222.44 | **8/8** | 0/8 |
+| 180,000 | 8 | 3594.78 | 3621.32 | 26.80 | 3680.29 | **8/8** | **8/8** |
+| 200,000 | 16 | 3983.12 | 4022.76 | 52.36 | 4090.10 | **16/16** | **16/16** |
+
+The k=1,000 and k=200,000 rows pool two or four runs; their IQRs carry a run-to-run offset the
+single-run rows do not (within either k=200,000 run the IQR is 6.62 and 9.02 ms).
+
+Three findings:
+
+1. **The over-budget crossover brackets to (140,000, 150,000] covers.** Measured, not projected. The
+   report's original 1,514,000 figure was right in magnitude and wrong in units.
+2. **Real `SQLITE_BUSY` from the ordinary `idMap.bind` writer.** 24 measured busy rows (30 counting
+   warmup) across three run directories: k=180,000 in `run-...185117Z`, and k=200,000 REPRODUCED
+   INDEPENDENTLY in `run-...184228Z` and `run-...184531Z`. Every one is a legal workload, not a
+   synthetic stall. **The pre-fix "zero busy outcomes at any corpus size" is falsified for this
+   shape.**
+3. **The busy handler gives up at 3202 to 3296 ms (3307 counting warmup), not at the nominal 3000.**
+   So the busy threshold sits about 10% above the over-budget one, and k=160,000 is a RACE rather
+   than a safe cell: its own contender WAITS (3195.8 to 3265.9 ms, all returning `bound`) sit inside
+   the give-up band, which is the like-for-like comparison since the band is a wait statistic. One
+   trial waited 3263.5 ms and got `bound`; another waited 3202.2 ms and got `busy`. That band is a property
+   of this host and this SQLite build, so the exact 160,000 verdict is MACHINE-DEPENDENT and should
+   not be read as a threshold.
+
+### A second output change in the emission move, declared
+
+The change that moved log emission out of these transactions was described as carrying ONE deliberate
+text change. It carries TWO. `DeferredProofLog.stale` (`SqlDelightRetirementRepository.kt:357-360`)
+DROPS a staleness record whose current tokens are both null, so a message that used to be emitted is
+no longer emitted at all. It is an intended ruling, not a regression: a root with no observation row
+renders `null/null`, which tells an operator nothing actionable, and dropping it at accumulation
+stops it taking a budget slot from a record that would have printed. `DeferredProofLogEmissionTest:135`
+pins the behaviour. The sibling `advanceStale` (`:385-392`) deliberately does NOT drop it, because for
+a git advance the missing-row case is the only record that a range was discarded.
+
+## KNOWN BOUND: `applyProofs` batch size is unbounded, and hold time is linear in it
+
+`applyProofs` places NO limit on how many covers one batch may carry, and hold time is linear in
+covers at about 20 ms per 1,000. A sufficiently large single batch therefore exceeds the busy budget
+and makes other app-DB writers fail with `SQLITE_BUSY`. Measured: over budget past 150,000 covers,
+observed busy at 180,000. `IndexBuilder.kt:428` hands the whole proof list over in one call, and
+`ObservationEpoch.proofFromScan` (`ObservationEpoch.kt:216`) computes `gone` over the root's entire
+durable binding set, so the batch is bounded only by the corpus.
+
+**NOT being fixed now, deliberately.** Chunking the transaction would break two invariants the code
+documents at the site:
+
+- `SqlDelightRetirementRepository.kt:52-58`: ONE `unavailableNow()` read serves every proof and
+  advance in the pass, so they all judge standing against the same instant.
+- `SqlDelightRetirementRepository.kt:64-67`: the git checkpoint advance lands in the SAME transaction
+  as the reaps it rides with, with "no window between the reap and the move".
+
+It would also introduce partial application, where callers today get all-or-nothing. Reaching the
+bound requires a corpus of 150,000 pages deleted essentially all at once, which is beyond any
+deployment this project expects. That is the whole of the argument; there is no margin left to appeal
+to.
+
 ## REMEDY-CONSTRAINTS
+
+Written 2026-08-01 against the `k = n / 10` matrix. Kept because the three options and their costs
+are still the right map, with the claims the post-fix ladder falsified marked inline.
 
 The issue names three options. What the data says about each, WITHOUT choosing:
 
-**Raise the busy timeout.** The data does not motivate this. Nothing approaches the existing 3000 ms
-budget; the worst observed hold uses 13.8% of it. Raising the timeout would address a problem that
-was not observed. It would only become relevant at corpus sizes around 700,000 pages.
+**Raise the busy timeout.** The `k = n / 10` data does not motivate this: no cell in it approaches
+the existing 3000 ms budget and the worst observed hold uses 13.8% of it. CORRECTED SCOPE: the
+original sentence went on to say this would only become relevant "at corpus sizes around 700,000
+pages". At `k = n` it is relevant from about 150,000 covers, and raising the timeout does not stop
+the hold, it only lengthens how long every other writer waits behind it.
 
-**Chunk the transaction.** Would reduce peak hold for H1, the largest holder, at the cost of losing
-single-transaction atomicity for checkpoint replacement. The data does not currently justify paying
-that price, and the correctness consequences of a partially-replaced checkpoint would need their own
-analysis. Reconsider if a deployment approaches several hundred thousand pages.
+**Chunk the transaction.** Would reduce peak hold for H1, at the cost of losing single-transaction
+atomicity for checkpoint replacement. CORRECTED SCOPE: the original "reconsider if a deployment
+approaches several hundred thousand pages" was a PAGE threshold; for `applyProofs` the threshold is
+150,000 COVERS IN ONE BATCH. Chunking `applyProofs` specifically carries two further costs the
+KNOWN BOUND section above names, and it is not taken.
 
 **Restructure the work.** The measurement surfaced a variant the issue did not anticipate: move the
 per-proof log emission out of the write-lock window. It is about two thirds of the H3a hold and,
-unlike chunking, costs no atomicity.
+unlike chunking, costs no atomicity. THIS ONE LANDED; see the DECISION below.
 
-**Do nothing** is a legitimate fourth reading on the PERFORMANCE question, and the data supports it:
-the margin is 7x at 100,000 pages and the extrapolated crossover sits far beyond any realistic
-corpus.
+**Do nothing** was recorded here as a legitimate fourth reading on the PERFORMANCE question, on the
+grounds that "the margin is 7x at 100,000 pages and the extrapolated crossover sits far beyond any
+realistic corpus". FALSIFIED. The 7x margin is a property of the `k = n / 10` shape only, and the
+crossover is at 150,000 covers, which the code can legally produce. Doing nothing is still the
+decision, but for a different reason, stated below.
 
-## DECISION, 2026-08-01
+## DECISION, 2026-08-01, CORRECTED 2026-08-04
 
-**No remedy is taken for hold duration.** Nothing approaches the 3000 ms budget, no busy outcome was
-observed at any corpus size, and the projected crossovers sit between 737,000 and 3.6 million pages.
-Raising the timeout would address a problem that was not observed; chunking would trade atomicity
-for margin that is not needed.
+The original text read: "No remedy is taken for hold duration. Nothing approaches the 3000 ms budget,
+no busy outcome was observed at any corpus size, and the projected crossovers sit between 737,000 and
+3.6 million pages." **Both premises in that sentence are false.** Busy outcomes DO occur, from the
+ordinary `idMap.bind` writer, at 180,000 covers and above; and the `applyProofs` crossover is at about
+150,000 covers, not 1.5 million pages.
 
-**What would reopen it:** a deployment approaching several hundred thousand pages, a move of the app
-DB to WAL (which changes the entire contention picture these numbers describe), or materially slower
-storage than the local SSD used here.
+**The decision is unchanged and the reason is replaced.** No remedy is taken for hold duration, NOT
+because there is margin - past 150,000 covers there is none - but because reaching that point requires
+a single batch covering 150,000 pages, which means a corpus of that size deleted essentially all at
+once and then scanned. That is beyond any deployment this project expects. The costs of the remedies
+are unchanged and are now the whole of the argument: raising the timeout only lengthens the wait it
+does not shorten the hold, and chunking `applyProofs` would break the same-instant standing read and
+the same-transaction git advance, and would introduce partial application. Recorded as a KNOWN BOUND
+above rather than as an absence of one.
+
+**What would reopen it:** a single delete-then-scan pass covering on the order of 100,000 bindings (a
+COVERS threshold, not a corpus one - a large corpus with ordinary churn does not approach it), a move
+of the app DB to WAL (which changes the entire contention picture these numbers describe), or
+materially slower storage than the local SSD used here.
 
 **One change LANDED WITH THIS REPORT, and NOT on performance grounds.** The per-proof log emission
 was moved out of these transactions because `BeginImmediateSqliteDriver.kt:53-55` already forbids
@@ -259,7 +470,7 @@ indefinitely; the 82 ms measured here is the best case of an unbounded distribut
 margin does not protect against an unbounded syscall. That work was scoped to three transaction
 blocks (`applyProofs`, `revoke`, `RootTopologyRepository.observeBinding`).
 
-**Consequence for this report:** the H3a figures below, and the 81.27 vs 27.31 ms logging split, are
+**Consequence for this report:** the H3a figures above, and the 81.27 vs 27.31 ms logging split, are
 PRE-FIX measurements. They remain a true record of the code at `37b3d52`.
 
 ## Limits of this measurement, stated plainly
@@ -269,9 +480,20 @@ PRE-FIX measurements. They remain a true record of the code at `37b3d52`.
 - JOURNAL MODE IS DELETE (SQLite's default; the app DB sets none). Under WAL, readers do not block
   on the writer and this entire contention picture changes. Every number here is a DELETE-mode
   number.
-- Crossover figures are PROJECTIONS from the per-page cost at the LARGEST measured N only, not a fit
-  across the four points and not measurements. They are the right order of magnitude, not precise
-  thresholds.
+- The PRE-FIX crossover figures are PROJECTIONS from the per-unit cost at the LARGEST measured N
+  only, not a fit across the four points and not measurements. They are the right order of magnitude,
+  not precise thresholds - and for the two `applyProofs` rows their UNITS were published wrong, as
+  pages rather than covers. The post-fix ladder replaces the H2 projection with a measured bracket.
+- Every pre-fix cell fixed the proof batch at `k = n / 10` covers. No pre-fix row constrains the
+  behaviour of a batch that covers a whole root, which is exactly what the corrected sections address.
+- The post-fix runs ship as `issue-23-postfix-covers-<run>.csv` beside this report, so both matrices
+  are recomputable from this tree. The as-run probe bytes do not ship: the instrument was edited
+  between runs, so the tree's copy hashes to none of the four recorded values.
+- Contender coverage is PARTIAL on the read-only side: the C2 spot-check exercises only the tombstone
+  refusal in `SqlDelightIdMapRepository.bind` (`:100-103`). The live-incumbent refusal (`:104-107`)
+  was never measured, in either matrix.
+- The 3202 to 3296 ms busy give-up band is a property of this host and this SQLite build. The verdict
+  that k=160,000 is a race rather than a safe cell is machine-dependent and does not transfer.
 - The logging share depends on the synchronous console appender in `logback.xml`; a different
   appender would change it substantially.
 - The H1 materiality verdict is consistent-with-mechanism, not independently falsified: nothing
@@ -284,13 +506,15 @@ PRE-FIX measurements. They remain a true record of the code at `37b3d52`.
   the ONLY `overlap_verified=true` row in the entire file is the calibration row. Verified directly
   against the CSV.
 
-## Appendix: per-cell detail
+## Appendix: per-cell detail (PRE-FIX matrix, `k = n / 10`)
 
 The summary table above pools the two contender arms. That pooling hides real structure, so the
 full per-cell breakdown follows. Note H2 at N=5,000 with the C1 contender: median 10.24 ms and IQR
 0.31 ms but a 23.92 ms max, a single outlier attributable to that arm which the pooled view erased.
 
-Every cell: zero trials over the 3000 ms budget, zero busy outcomes, zero exclusions.
+Every cell OF THIS MATRIX: zero trials over the 3000 ms budget, zero busy outcomes, zero exclusions.
+Every proof batch here carries `k = n / 10` covers; the k = n ladder that does exceed the budget is
+in the post-fix section, not here.
 
 | holder | N | contender | trials | min | median | IQR | max | over budget | busy |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---:|

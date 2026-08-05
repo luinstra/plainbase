@@ -34,6 +34,7 @@ class SqlDelightRetirementRepository(
     private val dirty get() = db.dirtyPageQueries
     private val gitCheckpoints get() = db.gitCheckpointQueries
 
+    /** Unbounded batch, hold linear in covers, over budget past 150k: `docs/reports/issue-23-write-lock-hold-measurement-report.md` */
     override fun applyProofs(
         proofs: List<AbsenceProof>,
         witnessed: Set<RootedPageId>,
