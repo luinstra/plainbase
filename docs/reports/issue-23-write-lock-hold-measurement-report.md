@@ -294,11 +294,13 @@ check that the shape did not move, not a before/after delta.
   | `run-20260804-184840Z` | `8f6cc7103119077f907f57026057f40ccb704ffbfececb2e4d6975809d6faae5` | k=n at 140,000 and 160,000 |
   | `run-20260804-185117Z` | `10385a6017ff74416e19284b6113ce1775007d4b8a9d0356b5b8ef0250ffd76c` | k=n at 150,000 and 180,000 |
 
-- The four runs are preserved beside this report as `issue-23-postfix-covers-<run>.csv`, copied out
-  of gitignored `.crew/`, so every post-fix number here is recomputable the same way the 2026-08-01
-  matrix is. The hashes identify the probe blob AS RUN; they are not checksums of any committed
-  file, and the as-run probe bytes themselves do NOT ship (the tree's probe hashes to none of the
-  four, since `ACTIVE_N_SET` and `ACTIVE_HOLDERS` were edited between runs).
+- The four runs are preserved beside this report as `issue-23-postfix-covers-184228Z.csv`,
+  `-184531Z.csv`, `-184840Z.csv` and `-185117Z.csv`, one per run directory above (the timestamp is
+  the run id's), copied out of gitignored `.crew/`, so every post-fix number here is recomputable the
+  same way the 2026-08-01 matrix is. The hashes identify the probe blob AS RUN; they are not
+  checksums of any committed file, and the as-run probe bytes themselves do NOT ship (the tree's
+  probe hashes to none of the four, since `ACTIVE_N_SET` and `ACTIVE_HOLDERS` were edited between
+  runs).
 - Machine: `mini.local`, Apple M4 Pro, 24 GB, macOS 26.5.2, JVM 21.0.11, Gradle 9.6.1. Same host,
   same DELETE journal mode, same 3000 ms `busy_timeout` as the pre-fix matrix.
 - AGGREGATION: measured-phase rows only, warmup excluded. VERIFIED to be the same convention the
@@ -323,7 +325,8 @@ check that the shape did not move, not a before/after delta.
 
 Same k, TEN TIMES the corpus, 0.19% apart. Corpus size is not the variable; batch covers is.
 
-Per-1,000-covers cost, flat across a 200x range in k:
+Per-1,000-covers cost, flat across a 200x range in k, from k=1,000 up (the table below carries the
+k=100 and k=500 rows too, and the paragraph after it says what each of those spans):
 
 | shape | n | k | trials | median (ms) | ms per 1,000 covers |
 |---|---:|---:|---:|---:|---:|
@@ -391,23 +394,33 @@ a git advance the missing-row case is the only record that a range was discarded
 
 `applyProofs` places NO limit on how many covers one batch may carry, and hold time is linear in
 covers at about 20 ms per 1,000. A sufficiently large single batch therefore exceeds the busy budget
-and makes other app-DB writers fail with `SQLITE_BUSY`. Measured: over budget past 150,000 covers,
-observed busy at 180,000. `IndexBuilder.kt:428` hands the whole proof list over in one call, and
-`ObservationEpoch.proofFromScan` (`ObservationEpoch.kt:216`) computes `gone` over the root's entire
-durable binding set, so the batch is bounded only by the corpus.
+and makes other app-DB writers fail with `SQLITE_BUSY`. Measured: over budget at 150,000 covers and
+above, observed busy at 180,000. `IndexBuilder.kt:428` hands the whole proof list over in one call,
+and `ObservationEpoch.proofFromScan` (`ObservationEpoch.kt:216`) computes `gone` over the root's
+entire durable binding set, so the batch is bounded only by the corpus.
 
-**NOT being fixed now, deliberately.** Chunking the transaction would break two invariants the code
-documents at the site:
+**NOT being fixed now, deliberately.** Two grounds carry the decision, in this order:
+
+- **Partial application.** Chunking would give callers a half-applied pass where today they get
+  all-or-nothing, and nothing in the caller or the schema is written to survive that.
+- **The corpus floor.** A batch covers only durable bindings, so 150,000 covers needs a root holding
+  at least 150,000 bindings, and this project does not expect corpora at that scale. This is the
+  ground that makes the bound unreachable in practice, and it is a statement about corpus SIZE, not
+  about how fast a delete happens: covers accumulate between reconciliations (the git path computes
+  them over `deletedIn(oldHead, postHead)`, the whole range since the checkpoint last advanced), so a
+  qualifying batch does not need the deletions to arrive together.
+
+And the LETTER of two invariants the code documents at the site would have to be renegotiated. Both
+are preservable in spirit, so neither is treated as a blocker here:
 
 - `SqlDelightRetirementRepository.kt:52-58`: ONE `unavailableNow()` read serves every proof and
-  advance in the pass, so they all judge standing against the same instant.
+  advance in the pass, so they all judge standing against the same instant. Per-chunk reads would be
+  strictly FRESHER, which is the fail-closed direction `IndexBuilder.kt:423-427` already documents
+  for standing.
 - `SqlDelightRetirementRepository.kt:64-67`: the git checkpoint advance lands in the SAME transaction
-  as the reaps it rides with, with "no window between the reap and the move".
-
-It would also introduce partial application, where callers today get all-or-nothing. Reaching the
-bound requires a corpus of 150,000 pages deleted essentially all at once, which is beyond any
-deployment this project expects. That is the whole of the argument; there is no margin left to appeal
-to.
+  as the reaps it rides with, with "no window between the reap and the move". Advancing in the last
+  chunk leaves only a reap-without-move crash window, which the next pass re-examines and
+  `retireBinding`'s binding-gone no-op (`SqlDelightRetirementRepository.kt:136-137`) absorbs.
 
 ## REMEDY-CONSTRAINTS
 
@@ -420,13 +433,18 @@ The issue names three options. What the data says about each, WITHOUT choosing:
 the existing 3000 ms budget and the worst observed hold uses 13.8% of it. CORRECTED SCOPE: the
 original sentence went on to say this would only become relevant "at corpus sizes around 700,000
 pages". At `k = n` it is relevant from about 150,000 covers, and raising the timeout does not stop
-the hold, it only lengthens how long every other writer waits behind it.
+the hold, it only lengthens how long every other writer waits behind it. What that trade buys is not
+quantified here: the harm it would avert is a THROWN `SQLITE_BUSY` out of `idMap.bind` (an expected
+path per `BeginImmediateSqliteDriver.kt:135`), whose only production caller is the rebuild's
+identity-assignment loop at `IndexBuilder.kt:1455`, and what that throw costs the pass and its
+operator was NOT characterized by this measurement.
 
 **Chunk the transaction.** Would reduce peak hold for H1, at the cost of losing single-transaction
 atomicity for checkpoint replacement. CORRECTED SCOPE: the original "reconsider if a deployment
 approaches several hundred thousand pages" was a PAGE threshold; for `applyProofs` the threshold is
-150,000 COVERS IN ONE BATCH. Chunking `applyProofs` specifically carries two further costs the
-KNOWN BOUND section above names, and it is not taken.
+150,000 COVERS IN ONE BATCH. Chunking `applyProofs` specifically carries the further costs the KNOWN
+BOUND section above names - partial application, plus the letter of two documented invariants - and
+it is not taken.
 
 **Restructure the work.** The measurement surfaced a variant the issue did not anticipate: move the
 per-proof log emission out of the write-lock window. It is about two thirds of the H3a hold and,
@@ -443,22 +461,29 @@ decision, but for a different reason, stated below.
 The original text read: "No remedy is taken for hold duration. Nothing approaches the 3000 ms budget,
 no busy outcome was observed at any corpus size, and the projected crossovers sit between 737,000 and
 3.6 million pages." **Both premises in that sentence are false.** Busy outcomes DO occur, from the
-ordinary `idMap.bind` writer, at 180,000 covers and above; and the `applyProofs` crossover is at about
-150,000 covers, not 1.5 million pages.
+ordinary `idMap.bind` writer, at 180,000 covers and above (k=160,000 is a RACE on this host, not a
+safe cell; see the ladder's third finding); and the `applyProofs` crossover is at about 150,000
+covers, not 1.5 million pages.
 
 **The decision is unchanged and the reason is replaced.** No remedy is taken for hold duration, NOT
-because there is margin - past 150,000 covers there is none - but because reaching that point requires
-a single batch covering 150,000 pages, which means a corpus of that size deleted essentially all at
-once and then scanned. That is beyond any deployment this project expects. The costs of the remedies
-are unchanged and are now the whole of the argument: raising the timeout only lengthens the wait it
-does not shorten the hold, and chunking `applyProofs` would break the same-instant standing read and
-the same-transaction git advance, and would introduce partial application. Recorded as a KNOWN BOUND
-above rather than as an absence of one.
+because there is margin - at 150,000 covers and above there is none - but because reaching that point
+takes a single batch covering 150,000 durable BINDINGS, so a root would have to hold at least that
+many and lose them all between two of its scans (or across one git checkpoint range). Corpora at that
+scale are beyond any deployment this project expects, and that corpus floor, not any margin in the
+hold, is what makes the bound unreachable. Note what the floor does NOT rest on: covers accumulate
+across reconciliations, so the deletions need not arrive together. The remaining ground is the cost
+of the remedies, unchanged: raising the timeout only lengthens the wait, it does not shorten the
+hold, and chunking `applyProofs` would introduce partial application where callers get all-or-nothing
+today, and would renegotiate the letter of the same-instant standing read and the same-transaction
+git advance. Recorded as a KNOWN BOUND above rather than as an absence of one.
 
 **What would reopen it:** a single delete-then-scan pass covering on the order of 100,000 bindings (a
 COVERS threshold, not a corpus one - a large corpus with ordinary churn does not approach it), a move
 of the app DB to WAL (which changes the entire contention picture these numbers describe), or
-materially slower storage than the local SSD used here.
+materially slower storage than the local SSD used here. Read the covers trigger as a scale question
+rather than a catastrophe one: once a corpus IS that large, a qualifying batch is a fraction of it,
+not a wipe. In a two-million-page tree 100,000 covers is 5%, which a directory restructure or a
+branch switch can produce.
 
 **One change LANDED WITH THIS REPORT, and NOT on performance grounds.** The per-proof log emission
 was moved out of these transactions because `BeginImmediateSqliteDriver.kt:53-55` already forbids
@@ -486,9 +511,10 @@ PRE-FIX measurements. They remain a true record of the code at `37b3d52`.
   pages rather than covers. The post-fix ladder replaces the H2 projection with a measured bracket.
 - Every pre-fix cell fixed the proof batch at `k = n / 10` covers. No pre-fix row constrains the
   behaviour of a batch that covers a whole root, which is exactly what the corrected sections address.
-- The post-fix runs ship as `issue-23-postfix-covers-<run>.csv` beside this report, so both matrices
-  are recomputable from this tree. The as-run probe bytes do not ship: the instrument was edited
-  between runs, so the tree's copy hashes to none of the four recorded values.
+- The post-fix runs ship beside this report as `issue-23-postfix-covers-184228Z.csv`,
+  `-184531Z.csv`, `-184840Z.csv` and `-185117Z.csv`, so both matrices are recomputable from this
+  tree. The as-run probe bytes do not ship: the instrument was edited between runs, so the tree's
+  copy hashes to none of the four recorded values.
 - Contender coverage is PARTIAL on the read-only side: the C2 spot-check exercises only the tombstone
   refusal in `SqlDelightIdMapRepository.bind` (`:100-103`). The live-incumbent refusal (`:104-107`)
   was never measured, in either matrix.
