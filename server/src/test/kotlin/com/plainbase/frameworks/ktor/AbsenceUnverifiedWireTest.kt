@@ -133,7 +133,7 @@ class AbsenceUnverifiedWireTest : FunSpec({
             // denying it existed). The 410 is uncached and reversible: this same test reclaims the id as a 302.
             harness.retirements.applyProofs(
                 listOf(
-                    AbsenceProof(
+                    AbsenceProof.accepted(
                         root = RootName.PRIMARY,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.PRIMARY),

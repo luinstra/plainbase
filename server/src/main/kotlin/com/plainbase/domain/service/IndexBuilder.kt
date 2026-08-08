@@ -35,6 +35,7 @@ import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.GitCheckpointAdvance
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.ObservationId
@@ -647,6 +648,7 @@ class IndexBuilder(
      * the key and converges. A DRAINED bucket is unaffected - it lists nothing, so a mirror holding nothing holds the
      * whole of it.
      */
+    @OptIn(InferredProofMint::class)
     private fun mintObjectListProofs(
         scans: List<SourceScan>,
         witnessed: Map<RootedPath, Witness>,
@@ -674,7 +676,7 @@ class IndexBuilder(
                 // mid-window) still safe, because a re-bind lands the latch UNRESOLVED and `proven` refuses on TRUST
                 // before it ever compares bindings. The binding comparison is the belt for a stale generation under a
                 // binding that is trusted again; the trust status is the braces, and it is the one doing the work here.
-                AbsenceProof(
+                AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
                     observationId = observations.getValue(root),
@@ -793,6 +795,7 @@ class IndexBuilder(
         }
     }
 
+    @OptIn(InferredProofMint::class)
     private fun mintGitRange(
         source: Source,
         scan: SourceScan,
@@ -818,7 +821,7 @@ class IndexBuilder(
                     it.path in deleted && it.path !in enumerated && it.path !in scan.unread
                 }
                 val proof = covers.takeIf { it.isNotEmpty() }?.let {
-                    AbsenceProof(
+                    AbsenceProof.inferred(
                         root = root,
                         source = ProofSource.GIT,
                         observationId = token,

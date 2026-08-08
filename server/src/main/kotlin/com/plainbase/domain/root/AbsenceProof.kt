@@ -109,6 +109,15 @@ value class BindingEpoch(val value: Long)
  */
 data class BindingRef(val path: TreePath, val id: PageId)
 
+@RequiresOptIn(
+    message = "Constructing an INFERRED absence proof outside the pass boundary re-opens the " +
+        "revoke-before-stamp bug class. Production code opts in exactly once: AbsencePass.",
+    level = RequiresOptIn.Level.ERROR,
+)
+@Retention(AnnotationRetention.BINARY)
+@Target(AnnotationTarget.FUNCTION)
+annotation class InferredProofMint
+
 /**
  * A positive licence to assert that a SPECIFIC BINDING is gone.
  *
@@ -122,7 +131,8 @@ data class BindingRef(val path: TreePath, val id: PageId)
  * window, because the compare and the deletes are ONE transaction. The two tokens are orthogonal: [observationId]
  * dies on an epoch break, [bindingEpoch] advances on a bind, and either mismatch alone discards the proof.
  */
-data class AbsenceProof(
+@ConsistentCopyVisibility
+data class AbsenceProof private constructor(
     val root: RootName,
     val source: ProofSource,
     val observationId: ObservationId,
@@ -160,6 +170,33 @@ data class AbsenceProof(
         if (!source.inferred || witnessed.isEmpty()) return this
         val gone = covers.filterNotTo(mutableSetOf()) { RootedPageId(root, it.id) in witnessed }
         return takeIf { gone.isNotEmpty() }?.copy(covers = gone)
+    }
+
+    companion object {
+        fun accepted(
+            root: RootName,
+            source: ProofSource,
+            observationId: ObservationId,
+            bindingEpoch: BindingEpoch,
+            covers: Set<BindingRef>,
+        ): AbsenceProof {
+            require(!source.inferred) { "an ${source.name} proof is INFERRED evidence and must be minted by the pass" }
+            require(covers.isNotEmpty()) { "a proof that covers nothing licenses nothing" }
+            return AbsenceProof(root, source, observationId, bindingEpoch, covers)
+        }
+
+        @InferredProofMint
+        fun inferred(
+            root: RootName,
+            source: ProofSource,
+            observationId: ObservationId,
+            bindingEpoch: BindingEpoch,
+            covers: Set<BindingRef>,
+        ): AbsenceProof {
+            require(source.inferred) { "an ${source.name} proof is ACCEPTED, not inferred - mint it via accepted()" }
+            require(covers.isNotEmpty()) { "a proof that covers nothing licenses nothing" }
+            return AbsenceProof(root, source, observationId, bindingEpoch, covers)
+        }
     }
 }
 

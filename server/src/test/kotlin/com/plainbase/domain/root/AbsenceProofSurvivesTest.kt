@@ -2,6 +2,7 @@ package com.plainbase.domain.root
 
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.nulls.shouldBeNull
@@ -14,6 +15,7 @@ import io.kotest.matchers.shouldBe
  * of one root's corpus mounted under another no longer holds up this root's legitimate deletes. A non-inferred
  * (`OPERATOR`/`API_DELETE`) proof survives whole regardless of the witness.
  */
+@OptIn(InferredProofMint::class)
 class AbsenceProofSurvivesTest : FunSpec({
 
     val main = RootName.PRIMARY
@@ -21,13 +23,62 @@ class AbsenceProofSurvivesTest : FunSpec({
     val x = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
     val y = PageId.require("0197b555-1111-7222-8333-444455556666")
 
-    fun proof(source: ProofSource, root: RootName, vararg ids: PageId) = AbsenceProof(
-        root = root,
-        source = source,
-        observationId = ObservationId(1),
-        bindingEpoch = BindingEpoch(0),
-        covers = ids.mapTo(mutableSetOf()) { BindingRef(TreePath.require("guides/gone.md"), it) },
-    )
+    test("accepted rejects an inferred proof source") {
+        shouldThrow<IllegalArgumentException> {
+            AbsenceProof.accepted(
+                root = main,
+                source = ProofSource.EPOCH,
+                observationId = ObservationId(1),
+                bindingEpoch = BindingEpoch(0),
+                covers = setOf(BindingRef(TreePath.require("guides/gone.md"), x)),
+            )
+        }
+    }
+
+    test("accepted rejects empty covers") {
+        shouldThrow<IllegalArgumentException> {
+            AbsenceProof.accepted(
+                root = main,
+                source = ProofSource.OPERATOR,
+                observationId = ObservationId(1),
+                bindingEpoch = BindingEpoch(0),
+                covers = emptySet(),
+            )
+        }
+    }
+
+    test("inferred rejects an accepted proof source") {
+        shouldThrow<IllegalArgumentException> {
+            AbsenceProof.inferred(
+                root = main,
+                source = ProofSource.OPERATOR,
+                observationId = ObservationId(1),
+                bindingEpoch = BindingEpoch(0),
+                covers = setOf(BindingRef(TreePath.require("guides/gone.md"), x)),
+            )
+        }
+    }
+
+    test("inferred rejects empty covers") {
+        shouldThrow<IllegalArgumentException> {
+            AbsenceProof.inferred(
+                root = main,
+                source = ProofSource.EPOCH,
+                observationId = ObservationId(1),
+                bindingEpoch = BindingEpoch(0),
+                covers = emptySet(),
+            )
+        }
+    }
+
+    fun proof(source: ProofSource, root: RootName, vararg ids: PageId): AbsenceProof {
+        val covers = ids.mapTo(mutableSetOf()) { BindingRef(TreePath.require("guides/gone.md"), it) }
+        return if (source.inferred) {
+            AbsenceProof.inferred(root, source, ObservationId(1), BindingEpoch(0), covers)
+        } else {
+            AbsenceProof.accepted(root, source, ObservationId(1), BindingEpoch(0), covers)
+        }
+    }
 
     test("an INFERRED proof for root A is refuted by A's own witness of the id - survives is null") {
         proof(ProofSource.EPOCH, main, x).survives(setOf(RootedPageId(main, x))).shouldBeNull()

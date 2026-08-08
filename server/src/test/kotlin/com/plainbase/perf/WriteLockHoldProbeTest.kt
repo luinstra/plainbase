@@ -14,6 +14,7 @@ import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.AtRisk
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BindingStatus
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootName
@@ -1105,6 +1106,7 @@ private class ProbeRun private constructor(
         else -> error("unreachable holder in expected statement count: $holder")
     }
 
+    @OptIn(InferredProofMint::class)
     private fun prepareHolderPlan(
         holder: Holder,
         snapshot: SeedSnapshot,
@@ -1124,7 +1126,7 @@ private class ProbeRun private constructor(
                 val epoch = retirements.bindingEpoch(GUIDES)
                 HolderPlan(
                     proofs = listOf(
-                        AbsenceProof(
+                        AbsenceProof.inferred(
                             root = GUIDES,
                             source = ProofSource.EPOCH,
                             observationId = observation,
@@ -1141,7 +1143,7 @@ private class ProbeRun private constructor(
             Holder.H2_FULL,
             -> {
                 val proofs = CORPUS_ROOTS.map { root ->
-                    AbsenceProof(
+                    AbsenceProof.inferred(
                         root = root,
                         source = ProofSource.EPOCH,
                         observationId = retirements.observation(root),
@@ -1159,7 +1161,7 @@ private class ProbeRun private constructor(
                 val observation = retirements.observation(GUIDES)
                 val epoch = retirements.bindingEpoch(GUIDES)
                 val proofs = snapshot.bindingsByRoot.getValue(GUIDES).take(k).map { ref ->
-                    AbsenceProof(GUIDES, ProofSource.EPOCH, observation, epoch, setOf(ref))
+                    AbsenceProof.inferred(GUIDES, ProofSource.EPOCH, observation, epoch, setOf(ref))
                 }
                 retirements.revoke(GUIDES)
                 check(retirements.observation(GUIDES) != observation) { "H3a refutation precondition did not change observation" }
@@ -1173,7 +1175,7 @@ private class ProbeRun private constructor(
                 val proofs = CORPUS_ROOTS.map { root ->
                     val observation = observations.getValue(root)
                     val epoch = retirements.bindingEpoch(root)
-                    AbsenceProof(
+                    AbsenceProof.inferred(
                         root = root,
                         source = ProofSource.EPOCH,
                         observationId = observation,

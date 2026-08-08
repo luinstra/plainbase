@@ -293,7 +293,7 @@ class WriteGoldenTest : FunSpec({
             java.nio.file.Files.delete(harness.root.resolve("guides/deploy-guide.md"))
             harness.retirements.applyProofs(
                 listOf(
-                    AbsenceProof(
+                    AbsenceProof.accepted(
                         root = RootName.PRIMARY,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.PRIMARY),

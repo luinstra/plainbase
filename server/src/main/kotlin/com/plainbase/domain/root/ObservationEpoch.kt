@@ -205,6 +205,7 @@ class ObservationEpoch(
         }
     }
 
+    @OptIn(InferredProofMint::class)
     private fun proofFromScan(
         root: RootName,
         witnessed: Set<TreePath>,
@@ -228,7 +229,7 @@ class ObservationEpoch(
         // evidence - would fold a bind that landed in the gap INTO the stamp, and the compare would then MATCH the
         // reap it must forbid. It rides alongside epoch.observationId, the epoch's continuity token, not a fresh
         // read - the two stamps are orthogonal by design.
-        return AbsenceProof(
+        return AbsenceProof.inferred(
             root = root,
             source = ProofSource.EPOCH,
             observationId = epoch.observationId,

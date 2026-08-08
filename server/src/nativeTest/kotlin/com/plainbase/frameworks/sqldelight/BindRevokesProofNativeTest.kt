@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
@@ -32,6 +33,7 @@ import kotlin.test.assertTrue
 @Tag("native")
 class BindRevokesProofNativeTest {
 
+    @OptIn(InferredProofMint::class)
     @Test
     fun `a re-bind revokes a proof minted before it - the re-created binding and its dirty_page recovery row survive`() {
         val dir = Files.createTempDirectory("pb-native-revoke-before-stamp")
@@ -52,7 +54,7 @@ class BindRevokesProofNativeTest {
 
                 // A pass mints an EPOCH proof over (path, X): both freshness stamps captured at MINT time, before the
                 // re-bind below. observation() also mints the durable row the increment then advances.
-                val proof = AbsenceProof(
+                val proof = AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.EPOCH,
                     observationId = retirements.observation(root),

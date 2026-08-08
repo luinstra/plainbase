@@ -422,7 +422,7 @@ class ProposalRouteTest : FunSpec({
                 // answer it always claimed to be.
                 harness.retirements.applyProofs(
                     listOf(
-                        AbsenceProof(
+                        AbsenceProof.accepted(
                             root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
                             observationId = harness.retirements.observation(RootName.PRIMARY),

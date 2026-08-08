@@ -6,6 +6,7 @@ import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.GitCheckpointAdvance
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
@@ -37,6 +38,7 @@ import java.nio.file.Files
  * The honest cost is pinned too (`a legitimate delete does NOT converge`): C0 buys safety by refusing to guess,
  * and C2/C4 buy convergence back with evidence.
  */
+@OptIn(InferredProofMint::class)
 class AbsenceAuthorityTest : FunSpec({
 
     val extra = RootName.require("extra")
@@ -292,7 +294,7 @@ class AbsenceAuthorityTest : FunSpec({
                 // live key space, keyed by ID, so path reuse is a non-event.
                 world.retirements.applyProofs(
                     listOf(
-                        AbsenceProof(
+                        AbsenceProof.accepted(
                             root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.PRIMARY),
@@ -326,7 +328,7 @@ class AbsenceAuthorityTest : FunSpec({
                 builder.rebuild()
                 world.retirements.applyProofs(
                     listOf(
-                        AbsenceProof(
+                        AbsenceProof.accepted(
                             root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.PRIMARY),
@@ -361,7 +363,7 @@ class AbsenceAuthorityTest : FunSpec({
                 builder.rebuild()
                 world.retirements.applyProofs(
                     listOf(
-                        AbsenceProof(
+                        AbsenceProof.accepted(
                             root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.PRIMARY),
@@ -417,7 +419,7 @@ class AbsenceAuthorityTest : FunSpec({
                 // watcher break, a rebind - all the same fact: we are no longer looking at what we were looking
                 // at). Revocation is a write to the SAME app DB the reap re-reads inside its own transaction, so
                 // the compare fails and the licence is worth nothing.
-                val proof = AbsenceProof(
+                val proof = AbsenceProof.inferred(
                     root = RootName.PRIMARY,
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.PRIMARY),
@@ -444,7 +446,7 @@ class AbsenceAuthorityTest : FunSpec({
             AbsenceWorld(mainDir, extraDir).use { world ->
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
 
-                val forRootA = AbsenceProof(
+                val forRootA = AbsenceProof.inferred(
                     root = RootName.PRIMARY, // minted for MAIN...
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.PRIMARY),
@@ -474,7 +476,7 @@ class AbsenceAuthorityTest : FunSpec({
                 // A legitimate INFERRED absence for A's copy, applied with the witness carrying B's live observation of
                 // X - `(extra, X)`, NOT `(main, X)`. Under the global witness B's live X would refute this and nothing
                 // would reap; under the per-root witness `(extra, X)` does not match `(main, X)`, so A's retire lands.
-                val proof = AbsenceProof(
+                val proof = AbsenceProof.inferred(
                     root = RootName.PRIMARY,
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.PRIMARY),
@@ -501,13 +503,26 @@ class AbsenceAuthorityTest : FunSpec({
             AbsenceWorld(mainDir, extraDir).use { world ->
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
                 val binding = BindingRef(TreePath.require("guides/deploy.md"), id)
-                fun proofFrom(source: ProofSource) = AbsenceProof(
-                    root = RootName.PRIMARY,
-                    source = source,
-                    observationId = world.retirements.observation(RootName.PRIMARY),
-                    bindingEpoch = world.retirements.bindingEpoch(RootName.PRIMARY),
-                    covers = setOf(binding),
-                )
+                fun proofFrom(source: ProofSource): AbsenceProof {
+                    val stamps = world.retirements
+                    return if (source.inferred) {
+                        AbsenceProof.inferred(
+                            RootName.PRIMARY,
+                            source,
+                            stamps.observation(RootName.PRIMARY),
+                            stamps.bindingEpoch(RootName.PRIMARY),
+                            setOf(binding),
+                        )
+                    } else {
+                        AbsenceProof.accepted(
+                            RootName.PRIMARY,
+                            source,
+                            stamps.observation(RootName.PRIMARY),
+                            stamps.bindingEpoch(RootName.PRIMARY),
+                            setOf(binding),
+                        )
+                    }
+                }
 
                 // The witness says we READ this id. For an EPOCH proof that is a CONTRADICTION: the absence was
                 // INFERRED from a gap in what we observed, and the page turns out to be one of the things we observed.
@@ -545,7 +560,7 @@ class AbsenceAuthorityTest : FunSpec({
             writePage(mainDir, "guides/deploy.md", "---\nid: ${id.value}\ntitle: Deploy\n---\n\n# Deploy\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
                 world.builder(mainDir, LocalContentStore(extraDir)).rebuild()
-                val proof = AbsenceProof(
+                val proof = AbsenceProof.inferred(
                     root = RootName.PRIMARY,
                     source = ProofSource.EPOCH,
                     observationId = world.retirements.observation(RootName.PRIMARY),
@@ -569,7 +584,7 @@ class AbsenceAuthorityTest : FunSpec({
                 world.idMap.bind(home, id, materialized = true) shouldBe BindOutcome.Bound
                 world.retirements.applyProofs(
                     listOf(
-                        AbsenceProof(
+                        AbsenceProof.accepted(
                             root = RootName.PRIMARY,
                             source = ProofSource.OPERATOR,
                             observationId = world.retirements.observation(RootName.PRIMARY),

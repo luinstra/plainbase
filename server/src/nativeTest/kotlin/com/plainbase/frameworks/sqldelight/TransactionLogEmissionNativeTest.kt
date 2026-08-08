@@ -8,6 +8,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootName
@@ -46,6 +47,7 @@ private const val WORKER_THREAD_NAME = "pb-deferred-log-worker"
 @Tag("native")
 class TransactionLogEmissionNativeTest {
 
+    @OptIn(InferredProofMint::class)
     @Test
     fun `a blocked log consumer does not hold the write lock through a stale proof`() {
         val root = RootName.require("stale-row")
@@ -53,7 +55,7 @@ class TransactionLogEmissionNativeTest {
             val retirements = SqlDelightRetirementRepository(db)
             // A row must EXIST with MISMATCHED tokens: a root with no observation row renders `null/null`, which the
             // fix drops at accumulation, so that seed would look broken against a correct implementation.
-            val minted = AbsenceProof(
+            val minted = AbsenceProof.inferred(
                 root = root,
                 source = ProofSource.EPOCH,
                 observationId = retirements.observation(root),

@@ -189,7 +189,7 @@ class WriteRouteTest : FunSpec({
             // exactly as it will when `plainbase root reconcile` ships.)
             harness.retirements.applyProofs(
                 listOf(
-                    AbsenceProof(
+                    AbsenceProof.accepted(
                         root = RootName.PRIMARY,
                         source = ProofSource.OPERATOR,
                         observationId = harness.retirements.observation(RootName.PRIMARY),

@@ -264,7 +264,7 @@ object AdminCommand {
                 1
             }
         }
-        val proof = AbsenceProof(
+        val proof = AbsenceProof.accepted(
             root = root,
             source = ProofSource.OPERATOR,
             observationId = observationId,
