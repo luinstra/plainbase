@@ -444,7 +444,7 @@ class ObjectContentStore(
     // backend earns NO OBSERVATION EPOCH (C2). A poller is not an observation: between two polls the bucket can be
     // rebound, drained, or replaced with a decoy, and nothing here would know. The absence authority an object root
     // gets is `OBJECT_LIST` under the C3 binding latch, minted from a complete LIST of the bucket itself, and the
-    // rebuild is what withholds EPOCH from it (`IndexBuilder.mintEpochProofs` mints only for a LOCAL backend) rather
+    // rebuild is what withholds EPOCH from it (`IndexBuilder.confirmEpochs` confirms only for a LOCAL backend) rather
     // than this store having to pretend it is permanently broken.
     override fun watch(
         onChange: (TreePath) -> Unit,

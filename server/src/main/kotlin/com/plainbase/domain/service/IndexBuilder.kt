@@ -23,6 +23,7 @@ import com.plainbase.domain.principal.ManageGrant
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
 import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
 import com.plainbase.domain.repository.NoTopology
@@ -36,6 +37,7 @@ import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.GitCheckpointAdvance
 import com.plainbase.domain.root.InferredProofMint
+import com.plainbase.domain.root.ObjectManifest
 import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.ObservationId
@@ -98,7 +100,7 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * which is exactly as consistent with an unplugged disk as with a delete. The ONLY licence to delete is an
  * [AbsenceProof].
  *
- * **C2 mints the first one ([mintEpochProofs]), and it is what makes an ordinary delete converge again.** An
+ * **C2 mints the first one ([AbsencePass.mintEpoch]), and it is what makes an ordinary delete converge again.** An
  * [ObservationEpoch] that has watched a tree WITHOUT A GAP since it read a page - fully covered, identity-stable,
  * scanned end to end - and now does not find it has evidence rather than an inference, and evidence is the only
  * thing that has ever been allowed to delete anything here. Every other absence still ends in LIMBO ([RootLimbo]):
@@ -333,61 +335,9 @@ class IndexBuilder(
                 previous.pages.associate { it.rooted to it.urlPath }
             }
 
-        // Execution invariant (b): scan ALL sources before the FIRST resolve. The original reason is vestigial -
-        // `ownerOf` is root-scoped, so no other root's binding is ever handed to the visibility rule during this
-        // root's resolve, and a registered-but-unscanned root reads untouchable-LIVE rather than detached. What
-        // still needs the whole corpus up front is the WITNESS map every absence proof is minted against, and a
-        // deterministic pass shape.
-        //
-        // D5: probe first, and skip what is not there. `scans` holds only the roots this pass actually walked.
-        // Nothing here is an ADMISSION any more - there is no tripwire to pass and no authority to be granted,
-        // because a scan is no longer evidence of a deletion under any circumstances. What comes out of it is a
-        // WITNESS map: the pages we READ, and the ids they carried.
-        //
-        // The GIT oracle's HEAD bracket (C4): capture each eligible root's head BEFORE the scan loop, so a
-        // `git rm && commit` landing DURING the walk (whose deletion the walk then witnesses, correctly
-        // suppressing the cover) cannot also let the advance consume the range that deletion is in - the mint
-        // re-reads HEAD and requires equality, so a head that moved mid-pass yields no proof and no advance.
-        // ESTABLISH, THEN STAMP, AND BOTH BEFORE THE EARLIEST NEGATIVE EVIDENCE (revoke-before-stamp, C5).
-        //
-        // [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass is
-        // indistinguishable at the freshness compare from a watcher BREAK landing mid-pass. Hoisting the open above all
-        // evidence is what lets the stamps below be taken pre-evidence at all: past this point NOTHING THIS PASS DOES
-        // moves either token, so any later movement invalidates this pass's proofs and every stamp fails closed against
-        // it. Movement does not imply a break - a concurrent save moves `binding_epoch` perfectly healthily - it implies
-        // only that this pass's evidence is no longer current, which is the same answer either way.
-        //
-        // Both stamps are then captured HERE, before the git HEAD bracket ([gitHeadsBefore]), the scan ([observed]), and
-        // the `durable` snapshot each mint reads - the earliest evidence-reads of the whole pass:
-        //  - binding_epoch, per local root, so a concurrent `WritePipeline` re-bind of a covered key advances PAST this
-        //    value and the proof loses [applyProofs]' two-token compare rather than reaping the freshly re-created
-        //    binding (and its `dirty_page` USER-CONTENT recovery row).
-        //  - observation_id, per root, so a BREAK arriving on a watcher thread in the (evidence -> mint) window moves the
-        //    token past this value instead of being folded INTO a stamp the mint read after it. Read at mint - as the
-        //    inferred sources once had to, because the epoch open they must NOT die by moved the token mid-pass - a break
-        //    in that window stamped its own post-break value, MATCHED, and reaped a tree it had stopped watching.
-        //
-        // Captured any later, either stamp folds in the very event it exists to detect. [gitOracleRoots] is a subset of
-        // [localSources], so the binding capture covers the EPOCH and GIT mints alike; OBJECT_LIST takes its binding half
-        // from the manifest, co-read with the pagination boundary. OPERATOR/API_DELETE arrive pre-evidence, unaffected.
-        // `establish` HANDS BACK the token it installed, and that is load-bearing: an open revokes, so re-reading the
-        // token after it would pick up a break that landed in the gap between the two and stamp the proof with exactly
-        // the value `applyProofs` is about to compare against - the same swallow, one line narrower. A root with no
-        // epoch (unwatched, or partial coverage) answers null and falls back to a plain read, which is honest for it:
-        // nothing legitimately moves an unwatched root's token mid-pass, so a break after this read still fails closed.
-        // GIT deliberately needs no epoch at all - an offline `git rm` converges on an unobserved root - which is why
-        // this map covers every source rather than only the ones holding an epoch.
-        val established = localSources.associate { it.root.name to epochs.establish(it.root.name) }
-        // The observation stamps come FIRST of the two captures, and that ordering is itself load-bearing. For a root
-        // `establish` opened, the value is the one it installed and nothing can precede it. But an UNOBSERVED root - the
-        // case GIT exists for, since an offline `git rm` converges with no epoch at all - falls back to a plain read, and
-        // a read taken after the binding capture would absorb a break that landed between the two: one stamp catching an
-        // event the other cannot, for no reason a reader could predict. Both are now as early as this pass can make them.
-        val observationStamps = sources.associate { source ->
-            source.root.name to (established[source.root.name] ?: retirements.observation(source.root.name))
-        }
-        val bindingEpochs = localSources.associate { it.root.name to retirements.bindingEpoch(it.root.name) }
-        val headsBefore = gitHeadsBefore()
+        // AbsencePass.capture owns the effectful establish, stamp, and git bracket order. It runs once here before
+        // the scan loop so every mint reasons from the same fixed pre-evidence capture.
+        val pass = AbsencePass.capture(epochs, retirements, idMap, bindings, sources, localSources, gitOracleRoots)
         val observed = sources.mapNotNull { scanIfAvailable(it) }
         // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
         // every page we looked at, because "is this the tree our rows describe?" is exactly what it is deciding.
@@ -397,23 +347,13 @@ class IndexBuilder(
             }
         }.toMap()
 
-        // **The only licence to delete** - and there are now THREE sources that mint it here: EPOCH (C2, local roots),
-        // OBJECT_LIST (C3, a complete bucket LIST under a TRUSTED binding), and GIT (C4, a commit range that deleted
-        // the path on a HEAD descending from the recorded checkpoint). OPERATOR (C5's `admin force-retire`) mints
-        // elsewhere and API_DELETE arrives later; an absence outside those sources is still never believed. Minted
-        // BEFORE the binds below, against the id_map as it stands NOW: a proof is about the durable binding a page HAD
-        // when the pass observed it gone, and this pass is about to rewrite that table. GIT also yields checkpoint
-        // ADVANCES that ride the apply transaction.
-        //
-        // **Mint order is NO LONGER load-bearing, and that is the point.** It used to be: opening an epoch REVOKES the
-        // root's observation token, every watched root opens one on its first pass (`serve()` installs the watcher
-        // BEFORE the first rebuild), so a source stamping the PRE-open token was discarded on every watched boot - which
-        // forced GIT to mint LAST and read the token late, and THAT is what swallowed a break arriving in the
-        // (evidence -> mint) window. The open now happens in `establish` above, before any evidence, and both stamps are
-        // captured there, so these mints are order-independent: each stamps a value taken before it ran, and the ONLY
-        // thing that can move a token afterwards is a genuine break - which fails the compare, exactly as it must.
-        val absence = mintEpochProofs(observed, bindingEpochs) + mintObjectListProofs(observed, seen, observationStamps)
-        val gitMint = mintGitProofs(observed, headsBefore, bindingEpochs, observationStamps)
+        val confirmations = confirmEpochs(observed)
+        val manifests = sources.filter { it.root.backend is RootBackend.Object }
+            .filter { source -> observed.any { it.root == source.root.name && it.complete } }
+            .mapNotNull { source -> source.manifests?.latestManifest()?.let { source.root.name to it } }
+            .toMap()
+        val absence = pass.mintEpoch(confirmations) + pass.mintObjectList(manifests, observed, witnessed = seen)
+        val gitMint = pass.mintGit(observed)
         val proofs: List<AbsenceProof> = absence + gitMint.proofs
         // **Every (root, id) this pass READ** - handed to the only deleter, which REFUSES to retire a binding whose
         // rooted id is in it ([AbsenceProof.survives]). A page we are looking at is not a page that is absent, and a
@@ -570,37 +510,16 @@ class IndexBuilder(
     }
 
     /**
-     * **The EPOCH proof source (C2): the chunk that makes an online delete converge again.**
+     * Runs the effectful EPOCH bookkeeping after the scan. A skipped or incomplete local root breaks its epoch; a
+     * complete scan earns a confirmation from the epoch state machine. Minting belongs to [AbsencePass.mintEpoch].
      *
-     * A page is proven gone when an epoch that WITNESSED it - an unbroken observation of an identity-stable tree,
-     * fully watched, scanned end to end - looks again and does not find it. Nothing here trusts a delete EVENT:
-     * the events are what make us LOOK, and [ObservationEpoch] decides whether looking is worth anything.
-     *
-     * The four ways this can fail, and all of them fail CLOSED - into limbo, never into a delete:
-     *  - **an object root gets no epoch at all.** Its watch is a POLLER over a mirror, so "the page is not in the
-     *    mirror" says nothing about the bucket, and a rebound or wrong bucket would drain the mirror and read as a
-     *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the C3 binding latch, which is the
-     *    thing that can actually see what the bucket holds.
-     *  - **a root this pass could not scan** (unavailable, vanished, a live-root failure) BREAKS its epoch. That is
-     *    the availability mark and the scan failure, arriving as the same fact: we stopped watching.
-     *  - **an INCOMPLETE scan** breaks it too. A view with holes in it is not an observation of a tree, and a page
-     *    "missing" from a walk that could not see the whole tree is not missing at all.
-     *  - **partial watch coverage, a break, or a restart** are the epoch's own business ([ObservationEpoch]).
-     *
-     * [durable] is read HERE, before the binds: the proof is about the row the page HAD, and `resolveIdentities`
-     * is about to rewrite that table. ([publishLimbo] re-reads it afterwards on purpose - it is answering the
-     * opposite question, about the rows that are left.)
+     * [durable] is read here, before the binds: the confirmation is about the row the page had, and
+     * `resolveIdentities` is about to rewrite that table. ([publishLimbo] re-reads it afterwards on purpose because it
+     * answers the opposite question, about the rows that are left.)
      */
-    private fun mintEpochProofs(scans: List<SourceScan>, stamps: Map<RootName, BindingEpoch>): List<AbsenceProof> {
-        val localRoots = localSources
-        // [stamps] was captured by the CALLER before the EARLIEST negative evidence of the pass - before the scan whose
-        // witnessed/unread `scanned` folds against, and before `durable` below (revoke-before-stamp, C5). A restore's
-        // re-bind of a covered key landing in or after that window advances the epoch past this value, so its proof
-        // loses `applyProofs`' two-token compare and cannot reap the freshly re-created binding + its `dirty_page`
-        // recovery row. Captured after the SCAN - as it once was, here - a bind in the (scan-end -> stamp) gap would be
-        // folded INTO the stamp and the compare would then MATCH the reap it must forbid.
+    private fun confirmEpochs(scans: List<SourceScan>): Map<RootName, ObservationEpoch.EpochConfirmation> {
         val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
-        return localRoots
+        return localSources
             .mapNotNull { source ->
                 val root = source.root.name
                 // SKIPPED and SHORT are the same fact here - we did not see this tree - and they break the epoch for
@@ -617,85 +536,332 @@ class IndexBuilder(
                     // difference between a page that is GONE and a page we merely could not read this pass.
                     unread = scan.unread,
                     durable = durable[root].orEmpty().toSet(),
-                    bindingEpoch = stamps.getValue(root),
-                )
-            }
+                )?.let { root to it }
+            }.toMap()
     }
 
     /**
-     * **The OBJECT_LIST proof source (C3): the chunk that lets an object root converge a delete without ever letting
-     * it believe the wrong bucket.**
+     * The immutable absence-authority pass: capture freshness before evidence, then mint all inferred proof sources
+     * from that capture. The only licence to delete comes from EPOCH, OBJECT_LIST, or GIT here. OPERATOR is accepted
+     * elsewhere, and an absence outside those sources is never believed.
      *
-     * An object root gets no observation epoch - its watch is a POLLER over a mirror, and "the page is not in the
-     * mirror" says nothing about the bucket. What it gets instead is the bucket itself: a COMPLETE LIST is positive
-     * proof of absence, *of the bucket it listed*. Whether that bucket is OURS is the [BindingLatch]'s question, and
-     * every guard lives there rather than here, so this is only the plumbing: hand the latch the manifest and the
-     * witness, take back the bindings it says are provably gone, and stamp them with the root's current token.
+     * Mint order is not load-bearing. Opening an epoch used to revoke during minting, which forced later token reads
+     * and swallowed breaks in the evidence-to-mint window. [capture] establishes first and freezes both stamp maps
+     * before any evidence, so every mint stamps a value taken before it ran and later movement fails closed.
      *
-     * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
-     * arm, and it is the common one: a store that has listed nothing knows nothing.
+     * STAMP PROVENANCE exception: OBJECT_LIST receives [ObjectManifest.bindingEpoch] as a method argument because it
+     * was captured with the poll's pagination evidence. [ObservationEpoch.EpochConfirmation.observationId] likewise
+     * enters as an honest method-parameter token. The field fence prevents a live token-answering capability, not
+     * those explicitly captured values.
      *
-     * **And the mirror must hold the WHOLE generation, which is what [SourceScan.complete] means for an object root**
-     * (`ObjectContentStore.scan` derives it from `mirrorHoldsGeneration`). The LIST is the authority about the BUCKET
-     * and it needs no help from the mirror to say a key is gone - but the REFUTATION is made of pages we READ, and on
-     * an object root we read the MIRROR. A poll whose GET of one key failed drops it and "retries next cycle", so the
-     * published generation NAMES a key the mirror does not hold; if that key is a RENAMED page, the id that would
-     * have refuted its old binding is sitting in an object we never fetched, and a LIST returns keys and etags - never
-     * frontmatter ids - so the manifest cannot supply it either. Absence proven by the bucket, refutation withheld by
-     * the mirror: we would retire a page that MOVED.
-     *
-     * So we do not prove what we could not read. The rows wait in limbo (503, self-healing) and the next poll fetches
-     * the key and converges. A DRAINED bucket is unaffected - it lists nothing, so a mirror holding nothing holds the
-     * whole of it.
+     * This boundary is enforced by construction, with a spelling and field-list tripwire as its teeth rather than as
+     * a proof. Any change to the capture order, or to any mint's stamp provenance, gets a harness row or a watched
+     * back-out first. Suppressions or compiler flags outside the scanned literals and files, reflection, and companion
+     * or delegated authority shapes remain review responsibilities.
      */
     @OptIn(InferredProofMint::class)
-    private fun mintObjectListProofs(
-        scans: List<SourceScan>,
-        witnessed: Map<RootedPath, Witness>,
-        observations: Map<RootName, ObservationId>,
-    ): List<AbsenceProof> =
-        sources.filter { it.root.backend is RootBackend.Object }.mapNotNull { source ->
-            val root = source.root.name
+    private class AbsencePass private constructor(
+        private val proven: (RootName, ObjectManifest, Map<RootedPath, Witness>) -> Set<BindingRef>,
+        private val durable: () -> List<IdBinding>,
+        private val gitCheckpoint: (RootName) -> String?,
+        private val histories: Map<RootName, GitReads>,
+        private val observationStamps: Map<RootName, ObservationId>,
+        private val bindingEpochs: Map<RootName, BindingEpoch>,
+        private val headsBefore: Map<RootName, String>,
+    ) {
+        /** The C4 mint's two outputs: absence proofs to apply, and checkpoint advances that ride the same transaction. */
+        data class GitMint(val proofs: List<AbsenceProof>, val advances: List<GitCheckpointAdvance>)
+
+        /** The token-free read projection of one eligible root's history provider. */
+        class GitReads(
+            val currentHead: () -> String?,
+            val isAncestor: (String, String) -> Boolean,
+            val deletedIn: (String, String) -> Set<TreePath>?,
+        )
+
+        /**
+         * **The EPOCH proof source (C2): the chunk that makes an online delete converge again.**
+         *
+         * A page is proven gone when an epoch that WITNESSED it, an unbroken observation of an identity-stable tree,
+         * fully watched and scanned end to end, looks again and does not find it. Nothing here trusts a delete EVENT:
+         * the events are what make us LOOK, and [ObservationEpoch] decides whether looking is worth anything.
+         *
+         * The four ways this can fail all fail CLOSED, into limbo and never into a delete:
+         *  - **an object root gets no epoch at all.** Its watch is a POLLER over a mirror, so "the page is not in the
+         *    mirror" says nothing about the bucket, and a rebound or wrong bucket would drain the mirror and read as a
+         *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the C3 binding latch, which is the
+         *    thing that can actually see what the bucket holds.
+         *  - **a root this pass could not scan** (unavailable, vanished, a live-root failure) BREAKS its epoch. That is
+         *    the availability mark and the scan failure, arriving as the same fact: we stopped watching.
+         *  - **an INCOMPLETE scan** breaks it too. A view with holes in it is not an observation of a tree, and a page
+         *    "missing" from a walk that could not see the whole tree is not missing at all.
+         *  - **partial watch coverage, a break, or a restart** are the epoch's own business ([ObservationEpoch]).
+         *
+         * [bindingEpochs] was captured by the caller before the earliest negative evidence of the pass, before the
+         * scan whose witnessed and unread sets [ObservationEpoch.confirmFromScan] folds against. A restore re-bind of
+         * a covered key landing in or after that window advances the epoch past this value, so its proof loses
+         * `applyProofs`' two-token compare and cannot reap the freshly re-created binding and its recovery row.
+         * Captured after the scan, a bind in the scan-end-to-stamp gap would be folded into the stamp and the compare
+         * would then match the reap it must forbid.
+         */
+        fun mintEpoch(confirmations: Map<RootName, ObservationEpoch.EpochConfirmation>): List<AbsenceProof> =
+            confirmations.entries.map { (root, confirmation) ->
+                AbsenceProof.inferred(
+                    root = root,
+                    source = ProofSource.EPOCH,
+                    observationId = confirmation.observationId,
+                    bindingEpoch = bindingEpochs.getValue(root),
+                    covers = confirmation.gone,
+                )
+            }
+
+        /**
+         * **The OBJECT_LIST proof source (C3): the chunk that lets an object root converge a delete without ever
+         * letting it believe the wrong bucket.**
+         *
+         * An object root gets no observation epoch: its watch is a POLLER over a mirror, and "the page is not in the
+         * mirror" says nothing about the bucket. What it gets instead is the bucket itself: a COMPLETE LIST is positive
+         * proof of absence, *of the bucket it listed*. Whether that bucket is OURS is the [BindingLatch]'s question,
+         * and every guard lives there rather than here, so this is only the plumbing: hand the latch the manifest and
+         * the witness, take back the bindings it says are provably gone, and stamp them with the root's current token.
+         *
+         * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
+         * arm, and it is the common one: a store that has listed nothing knows nothing.
+         *
+         * **And the mirror must hold the WHOLE generation, which is what [SourceScan.complete] means for an object root**
+         * (`ObjectContentStore.scan` derives it from `mirrorHoldsGeneration`). The LIST is the authority about the
+         * BUCKET and it needs no help from the mirror to say a key is gone, but the REFUTATION is made of pages we READ,
+         * and on an object root we read the MIRROR. A poll whose GET of one key failed drops it and "retries next cycle",
+         * so the published generation NAMES a key the mirror does not hold. If that key is a RENAMED page, the id that
+         * would have refuted its old binding is sitting in an object we never fetched, and a LIST returns keys and etags,
+         * never frontmatter ids, so the manifest cannot supply it either. Absence proven by the bucket, refutation
+         * withheld by the mirror: we would retire a page that MOVED.
+         *
+         * So we do not prove what we could not read. The rows wait in limbo (503, self-healing) and the next poll fetches
+         * the key and converges. A DRAINED bucket is unaffected: it lists nothing, so a mirror holding nothing holds the
+         * whole of it. [scans] exists solely for the kept-verbatim completeness belt; the call site already gates the
+         * manifest read behind the same condition.
+         */
+        fun mintObjectList(
+            manifests: Map<RootName, ObjectManifest>,
+            scans: List<SourceScan>,
+            witnessed: Map<RootedPath, Witness>,
+        ): List<AbsenceProof> = manifests.entries.mapNotNull { (root, manifest) ->
             if (scans.none { it.root == root && it.complete }) return@mapNotNull null
-            val manifest = source.manifests?.latestManifest() ?: return@mapNotNull null
-            val gone = bindings.proven(root, manifest, witnessed)
+            val gone = proven(root, manifest, witnessed)
             if (gone.isEmpty()) {
                 null
             } else {
                 // The binding-epoch stamp comes from the MANIFEST (revoke-before-stamp, C5), co-read with `rowsAtStart`
-                // at the pagination boundary - NOT `retirements.bindingEpoch(root)` at mint, which is a whole poll cycle
-                // LATER and would already reflect any restore's re-bind, matching the reap it must forbid. The negative
-                // evidence (`rowsAtStart - listed`) and the stamp are thus the SAME durable moment. The observation half
-                // is the CALLER's pre-evidence capture rather than a mint-time read, so a break arriving in this pass's
-                // (evidence -> mint) window moves the token past it and fails the compare.
+                // at the pagination boundary, NOT from a mint-time read a whole poll cycle later, which would already
+                // reflect any restore's re-bind and match the reap it must forbid. The negative evidence and its stamp
+                // are thus the SAME durable moment. The observation half is the caller's pre-evidence capture rather
+                // than a mint-time read, so a break in this pass's evidence-to-mint window moves the token past it and
+                // fails the compare.
                 //
-                // The wider poll -> mint gap this source alone has is NOT closed by ordering, and it is NOT closed by the
-                // token: nothing can move a stamp read after the evidence it stamps. It is closed by the LATCH, and
-                // `ObjectListRebindBetweenPollAndMintTest` measured WHICH part - backing out
-                // `manifest.binding != latched.binding` leaves the realistic case (an operator re-points the root
-                // mid-window) still safe, because a re-bind lands the latch UNRESOLVED and `proven` refuses on TRUST
-                // before it ever compares bindings. The binding comparison is the belt for a stale generation under a
-                // binding that is trusted again; the trust status is the braces, and it is the one doing the work here.
+                // The wider poll-to-mint gap this source alone has is NOT closed by ordering, and it is NOT closed by
+                // the token: nothing can move a stamp read after the evidence it stamps. It is closed by the LATCH.
+                // `ObjectListRebindBetweenPollAndMintTest` measured which part: a re-bind lands the latch UNRESOLVED and
+                // `proven` refuses on TRUST. The binding comparison is the belt for a stale generation under a binding
+                // that is trusted again; that state is production-unreachable today because BindingLatch.observe is
+                // boot-only, and its trusted-again world row is bundled into whichever chunk first makes observe
+                // reachable mid-lifetime through config reload or multi-root object backends; the guard has a flipping
+                // unit RED in SqlDelightRootTopologyRepositoryTest.
                 AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
-                    observationId = observations.getValue(root),
+                    observationId = observationStamps.getValue(root),
                     bindingEpoch = manifest.bindingEpoch,
                     covers = gone,
                 )
             }
         }
 
-    /** The C4 mint's two outputs: absence proofs to apply, and checkpoint advances that ride the same transaction. */
-    private data class GitMint(val proofs: List<AbsenceProof>, val advances: List<GitCheckpointAdvance>)
+        /**
+         * **The GIT proof source (C4): the chunk that restores OFFLINE delete convergence.**
+         *
+         * An operator deletes pages while the server is DOWN (`git rm && git commit`, then boot). No epoch witnessed the
+         * absence and no LIST can attest it, so without this the rows sit in limbo forever. C4 adds the one oracle that
+         * survives a shutdown: **recorded human intent**, a commit range that deleted the path, on a HEAD that DESCENDS
+         * from the last one we recorded, confirmed by THIS pass's complete walk. Rename safety is free: a `git mv` is a
+         * `D old` in the range, and the file the pass READ under the new name refutes the cover in the apply transaction.
+         *
+         * Three gates hold for EVERY advance, the baseline included. There is no advance without a present, complete,
+         * head-STABLE scan:
+         *  - **G1** the pre-scan head is absent (no repo, no commits, shallow, failure) -> skip the root.
+         *  - **G2** the post-scan head is null or moved since G1 (the bracket) -> skip: a `git rm` mid-walk must not let
+         *    the advance swallow the range it landed in, or the row it deletes pins in limbo permanently.
+         *  - **G3** no present, complete scan -> skip: a range confirmed by a partial view is not confirmed.
+         *
+         * Then, on the recorded checkpoint `oldHead`:
+         *  - **null** -> BASELINE: record the current head, mint NOTHING (there is no range; MIGRATION first-sight rule).
+         *    A pre-upgrade offline delete is the accepted residue.
+         *  - **== postHead** -> nothing new.
+         *  - **not an ancestor of postHead** -> fail closed (a force-push or `pull --rebase` rewrote history): no proof,
+         *    no advance, and the checkpoint pins until C5 reconcile re-baselines.
+         *  - otherwise -> the range's `.md` deletions this pass did NOT enumerate and did NOT fail to read become the
+         *    cover. The checkpoint advances iff none of the range's deletions is UNREAD. The advance is
+         *    RESOLUTION-based, not reap-based: an empty effective reap set still advances (a restored file would
+         *    otherwise re-diff an ever-growing range forever), and an UNREAD path in the range withholds it (the walk
+         *    saw it, the read failed, so it is neither witnessed nor proven gone, and `AbsenceUnknown` may no more
+         *    advance a checkpoint than mint a proof).
+         *
+         * [durable] is read HERE, before the binds and before `applyProofs`, exactly like [IndexBuilder.confirmEpochs]:
+         * the proof is about the row a page HAD when the pass observed it gone. The mint runs INSIDE `rebuild`, where
+         * the witness exists, never a boot path where an honest empty witness would refute nothing and a `git mv` would
+         * split.
+         */
+        fun mintGit(scans: List<SourceScan>): GitMint {
+            val durableByRoot = durable().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
+            val minted = histories.entries.mapNotNull { (root, git) ->
+                mintGitForSource(root, git, scans, durableByRoot)
+            }
+            return GitMint(
+                proofs = minted.flatMap(GitMint::proofs),
+                advances = minted.flatMap(GitMint::advances),
+            )
+        }
 
-    /**
-     * Each eligible root's HEAD as it stood BEFORE the scan loop - the near half of the C4 HEAD bracket. Eligible =
-     * a LOCAL root running git ([HistoryProvider.enabled]); an object root's history is git-over-the-mirror, which is
-     * OUR derived repo and never "recorded human intent" about the bucket, so it is excluded by construction (§3.1).
-     */
-    private fun gitHeadsBefore(): Map<RootName, String> =
-        gitOracleRoots.mapNotNull { source -> source.history.currentHead()?.let { source.root.name to it } }.toMap()
+        private fun mintGitForSource(
+            root: RootName,
+            git: GitReads,
+            scans: List<SourceScan>,
+            durable: Map<RootName, List<BindingRef>>,
+        ): GitMint? {
+            val preHead = headsBefore[root]
+            val postHead = git.currentHead()
+            val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete }
+            return when {
+                preHead == null -> null
+                postHead == null || postHead != preHead -> null
+                scan == null -> null
+                else -> {
+                    val token = observationStamps.getValue(root)
+                    val epoch = bindingEpochs.getValue(root)
+                    mintGitRange(git, scan, root, postHead, token, epoch, durable[root].orEmpty())
+                }
+            }
+        }
+
+        private fun mintGitRange(
+            git: GitReads,
+            scan: SourceScan,
+            root: RootName,
+            postHead: String,
+            token: ObservationId,
+            epoch: BindingEpoch,
+            durable: List<BindingRef>,
+        ): GitMint? {
+            val oldHead = gitCheckpoint(root)
+            return when {
+                oldHead == null ->
+                    GitMint(
+                        proofs = emptyList(),
+                        advances = listOf(GitCheckpointAdvance(root, token, epoch, postHead)),
+                    )
+
+                oldHead == postHead -> null
+                !git.isAncestor(oldHead, postHead) -> null
+                else -> git.deletedIn(oldHead, postHead)?.let { deleted ->
+                    val enumerated = scan.drafts.mapTo(mutableSetOf()) { it.file.path }
+                    val covers = durable.filterTo(mutableSetOf()) {
+                        it.path in deleted && it.path !in enumerated && it.path !in scan.unread
+                    }
+                    val proof = covers.takeIf { it.isNotEmpty() }?.let {
+                        AbsenceProof.inferred(
+                            root = root,
+                            source = ProofSource.GIT,
+                            observationId = token,
+                            bindingEpoch = epoch,
+                            covers = it,
+                        )
+                    }
+                    val advance = GitCheckpointAdvance(root, token, epoch, postHead)
+                        .takeIf { (deleted intersect scan.unread).isEmpty() }
+                    GitMint(listOfNotNull(proof), listOfNotNull(advance))
+                }
+            }
+        }
+
+        companion object {
+            /**
+             * Runs the fixed pre-evidence capture. The GIT oracle's HEAD bracket captures each eligible root's head
+             * BEFORE the scan loop, so a `git rm && commit` landing DURING the walk cannot also let the advance consume
+             * the range that deletion is in. The mint re-reads HEAD and requires equality, so a head that moved
+             * mid-pass yields no proof and no advance. Establish, then stamp, and both before the earliest negative
+             * evidence.
+             *
+             * [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass is
+             * indistinguishable at the freshness compare from a watcher BREAK landing mid-pass. Hoisting the open above
+             * all evidence lets the stamps below be taken pre-evidence: past this point nothing this pass does moves
+             * either token, so any later movement invalidates this pass's proofs and every stamp fails closed against
+             * it. Movement does not imply a break. A concurrent save moves `binding_epoch` perfectly healthily. It
+             * implies only that this pass's evidence is no longer current, which is the same answer either way.
+             *
+             * Both stamps are captured here, before the git HEAD bracket, scan, and durable snapshot each mint reads,
+             * which are the earliest evidence reads of the whole pass:
+             *  - `binding_epoch`, per local root, so a concurrent re-bind of a covered key advances past this value and
+             *    the proof loses `applyProofs`' two-token compare rather than reaping the freshly re-created binding.
+             *  - `observation_id`, per root, so a BREAK in the evidence-to-mint window moves the token past this value
+             *    instead of being folded into a stamp read after it. A mint-time read would stamp its own post-break
+             *    value, match, and reap a tree it had stopped watching.
+             *
+             * Captured any later, either stamp folds in the event it exists to detect. [gitOracleRoots] is a subset of
+             * [localSources], so the binding capture covers EPOCH and GIT. OBJECT_LIST takes its binding half from the
+             * manifest, co-read with the pagination boundary. OPERATOR and API_DELETE arrive pre-evidence, unaffected.
+             * `establish` hands back the token it installed, and that is load-bearing: re-reading it after the open could
+             * absorb a break landing between those two operations and stamp the proof with exactly the value
+             * `applyProofs` is about to compare. A root with no epoch falls back to a plain read, which is honest for it.
+             * GIT deliberately needs no epoch because an offline `git rm` converges on an unobserved root, which is why
+             * this map covers every source rather than only those holding an epoch.
+             *
+             * Observation stamps come FIRST of the two captures, and that ordering is itself load-bearing. For a root
+             * `establish` opened, the value is the one it installed. But an UNOBSERVED root, the case GIT exists for,
+             * falls back to a plain read. A read after the binding capture would absorb a break that landed between the
+             * two, leaving one stamp catching an event the other cannot. Both are as early as the pass can make them.
+             * Calling this effectful function twice would revoke the first capture's tokens.
+             *
+             * The repositories enter only as parameters; after construction no field can answer a live freshness
+             * token. The git HEAD bracket is frozen over the caller's eligible roots in their existing order. The
+             * token-free [GitReads] projections retain the far HEAD read, ancestry check, and deleted-path query for
+             * mint time.
+             */
+            fun capture(
+                epochs: ObservationEpoch,
+                retirements: RetirementRepository,
+                idMap: IdMapRepository,
+                latch: BindingLatch,
+                sources: List<Source>,
+                localSources: List<Source>,
+                gitOracleRoots: List<Source>,
+            ): AbsencePass {
+                val established = localSources.associate { it.root.name to epochs.establish(it.root.name) }
+                val observationStamps = sources.associate { source ->
+                    source.root.name to (established[source.root.name] ?: retirements.observation(source.root.name))
+                }
+                val bindingEpochs = localSources.associate { it.root.name to retirements.bindingEpoch(it.root.name) }
+                val headsBefore = gitOracleRoots.mapNotNull { source ->
+                    source.history.currentHead()?.let { source.root.name to it }
+                }.toMap()
+                val histories = gitOracleRoots.associate { source ->
+                    source.root.name to GitReads(
+                        source.history::currentHead,
+                        source.history::isAncestor,
+                        source.history::deletedIn,
+                    )
+                }
+                return AbsencePass(
+                    proven = latch::proven,
+                    durable = idMap::bindings,
+                    gitCheckpoint = retirements::gitHead,
+                    histories = histories,
+                    observationStamps = observationStamps,
+                    bindingEpochs = bindingEpochs,
+                    headsBefore = headsBefore,
+                )
+            }
+        }
+    }
 
     /**
      * The roots the C4 oracle may speak about, in ONE place: the two halves of the HEAD bracket are the same
@@ -711,130 +877,6 @@ class IndexBuilder(
      */
     private val localSources: List<Source>
         get() = sources.filter { it.root.backend is RootBackend.Local }
-
-    /**
-     * **The GIT proof source (C4): the chunk that restores OFFLINE delete convergence.**
-     *
-     * An operator deletes pages while the server is DOWN (`git rm && git commit`, then boot). No epoch witnessed the
-     * absence and no LIST can attest it, so without this the rows sit in limbo forever. C4 adds the one oracle that
-     * survives a shutdown: **recorded human intent** - a commit range that deleted the path, on a HEAD that DESCENDS
-     * from the last one we recorded, confirmed by THIS pass's complete walk. Rename safety is free: a `git mv` is a
-     * `D old` in the range, and the file the pass READ under the new name refutes the cover in the apply transaction.
-     *
-     * Three gates hold for EVERY advance, the baseline included (there is no advance of any kind without a present,
-     * complete, head-STABLE scan):
-     *  - **G1** the pre-scan head is absent (no repo, no commits, shallow, failure) -> skip the root.
-     *  - **G2** the post-scan head is null or moved since G1 (the bracket) -> skip: a `git rm` mid-walk must not let
-     *    the advance swallow the range it landed in, or the row it deletes pins in limbo permanently.
-     *  - **G3** no present, complete scan -> skip: a range confirmed by a partial view is not confirmed.
-     *
-     * Then, on the recorded checkpoint `oldHead`:
-     *  - **null** -> BASELINE: record the current head, mint NOTHING (there is no range; MIGRATION first-sight rule).
-     *    A pre-upgrade offline delete is the accepted residue.
-     *  - **== postHead** -> nothing new.
-     *  - **not an ancestor of postHead** -> fail closed (a force-push / `pull --rebase` rewrote history): no proof, no
-     *    advance, the checkpoint pins until C5 reconcile re-baselines.
-     *  - otherwise -> the range's `.md` deletions this pass did NOT enumerate and did NOT fail to read become the
-     *    cover; the checkpoint advances iff none of the range's deletions is UNREAD. The advance is RESOLUTION-based,
-     *    not reap-based: an empty effective reap set still advances (a restored file would otherwise re-diff an
-     *    ever-growing range forever), and an UNREAD path in the range withholds it (the walk saw it, the read failed,
-     *    so it is neither witnessed nor proven gone - and `AbsenceUnknown` may no more advance a checkpoint than mint
-     *    a proof).
-     *
-     * [durable] is read HERE, before the binds and before `applyProofs`, exactly like [mintEpochProofs]: the proof is
-     * about the row a page HAD when the pass observed it gone. The mint runs INSIDE `rebuild`, where the witness
-     * exists - never a boot path, where an honest empty witness would refute nothing and a `git mv` would split.
-     *
-     * **And it must run AFTER [mintEpochProofs]**, which is the one ordering rule this source has: the token it stamps
-     * has to be the one the epoch-open left behind, or every watched root's boot discards this mint whole. The call
-     * site owns the why.
-     */
-    private fun mintGitProofs(
-        scans: List<SourceScan>,
-        headsBefore: Map<RootName, String>,
-        stamps: Map<RootName, BindingEpoch>,
-        observations: Map<RootName, ObservationId>,
-    ): GitMint {
-        // [stamps] was captured by the CALLER before the EARLIEST negative evidence of the pass (revoke-before-stamp,
-        // C5), alongside `headsBefore` and before `durable` and the commit-range diff this mint rests on - so a
-        // restore's re-bind of a covered key landing in or after that window advances the epoch past this value and
-        // the proof loses `applyProofs`' two-token compare. Captured in the loop below - after `durable` was read -
-        // a bind in the gap would be folded into the stamp and the compare would MATCH the reap it must forbid.
-        val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
-        val minted = gitOracleRoots.mapNotNull { source ->
-            mintGitForSource(source, scans, headsBefore, stamps, observations, durable)
-        }
-        return GitMint(
-            proofs = minted.flatMap(GitMint::proofs),
-            advances = minted.flatMap(GitMint::advances),
-        )
-    }
-
-    private fun mintGitForSource(
-        source: Source,
-        scans: List<SourceScan>,
-        headsBefore: Map<RootName, String>,
-        stamps: Map<RootName, BindingEpoch>,
-        observations: Map<RootName, ObservationId>,
-        durable: Map<RootName, List<BindingRef>>,
-    ): GitMint? {
-        val root = source.root.name
-        val preHead = headsBefore[root]
-        val postHead = source.history.currentHead()
-        val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete }
-        return when {
-            preHead == null -> null // G1
-            postHead == null || postHead != preHead -> null // G2, the bracket
-            scan == null -> null // G3
-            else -> {
-                // BOTH stamps were captured before the earliest evidence of the pass (revoke-before-stamp, C5).
-                val token = observations.getValue(root)
-                val epoch = stamps.getValue(root)
-                mintGitRange(source, scan, root, postHead, token, epoch, durable[root].orEmpty())
-            }
-        }
-    }
-
-    @OptIn(InferredProofMint::class)
-    private fun mintGitRange(
-        source: Source,
-        scan: SourceScan,
-        root: RootName,
-        postHead: String,
-        token: ObservationId,
-        epoch: BindingEpoch,
-        durable: List<BindingRef>,
-    ): GitMint? {
-        val oldHead = retirements.gitHead(root)
-        return when {
-            oldHead == null ->
-                GitMint(
-                    proofs = emptyList(),
-                    advances = listOf(GitCheckpointAdvance(root, token, epoch, postHead)),
-                )
-
-            oldHead == postHead -> null
-            !source.history.isAncestor(oldHead, postHead) -> null
-            else -> source.history.deletedIn(oldHead, postHead)?.let { deleted ->
-                val enumerated = scan.drafts.mapTo(mutableSetOf()) { it.file.path }
-                val covers = durable.filterTo(mutableSetOf()) {
-                    it.path in deleted && it.path !in enumerated && it.path !in scan.unread
-                }
-                val proof = covers.takeIf { it.isNotEmpty() }?.let {
-                    AbsenceProof.inferred(
-                        root = root,
-                        source = ProofSource.GIT,
-                        observationId = token,
-                        bindingEpoch = epoch,
-                        covers = it,
-                    )
-                }
-                val advance = GitCheckpointAdvance(root, token, epoch, postHead)
-                    .takeIf { (deleted intersect scan.unread).isEmpty() }
-                GitMint(listOfNotNull(proof), listOfNotNull(advance))
-            }
-        }
-    }
 
     /**
      * The drafts this pass must NOT bind: a file at an at-risk path, under a root whose binding is still UNRESOLVED,

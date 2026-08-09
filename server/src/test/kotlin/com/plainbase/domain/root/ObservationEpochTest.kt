@@ -62,11 +62,9 @@ class ObservationEpochTest : FunSpec({
         val durable = setOf(deploy, rollback)
 
         epochs.scanned(handbook, witnessed = setOf(deploy.path, rollback.path), durable = durable) // the base
-        val proof = epochs.scanned(handbook, witnessed = setOf(rollback.path), durable = durable).shouldNotBeNull()
+        val confirmation = epochs.scanned(handbook, witnessed = setOf(rollback.path), durable = durable).shouldNotBeNull()
 
-        proof.root shouldBe handbook
-        proof.source shouldBe ProofSource.EPOCH
-        proof.covers shouldContainExactly setOf(deploy)
+        confirmation.gone shouldContainExactly setOf(deploy)
     }
 
     test("a BREAK then a re-open grants NO authority over pages the new epoch never witnessed") {
@@ -96,11 +94,11 @@ class ObservationEpochTest : FunSpec({
         val durable = setOf(seen, neverSeen)
 
         epochs.scanned(handbook, witnessed = setOf(seen.path), durable = durable) // base: witnesses ONE of the two
-        val proof = epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldNotBeNull()
+        val confirmation = epochs.scanned(handbook, witnessed = emptySet(), durable = durable).shouldNotBeNull()
 
         // The one it READ is proven gone. The one it never read is not evidence of anything, and no amount of
         // subsequent good health promotes it - the epoch's authority is scoped to its witness set, permanently.
-        proof.covers shouldContainExactly setOf(seen)
+        confirmation.gone shouldContainExactly setOf(seen)
     }
 
     test("a root NOBODY IS WATCHING earns no epoch at all - two scans with an `rm` between them are just two scans") {
@@ -172,18 +170,17 @@ class ObservationEpochTest : FunSpec({
         // The break lands after this pass already took its evidence. The PRODUCTION signature is called directly here,
         // NOT the establish-then-scan helper: the helper would re-open the epoch first and hide the very arm under test.
         epochs.broke(handbook, BreakCause.OVERFLOW)
-        val proof = epochs.scanned(
+        val confirmation = epochs.scanned(
             root = handbook,
             witnessed = setOf(deploy.path),
             unread = emptySet(),
             durable = durable,
-            bindingEpoch = BindingEpoch(0),
         )
 
         // It mints nothing - and, the part that matters, it opens NOTHING either. Re-opening here would seed the new
         // epoch with the witness set of a scan taken BEFORE the break, so the next pass would "confirm" a delete across
         // the very gap this break reported. That epoch is the next pass's to open, over a witness gathered after it.
-        proof.shouldBeNull()
+        confirmation.shouldBeNull()
         epochs.isOpen(handbook) shouldBe false
     }
 
@@ -218,7 +215,11 @@ class ObservationEpochTest : FunSpec({
  * EXPLICITLY and has NO DEFAULT: a safety input that silently defaults to the optimistic value ("nothing was unread")
  * is precisely how it came to be missing in the first place, and it reaped pages that were sitting on disk.
  */
-private fun ObservationEpoch.scanned(root: RootName, witnessed: Set<TreePath>, durable: Set<BindingRef>): AbsenceProof? {
+private fun ObservationEpoch.scanned(
+    root: RootName,
+    witnessed: Set<TreePath>,
+    durable: Set<BindingRef>,
+): ObservationEpoch.EpochConfirmation? {
     establish(root)
-    return scanned(root = root, witnessed = witnessed, unread = emptySet(), durable = durable, bindingEpoch = BindingEpoch(0))
+    return scanned(root = root, witnessed = witnessed, unread = emptySet(), durable = durable)
 }

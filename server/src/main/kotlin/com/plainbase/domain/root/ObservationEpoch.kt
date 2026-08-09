@@ -11,9 +11,9 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 /**
  * **The event never carries authority. The unbroken OBSERVATION does, and the scan confirms.** (C2)
  *
- * This is the first source that mints an [AbsenceProof], and therefore the chunk that gives back ONLINE delete
- * convergence: after C0 nothing reaps at all, by design (the safety floor), and this hands back exactly the
- * deletes we can honestly prove.
+ * This is the first source that earns an EPOCH confirmation, and therefore the source that lets the absence pass give
+ * back ONLINE delete convergence: after C0 nothing reaps at all, by design (the safety floor), and this confirms
+ * exactly the deletes we can honestly prove.
  *
  * **Why not trust the delete EVENT?** Because an unmount, a rename-flip's `rm -rf site.old` landing on
  * inode-tracked watches, and a watcher fault all produce delete events - and on macOS the JDK `WatchService` is a
@@ -23,14 +23,14 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  *
  * ```
  * CLOSED --[establish(), at the TOP of a pass, under WHOLE coverage]--> OPEN
- *         mint a NEW ObservationId over an EMPTY witness; mint NO PROOFS - it has nothing to compare against, and
+ *         mint a NEW ObservationId over an EMPTY witness; earn NO CONFIRMATION - it has nothing to compare against, and
  *         RETROACTIVE authority IS the decoy hole. The pass's own scan then folds its pages into the witness, so an
  *         opening pass still proves exactly nothing. The open happens HERE, before any evidence is read, so that its
  *         revoke can never be mistaken for a mid-pass break by a stamp taken later (C5, revoke-before-stamp).
  *
  * OPEN --[a COMPLETE scan, epoch UNBROKEN]--> OPEN                  (a CONFIRMATION scan)
- *         KEEP the id. Mint AbsenceProof(EPOCH) for every binding the epoch WITNESSED that this scan did NOT
- *         see; then fold the newly-seen pages into the witness set. *** This is what converges an online delete. ***
+ *         KEEP the id. Confirm every binding the epoch WITNESSED that this scan did NOT see; then fold the newly-seen
+ *         pages into the witness set. *** This is what lets the pass converge an online delete. ***
  *
  * OPEN --[any BREAK]--> CLOSED
  *         revoke the ObservationId, which invalidates every outstanding proof by the freshness rule. The pass the
@@ -65,6 +65,9 @@ class ObservationEpoch(
     /** Watch coverage, read (never written) here: an epoch may not OPEN on a tree whose watcher cannot see all of it. */
     private val convergence: RootConvergence,
 ) {
+
+    /** The epoch's continuity token and the non-empty bindings its confirmation scan proved gone. */
+    data class EpochConfirmation(val observationId: ObservationId, val gone: Set<BindingRef>)
 
     /** One root's observation. */
     sealed interface Epoch {
@@ -165,8 +168,8 @@ class ObservationEpoch(
     }
 
     /**
-     * One root's COMPLETE scan, [witnessed] being the pages it read. Returns the `EPOCH` proof it earned, which is
-     * null on the opening scan of an epoch - by construction, not by omission.
+     * One root's COMPLETE scan, [witnessed] being the pages it read. Returns the `EPOCH` confirmation it earned,
+     * which is null on the opening scan of an epoch - by construction, not by omission.
      *
      * [durable] is the root's id_map rows as they stood BEFORE this pass touched them: what the proof is ABOUT is
      * a binding, and the binding is the durable fact. A row whose path this epoch never witnessed is not covered
@@ -188,8 +191,7 @@ class ObservationEpoch(
         witnessed: Set<TreePath>,
         unread: Set<TreePath>,
         durable: Set<BindingRef>,
-        bindingEpoch: BindingEpoch,
-    ): AbsenceProof? {
+    ): EpochConfirmation? {
         val state = holder.load()[root] ?: Epoch.Unobserved
         val epoch = liveEpoch(root)
         return when {
@@ -201,19 +203,17 @@ class ObservationEpoch(
             }
 
             epoch == null -> null
-            else -> proofFromScan(root, witnessed, unread, durable, bindingEpoch, epoch)
+            else -> confirmFromScan(root, witnessed, unread, durable, epoch)
         }
     }
 
-    @OptIn(InferredProofMint::class)
-    private fun proofFromScan(
+    private fun confirmFromScan(
         root: RootName,
         witnessed: Set<TreePath>,
         unread: Set<TreePath>,
         durable: Set<BindingRef>,
-        bindingEpoch: BindingEpoch,
         epoch: Epoch.Open,
-    ): AbsenceProof? {
+    ): EpochConfirmation? {
         val gone = durable.filterTo(mutableSetOf()) { it.path in epoch.witnessed && it.path !in witnessed && it.path !in unread }
         holder.store(holder.load() + (root to epoch.copy(witnessed = epoch.witnessed + witnessed)))
         if (gone.isEmpty()) return null
@@ -221,21 +221,7 @@ class ObservationEpoch(
             "the observation epoch for root '$root' witnessed ${gone.size} page(s) that this scan does not see: it has " +
                 "watched this tree without a gap since it read them, so they are DELETED - ${gone.joinToString { it.path.value }}"
         }
-        // [bindingEpoch] is stamped in by the CALLER (revoke-before-stamp, C5), captured BEFORE it read the negative
-        // evidence this proof rests on - the `durable` snapshot and the scan's `witnessed`/`unread`. A restore's
-        // re-bind of a covered key landing in or after that window advances the root's binding_epoch PAST this value,
-        // so the proof loses `applyProofs`' two-token compare and cannot reap the binding (and its `dirty_page`
-        // recovery row) the restore just re-created. Capturing it HERE instead - after `gone` is computed from stale
-        // evidence - would fold a bind that landed in the gap INTO the stamp, and the compare would then MATCH the
-        // reap it must forbid. It rides alongside epoch.observationId, the epoch's continuity token, not a fresh
-        // read - the two stamps are orthogonal by design.
-        return AbsenceProof.inferred(
-            root = root,
-            source = ProofSource.EPOCH,
-            observationId = epoch.observationId,
-            bindingEpoch = bindingEpoch,
-            covers = gone,
-        )
+        return EpochConfirmation(epoch.observationId, gone)
     }
 
     /**

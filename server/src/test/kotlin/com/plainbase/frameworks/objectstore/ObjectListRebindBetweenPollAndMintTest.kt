@@ -40,11 +40,14 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  * the new one.
  *
  * **WHAT THIS MEASURED, which is not what was expected.** The property holds - and the CONTROL proves that is not
- * vacuous, because the identical delete under an unchanged binding does converge. But backing out
- * `manifest.binding != latched.binding` leaves BOTH rows green: that guard is inert here. What actually refuses is
- * [BindingLatch.proven]'s TRUST check, because observing a new binding lands the latch UNRESOLVED and trust is tested
- * before bindings are compared. So the binding comparison is the belt for a stale generation under a binding that has
- * become trusted again - a state this row does not construct - and the trust status is what closes the realistic case.
+ * vacuous, because the identical delete under an unchanged binding does converge. Both refusal conditions are true:
+ * [BindingLatch.proven] compares the manifest binding first, while observing a new binding also leaves the latch
+ * UNRESOLVED so the following trust check would refuse if that comparison were backed out. The comparison is the belt
+ * for a stale generation under a binding that has become trusted again, a state this row does not construct.
+ *
+ * The mid-lifetime [BindingLatch.observe] below is test-only; its trusted-again world row is bundled into whichever
+ * chunk first makes observe reachable mid-lifetime through config reload or multi-root object backends, while today it
+ * is boot-only and `SqlDelightRootTopologyRepositoryTest` carries the flipping unit RED.
  *
  * That distinction is the reason to run a probe instead of reasoning: the KDoc on the caller previously credited the
  * binding guard, and it was crediting the wrong half.
@@ -70,12 +73,10 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             bucket.remove("guides/deploy.md")
             world.store.pollOnce()
 
-            // THE INTERLEAVE: the operator re-points the root at another bucket. Production does both halves of this -
-            // the latch records the new binding, and `onIdentityRebind` breaks the epoch, which revokes the token. It
-            // lands AFTER the listing was taken and BEFORE the mint reads its observation stamp, which is the window
-            // this source cannot close by ordering.
+            // THE INTERLEAVE: one BindingLatch.observe call records the new binding and advances its freshness epoch
+            // transactionally. It lands AFTER the listing was taken and BEFORE the mint reads its observation stamp,
+            // which is the window this source cannot close by ordering.
             BindingLatch(world.topology).observe(RootName.PRIMARY, elsewhere)
-            world.retirements.revoke(RootName.PRIMARY)
 
             world.builder().rebuild()
 
