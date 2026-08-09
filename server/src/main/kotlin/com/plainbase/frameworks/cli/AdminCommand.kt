@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.AgentMode
 import com.plainbase.domain.repository.ApiTokenMeta
@@ -33,6 +34,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightTransactionRunner
 import com.plainbase.frameworks.sqldelight.SqlDelightUserRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
@@ -70,9 +72,10 @@ object AdminCommand {
         config: PlainbaseConfig,
         output: CommandOutput = systemCommandOutput(),
         reloadConfig: () -> PlainbaseConfig? = { config },
+        driverFactory: (Path) -> SqlDriver = DatabaseFactory::createDriver,
     ): Int =
         runCatching {
-            runChecked(args, config, output, reloadConfig)
+            runChecked(args, config, output, reloadConfig, driverFactory)
         }.getOrElse { failure ->
             if (failure is Error) throw failure
             logger.error(failure) { "admin command failed" }
@@ -85,6 +88,7 @@ object AdminCommand {
         config: PlainbaseConfig,
         output: CommandOutput,
         reloadConfig: () -> PlainbaseConfig?,
+        driverFactory: (Path) -> SqlDriver,
     ): Int {
         // setup-token mutates DB state on DATA_DIR shared with a live server, so it MUST hold the DataDirLock BEFORE
         // any driver opens + migrates the DB (fix D: a second process opening/migrating before losing the lock race
@@ -106,7 +110,7 @@ object AdminCommand {
             return 1
         }
         return lock.use {
-            val driver = DatabaseFactory.createDriver(config.appDatabasePath)
+            val driver = driverFactory(config.appDatabasePath)
             try {
                 val database = DatabaseFactory.createDatabase(driver)
                 val tokenService = ApiTokenService(
@@ -275,6 +279,8 @@ object AdminCommand {
         // to refute with; and OPERATOR is an ACCEPTED decision rather than an inference, so the standing gate does not
         // consult this set for it at all - an operator retiring a page in a root they have already been told is
         // unavailable is doing exactly what they asked for.
+        // Named residue: the root-wide binding-epoch advance means a concurrent same-root save can make force-retire
+        // spuriously refuse here. That is fail-closed, but its production frequency is not yet measured.
         if (RootedPageId(root, id) !in retirements.applyProofs(listOf(proof), witnessed = emptySet(), unavailableNow = { emptySet() })) {
             output.error("admin force-retire: refused to retire ${id.value} in root '${root.value}' (freshness or binding re-read)")
             return 1

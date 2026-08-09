@@ -1,5 +1,9 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlPreparedStatement
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
@@ -87,5 +91,57 @@ class ForceRetireCommandNativeTest {
                 assertFalse(resolver.bindsLive(extra, x))
             }
         }
+    }
+
+    @Test
+    fun `force-retire refuses a same-id re-bind before the binding lookup in-image`() {
+        withSeededExtra { config ->
+            val exit = AdminCommand.run(
+                listOf("force-retire", "extra", x.value),
+                config,
+                NativeCommandOutputCapture.current,
+                driverFactory = { databasePath ->
+                    NativeRebindBeforeBindingLookupDriver(DatabaseFactory.createDriver(databasePath)) {
+                        DatabaseFactory.createDriver(databasePath).use { secondDriver ->
+                            SqlDelightIdMapRepository(DatabaseFactory.createDatabase(secondDriver))
+                                .bind(path, x, materialized = false)
+                        }
+                    }
+                },
+            )
+
+            assertEquals(1, exit)
+            DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+                val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
+                assertNotNull(repo.bindingInRoot(extra, x))
+            }
+        }
+    }
+}
+
+private val NATIVE_SELECT_BINDING_BY_ROOT_ID_SQL = """
+    SELECT id_map.root, id_map.path, id_map.id, id_map.materialized
+    FROM id_map
+    WHERE id = ? AND root = ?
+""".trimIndent()
+
+private class NativeRebindBeforeBindingLookupDriver(
+    private val delegate: SqlDriver,
+    private val beforeBindingLookup: () -> Unit,
+) : SqlDriver by delegate {
+    private var fired = false
+
+    override fun <R> executeQuery(
+        identifier: Int?,
+        sql: String,
+        mapper: (SqlCursor) -> QueryResult<R>,
+        parameters: Int,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<R> {
+        if (!fired && sql.trim() == NATIVE_SELECT_BINDING_BY_ROOT_ID_SQL) {
+            fired = true
+            beforeBindingLookup()
+        }
+        return delegate.executeQuery(identifier, sql, mapper, parameters, binders)
     }
 }

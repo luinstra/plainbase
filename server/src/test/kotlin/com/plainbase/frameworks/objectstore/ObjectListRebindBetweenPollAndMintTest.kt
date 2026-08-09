@@ -4,10 +4,13 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 
 /**
  * **The one interleaving `AbsenceInterleavingHarnessTest` structurally cannot reach: OBJECT_LIST's poll boundary.**
@@ -98,6 +101,28 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             withClue("an ordinary delete in a TRUSTED bucket is exactly what OBJECT_LIST exists to converge") {
                 world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(runbookId)
                 world.idMap.retiredBindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId)
+            }
+        }
+    }
+
+    test("an idempotent same-id re-bind after LIST cannot refresh the manifest epoch at mint") {
+        ObjectAbsenceWorld().use { world ->
+            val bucket = FakeObjectStore().apply {
+                seedPage("guides/deploy.md", deployId)
+                seedPage("guides/runbook.md", runbookId)
+            }
+            world.boot(bucket, handbookBinding).rebuild()
+
+            bucket.remove("guides/deploy.md")
+            world.store.pollOnce()
+
+            val deployPath = RootedPath(RootName.PRIMARY, page("guides/deploy.md"))
+            world.idMap.bind(deployPath, deployId, materialized = true)
+            world.builder().rebuild()
+
+            withClue("the pre-rebind LIST cannot retire the binding restored after its epoch was captured") {
+                world.idMap.bindingInRoot(RootName.PRIMARY, deployId).shouldNotBeNull()
+                world.idMap.retiredAt(RootName.PRIMARY, deployId).shouldBeNull()
             }
         }
     }
