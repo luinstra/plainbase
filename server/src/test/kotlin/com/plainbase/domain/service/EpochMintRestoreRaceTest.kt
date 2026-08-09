@@ -30,11 +30,13 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  * lands strictly after it and the compare MISMATCHES.
  *
  * The two rows below pin the two stages, and it takes two DIFFERENT back-outs to tell them apart:
- *  - **durable-read window** - revert `ObservationEpoch.scanned` to a mint-time `retirements.bindingEpoch(root)`
- *    self-read. That is later than BOTH stages, so BOTH rows go RED.
- *  - **scan-end window** - move the `IndexBuilder` capture below the scan (still above `durable`). Only the SECOND row
- *    goes red; the durable-read row stays green. This is the one that earns the second row its separate existence, and
- *    the reason a single back-out is not proof: the first bug hid the second for a whole round.
+ *  - **durable-read window** - following the commit-3 GIT drill's constructor-seam shape, temporarily add a live
+ *    binding-epoch read to `AbsencePass`, bind it to `retirements::bindingEpoch` in `capture`, and re-point
+ *    `mintEpoch`'s `bindingEpochs.getValue(root)` to that seam. The read is later than BOTH stages, so BOTH rows go RED.
+ *  - **scan-end window** - move `AbsencePass.capture` below the `sources.mapNotNull { scanIfAvailable(it) }` scan while
+ *    keeping it above `confirmEpochs`' durable snapshot. Only the SECOND row goes red; the durable-read row stays green.
+ *    This is the one that earns the second row its separate existence, and the reason a single back-out is not proof:
+ *    the first bug hid the second for a whole round.
  *
  * Either way the observation token never moves here (no break, no restart), so only the binding-epoch half can catch
  * the re-bind - and captured after the evidence, it cannot.

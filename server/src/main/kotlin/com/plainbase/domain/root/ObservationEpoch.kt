@@ -67,7 +67,11 @@ class ObservationEpoch(
 ) {
 
     /** The epoch's continuity token and the non-empty bindings its confirmation scan proved gone. */
-    data class EpochConfirmation(val observationId: ObservationId, val gone: Set<BindingRef>)
+    data class EpochConfirmation(val observationId: ObservationId, val gone: Set<BindingRef>) {
+        init {
+            require(gone.isNotEmpty()) { "an epoch confirmation that names nothing gone confirms nothing" }
+        }
+    }
 
     /** One root's observation. */
     sealed interface Epoch {
@@ -171,9 +175,9 @@ class ObservationEpoch(
      * One root's COMPLETE scan, [witnessed] being the pages it read. Returns the `EPOCH` confirmation it earned,
      * which is null on the opening scan of an epoch - by construction, not by omission.
      *
-     * [durable] is the root's id_map rows as they stood BEFORE this pass touched them: what the proof is ABOUT is
-     * a binding, and the binding is the durable fact. A row whose path this epoch never witnessed is not covered
-     * however long the epoch has been open (the scoping rule).
+     * [durable] is the root's id_map rows as they stood BEFORE this pass touched them. The returned confirmation names
+     * the durable bindings this uninterrupted epoch can declare gone. A row whose path this epoch never witnessed is
+     * not included however long the epoch has been open (the scoping rule).
      *
      * [unread] is the third answer, and leaving it out was a corpus bug. A scan is a WALK followed by a READ of each
      * thing it walked, and COMPLETENESS is a property of the WALK - so a page that lost a race between the two is

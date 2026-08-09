@@ -16,7 +16,10 @@ import java.nio.file.Paths
  * the enumerated source opt-in, propagating marker, fully-qualified reference, Gradle flag, and suppression spellings,
  * plus instance fields on the pass and its Git projection. A suppression or compiler flag spelled outside the scanned
  * literals and files, a companion/delegated authority shape, and reflection remain review responsibilities. The
- * compiler gate itself was separately watched refusing an unannotated inferred factory call.
+ * compiler gate was watched refusing an unannotated inferred factory call by the commit-1 compile-probe drill recorded
+ * in `.crew/c5.1-execution-log.md`; that refusal is not a committed fixture. The exact-four marker count also means the
+ * two authority files must never name `InferredProofMint` in prose, so a future documentation edit fails for a readable
+ * reason.
  */
 class InferredMintTripwireTest : FunSpec({
 
@@ -122,8 +125,14 @@ private fun Class<*>.instanceFieldNames(): Set<String> = declaredFields
     .filterNot { field -> Modifier.isStatic(field.modifiers) || field.isSynthetic }
     .mapTo(mutableSetOf()) { it.name }
 
+private val WALK_EXCLUDED_DIRECTORIES = setOf("node_modules", ".git", "build")
+
+private fun Path.isWalkExcluded(): Boolean = any { it.toString() in WALK_EXCLUDED_DIRECTORIES }
+
 private fun kotlinFiles(root: Path): List<Path> = Files.walk(root).use { paths ->
-    paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".kt") }.sorted().toList()
+    paths.filter { path ->
+        !path.isWalkExcluded() && Files.isRegularFile(path) && path.fileName.toString().endsWith(".kt")
+    }.sorted().toList()
 }
 
 private fun mainKotlinRoot(): Path {
@@ -149,7 +158,7 @@ private fun repoRoot(): Path {
 
 private fun gradleConfigurationFiles(root: Path): List<Path> = Files.walk(root).use { paths ->
     paths.filter { path ->
-        if (!Files.isRegularFile(path)) return@filter false
+        if (path.isWalkExcluded() || !Files.isRegularFile(path)) return@filter false
         val name = path.fileName.toString()
         name.endsWith(".gradle.kts") || name == "gradle.properties"
     }.sorted().toList()

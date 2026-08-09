@@ -66,6 +66,9 @@ object AdminCommand {
      * [reloadConfig] re-reads DATA_DIR's config on demand; only `force-retire` uses it, to re-check the registry under
      * `roots.lock`. It defaults to the passed [config] (a direct caller that runs no concurrent `root remove` needs no
      * reload), and `runAsMain` overrides it with a real disk reload.
+     *
+     * [driverFactory] is a production-defaulted test seam for interleaving a second connection. Production always uses
+     * the [DatabaseFactory.createDriver] default.
      */
     fun run(
         args: List<String>,

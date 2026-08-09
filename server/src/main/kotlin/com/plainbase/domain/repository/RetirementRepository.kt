@@ -122,8 +122,9 @@ interface RetirementRepository {
     fun observation(root: RootName): ObservationId
 
     /**
-     * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`) - the SECOND stamp a producer captures at
-     * MINT time and [applyProofs] re-checks. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
+     * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`). Local inferred-proof producers capture it
+     * PRE-EVIDENCE in `AbsencePass.capture`; OBJECT_LIST receives its epoch co-read with the manifest at the poll
+     * boundary. [applyProofs] re-checks it. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
      * break. Zero when the root has no observation row yet (nothing to be fresh against, and no proof outstanding).
      */
     fun bindingEpoch(root: RootName): BindingEpoch

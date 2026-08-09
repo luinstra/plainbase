@@ -25,8 +25,9 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  *    pagination boundary, so stamp and evidence are the same instant. A later bind advances past it and loses the
  *    compare. Nothing to probe.
  *  - the OBSERVATION half is read at the top of `rebuild()` - i.e. AFTER the evidence it stamps. For a local root the
- *    stamp precedes the evidence; here it cannot. Its defence is not the token at all, it is
- *    [BindingLatch.proven]'s `manifest.binding != latched.binding` guard, and THAT is what this pins.
+ *    stamp precedes the evidence; here it cannot. Its defence is the latch's TWO refusals, in implementation order:
+ *    [BindingLatch.proven]'s `manifest.binding != latched.binding` comparison returns first, with the UNRESOLVED trust
+ *    check behind it. This row pins that pair.
  *
  * **Why this specific event, and not a bare revoke.** The events that can revoke an object root's observation are
  * exactly: an identity rebind (`onIdentityRebind` -> `broke`), an availability loss, and a restart. A restart destroys
@@ -45,9 +46,11 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  * UNRESOLVED so the following trust check would refuse if that comparison were backed out. The comparison is the belt
  * for a stale generation under a binding that has become trusted again, a state this row does not construct.
  *
- * The mid-lifetime [BindingLatch.observe] below is test-only; its trusted-again world row is bundled into whichever
- * chunk first makes observe reachable mid-lifetime through config reload or multi-root object backends, while today it
- * is boot-only and `SqlDelightRootTopologyRepositoryTest` carries the flipping unit RED.
+ * The mid-lifetime [BindingLatch.observe] below is test-only. Its trusted-again world row is deliberately deferred,
+ * with the owner's acceptance and no tracked issue, until whichever chunk first makes observe reachable mid-lifetime
+ * through config reload or multi-root object backends. This KDoc is the durable record. Today observe is boot-only, and
+ * the `trustCalls shouldBe 0` RED in `SqlDelightRootTopologyRepositoryTest` pins comparison-before-trust ORDER, not the
+ * trusted-again world.
  *
  * That distinction is the reason to run a probe instead of reasoning: the KDoc on the caller previously credited the
  * binding guard, and it was crediting the wrong half.
@@ -74,8 +77,8 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             world.store.pollOnce()
 
             // THE INTERLEAVE: one BindingLatch.observe call records the new binding and advances its freshness epoch
-            // transactionally. It lands AFTER the listing was taken and BEFORE the mint reads its observation stamp,
-            // which is the window this source cannot close by ordering.
+            // transactionally. It lands AFTER the listing was taken and BEFORE AbsencePass.capture reads the observation
+            // stamp at the top of rebuild(), which is the window this source cannot close by ordering.
             BindingLatch(world.topology).observe(RootName.PRIMARY, elsewhere)
 
             world.builder().rebuild()

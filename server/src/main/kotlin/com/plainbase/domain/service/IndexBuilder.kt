@@ -661,12 +661,14 @@ class IndexBuilder(
                 //
                 // The wider poll-to-mint gap this source alone has is NOT closed by ordering, and it is NOT closed by
                 // the token: nothing can move a stamp read after the evidence it stamps. It is closed by the LATCH.
-                // `ObjectListRebindBetweenPollAndMintTest` measured which part: a re-bind lands the latch UNRESOLVED and
-                // `proven` refuses on TRUST. The binding comparison is the belt for a stale generation under a binding
-                // that is trusted again; that state is production-unreachable today because BindingLatch.observe is
-                // boot-only, and its trusted-again world row is bundled into whichever chunk first makes observe
-                // reachable mid-lifetime through config reload or multi-root object backends; the guard has a flipping
-                // unit RED in SqlDelightRootTopologyRepositoryTest.
+                // `ObjectListRebindBetweenPollAndMintTest` measured the pair in implementation order: `proven` returns
+                // first on the binding comparison, while a re-bind also leaves the latch UNRESOLVED so the trust check
+                // behind it would refuse if the comparison were backed out. The binding comparison is the belt for a
+                // stale generation under a binding that is trusted again. That state is production-unreachable today
+                // because BindingLatch.observe is boot-only, and its trusted-again world row is an owner-accepted
+                // deferral with no tracked issue until whichever chunk first makes observe reachable mid-lifetime
+                // through config reload or multi-root object backends. This comment and the test KDoc are the durable
+                // record. The SqlDelightRootTopologyRepositoryTest RED pins comparison-before-trust order, not that world.
                 AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
@@ -822,9 +824,10 @@ class IndexBuilder(
              * Calling this effectful function twice would revoke the first capture's tokens.
              *
              * The repositories enter only as parameters; after construction no field can answer a live freshness
-             * token. The git HEAD bracket is frozen over the caller's eligible roots in their existing order. The
-             * token-free [GitReads] projections retain the far HEAD read, ancestry check, and deleted-path query for
-             * mint time.
+             * token. [durable], [gitCheckpoint], and the [GitReads] members are DELIBERATELY-LIVE non-token reads of
+             * bindings and git evidence: SHAs, ancestry, and deleted paths. The git HEAD bracket is frozen over the
+             * caller's eligible roots in their existing order. The token-free [GitReads] projections retain the far
+             * HEAD read, ancestry check, and deleted-path query for mint time.
              */
             fun capture(
                 epochs: ObservationEpoch,
