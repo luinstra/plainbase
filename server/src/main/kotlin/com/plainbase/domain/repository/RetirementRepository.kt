@@ -95,6 +95,8 @@ interface RetirementRepository {
      * transaction's snapshot would be missed. That is the same bug as capturing a freshness stamp too late, mirrored:
      * a stamp must be read as EARLY as possible (before the evidence), and this must be read as LATE as possible
      * (inside the boundary it is checked against). The implementation therefore calls this INSIDE its transaction, once.
+     * This safety argument also depends on unavailability remaining sticky across the pass; any future recovery path
+     * that clears a mark must first replace that dated guarantee with a durable transition the apply can validate.
      *
      * **Because it runs there, it must not LOG and must not block on IO** - an app-DB transaction holds the write lock
      * for its whole body, and a stalled log consumer or a network read inside one holds it for as long as it stalls.
@@ -120,8 +122,9 @@ interface RetirementRepository {
     fun observation(root: RootName): ObservationId
 
     /**
-     * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`) - the SECOND stamp a producer captures at
-     * MINT time and [applyProofs] re-checks. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
+     * [root]'s CURRENT binding epoch (`root_observation.binding_epoch`). Local inferred-proof producers capture it
+     * PRE-EVIDENCE in `AbsencePass.capture`; OBJECT_LIST receives its epoch co-read with the manifest at the poll
+     * boundary. [applyProofs] re-checks it. Orthogonal to [observation]: this advances on a `bind`, that revokes on a
      * break. Zero when the root has no observation row yet (nothing to be fresh against, and no proof outstanding).
      */
     fun bindingEpoch(root: RootName): BindingEpoch

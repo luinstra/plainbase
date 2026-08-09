@@ -17,7 +17,7 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * UNRESOLVED --[every at-risk binding WITNESSED BY IDENTITY]--> TRUSTED   (or an operator accepts - C5)
  *     mints NOTHING while it waits, across polls AND restarts.
  *
- * TRUSTED --[a complete, generation-bound LIST]--> AbsenceProof(OBJECT_LIST) over rowsAtStart - listed
+ * TRUSTED --[a complete, generation-bound LIST]--> an OBJECT_LIST absence proof over rowsAtStart - listed
  *     a DRAINED bucket under a TRUSTED binding reaps normally: that is an ordinary delete, and it converges.
  *
  * any binding CHANGE --> UNRESOLVED, at_risk re-snapshotted, observation token revoked.

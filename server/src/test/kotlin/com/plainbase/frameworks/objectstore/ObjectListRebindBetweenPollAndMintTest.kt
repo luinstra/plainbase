@@ -4,10 +4,13 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.RootBinding
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 
 /**
  * **The one interleaving `AbsenceInterleavingHarnessTest` structurally cannot reach: OBJECT_LIST's poll boundary.**
@@ -22,26 +25,34 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
  *    pagination boundary, so stamp and evidence are the same instant. A later bind advances past it and loses the
  *    compare. Nothing to probe.
  *  - the OBSERVATION half is read at the top of `rebuild()` - i.e. AFTER the evidence it stamps. For a local root the
- *    stamp precedes the evidence; here it cannot. Its defence is not the token at all, it is
- *    [BindingLatch.proven]'s `manifest.binding != latched.binding` guard, and THAT is what this pins.
+ *    stamp precedes the evidence; here it cannot. Its defence is the latch's TWO refusals, in implementation order:
+ *    [BindingLatch.proven]'s `manifest.binding != latched.binding` comparison returns first, with the UNRESOLVED trust
+ *    check behind it. This row pins that pair.
  *
  * **Why this specific event, and not a bare revoke.** The events that can revoke an object root's observation are
- * exactly: an identity rebind (`onIdentityRebind` -> `broke`), an availability loss, and a restart. A restart destroys
- * the in-memory manifest, so no stale proof survives to apply. An availability loss is caught source-agnostically by
- * `applyProofs`' `unavailableNow` standing gate. A BARE revoke is unreachable - nothing else calls `broke` for an
- * object root, and `ObjectContentStore` documents that it never invokes `onBreak` at all. That leaves the rebind as
- * the only realistic event in the (poll -> mint) window, which makes it the whole probe rather than one cell of many.
+ * exactly: a binding rebind, an availability loss, and a restart. This interleave's rebind rides [BindingLatch.observe]
+ * into `SqlDelightRootTopologyRepository.observeBinding`, whose binding transaction revokes the observation. A restart
+ * destroys the in-memory manifest, so no stale proof survives to apply. An availability loss is caught
+ * source-agnostically by `applyProofs`' `unavailableNow` standing gate. A BARE revoke is unreachable: outside that
+ * transactional rebind, nothing calls `broke` for an object root, and `ObjectContentStore` documents that it never
+ * invokes `onBreak` at all. That leaves the rebind as the only realistic event in the (poll -> mint) window, which
+ * makes it the whole probe rather than one cell of many.
  *
  * A LIST taken against one bucket must authorize NOTHING once the root points somewhere else: copy and re-bind are
  * indistinguishable from the listing's point of view, and what it failed to see in the old universe says nothing about
  * the new one.
  *
  * **WHAT THIS MEASURED, which is not what was expected.** The property holds - and the CONTROL proves that is not
- * vacuous, because the identical delete under an unchanged binding does converge. But backing out
- * `manifest.binding != latched.binding` leaves BOTH rows green: that guard is inert here. What actually refuses is
- * [BindingLatch.proven]'s TRUST check, because observing a new binding lands the latch UNRESOLVED and trust is tested
- * before bindings are compared. So the binding comparison is the belt for a stale generation under a binding that has
- * become trusted again - a state this row does not construct - and the trust status is what closes the realistic case.
+ * vacuous, because the identical delete under an unchanged binding does converge. Both refusal conditions are true:
+ * [BindingLatch.proven] compares the manifest binding first, while observing a new binding also leaves the latch
+ * UNRESOLVED so the following trust check would refuse if that comparison were backed out. The comparison is the belt
+ * for a stale generation under a binding that has become trusted again, a state this row does not construct.
+ *
+ * The mid-lifetime [BindingLatch.observe] below is test-only. Its trusted-again world row is deliberately deferred,
+ * with the owner's acceptance and no tracked issue, until whichever chunk first makes observe reachable mid-lifetime
+ * through config reload or multi-root object backends. This KDoc is the durable record. Today observe is boot-only, and
+ * the `trustCalls shouldBe 0` RED in `SqlDelightRootTopologyRepositoryTest` pins comparison-before-trust ORDER, not the
+ * trusted-again world.
  *
  * That distinction is the reason to run a probe instead of reasoning: the KDoc on the caller previously credited the
  * binding guard, and it was crediting the wrong half.
@@ -67,12 +78,10 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             bucket.remove("guides/deploy.md")
             world.store.pollOnce()
 
-            // THE INTERLEAVE: the operator re-points the root at another bucket. Production does both halves of this -
-            // the latch records the new binding, and `onIdentityRebind` breaks the epoch, which revokes the token. It
-            // lands AFTER the listing was taken and BEFORE the mint reads its observation stamp, which is the window
-            // this source cannot close by ordering.
+            // THE INTERLEAVE: one BindingLatch.observe call records the new binding and advances its freshness epoch
+            // transactionally. It lands AFTER the listing was taken and BEFORE AbsencePass.capture reads the observation
+            // stamp at the top of rebuild(), which is the window this source cannot close by ordering.
             BindingLatch(world.topology).observe(RootName.PRIMARY, elsewhere)
-            world.retirements.revoke(RootName.PRIMARY)
 
             world.builder().rebuild()
 
@@ -98,6 +107,28 @@ class ObjectListRebindBetweenPollAndMintTest : FunSpec({
             withClue("an ordinary delete in a TRUSTED bucket is exactly what OBJECT_LIST exists to converge") {
                 world.idMap.bindings().map { it.id } shouldContainExactlyInAnyOrder listOf(runbookId)
                 world.idMap.retiredBindings().map { it.id } shouldContainExactlyInAnyOrder listOf(deployId)
+            }
+        }
+    }
+
+    test("an idempotent same-id re-bind after LIST cannot refresh the manifest epoch at mint") {
+        ObjectAbsenceWorld().use { world ->
+            val bucket = FakeObjectStore().apply {
+                seedPage("guides/deploy.md", deployId)
+                seedPage("guides/runbook.md", runbookId)
+            }
+            world.boot(bucket, handbookBinding).rebuild()
+
+            bucket.remove("guides/deploy.md")
+            world.store.pollOnce()
+
+            val deployPath = RootedPath(RootName.PRIMARY, page("guides/deploy.md"))
+            world.idMap.bind(deployPath, deployId, materialized = true)
+            world.builder().rebuild()
+
+            withClue("the pre-rebind LIST cannot retire the binding restored after its epoch was captured") {
+                world.idMap.bindingInRoot(RootName.PRIMARY, deployId).shouldNotBeNull()
+                world.idMap.retiredAt(RootName.PRIMARY, deployId).shouldBeNull()
             }
         }
     }

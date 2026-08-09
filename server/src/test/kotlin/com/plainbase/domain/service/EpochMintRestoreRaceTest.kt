@@ -30,11 +30,13 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  * lands strictly after it and the compare MISMATCHES.
  *
  * The two rows below pin the two stages, and it takes two DIFFERENT back-outs to tell them apart:
- *  - **durable-read window** - revert `ObservationEpoch.scanned` to a mint-time `retirements.bindingEpoch(root)`
- *    self-read. That is later than BOTH stages, so BOTH rows go RED.
- *  - **scan-end window** - move the `IndexBuilder` capture below the scan (still above `durable`). Only the SECOND row
- *    goes red; the durable-read row stays green. This is the one that earns the second row its separate existence, and
- *    the reason a single back-out is not proof: the first bug hid the second for a whole round.
+ *  - **durable-read window** - following the commit-3 GIT drill's constructor-seam shape, temporarily add a live
+ *    binding-epoch read to `AbsencePass`, bind it to `retirements::bindingEpoch` in `capture`, and re-point
+ *    `mintEpoch`'s `bindingEpochs.getValue(root)` to that seam. The read is later than BOTH stages, so BOTH rows go RED.
+ *  - **scan-end window** - move `AbsencePass.capture` below the `sources.mapNotNull { scanIfAvailable(it) }` scan while
+ *    keeping it above `confirmEpochs`' durable snapshot. Only the SECOND row goes red; the durable-read row stays green.
+ *    This is the one that earns the second row its separate existence, and the reason a single back-out is not proof:
+ *    the first bug hid the second for a whole round.
  *
  * Either way the observation token never moves here (no break, no restart), so only the binding-epoch half can catch
  * the re-bind - and captured after the evidence, it cannot.
@@ -59,9 +61,9 @@ class EpochMintRestoreRaceTest : FunSpec({
                 // The page is deleted under the running server, so the next CONFIRMATION scan mints an EPOCH proof over it.
                 extraDir.resolve("notes/rollback.md").toFile().delete()
 
-                // THE RACE: a concurrent restore re-binds (extra, rollback, id) at the exact instant the EPOCH mint
-                // snapshots its durable evidence - advancing binding_epoch. The proof must lose the two-token compare;
-                // it only does so if its stamp was captured BEFORE this re-bind, i.e. before the durable read.
+                // THE RACE: a concurrent restore re-binds (extra, rollback, id) as the EPOCH mint snapshots its durable
+                // evidence, advancing binding_epoch. AbsencePass.capture already froze the stamp before any evidence,
+                // so the proof loses the two-token compare to this later re-bind.
                 val racing = ReBindAtDurableRead(world.idMap) { world.idMap.bind(rollback, id, materialized = true) }
                 world.builder(mainDir, LocalContentStore(extraDir), world.indexer, idMap = racing).rebuild()
 
@@ -92,11 +94,10 @@ class EpochMintRestoreRaceTest : FunSpec({
                 extraDir.resolve("notes/rollback.md").toFile().delete()
 
                 // THE RACE, one layer up from the durable-read test: a concurrent restore re-binds (extra, rollback, id)
-                // AS THE SCAN HANDS BACK - strictly after the scan's witnessed/unread are fixed (the file is already gone
-                // from disk), and, if the stamp is captured after the scan, before it. That advances binding_epoch to E+1,
-                // the late stamp captures E+1, the apply's two-token compare MATCHES, and the freshly re-created binding
-                // plus its dirty_page row are reaped. The proof must lose that compare; it only does if its stamp was
-                // captured BEFORE the scan, so this re-bind lands strictly after the stamp (E) and the compare re-reads E+1.
+                // AS THE SCAN HANDS BACK, strictly after the scan's witnessed/unread are fixed (the file is already gone
+                // from disk). AbsencePass.capture froze the stamp at E before the scan; this re-bind advances binding_epoch
+                // to E+1, so the apply's two-token compare rejects the proof and preserves the freshly re-created binding
+                // plus its dirty_page row. A post-scan capture would instead fold E+1 into the proof and permit the reap.
                 val racing = ReBindAtScanEnd(LocalContentStore(extraDir)) { world.idMap.bind(rollback, id, materialized = true) }
                 world.builder(mainDir, racing, world.indexer).rebuild()
 

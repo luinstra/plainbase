@@ -5,6 +5,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
@@ -29,6 +30,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  * `dirty.deleteById(binding.id)` (and the `.sq` to `WHERE id = :id`); retiring main then wipes extra's rows and
  * the survival assertions FAIL. Root-scoping greens them.
  */
+@OptIn(InferredProofMint::class)
 class RetirementCrossRootIsolationTest : FunSpec({
 
     val main = RootName.PRIMARY
@@ -60,7 +62,7 @@ class RetirementCrossRootIsolationTest : FunSpec({
             )
 
             val observation = retirements.observation(main) // mint main's freshness token; the proof stamps it
-            val proof = AbsenceProof(
+            val proof = AbsenceProof.inferred(
                 root = main,
                 source = ProofSource.EPOCH,
                 observationId = observation,

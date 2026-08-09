@@ -1,5 +1,9 @@
 package com.plainbase.frameworks.cli
 
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlPreparedStatement
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
@@ -14,6 +18,7 @@ import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -105,6 +110,35 @@ class ForceRetireCommandTest : FunSpec({
         }
     }
 
+    test("a same-id re-bind before the binding lookup refuses retirement and leaves the binding live") {
+        withConfig { config ->
+            val bindingPath = RootedPath(RootName.PRIMARY, TreePath.require("guides/a.md"))
+            seedBinding(config, bindingPath.path.value)
+
+            val out = CommandOutputFixture()
+            AdminCommand.run(
+                listOf("force-retire", "docs", id),
+                config,
+                out.output,
+                driverFactory = { databasePath ->
+                    RebindBeforeBindingLookupDriver(DatabaseFactory.createDriver(databasePath)) {
+                        DatabaseFactory.createDriver(databasePath).use { secondDriver ->
+                            SqlDelightIdMapRepository(DatabaseFactory.createDatabase(secondDriver))
+                                .bind(bindingPath, PageId.require(id), materialized = false)
+                        }
+                    }
+                },
+            ) shouldBe 1
+            out.stderr shouldContain "refused to retire"
+
+            DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+                val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
+                repo.bindingInRoot(RootName.PRIMARY, PageId.require(id)).shouldNotBeNull()
+                repo.retiredAt(RootName.PRIMARY, PageId.require(id)).shouldBeNull()
+            }
+        }
+    }
+
     test("a held roots.lock refuses force-retire without mutation, then the same command succeeds after release") {
         withConfig { config ->
             seedBinding(config, "guides/a.md")
@@ -165,3 +199,30 @@ class ForceRetireCommandTest : FunSpec({
         }
     }
 })
+
+private val SELECT_BINDING_BY_ROOT_ID_SQL = """
+    SELECT id_map.root, id_map.path, id_map.id, id_map.materialized
+    FROM id_map
+    WHERE id = ? AND root = ?
+""".trimIndent()
+
+private class RebindBeforeBindingLookupDriver(
+    private val delegate: SqlDriver,
+    private val beforeBindingLookup: () -> Unit,
+) : SqlDriver by delegate {
+    private var fired = false
+
+    override fun <R> executeQuery(
+        identifier: Int?,
+        sql: String,
+        mapper: (SqlCursor) -> QueryResult<R>,
+        parameters: Int,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<R> {
+        if (!fired && sql.trim() == SELECT_BINDING_BY_ROOT_ID_SQL) {
+            fired = true
+            beforeBindingLookup()
+        }
+        return delegate.executeQuery(identifier, sql, mapper, parameters, binders)
+    }
+}

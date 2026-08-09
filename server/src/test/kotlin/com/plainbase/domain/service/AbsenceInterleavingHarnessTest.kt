@@ -1,5 +1,9 @@
 package com.plainbase.domain.service
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
 import com.plainbase.domain.content.TreePath
@@ -20,9 +24,11 @@ import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import org.slf4j.LoggerFactory
 
 /**
  * **The interleaving matrix: the gate this bug class has never had.**
@@ -130,6 +136,30 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                 )
             }
         }
+
+    // Deliberate out-of-matrix mechanism pin: this repeats one cell solely to preserve the EPOCH source label.
+    test("EPOCH provenance - the stale-discard line names EPOCH") {
+        val logger = LoggerFactory.getLogger(SqlDelightRetirementRepository::class.java) as Logger
+        val previousLevel = logger.level
+        val captured = ListAppender<ILoggingEvent>()
+        captured.start()
+        try {
+            logger.level = Level.WARN
+            logger.addAppender(captured)
+            val survived = runPass(Authority.EPOCH, Boundary.ON_APPLY_ENTRY, Event.WATCHER_BREAK)
+            survived.binding shouldBe true
+            survived.recoveryRow shouldBe true
+            val messages = captured.list.map { it.formattedMessage }
+            withClue("captured stale-discard lines: ${messages.joinToString()}") {
+                messages.count { "a EPOCH proof" in it } shouldBe 1
+            }
+        } finally {
+            logger.detachAppender(captured)
+            captured.stop()
+            captured.list.clear()
+            logger.level = previousLevel
+        }
+    }
 
     // Not a matrix cell, and deliberately so: the matrix asks "can stale evidence reap a live binding", parameterised
     // over Authority x Boundary x Event, and this is neither a new Event nor a new Boundary. It asks the OTHER

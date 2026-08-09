@@ -10,6 +10,7 @@ import com.plainbase.domain.root.AbsenceProof
 import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.GitCheckpointAdvance
+import com.plainbase.domain.root.InferredProofMint
 import com.plainbase.domain.root.ObservationId
 import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
@@ -336,8 +337,9 @@ private fun SqlDelightRetirementRepository.staleRoot(name: String): RootName =
 private fun SqlDelightRetirementRepository.freshRoot(name: String): RootName =
     RootName.require(name).also { observation(it) }
 
+@OptIn(InferredProofMint::class)
 private fun proofAt(root: RootName, observation: Long, epoch: Long, covers: Set<BindingRef>): AbsenceProof =
-    AbsenceProof(root, ProofSource.EPOCH, ObservationId(observation), BindingEpoch(epoch), covers)
+    AbsenceProof.inferred(root, ProofSource.EPOCH, ObservationId(observation), BindingEpoch(epoch), covers)
 
 private fun bindingRef(index: Int): BindingRef =
     BindingRef(TreePath.require("p$index.md"), PageId.require("01900000-0000-7000-8000-%012d".format(index)))

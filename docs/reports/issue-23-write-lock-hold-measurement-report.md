@@ -4,6 +4,9 @@
 **Scope:** Issue #23, measuring how long the app DB write lock is held by corpus-scaled transactions
 after PR #22 moved the driver to `BEGIN IMMEDIATE`, and whether that change made it worse.
 
+**Code-reference baseline:** References are pinned to the tree at merge `9602879` (2026-08-05). `ObservationEpoch.proofFromScan`
+has since been renamed `confirmFromScan`, and line numbers have drifted.
+
 Measurement report. NUMBERS AND AN HONEST READING ONLY. The remedy is deliberately NOT chosen here;
 the issue forbids precommitting to one and the option space is mapped at the end for a separate
 owner decision.
