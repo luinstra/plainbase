@@ -543,23 +543,19 @@ class IndexBuilder(
     }
 
     /**
-     * The immutable absence-authority pass: capture freshness before evidence, then mint all inferred proof sources
-     * from that capture. The only licence to delete comes from EPOCH, OBJECT_LIST, or GIT here. OPERATOR is accepted
-     * elsewhere, and an absence outside those sources is never believed.
+     * The immutable absence-authority pass: capture freshness before evidence, then mint every inferred proof source
+     * from that capture. The only licence to delete comes from EPOCH, OBJECT_LIST, or GIT here; OPERATOR is accepted
+     * elsewhere, and an absence outside those sources is never believed. [capture] owns the fixed pre-evidence order
+     * and its rationale; mint order among the three sources is not load-bearing.
      *
-     * Mint order is not load-bearing. Opening an epoch used to revoke during minting, which forced later token reads
-     * and swallowed breaks in the evidence-to-mint window. [capture] establishes first and freezes both stamp maps
-     * before any evidence, so every mint stamps a value taken before it ran and later movement fails closed.
+     * STAMP PROVENANCE exception: OBJECT_LIST's binding half arrives as [ObjectManifest.bindingEpoch] and EPOCH's
+     * observation half as [ObservationEpoch.EpochConfirmation.observationId], each captured with its evidence. The
+     * field fence forbids a live token-answering capability, not those explicitly captured values.
      *
-     * STAMP PROVENANCE exception: OBJECT_LIST receives [ObjectManifest.bindingEpoch] as a method argument because it
-     * was captured with the poll's pagination evidence. [ObservationEpoch.EpochConfirmation.observationId] likewise
-     * enters as an honest method-parameter token. The field fence prevents a live token-answering capability, not
-     * those explicitly captured values.
-     *
-     * This boundary is enforced by construction, with a spelling and field-list tripwire as its teeth rather than as
-     * a proof. Any change to the capture order, or to any mint's stamp provenance, gets a harness row or a watched
-     * back-out first. Suppressions or compiler flags outside the scanned literals and files, reflection, and companion
-     * or delegated authority shapes remain review responsibilities.
+     * Enforced by construction, with a spelling and field-list tripwire as its teeth rather than a proof. Any change
+     * to the capture order, or to any mint's stamp provenance, gets a harness row or a watched back-out first.
+     * Suppressions or flags outside the scanned literals, reflection, and companion or delegated authority shapes
+     * remain review responsibilities.
      */
     @OptIn(InferredProofMint::class)
     private class AbsencePass private constructor(
@@ -571,7 +567,7 @@ class IndexBuilder(
         private val bindingEpochs: Map<RootName, BindingEpoch>,
         private val headsBefore: Map<RootName, String>,
     ) {
-        /** The C4 mint's two outputs: absence proofs to apply, and checkpoint advances that ride the same transaction. */
+        /** The GIT mint's two outputs: absence proofs to apply, and checkpoint advances that ride the same transaction. */
         data class GitMint(val proofs: List<AbsenceProof>, val advances: List<GitCheckpointAdvance>)
 
         /** The token-free read projection of one eligible root's history provider. */
@@ -582,7 +578,7 @@ class IndexBuilder(
         )
 
         /**
-         * **The EPOCH proof source (C2): the chunk that makes an online delete converge again.**
+         * **The EPOCH proof source: what makes an online delete converge.**
          *
          * A page is proven gone when an epoch that WITNESSED it, an unbroken observation of an identity-stable tree,
          * fully watched and scanned end to end, looks again and does not find it. Nothing here trusts a delete EVENT:
@@ -591,7 +587,7 @@ class IndexBuilder(
          * The four ways this can fail all fail CLOSED, into limbo and never into a delete:
          *  - **an object root gets no epoch at all.** Its watch is a POLLER over a mirror, so "the page is not in the
          *    mirror" says nothing about the bucket, and a rebound or wrong bucket would drain the mirror and read as a
-         *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the C3 binding latch, which is the
+         *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the binding latch, which is the
          *    thing that can actually see what the bucket holds.
          *  - **a root this pass could not scan** (unavailable, vanished, a live-root failure) BREAKS its epoch. That is
          *    the availability mark and the scan failure, arriving as the same fact: we stopped watching.
@@ -599,12 +595,8 @@ class IndexBuilder(
          *    "missing" from a walk that could not see the whole tree is not missing at all.
          *  - **partial watch coverage, a break, or a restart** are the epoch's own business ([ObservationEpoch]).
          *
-         * [bindingEpochs] was captured by the caller before the earliest negative evidence of the pass, before the
-         * scan whose witnessed and unread sets [ObservationEpoch.confirmFromScan] folds against. A restore re-bind of
-         * a covered key landing in or after that window advances the epoch past this value, so its proof loses
-         * `applyProofs`' two-token compare and cannot reap the freshly re-created binding and its recovery row.
-         * Captured after the scan, a bind in the scan-end-to-stamp gap would be folded into the stamp and the compare
-         * would then match the reap it must forbid.
+         * [bindingEpochs] is the caller's pre-evidence capture; [capture] carries the argument for why a restore's
+         * re-bind landing after it must lose `applyProofs`' two-token compare.
          */
         fun mintEpoch(confirmations: Map<RootName, ObservationEpoch.EpochConfirmation>): List<AbsenceProof> =
             confirmations.entries.map { (root, confirmation) ->
@@ -618,8 +610,7 @@ class IndexBuilder(
             }
 
         /**
-         * **The OBJECT_LIST proof source (C3): the chunk that lets an object root converge a delete without ever
-         * letting it believe the wrong bucket.**
+         * **The OBJECT_LIST proof source: an object root converges a delete without ever believing the wrong bucket.**
          *
          * An object root gets no observation epoch: its watch is a POLLER over a mirror, and "the page is not in the
          * mirror" says nothing about the bucket. What it gets instead is the bucket itself: a COMPLETE LIST is positive
@@ -654,23 +645,12 @@ class IndexBuilder(
             if (gone.isEmpty()) {
                 null
             } else {
-                // The binding-epoch stamp comes from the MANIFEST (revoke-before-stamp, C5), co-read with `rowsAtStart`
-                // at the pagination boundary, NOT from a mint-time read a whole poll cycle later, which would already
-                // reflect any restore's re-bind and match the reap it must forbid. The negative evidence and its stamp
-                // are thus the SAME durable moment. The observation half is the caller's pre-evidence capture rather
-                // than a mint-time read, so a break in this pass's evidence-to-mint window moves the token past it and
-                // fails the compare.
-                //
-                // The wider poll-to-mint gap this source alone has is NOT closed by ordering, and it is NOT closed by
-                // the token: nothing can move a stamp read after the evidence it stamps. It is closed by the LATCH.
-                // `ObjectListRebindBetweenPollAndMintTest` measured the pair in implementation order: `proven` returns
-                // first on the binding comparison, while a re-bind also leaves the latch UNRESOLVED so the trust check
-                // behind it would refuse if the comparison were backed out. The binding comparison is the belt for a
-                // stale generation under a binding that is trusted again. That state is production-unreachable today
-                // because BindingLatch.observe is boot-only, and its trusted-again world row is an owner-accepted
-                // deferral with no tracked issue until whichever chunk first makes observe reachable mid-lifetime
-                // through config reload or multi-root object backends. This comment and the test KDoc are the durable
-                // record. The SqlDelightRootTopologyRepositoryTest RED pins comparison-before-trust order, not that world.
+                // The binding-epoch stamp is the MANIFEST's, co-read with `rowsAtStart` at the pagination boundary; a
+                // mint-time read a poll cycle later would already reflect a restore's re-bind and match the reap it
+                // must forbid. The wider poll-to-mint gap this source alone has is closed by the LATCH, not by
+                // ordering: `ObjectListRebindBetweenPollAndMintTest` measured `proven` refusing on the binding
+                // comparison first, with the UNRESOLVED trust check behind it. That test's KDoc is the durable record
+                // of the trusted-again deferral (owner-accepted, no tracked issue).
                 AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
@@ -682,10 +662,10 @@ class IndexBuilder(
         }
 
         /**
-         * **The GIT proof source (C4): the chunk that restores OFFLINE delete convergence.**
+         * **The GIT proof source: OFFLINE delete convergence.**
          *
          * An operator deletes pages while the server is DOWN (`git rm && git commit`, then boot). No epoch witnessed the
-         * absence and no LIST can attest it, so without this the rows sit in limbo forever. C4 adds the one oracle that
+         * absence and no LIST can attest it, so without this the rows sit in limbo forever. This is the one oracle that
          * survives a shutdown: **recorded human intent**, a commit range that deleted the path, on a HEAD that DESCENDS
          * from the last one we recorded, confirmed by THIS pass's complete walk. Rename safety is free: a `git mv` is a
          * `D old` in the range, and the file the pass READ under the new name refutes the cover in the apply transaction.
@@ -698,11 +678,11 @@ class IndexBuilder(
          *  - **G3** no present, complete scan -> skip: a range confirmed by a partial view is not confirmed.
          *
          * Then, on the recorded checkpoint `oldHead`:
-         *  - **null** -> BASELINE: record the current head, mint NOTHING (there is no range; MIGRATION first-sight rule).
-         *    A pre-upgrade offline delete is the accepted residue.
+         *  - **null** -> BASELINE: record the current head, mint NOTHING (first sight establishes a baseline, never a
+         *    range). A pre-upgrade offline delete is the accepted residue.
          *  - **== postHead** -> nothing new.
          *  - **not an ancestor of postHead** -> fail closed (a force-push or `pull --rebase` rewrote history): no proof,
-         *    no advance, and the checkpoint pins until C5 reconcile re-baselines.
+         *    no advance, and the checkpoint pins until reconcile re-baselines.
          *  - otherwise -> the range's `.md` deletions this pass did NOT enumerate and did NOT fail to read become the
          *    cover. The checkpoint advances iff none of the range's deletions is UNREAD. The advance is
          *    RESOLUTION-based, not reap-based: an empty effective reap set still advances (a restored file would
@@ -789,47 +769,29 @@ class IndexBuilder(
 
         companion object {
             /**
-             * Runs the fixed pre-evidence capture. The GIT oracle's HEAD bracket captures each eligible root's head
-             * BEFORE the scan loop, so a `git rm && commit` landing DURING the walk cannot also let the advance consume
-             * the range that deletion is in. The mint re-reads HEAD and requires equality, so a head that moved
-             * mid-pass yields no proof and no advance. Establish, then stamp, and both before the earliest negative
-             * evidence.
+             * The fixed pre-evidence capture: establish, then stamp, then the HEAD bracket, all before the earliest
+             * evidence read. Calling this effectful function twice would revoke the first capture's tokens.
              *
-             * [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass is
-             * indistinguishable at the freshness compare from a watcher BREAK landing mid-pass. Hoisting the open above
-             * all evidence lets the stamps below be taken pre-evidence: past this point nothing this pass does moves
-             * either token, so any later movement invalidates this pass's proofs and every stamp fails closed against
-             * it. Movement does not imply a break. A concurrent save moves `binding_epoch` perfectly healthily. It
-             * implies only that this pass's evidence is no longer current, which is the same answer either way.
+             * [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass
+             * is indistinguishable at the freshness compare from a watcher BREAK. Past this point nothing this pass
+             * does moves either token, so any later movement (a break, or a perfectly healthy concurrent save) fails
+             * this pass's proofs closed. Captured any later, a stamp folds in the exact event it exists to detect: a
+             * re-bind of a covered key would survive the binding half's `applyProofs` compare, and a mid-pass break
+             * would be stamped with its own post-break token and reap a tree we had stopped watching.
              *
-             * Both stamps are captured here, before the git HEAD bracket, scan, and durable snapshot each mint reads,
-             * which are the earliest evidence reads of the whole pass:
-             *  - `binding_epoch`, per local root, so a concurrent re-bind of a covered key advances past this value and
-             *    the proof loses `applyProofs`' two-token compare rather than reaping the freshly re-created binding.
-             *  - `observation_id`, per root, so a BREAK in the evidence-to-mint window moves the token past this value
-             *    instead of being folded into a stamp read after it. A mint-time read would stamp its own post-break
-             *    value, match, and reap a tree it had stopped watching.
+             * Observation stamps precede the binding capture, and stamping the token `establish` HANDS BACK is
+             * load-bearing: a re-read after the open (or after the binding capture) could absorb a break landing
+             * between the two operations and stamp exactly the value `applyProofs` is about to compare. An UNOBSERVED
+             * root falls back to a plain read so the map covers every source: GIT deliberately needs no epoch, since
+             * an offline `git rm` must converge on an unobserved root. [gitOracleRoots] is a subset of [localSources],
+             * so the binding capture covers EPOCH and GIT; OBJECT_LIST takes its binding half from the manifest, and
+             * OPERATOR arrives pre-evidence elsewhere.
              *
-             * Captured any later, either stamp folds in the event it exists to detect. [gitOracleRoots] is a subset of
-             * [localSources], so the binding capture covers EPOCH and GIT. OBJECT_LIST takes its binding half from the
-             * manifest, co-read with the pagination boundary. OPERATOR and API_DELETE arrive pre-evidence, unaffected.
-             * `establish` hands back the token it installed, and that is load-bearing: re-reading it after the open could
-             * absorb a break landing between those two operations and stamp the proof with exactly the value
-             * `applyProofs` is about to compare. A root with no epoch falls back to a plain read, which is honest for it.
-             * GIT deliberately needs no epoch because an offline `git rm` converges on an unobserved root, which is why
-             * this map covers every source rather than only those holding an epoch.
-             *
-             * Observation stamps come FIRST of the two captures, and that ordering is itself load-bearing. For a root
-             * `establish` opened, the value is the one it installed. But an UNOBSERVED root, the case GIT exists for,
-             * falls back to a plain read. A read after the binding capture would absorb a break that landed between the
-             * two, leaving one stamp catching an event the other cannot. Both are as early as the pass can make them.
-             * Calling this effectful function twice would revoke the first capture's tokens.
-             *
-             * The repositories enter only as parameters; after construction no field can answer a live freshness
-             * token. [durable], [gitCheckpoint], and the [GitReads] members are DELIBERATELY-LIVE non-token reads of
-             * bindings and git evidence: SHAs, ancestry, and deleted paths. The git HEAD bracket is frozen over the
-             * caller's eligible roots in their existing order. The token-free [GitReads] projections retain the far
-             * HEAD read, ancestry check, and deleted-path query for mint time.
+             * The HEAD bracket freezes each eligible root's head before the scan; the mint re-reads HEAD and requires
+             * equality, so a `git rm && commit` landing during the walk yields no proof and no advance. The
+             * repositories enter only as parameters: after construction no field can answer a live freshness token,
+             * and [durable], [gitCheckpoint], and the [GitReads] members are DELIBERATELY-LIVE non-token reads of
+             * bindings and git evidence (SHAs, ancestry, deleted paths).
              */
             fun capture(
                 epochs: ObservationEpoch,
