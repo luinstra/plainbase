@@ -348,6 +348,8 @@ class IndexBuilder(
         }.toMap()
 
         val confirmations = confirmEpochs(observed)
+        // Deliberately paired with mintObjectList's completeness belt: this gate suppresses the manifest read, while
+        // the mint-side gate must remain fail-closed if this call-site selection is ever simplified.
         val manifests = sources.filter { it.root.backend is RootBackend.Object }
             .filter { source -> observed.any { it.root == source.root.name && it.complete } }
             .mapNotNull { source -> source.manifests?.latestManifest()?.let { source.root.name to it } }

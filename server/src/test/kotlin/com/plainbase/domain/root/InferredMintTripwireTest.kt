@@ -16,10 +16,11 @@ import java.nio.file.Paths
  * the enumerated source opt-in, propagating marker, fully-qualified reference, Gradle flag, and suppression spellings,
  * plus instance fields on the pass and its Git projection. A suppression or compiler flag spelled outside the scanned
  * literals and files, a companion/delegated authority shape, and reflection remain review responsibilities. The
- * compiler gate was watched refusing an unannotated inferred factory call by the commit-1 compile-probe drill recorded
- * in `.crew/c5.1-execution-log.md`; that refusal is not a committed fixture. The exact-four marker count also means the
- * two authority files must never name `InferredProofMint` in prose, so a future documentation edit fails for a readable
- * reason.
+ * Compiler probe diagnostics observed on 2026-08-08:
+ *  - Copy: `Cannot access 'fun copy(...)': it is private in 'com.plainbase.domain.root.AbsenceProof'`.
+ *  - Opt-in: `Constructing an INFERRED absence proof outside the pass boundary re-opens the revoke-before-stamp bug class.`
+ * The exact-four marker count also means the two authority files must never name `InferredProofMint` in prose, so a
+ * future documentation edit fails for a readable reason.
  */
 class InferredMintTripwireTest : FunSpec({
 
@@ -125,9 +126,12 @@ private fun Class<*>.instanceFieldNames(): Set<String> = declaredFields
     .filterNot { field -> Modifier.isStatic(field.modifiers) || field.isSynthetic }
     .mapTo(mutableSetOf()) { it.name }
 
-private val WALK_EXCLUDED_DIRECTORIES = setOf("node_modules", ".git", "build")
+private val WALK_EXCLUDED_DIRECTORIES = setOf("node_modules", "build")
 
-private fun Path.isWalkExcluded(): Boolean = any { it.toString() in WALK_EXCLUDED_DIRECTORIES }
+private fun Path.isWalkExcluded(): Boolean = any { segment ->
+    val name = segment.toString()
+    name.startsWith(".") || name in WALK_EXCLUDED_DIRECTORIES
+}
 
 private fun kotlinFiles(root: Path): List<Path> = Files.walk(root).use { paths ->
     paths.filter { path ->

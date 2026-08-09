@@ -30,11 +30,13 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  *    check behind it. This row pins that pair.
  *
  * **Why this specific event, and not a bare revoke.** The events that can revoke an object root's observation are
- * exactly: an identity rebind (`onIdentityRebind` -> `broke`), an availability loss, and a restart. A restart destroys
- * the in-memory manifest, so no stale proof survives to apply. An availability loss is caught source-agnostically by
- * `applyProofs`' `unavailableNow` standing gate. A BARE revoke is unreachable - nothing else calls `broke` for an
- * object root, and `ObjectContentStore` documents that it never invokes `onBreak` at all. That leaves the rebind as
- * the only realistic event in the (poll -> mint) window, which makes it the whole probe rather than one cell of many.
+ * exactly: a binding rebind, an availability loss, and a restart. This interleave's rebind rides [BindingLatch.observe]
+ * into `SqlDelightRootTopologyRepository.observeBinding`, whose binding transaction revokes the observation. A restart
+ * destroys the in-memory manifest, so no stale proof survives to apply. An availability loss is caught
+ * source-agnostically by `applyProofs`' `unavailableNow` standing gate. A BARE revoke is unreachable: outside that
+ * transactional rebind, nothing calls `broke` for an object root, and `ObjectContentStore` documents that it never
+ * invokes `onBreak` at all. That leaves the rebind as the only realistic event in the (poll -> mint) window, which
+ * makes it the whole probe rather than one cell of many.
  *
  * A LIST taken against one bucket must authorize NOTHING once the root points somewhere else: copy and re-bind are
  * indistinguishable from the listing's point of view, and what it failed to see in the old universe says nothing about

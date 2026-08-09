@@ -22,6 +22,7 @@ import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -96,21 +97,25 @@ class ForceRetireCommandNativeTest {
     @Test
     fun `force-retire refuses a same-id re-bind before the binding lookup in-image`() {
         withSeededExtra { config ->
-            val exit = AdminCommand.run(
-                listOf("force-retire", "extra", x.value),
-                config,
-                NativeCommandOutputCapture.current,
-                driverFactory = { databasePath ->
-                    NativeRebindBeforeBindingLookupDriver(DatabaseFactory.createDriver(databasePath)) {
-                        DatabaseFactory.createDriver(databasePath).use { secondDriver ->
-                            SqlDelightIdMapRepository(DatabaseFactory.createDatabase(secondDriver))
-                                .bind(path, x, materialized = false)
+            var exit: Int? = null
+            val stderr = NativeCommandOutputCapture.captureStderr {
+                exit = AdminCommand.run(
+                    listOf("force-retire", "extra", x.value),
+                    config,
+                    NativeCommandOutputCapture.current,
+                    driverFactory = { databasePath ->
+                        NativeRebindBeforeBindingLookupDriver(DatabaseFactory.createDriver(databasePath)) {
+                            DatabaseFactory.createDriver(databasePath).use { secondDriver ->
+                                SqlDelightIdMapRepository(DatabaseFactory.createDatabase(secondDriver))
+                                    .bind(path, x, materialized = false)
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+            }
 
             assertEquals(1, exit)
+            assertContains(stderr, "admin force-retire: refused to retire ${x.value} in root '${extra.value}'")
             DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
                 val repo = SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver))
                 assertNotNull(repo.bindingInRoot(extra, x))
