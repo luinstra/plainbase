@@ -11,6 +11,7 @@ import com.plainbase.domain.history.Commit
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.FileDiff
 import com.plainbase.domain.history.HistoryProvider
+import com.plainbase.domain.repository.DirtyPage
 import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.RetirementRepository
@@ -23,6 +24,8 @@ import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
+import com.plainbase.domain.search.PageSearchState
+import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import io.kotest.assertions.withClue
@@ -88,7 +91,7 @@ class AbsenceInterleavingHarnessTest : FunSpec({
     suspend fun runPass(source: Authority, boundary: Boundary?, event: Event?): Survival =
         withAbsenceTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nbody\n")
-            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nbody\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback-unique-term\n")
             writePage(extraDir, "notes/keep.md", "# Keep\n\nbody\n")
             AbsenceWorld(mainDir, extraDir).use { world ->
                 // EPOCH needs a watched root; GIT deliberately needs NO epoch at all, and that difference is the whole
@@ -101,6 +104,16 @@ class AbsenceInterleavingHarnessTest : FunSpec({
 
                 // An interrupted save left a recovery row: USER CONTENT, and the thing a wrong reap destroys.
                 world.dirtyPages.mark(id, RootedPath(extra, rollback), "sha256:recovery", Stage.WRITING)
+
+                val rooted = RootedPageId(extra, id)
+                val expectedRaw = requireNotNull(world.engine.indexedState()[rooted])
+                val expectedCheckpoint = requireNotNull(world.checkpoints.load()[rooted])
+                val expectedDirty = requireNotNull(world.dirtyPages.get(rooted))
+                val expectedBinding = requireNotNull(world.idMap.bindingInRoot(extra, id))
+
+                val beforeDelete = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0))
+                beforeDelete.total shouldBe 1L
+                beforeDelete.hits.map { RootedPageId(it.root, it.pageId) } shouldBe listOf(rooted)
 
                 // The page is deleted under the running server, so the CONFIRMATION pass below mints a proof over it.
                 // For GIT that deletion is also COMMITTED: the head moves, and the range is what proves it gone.
@@ -130,9 +143,25 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                     idMap = HookedIdMap(world.idMap, at(Boundary.AT_DURABLE_READ)),
                 ).rebuild()
 
+                val search = world.engine.search(SearchQuery("rollback-unique-term", limit = 20, offset = 0))
                 Survival(
                     binding = world.idMap.retiredAt(extra, id) == null,
-                    recoveryRow = world.dirtyPages.get(RootedPageId(extra, id)) != null,
+                    recoveryRow = world.dirtyPages.get(rooted) != null,
+                    currentRetired = rooted in world.idMap.retiredUnboundIds(),
+                    liveBinding = world.idMap.bindingInRoot(extra, id)?.path == RootedPath(extra, rollback),
+                    rawPresent = rooted in world.engine.indexedState(),
+                    termTotal = search.total,
+                    termHitsPresent = search.hits.isNotEmpty(),
+                    checkpointPresent = rooted in world.checkpoints.load(),
+                    dirtyPresent = world.dirtyPages.get(rooted) != null,
+                    expectedRaw = expectedRaw,
+                    actualRaw = world.engine.indexedState()[rooted],
+                    expectedCheckpoint = expectedCheckpoint,
+                    actualCheckpoint = world.checkpoints.load()[rooted],
+                    expectedDirty = expectedDirty,
+                    actualDirty = world.dirtyPages.get(rooted),
+                    expectedBinding = if (event == Event.REBIND) expectedBinding.copy(materialized = true) else expectedBinding,
+                    actualBinding = world.idMap.bindingInRoot(extra, id),
                 )
             }
         }
@@ -218,6 +247,17 @@ class AbsenceInterleavingHarnessTest : FunSpec({
             withClue("and the reap takes the recovery row with it - that is the loss the matrix exists to forbid") {
                 survived.recoveryRow shouldBe false
             }
+            survived.currentRetired shouldBe true
+            survived.liveBinding shouldBe false
+            survived.rawPresent shouldBe false
+            survived.termTotal shouldBe 0L
+            survived.termHitsPresent shouldBe false
+            survived.checkpointPresent shouldBe false
+            survived.dirtyPresent shouldBe false
+            survived.actualRaw shouldBe null
+            survived.actualCheckpoint shouldBe null
+            survived.actualDirty shouldBe null
+            survived.actualBinding shouldBe null
         }
 
         for (boundary in Boundary.entries) {
@@ -230,6 +270,19 @@ class AbsenceInterleavingHarnessTest : FunSpec({
                     withClue("the dirty_page USER-CONTENT row was destroyed despite $event at $boundary") {
                         survived.recoveryRow shouldBe true
                     }
+                    withClue("current durable retirement changed despite invalidated evidence at $event/$boundary") {
+                        survived.currentRetired shouldBe false
+                    }
+                    survived.liveBinding shouldBe true
+                    survived.rawPresent shouldBe true
+                    survived.termTotal shouldBe 1L
+                    survived.termHitsPresent shouldBe true
+                    survived.checkpointPresent shouldBe true
+                    survived.dirtyPresent shouldBe true
+                    survived.actualRaw shouldBe survived.expectedRaw
+                    survived.actualCheckpoint shouldBe survived.expectedCheckpoint
+                    survived.actualDirty shouldBe survived.expectedDirty
+                    survived.actualBinding shouldBe survived.expectedBinding
                 }
             }
         }
@@ -273,7 +326,25 @@ private enum class Event {
     AVAILABILITY_MARK,
 }
 
-private data class Survival(val binding: Boolean, val recoveryRow: Boolean)
+private data class Survival(
+    val binding: Boolean,
+    val recoveryRow: Boolean,
+    val currentRetired: Boolean,
+    val liveBinding: Boolean,
+    val rawPresent: Boolean,
+    val termTotal: Long,
+    val termHitsPresent: Boolean,
+    val checkpointPresent: Boolean,
+    val dirtyPresent: Boolean,
+    val expectedRaw: PageSearchState,
+    val actualRaw: PageSearchState?,
+    val expectedCheckpoint: TreePath,
+    val actualCheckpoint: TreePath?,
+    val expectedDirty: DirtyPage,
+    val actualDirty: DirtyPage?,
+    val expectedBinding: IdBinding,
+    val actualBinding: IdBinding?,
+)
 
 /** Fires at most once, so a seam the pass reads several times still yields ONE event at the earliest read. */
 private class FireOnce(private val fire: () -> Unit) {

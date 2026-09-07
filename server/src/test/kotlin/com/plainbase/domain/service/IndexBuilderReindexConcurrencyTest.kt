@@ -2,6 +2,7 @@ package com.plainbase.domain.service
 
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.ScanResult
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -36,7 +37,9 @@ class IndexBuilderReindexConcurrencyTest : FunSpec({
 
             SearchDb(searchDir.resolve("search.db")).use { searchDb ->
                 val provider = Fts5SearchProvider(searchDb)
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 val store = LocalContentStore(dir)
 
                 // A scan gate: the SECOND scan (the watcher rebuild) parks on a latch so the reindex
@@ -58,12 +61,13 @@ class IndexBuilderReindexConcurrencyTest : FunSpec({
                     dir,
                     contentStore = gating,
                     listeners = listOf(
-                        IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired)
+                        IndexBuilder.PublicationListener { snap, _ ->
+                            indexer.sync(snap)
                         },
                     ),
                     searchIndexer = indexer,
                 ).use { harness ->
+                    authority = harness.idMap
                     val builder = harness.builder
                     builder.rebuild() // initial publish + sync: engine indexes "staleterm"
 

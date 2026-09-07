@@ -5,6 +5,7 @@ import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.BindingRef
 import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 
 /**
@@ -60,6 +61,12 @@ interface IdMapRepository {
 
     /** The binding for [id] WITHIN [root], or null - the root-scoped `ownerOf` seam (C5). */
     fun bindingInRoot(root: RootName, id: PageId): IdBinding?
+
+    /** Every rooted tombstone that has no corresponding live binding. */
+    fun retiredUnboundIds(): Set<RootedPageId>
+
+    /** Whether [rooted] is tombstoned without a corresponding live binding. */
+    fun isRetiredUnbound(rooted: RootedPageId): Boolean
 
     /** Every tombstone, for reporting and tests. */
     fun retiredBindings(): List<RetiredBinding>

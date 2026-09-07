@@ -10,6 +10,7 @@ import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.RetiredBinding
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import kotlin.time.Clock
 
@@ -42,6 +43,12 @@ class SqlDelightIdMapRepository(
 
     override fun bindingInRoot(root: RootName, id: PageId): IdBinding? =
         queries.selectBindingByRootId(id = id, root = root).executeAsOneOrNull()?.toBinding()
+
+    override fun retiredUnboundIds(): Set<RootedPageId> =
+        queries.selectRetiredUnboundIds().executeAsList().map { RootedPageId(it.root, it.id) }.toSet()
+
+    override fun isRetiredUnbound(rooted: RootedPageId): Boolean =
+        queries.selectRetiredUnboundByRootId(root = rooted.root, id = rooted.id).executeAsOneOrNull() != null
 
     override fun retiredBindings(): List<RetiredBinding> = queries.selectAllRetired().executeAsList().map { it.toRetired() }
 

@@ -435,7 +435,7 @@ class MultiRootRuntimeTest : FunSpec({
                     // carried, not dropped
                     harness.builder.current.byRootedId.containsKey(RootedPageId(RootName.require("extra"), extraPage)).shouldBeTrue()
                 }
-                withClue("an unplugged disk deletes NOTHING: the listeners may only delete what the pass SCANNED") {
+                withClue("an unmounted root grants no retirement authority: live checkpoints and engine rows survive") {
                     harness.checkpoints.load() shouldHaveSizeOf checkpointsBefore
                     harness.searchProvider.indexedState().keys shouldBe engineBefore
                 }
@@ -480,7 +480,7 @@ class MultiRootRuntimeTest : FunSpec({
         }
     }
 
-    test("the FIRST publish under a boot-unavailable root deletes NOTHING for it (search rows and checkpoints survive)") {
+    test("the FIRST publish under a boot-unavailable root preserves checkpoints and the live binding") {
         twoRoots(seedExtra = false) { main, extra ->
             val missing = extra.resolve("gone-forever")
             val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5b")

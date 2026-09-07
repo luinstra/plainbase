@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.koin
 
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.SearchIndexer
@@ -16,17 +17,24 @@ import org.koin.dsl.onClose
  * the Koin context), the [Fts5SearchProvider] behind the domain port, and the §B4 seam —
  * [SearchIndexer.sync] registered as an [IndexBuilder.PublicationListener] (collected by
  * `indexModule`'s `getAll()`), so every published snapshot syncs the engine inside the serialized
- * rebuild. The qualifier keeps this definition distinct from S5's checkpoint listener.
+ * rebuild. The indexer and builder share the same [IdMapRepository] callbacks for current retirement
+ * eligibility. The qualifier keeps this definition distinct from S5's checkpoint listener.
  */
 val searchModule = module {
     single { SearchDb(get<PlainbaseConfig>().searchDatabasePath) } onClose { it?.close() }
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
-    single { SearchIndexer(get(), get()) }
-    // The listener seam hands each listener its delete authority as rooted ids, and SearchIndexer.sync now keys
-    // by (root, id) too, so the rooted retired set flows straight through.
+    single {
+        val idMap = get<IdMapRepository>()
+        SearchIndexer(
+            provider = get(),
+            splitter = get(),
+            retiredUnboundIds = idMap::retiredUnboundIds,
+            isRetiredUnbound = idMap::isRetiredUnbound,
+        )
+    }
     single<IndexBuilder.PublicationListener>(named("searchSync")) {
         val indexer = get<SearchIndexer>()
-        IndexBuilder.PublicationListener(indexer::sync)
+        IndexBuilder.PublicationListener { snapshot, _ -> indexer.sync(snapshot) }
     }
 }

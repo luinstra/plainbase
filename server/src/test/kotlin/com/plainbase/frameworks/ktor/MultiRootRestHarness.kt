@@ -104,7 +104,12 @@ class MultiRootRestHarness(
     private val searchDir = Files.createTempDirectory("plainbase-multiroot-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
-    private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+    private val searchIndexer = SearchIndexer(
+        searchProvider,
+        SectionSplitter(),
+        { index.idMap.retiredUnboundIds() },
+        { index.idMap.isRetiredUnbound(it) },
+    )
 
     /**
      * One store per root — constructed for EVERY configured root, including one whose path is missing. That is the
@@ -123,18 +128,23 @@ class MultiRootRestHarness(
         )
     }
 
-    val index = IndexHarness(
+    lateinit var index: IndexHarness
+        private set
+
+    init {
+        index = IndexHarness(
         root = requireNotNull(registry.primary.localPath),
         rootRegistry = registry,
         availability = availability,
         sources = roots.map { IndexBuilder.Source(it, storesByRoot.getValue(it.name), NoOpHistoryProvider) },
         listeners = listOf(
-            IndexBuilder.PublicationListener { snap, retired ->
-                searchIndexer.sync(snap, retired)
+            IndexBuilder.PublicationListener { snap, _ ->
+                searchIndexer.sync(snap)
             },
         ),
         searchIndexer = searchIndexer,
-    )
+        )
+    }
 
     val builder get() = index.builder
     val idMap get() = index.idMap

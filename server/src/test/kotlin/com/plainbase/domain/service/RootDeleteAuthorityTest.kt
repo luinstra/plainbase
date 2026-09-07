@@ -8,9 +8,11 @@ import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.search.SearchProvider
+import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.ktor.livePathOf
@@ -28,32 +30,31 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
 
 /**
- * DELETE AUTHORITY (ADR-0011 D5), pinned at the places a pass can hand it out by accident.
+ * DELETE AUTHORITY (ADR-0011 D5), pinned at the places an outage or incomplete scan might hand it out by accident.
  *
- * Every deletion pipeline downstream of a rebuild - the checkpoint replace, the search sync, the search
- * generation swap, the id_map supersession - is keyed off ONE set: the roots the pass actually walked. So the
- * only way a root's durable state dies behind an outage is for something to put it in that set, or to fail to
- * carry it out of one. That is exactly what these rows drive:
+ * Checkpoints and id_map supersessions consume pass-local applied proofs; search reconciliation reads current
+ * durable retired-unbound authority and carries engine rows that are not retired. A root being absent from a scan,
+ * unavailable, or omitted from a snapshot therefore cannot itself authorize deletion. These rows pin that boundary:
  *
  *  - a scan that VANISHES MID-WALK and returns SHORT rather than throwing (a directory iteration simply runs out
  *    of entries) - the pass must classify the SCAN IT WAS HANDED, not the probe it ran before starting;
  *  - a LIVE root whose scan fails (one `chmod 000` subdirectory) - that root's pass fails, never the whole
  *    rebuild, which at boot would take the server down over one unreadable folder in one extra root;
- *  - the search REINDEX, which re-derives the engine from the snapshot alone and therefore says nothing at all
- *    about a root unavailable since boot - unless it is told what the pass that published that snapshot was
- *    allowed to delete;
- *  - and the CORPUS-LOSS TRIPWIRE, the last check and the only one anchored in state that survives a restart: a
+ *  - the search REINDEX, which carries unretired rows and removes only current durable retired-unbound identities,
+ *    so an unavailable root cannot be purged merely because the current snapshot has no section for it;
+ *  - and the CORPUS-LOSS TRIPWIRE, a serving/outage check anchored in state that survives a restart: a
  *    root that scans to ZERO pages while its durable rows say otherwise, on a corpus this process has never seen,
- *    is a broken view rather than a delete. Its three siblings are here too, because a tripwire is only as good as
- *    the cases it lets THROUGH: the control (a corpus we watched drain still deletes), the operator override, and
- *    the fresh empty root that must be allowed to be empty.
+ *    is a broken view rather than a delete. The related cases distinguish an unproven watched drain, a cross-root
+ *    move, and a fresh empty root that must be allowed to be empty from a genuinely authorized retirement.
  */
 class RootDeleteAuthorityTest : FunSpec({
 
@@ -120,24 +121,28 @@ class RootDeleteAuthorityTest : FunSpec({
         }
     }
 
-    // ---- the CORPUS-LOSS TRIPWIRE: a zero-page scan is not, on its own, a delete instruction ---------
+    // ---- outage and proof-authority controls: a zero-page scan is not, on its own, a delete instruction ---------
     //
-    // Every probe upstream of the pass is a PROXY for "is the corpus there", and each has a hole at BOOT - where
-    // the tree an identity check would compare against is the broken one, and the remedy it prescribes (restart)
-    // is the trigger. What they all come out as is a root that scans to ZERO pages, which is also exactly what a
-    // genuine full-corpus delete looks like. Durable rows are the one oracle that outlives the process, so they
-    // are what decides - and the operator gets the override, because no row can tell a wipe-while-down from an
-    // outage either.
+    // Every probe upstream of the pass can observe a root that scans to ZERO pages, which is also exactly what a
+    // genuine full-corpus delete looks like. Durable rows preserve the last-known state across restart, but they
+    // do not turn an outage into proof; only a valid accepted proof may retire a binding. The tests cover both the
+    // serving decision and the search/checkpoint carry behavior.
 
     test("a root that scans to ZERO pages with durable rows, whose corpus we never saw, is a BROKEN VIEW: nothing is deleted") {
         withAuthorityTrees { mainDir, extraDir ->
-            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
-            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain-control-term\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nextra-unique-term\n")
             AuthorityWorld(mainDir, extraDir).use { world ->
                 // Run 1: the corpus is there, and its rows go durable.
                 val warm = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = warm.rebuild().byPath.getValue(rollbackPath).id
+                val rooted = RootedPageId(extra, rollback)
                 world.checkpoints.load().keys.map { it.id } shouldContain rollback
+                world.engine.indexedState()[rooted] shouldNotBe null
+                assertRootedSearchHit(world.engine, "extra-unique-term", rooted)
+                world.idMap.bindingInRoot(extra, rollback)?.path shouldBe rollbackPath
+                world.idMap.retiredUnboundIds() shouldNotContain rooted
+                world.idMap.isRetiredUnbound(rooted) shouldBe false
 
                 // The outage, and the shape that matters: the volume is unmounted while the server is DOWN, so what
                 // the next boot finds at the path is an EMPTY DIRECTORY (a mount point, a bind mount the container
@@ -154,9 +159,13 @@ class RootDeleteAuthorityTest : FunSpec({
                 withClue("the id_map binding is the permalink: losing it re-mints /p/{root}/{id} for a page that still exists") {
                     world.idMap.livePathOf(rollback) shouldBe rollbackPath
                 }
-                withClue("and the search rows, which the sync listener deletes off the same authority set") {
+                withClue("and the search rows, which carry unless current durable retired-unbound authority excludes them") {
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
+                assertRootedSearchHit(world.engine, "extra-unique-term", rooted)
+                world.idMap.bindingInRoot(extra, rollback)?.path shouldBe rollbackPath
+                world.idMap.retiredUnboundIds() shouldBe emptySet()
+                world.idMap.isRetiredUnbound(rooted) shouldBe false
                 val down = world.availability.current().unavailable[extra]
                 withClue("an empty VIEW must not be SERVED as a live corpus: 503 (the pages exist), never 404") {
                     down?.cause shouldBe UnavailableCause.CORPUS_MISSING
@@ -168,14 +177,10 @@ class RootDeleteAuthorityTest : FunSpec({
         }
     }
 
-    // ⚠ THIS ROW MOVES TO C2 (the observation epoch), and it is TIGHTENED there, never weakened. Under C0 an
-    // `rm -rf` beneath a RUNNING server does NOT reap - not because the case is wrong, but because C0 has NO PROOF
-    // SOURCE with which to believe it. "This process watched the corpus drain" was `corpusSeen`, and `corpusSeen`
-    // was a snapshot from T cashed at T+n: with ext4 inode reuse it hands a REAPED corpus full authority, which is
-    // ledger A2. C2 replaces it with an unbroken observation EPOCH - a live claim, revoked by every break - and at
-    // that point this case reaps again, on evidence rather than on a memory. Both sides get pinned there: a small
-    // delete inside an unbroken epoch REAPS; a delete storm that overflows the queue does NOT, and lands in limbo.
-    test("the C0 COST, stated: a corpus we watched drain does NOT reap - it lands in LIMBO until C2 can prove it") {
+    // A watched-then-drained root still needs a valid observation proof before retirement. The serving hint records
+    // what the process has seen for 503-versus-404, but it is not search or deletion authority; a drain without an
+    // accepted proof remains in limbo, while a real observation-epoch proof can retire the binding.
+    test("a watched drain without an accepted proof does NOT reap - it remains in LIMBO") {
         withAuthorityTrees { mainDir, extraDir ->
             writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
             writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
@@ -261,13 +266,16 @@ class RootDeleteAuthorityTest : FunSpec({
 
     test("a search REINDEX during an outage keeps the unscanned root's engine rows - a reindex is not a mass delete") {
         withAuthorityTrees { mainDir, extraDir ->
-            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nrollback beacon\n")
-            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nrollback beacon\n")
+            writePage(mainDir, "guides/deploy.md", "# Deploy\n\nmain-control-term\n")
+            writePage(extraDir, "notes/rollback.md", "# Rollback\n\nextra-reindex-unique-term\n")
             AuthorityWorld(mainDir, extraDir).use { world ->
                 // Run 1: both roots there, both indexed into the real engine.
                 val warm = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 val rollback = warm.rebuild().byPath.getValue(rollbackPath).id
+                val rooted = RootedPageId(extra, rollback)
                 world.engine.indexedState().keys.map { it.id } shouldContain rollback
+                assertRootedSearchHit(world.engine, "extra-reindex-unique-term", rooted)
+                world.idMap.isRetiredUnbound(rooted) shouldBe false
 
                 // Run 2: a RESTART with extra's disk unplugged. A fresh builder has no previous snapshot to carry,
                 // so the root is not merely skipped - it is absent from the corpus entirely, which is precisely
@@ -275,15 +283,23 @@ class RootDeleteAuthorityTest : FunSpec({
                 world.availability.markUnavailable(extra, UnavailableCause.MISSING_AT_BOOT)
                 val cold = world.builder(mainDir, LocalContentStore(extraDir), world.indexer)
                 cold.rebuild().section(extra).pages shouldBe emptyList()
-                withClue("the SYNC listener already respected the authority set") {
+                withClue("the search listener carried the unretired row from current durable authority") {
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
+                world.idMap.retiredUnboundIds() shouldBe emptySet()
+                world.idMap.isRetiredUnbound(rooted) shouldBe false
+                world.idMap.bindingInRoot(extra, rollback)?.path shouldBe rollbackPath
+                assertRootedSearchHit(world.engine, "extra-reindex-unique-term", rooted)
 
                 cold.rebuildSearchIndex() // the admin `reindex` route / the `plainbase reindex` CLI
 
                 withClue("search.db is derived state, but an operator's reindex must not purge a root's index behind an outage") {
                     world.engine.indexedState().keys.map { it.id } shouldContain rollback
                 }
+                assertRootedSearchHit(world.engine, "extra-reindex-unique-term", rooted)
+                world.idMap.bindingInRoot(extra, rollback)?.path shouldBe rollbackPath
+                world.idMap.retiredUnboundIds() shouldBe emptySet()
+                world.idMap.isRetiredUnbound(rooted) shouldBe false
                 withClue("and the swap still re-derived everything it DID scan") {
                     world.engine.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, extra)
                 }
@@ -331,6 +347,12 @@ private fun <T> withAuthorityTrees(block: (Path, Path) -> T): T {
     }
 }
 
+private fun assertRootedSearchHit(provider: SearchProvider, term: String, expected: RootedPageId) {
+    val result = provider.search(SearchQuery(term, limit = 20, offset = 0))
+    result.total shouldBe 1L
+    result.hits.map { RootedPageId(it.root, it.pageId) } shouldBe listOf(expected)
+}
+
 /**
  * One app-DB world (main, then extra) that can seat SEVERAL builders over the same durable state and the same
  * REAL search engine - which the reindex row needs, because the thing under test is the engine's own generation
@@ -352,7 +374,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
 
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
-    val indexer = SearchIndexer(engine, SectionSplitter())
+    val indexer = SearchIndexer(engine, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
     val retirements = SqlDelightRetirementRepository(database)
 
     fun builder(
@@ -378,7 +400,7 @@ private class AuthorityWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer ->
-                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired) }
+                IndexBuilder.PublicationListener { snap, _ -> indexer.sync(snap) }
             },
         ),
         searchIndexer = searchIndexer,

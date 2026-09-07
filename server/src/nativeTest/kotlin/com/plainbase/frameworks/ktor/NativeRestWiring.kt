@@ -85,7 +85,12 @@ fun withRestServices(
             val idMap = SqlDelightIdMapRepository(database)
             SearchDb(data.resolve("search.db")).use { searchDb ->
                 val searchProvider = Fts5SearchProvider(searchDb)
-                val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+                val searchIndexer = SearchIndexer(
+                    searchProvider,
+                    SectionSplitter(),
+                    idMap::retiredUnboundIds,
+                    idMap::isRetiredUnbound,
+                )
                 val rootRegistry = RootRegistry.of(listOf(localRoot("docs", content)))
                 val availability = com.plainbase.domain.root.RootAvailability(Clock.System)
                 val builder = IndexBuilder(
@@ -101,8 +106,8 @@ fun withRestServices(
                     rootRank = rootRegistry::rank,
                     registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
                     listeners = listOf(
-                        IndexBuilder.PublicationListener { snap, retired ->
-                            searchIndexer.sync(snap, retired)
+                        IndexBuilder.PublicationListener { snap, _ ->
+                            searchIndexer.sync(snap)
                         },
                     ),
                     searchIndexer = searchIndexer,

@@ -83,7 +83,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
 
     val engine: SearchProvider = Fts5SearchProvider(searchDb)
-    val indexer = SearchIndexer(engine, SectionSplitter())
+    val indexer = SearchIndexer(engine, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
 
     /**
      * Every break this world's WIRING reported - so a row can prove the mechanism it claims to be testing actually
@@ -159,7 +159,7 @@ internal class AbsenceWorld(mainDir: Path, extraDir: Path) : AutoCloseable {
         listeners = listOfNotNull(
             IndexBuilder.PublicationListener(checkpoints::replaceFrom),
             searchIndexer?.let { indexer ->
-                IndexBuilder.PublicationListener { snap, retired -> indexer.sync(snap, retired) }
+                IndexBuilder.PublicationListener { snap, _ -> indexer.sync(snap) }
             },
         ),
         searchIndexer = searchIndexer,

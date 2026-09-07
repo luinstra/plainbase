@@ -27,19 +27,21 @@ interface SearchProvider {
     /**
      * Full-corpus replacement under a generation/atomic swap; safe under concurrent [search].
      *
-     * [retired] is the absence-authority rule at the engine boundary (C0): the ONLY pages a swap may drop are the
-     * exact `(root, id)` rows an `AbsenceProof` just retired. Every other row rides into the new generation
-     * UNCHANGED - superseded by a freshly inserted row where the snapshot has one, carried verbatim where it does not.
+     * For non-null [retired], the caller supplies caller-captured durable retired-unbound identities at the engine
+     * boundary: the ONLY pages a swap may drop are the exact `(root, id)` rows the id-map reports retired and unbound.
+     * Every other row rides into the new generation UNCHANGED - superseded by a freshly inserted row where the
+     * snapshot has one, carried verbatim where it does not. The provider does not infer retirement from snapshot
+     * absence.
      *
      * It is not a nicety. A root unavailable since boot has no section in the snapshot; so does a root whose mount
      * failed under it; so does a page on a failed submount of a perfectly healthy root; so does every page of a
      * decoy tree's 997 missing siblings. An unrestricted swap reads all of that as a full-corpus delete and
      * destroys the index behind an unplugged disk - a mass delete an admin `reindex` performed on nobody's
-     * instruction. Absence from the snapshot proves nothing; only the proof does. In C0 [retired] is always EMPTY,
-     * so a swap deletes NOTHING.
+     * instruction. Absence from the snapshot proves nothing; only the durable authority query does.
      *
      * `null` is UNRESTRICTED (this corpus IS the engine): the shape the engine's own contract tests and the
-     * single-root spike want, and the one no absence-authority caller may use.
+     * single-root spike want, and the one no absence-authority caller may use. Production callers pass the captured
+     * durable set.
      */
     fun rebuild(pages: Sequence<PageDocuments>, retired: Set<RootedPageId>? = null)
 

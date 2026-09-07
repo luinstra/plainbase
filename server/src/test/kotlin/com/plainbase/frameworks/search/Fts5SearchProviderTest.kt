@@ -178,7 +178,7 @@ class Fts5SearchProviderTest : FunSpec({
         }
     }
 
-    test("rebuild retire of root A leaves root B (the kept clause is tuple-rooted)") {
+    test("rebuild retire of root A leaves root B (the carry exclusion is tuple-rooted)") {
         withProvider { provider, _ ->
             val extraRoot = RootName.require("extra")
             provider.rebuild(
@@ -188,8 +188,8 @@ class Fts5SearchProviderTest : FunSpec({
                 ),
             )
             provider.rebuild(emptySequence(), retired = setOf(rooted(1, RootName.PRIMARY)))
-            // RED (back-out): kept -> bare `page_id NOT IN (?)` binding it.id. retired={(main,1)} collapses to
-            // page_id IN (X), so NOT IN drops BOTH (main,1) and (extra,1) -> total 0L. Tuple-rooting kept greens it.
+            // RED (back-out): removing `excluded.root = <table>.root` from `notRetired` makes
+            // the exclusion page-id-only; this rooted carry control is its falsifier.
             provider.indexedState().keys shouldBe setOf(rooted(1, extraRoot))
             provider.search(query("carry")).total shouldBe 1L
             provider.search(query("carry")).hits.single().root shouldBe extraRoot
@@ -202,9 +202,8 @@ class Fts5SearchProviderTest : FunSpec({
             provider.rebuild(sequenceOf(pageDocuments(1, root = extraRoot, preamble = "supersede probe")))
             // retired = emptySet(), NOT null: null skips carryUnretired entirely, which would make this a false green.
             provider.rebuild(sequenceOf(pageDocuments(1, root = RootName.PRIMARY, preamble = "supersede probe")), retired = emptySet())
-            // RED (back-out): notSuperseded -> bare `page_id NOT IN (SELECT page_id ... generation = ?)`. The fresh
-            // main row's page_id X is in the subselect, so (extra,X) is NOT carried and drops -> total 1L. Tuple
-            // -rooting notSuperseded greens it (this is the silent cross-root data-loss branch).
+            // RED (back-out): removing `next_page.root = <table>.root` from `notSuperseded`
+            // makes supersession page-id-only; this cross-root carry control is its falsifier.
             provider.indexedState().keys shouldBe setOf(rooted(1, RootName.PRIMARY), rooted(1, extraRoot))
             provider.search(query("supersede")).total shouldBe 2L
             provider.search(query("supersede")).hits.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, extraRoot)

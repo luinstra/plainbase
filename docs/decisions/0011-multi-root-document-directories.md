@@ -180,12 +180,14 @@ today's laxer detection including the deliberate .git-as-file worktree acceptanc
 (`HistoryModule.kt`, gitEnabled) - so existing worktree deployments are grandfathered, never
 broken by an upgrade. (Synthesis #4; C1 stores the mode, C4 enforces.)
 
-### D5 - an unavailable root is 503, sticky, and runs NO deletion pipelines
+### D5 - an unavailable root is 503 and sticky; unavailability grants no new purge authority
 
 A known root whose path is missing/unreadable serves 503 (+ Retry-After), never 404: agents treat
 404 as page-gone and drop citations. A MID-RUN disappearance flips the root Unavailable and runs no
-index purge, no search deletes, no alias/identity churn - "root gone" is never "all pages deleted";
-durable state is untouched. Unavailable is sticky until restart in v1; the health endpoint lists
+index purge, no search deletes, no alias/identity churn - "root gone" is never "all pages deleted". Root
+unavailability alone creates no new retirement, purge, or identity-churn authority, although a previously durable
+retired-and-unbound identity may still be removed from derived search during recovery. Durable live identity state,
+aliases, and checkpoints remain untouched. Unavailable is sticky until restart in v1; the health endpoint lists
 per-root status. `/p/{id}` for a page in an unavailable root falls back to id_map (which persists
 and knows the root) to answer 503 not 404. (Synthesis #5; C4 implements.)
 

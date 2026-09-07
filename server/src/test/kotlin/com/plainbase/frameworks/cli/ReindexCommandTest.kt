@@ -1,10 +1,12 @@
 package com.plainbase.frameworks.cli
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.root.HistoryMode
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.RootsConfig
@@ -14,6 +16,8 @@ import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
+import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.longs.shouldBeGreaterThan
@@ -42,6 +46,46 @@ class ReindexCommandTest : FunSpec({
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 provider.search(SearchQuery(text = "capacitor", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
+                provider.indexedState().keys shouldBe
+                    setOf(
+                        RootedPageId(RootName.PRIMARY, ALPHA_ID),
+                        RootedPageId(RootName.PRIMARY, BETA_ID),
+                    )
+                provider.indexedState().size shouldBe 2
+            }
+        }
+    }
+
+    test("reindex displaces a fixed-id page without carrying the stale raw engine row") {
+        withReindexTree { config ->
+            captureStdout { runReindex(emptyList(), config) shouldBe 0 }
+
+            DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+                val database = DatabaseFactory.createDatabase(driver)
+                val idMap = SqlDelightIdMapRepository(database)
+                idMap.bindingInRoot(RootName.PRIMARY, ALPHA_ID)?.path?.path?.value shouldBe "alpha.md"
+            }
+
+            Files.writeString(
+                config.contentDir.resolve("alpha.md"),
+                "---\nid: ${REPLACEMENT_ALPHA_ID.value}\ntitle: Replacement Alpha\n---\n\n# Replacement Alpha\n\nfind the flux capacitor here.\n",
+            )
+            val out = captureStdout { runReindex(emptyList(), config) shouldBe 0 }
+            out.lineSequence().toList() shouldContain "reindex: rebuilt the search index for 2 page(s) under ${config.contentDir}"
+
+            DatabaseFactory.createDriver(config.appDatabasePath).use { driver ->
+                val database = DatabaseFactory.createDatabase(driver)
+                val idMap = SqlDelightIdMapRepository(database)
+                idMap.retiredAt(RootName.PRIMARY, ALPHA_ID)?.path?.path?.value shouldBe "alpha.md"
+                idMap.bindingInRoot(RootName.PRIMARY, ALPHA_ID) shouldBe null
+                idMap.bindingInRoot(RootName.PRIMARY, REPLACEMENT_ALPHA_ID)?.path?.path?.value shouldBe "alpha.md"
+            }
+            SearchDb(config.searchDatabasePath).use { db ->
+                Fts5SearchProvider(db).indexedState().keys shouldBe
+                    setOf(
+                        RootedPageId(RootName.PRIMARY, REPLACEMENT_ALPHA_ID),
+                        RootedPageId(RootName.PRIMARY, BETA_ID),
+                    )
             }
         }
     }
@@ -96,15 +140,23 @@ class ReindexCommandTest : FunSpec({
             SearchDb(config.searchDatabasePath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 // The regression this pins: a main-only source list would leave the engine holding `main` alone,
-                // because the rebuild is a GENERATION SWAP - every root it does not see is deleted from the index.
+                // because the rebuild is a GENERATION SWAP. Here the fresh complete scan sees both roots, so its
+                // accepted input and engine keys are exactly the known three pages.
                 provider.indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
+                provider.indexedState().keys shouldBe
+                    setOf(
+                        RootedPageId(RootName.PRIMARY, ALPHA_ID),
+                        RootedPageId(RootName.PRIMARY, BETA_ID),
+                        RootedPageId(HANDBOOK, HANDBOOK_PAGE_ID),
+                    )
+                provider.indexedState().size shouldBe 3
                 provider.search(SearchQuery(text = "capacitor", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
                 provider.search(SearchQuery(text = "onboarding", limit = 20, offset = 0)).total shouldBeGreaterThan 0L
             }
         }
     }
 
-    test("an unavailable extra root refuses the whole reindex (exit 1) rather than silently purging that root's search rows") {
+    test("an unavailable extra root refuses the whole reindex (exit 1) without purging its search rows") {
         withTwoRootTree { config, handbook ->
             captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
             Files.delete(handbook.resolve("onboarding.md"))
@@ -112,9 +164,11 @@ class ReindexCommandTest : FunSpec({
 
             val err = captureStderr { runReindex(emptyList(), config) shouldBe 1 }
             err shouldContain "root 'handbook' is not available"
-            err shouldContain "refusing to rebuild"
+            err shouldContain
+                "reindex: refusing to rebuild - offline reindex requires every configured root to be available. " +
+                "Restore the path(s), or remove the root(s) from the roots {} block if they are gone for good."
 
-            // Nothing was swapped: the vanished root's documents are still in the engine, and come back when it does.
+            // The old generation is unchanged: the vanished root's documents are still in the engine, and come back when it does.
             SearchDb(config.searchDatabasePath).use { db ->
                 Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
             }
@@ -123,18 +177,18 @@ class ReindexCommandTest : FunSpec({
 
     test(
         "a root that vanishes MID-REBUILD - past the preflight - aborts before the swap (exit 1), leaving the PRIOR " +
-            "search generation intact rather than silently purging the root that went away",
+            "search generation intact while the page pass reports incomplete coverage",
     ) {
         withTwoRootTree { config, _ ->
             captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
 
             // handbook answers the preflight probe and is gone from the rebuild's own probe on - the window a
-            // check-then-act guard cannot see. IndexBuilder SKIPS it (the carry-forward rule), and a fresh CLI
-            // process has no previous section to carry, so the published snapshot has no handbook section at all:
-            // swapping it in is a DELETE of handbook's rows, reported as a success.
+            // check-then-act guard cannot see. The page pass is incomplete, so the previous search generation stays.
             val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(HANDBOOK)) shouldBe 1 }
             err shouldContain "root 'handbook' went away while it was being indexed"
-            err shouldContain "nothing was written"
+            err shouldContain "page pass covers 1 of 2 configured root(s)"
+            err shouldContain "previous search generation is unchanged"
+            err shouldContain "page pass may already have updated content or application metadata"
 
             // The swap never happened: handbook's documents are still searchable, exactly as for a root nobody touched.
             SearchDb(config.searchDatabasePath).use { db ->
@@ -145,7 +199,7 @@ class ReindexCommandTest : FunSpec({
         }
     }
 
-    test("main's store is decorated too: main vanishing MID-REBUILD aborts before the swap, exactly as an extra does") {
+    test("main's store is decorated too: main vanishing MID-REBUILD reports incomplete coverage, exactly as an extra does") {
         withTwoRootTree { config, _ ->
             captureStdout { runReindex(emptyList(), config) shouldBe 0 } // seed the engine with BOTH roots
 
@@ -154,7 +208,9 @@ class ReindexCommandTest : FunSpec({
             // Undecorated, main's store would be the real one: nothing vanishes, and this run returns 0.
             val err = captureStderr { runReindex(emptyList(), config, vanishAfterFirstProbe(RootName.PRIMARY)) shouldBe 1 }
             err shouldContain "root 'docs' went away while it was being indexed"
-            err shouldContain "nothing was written"
+            err shouldContain "page pass covers 1 of 2 configured root(s)"
+            err shouldContain "previous search generation is unchanged"
+            err shouldContain "page pass may already have updated content or application metadata"
 
             SearchDb(config.searchDatabasePath).use { db ->
                 Fts5SearchProvider(db).indexedState().keys.map { it.root }.toSet() shouldBe setOf(RootName.PRIMARY, HANDBOOK)
@@ -178,6 +234,10 @@ class ReindexCommandTest : FunSpec({
 })
 
 private val HANDBOOK = RootName.require("handbook")
+private val ALPHA_ID = PageId.require("01900000-0000-7000-8000-000000000201")
+private val BETA_ID = PageId.require("01900000-0000-7000-8000-000000000202")
+private val REPLACEMENT_ALPHA_ID = PageId.require("01900000-0000-7000-8000-000000000203")
+private val HANDBOOK_PAGE_ID = PageId.require("01900000-0000-7000-8000-000000000204")
 
 /**
  * The disappearance a preflight structurally cannot catch: [root]'s store answers the FIRST availability probe (the
@@ -206,8 +266,11 @@ private fun withReindexTree(block: (PlainbaseConfig) -> Unit) {
     val content = Files.createTempDirectory("pb-reindex-content")
     val data = Files.createTempDirectory("pb-reindex-data")
     try {
-        Files.writeString(content.resolve("alpha.md"), "---\ntitle: Alpha\n---\n\n# Alpha\n\nfind the flux capacitor here.\n")
-        Files.writeString(content.resolve("beta.md"), "---\ntitle: Beta\n---\n\n# Beta\n\nplain filler text.\n")
+        Files.writeString(
+            content.resolve("alpha.md"),
+            "---\nid: ${ALPHA_ID.value}\ntitle: Alpha\n---\n\n# Alpha\n\nfind the flux capacitor here.\n",
+        )
+        Files.writeString(content.resolve("beta.md"), "---\nid: ${BETA_ID.value}\ntitle: Beta\n---\n\n# Beta\n\nplain filler text.\n")
         block(PlainbaseConfig(contentDir = content, dataDir = data, host = "127.0.0.1", port = 0))
     } finally {
         listOf(content, data).forEach(::deleteTree)
@@ -224,7 +287,7 @@ private fun withTwoRootTree(block: (PlainbaseConfig, Path) -> Unit) {
         withReindexTree { config ->
             Files.writeString(
                 handbook.resolve("onboarding.md"),
-                "---\ntitle: Onboarding\n---\n\n# Onboarding\n\nday-one onboarding steps.\n",
+                "---\nid: ${HANDBOOK_PAGE_ID.value}\ntitle: Onboarding\n---\n\n# Onboarding\n\nday-one onboarding steps.\n",
             )
             block(
                 config.copy(

@@ -52,23 +52,31 @@ class WriteRestHarness(
     private val searchDir = Files.createTempDirectory("plainbase-write-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
-    private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+    private lateinit var harness: IndexHarness
+    private val searchIndexer = SearchIndexer(
+        searchProvider,
+        SectionSplitter(),
+        { harness.idMap.retiredUnboundIds() },
+        { harness.idMap.isRetiredUnbound(it) },
+    )
 
     // The index builder runs over the SAME (possibly wrapped) store the route + pipeline see, so a
     // storeOverride can model BOTH a failing write (writeAssetExclusive Unreadable) AND a failing post-
     // write rebuild (a scan that throws). Existing overrides delegate scan/read to the real copy via
     // `by real`, so the snapshot stays genuine; with no override, pipelineStore === store.
-    private val harness = IndexHarness(
+    init {
+        harness = IndexHarness(
         root,
         contentStore = pipelineStore,
         history = history,
         listeners = listOf(
-            IndexBuilder.PublicationListener { snap, retired ->
-                searchIndexer.sync(snap, retired)
+            IndexBuilder.PublicationListener { snap, _ ->
+                searchIndexer.sync(snap)
             },
         ),
         searchIndexer = searchIndexer,
-    )
+        )
+    }
 
     val idMap: IdMapRepository get() = harness.idMap
     val builder get() = harness.builder

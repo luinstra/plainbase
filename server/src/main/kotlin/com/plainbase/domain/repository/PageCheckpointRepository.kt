@@ -35,7 +35,7 @@ interface PageCheckpointRepository {
  * page a pass did not witness is in LIMBO, and limbo is not a deletion.
  *
  * So: every row this pass did not just retire SURVIVES - the skipped root's, the never-scanned root's, the
- * detached root's, the failed submount's, and the decoy tree's alike. In C0 [retired] is always EMPTY, so
+ * detached root's, the failed submount's, and the decoy tree's alike. In historical C0 [retired] was always EMPTY, so
  * nothing is ever removed here at all; the pass only ever ADDS what it saw.
  *
  * The merge is KEYED, snapshot-wins - never a concat: a mid-run vanished root double-covers (its carried-forward

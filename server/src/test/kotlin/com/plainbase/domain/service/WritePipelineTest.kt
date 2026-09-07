@@ -296,10 +296,13 @@ class WritePipelineTest : FunSpec({
     test("a create whose search sync fails is WrittenButUnindexed; the dirty row is retained and reconcile recovers it") {
         withTempTree({}) { root ->
             val provider = TogglingSearchProvider()
-            val searchIndexer = SearchIndexer(provider, SectionSplitter())
+            lateinit var authority: com.plainbase.domain.repository.IdMapRepository
+            val searchIndexer =
+                SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
             // No search-sync LISTENER on rebuild() — the propagating guarantee is the reindex() syncPage,
             // exactly what createAndIndex relies on; rebuild() still publishes the page (read-visible).
             IndexHarness(root, searchIndexer = searchIndexer).use { harness ->
+                authority = harness.idMap
                 harness.builder.rebuild()
                 val pipeline = harness.writePipeline()
                 val pageId = PageId.require("01900000-0000-7000-8000-0000000000a1")

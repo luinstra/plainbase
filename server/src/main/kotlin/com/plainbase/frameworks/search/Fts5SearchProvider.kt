@@ -28,8 +28,9 @@ import java.sql.Statement
  *    TABLE-WIDE bm25 statistics (concurrent scores cannot drift while a rebuild runs); a rebuild
  *    that dies anywhere rolls back to nothing, so the next rebuild repairs for free (never a
  *    wedge on the (generation, root, page_id) primary key); and partial/duplicate corpora are
- *    impossible. An in-flight read transaction holding the pre-swap WAL snapshot still sees its
- *    complete generation.
+ *    impossible. Explicit retirement sets are staged in a writer-local TEMP table with bounded
+ *    two-parameter batches before carry; an in-flight read transaction holding the pre-swap WAL
+ *    snapshot still sees its complete generation.
  *  - [search]: hits and total run inside ONE deferred read transaction — the first SELECT
  *    establishes the WAL snapshot, the count reads the SAME snapshot and the same
  *    `active_generation` subselect, so a hits/total pair can never mix generations across a
@@ -71,8 +72,9 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             // Clearing them first means the (generation, root, page_id) key below can never collide.
             connection.deleteGenerations("!= ?", active)
             val next = active + 1
+            if (retired != null) Fts5RebuildExclusions.stage(connection, retired)
             pages.forEach { page -> connection.insertPage(next, page) }
-            if (retired != null) connection.carryUnretired(retired, from = active, to = next)
+            if (retired != null) connection.carryUnretired(from = active, to = next)
             connection.prepareStatement("UPDATE search_meta SET value = ? WHERE key = 'active_generation'").use { statement ->
                 statement.setString(1, next.toString())
                 statement.executeUpdate()
@@ -81,42 +83,42 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             // swap transaction satisfies its intent (only the active generation survives a rebuild)
             // while also closing the crash-after-flip-before-GC window the two-step letter leaves.
             connection.deleteGenerations("< ?", next)
+            if (retired != null) Fts5RebuildExclusions.clear(connection)
             next
         }
         logger.debug { "search rebuild published generation $published" }
     }
 
     /**
-     * Carries every row the proof did NOT retire into the swap's new generation - the absence-authority half of
-     * [rebuild] (C0). A carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so
-     * the `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its
+     * Carries every row the captured retirement set did NOT mark retired into the swap's new generation - the
+     * absence-authority half of [rebuild]. The explicit set has already been staged in the writer-local TEMP exclusion table with
+     * bounded batches; rooted `NOT EXISTS` predicates consult that table without expanding SQL parameters. A
+     * carried row is RE-STAMPED, not copied: the generation column moves from [from] to [to], so the
+     * `section_fts`/`section_trigram` rows (keyed by `section_doc.doc_id`, which carries no generation of its
      * own) follow their document for free and the GC that runs after the flip no longer sees them. It is all
      * inside the swap's ONE transaction, so a concurrent reader still observes one complete generation, old or new.
      *
      * ORDER MATTERS: `section_doc` re-stamps BEFORE `search_page`, because both ask "is this page already in the
      * new generation?" of `search_page@to` - which, until the second statement runs, holds exactly the pages the
      * swap inserted from the snapshot. A page whose section WAS carried into the snapshot is therefore skipped
-     * here (the freshly inserted rows are the newer truth) and its stale generation is GC'd as usual.
+     * here (the freshly inserted rows are the newer truth) and its stale generation is GC'd as usual. An explicit
+     * empty set leaves the TEMP table empty, so the same rooted predicate carries every unsuperseded row.
      */
-    private fun Connection.carryUnretired(retired: Set<RootedPageId>, from: Long, to: Long) {
-        // An EMPTY set retires nothing, so the predicate simply vanishes and EVERY row rides. That is C0's
-        // steady state, and it is the whole safety floor showing up as one absent SQL clause.
-        val kept = if (retired.isEmpty()) {
-            ""
-        } else {
-            " AND (root, page_id) NOT IN (VALUES ${retired.joinToString(", ") { "(?, ?)" }})"
-        }
-        val notSuperseded = " AND (root, page_id) NOT IN (SELECT root, page_id FROM search_page WHERE generation = ?)"
+    private fun Connection.carryUnretired(from: Long, to: Long) {
         listOf("section_doc", "search_page").forEach { table ->
-            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$kept$notSuperseded").use { statement ->
-                var p = 1
-                statement.setLong(p++, to)
-                statement.setLong(p++, from)
-                retired.forEach {
-                    statement.setString(p++, it.root.value)
-                    statement.setBytes(p++, it.id.toByteArray())
-                }
-                statement.setLong(p, to)
+            val notRetired =
+                " AND NOT EXISTS (" +
+                    "SELECT 1 FROM temp.rebuild_exclusion AS excluded " +
+                    "WHERE excluded.root = $table.root AND excluded.page_id = $table.page_id)"
+            val notSuperseded =
+                " AND NOT EXISTS (" +
+                    "SELECT 1 FROM search_page AS next_page " +
+                    "WHERE next_page.generation = ? " +
+                    "AND next_page.root = $table.root AND next_page.page_id = $table.page_id)"
+            prepareStatement("UPDATE $table SET generation = ? WHERE generation = ?$notRetired$notSuperseded").use { statement ->
+                statement.setLong(CarryParams.TO, to)
+                statement.setLong(CarryParams.FROM, from)
+                statement.setLong(CarryParams.NEXT_GENERATION, to)
                 statement.executeUpdate()
             }
         }
@@ -370,6 +372,12 @@ class Fts5SearchProvider(private val db: SearchDb) : SearchProvider {
             const val GENERATION = 1
             const val ROOT = 2
             const val PAGE_ID = 3
+        }
+
+        private object CarryParams {
+            const val TO = 1
+            const val FROM = 2
+            const val NEXT_GENERATION = 3
         }
 
         // §B5 bm25 column weights (title, heading, body, tags, aliases, owner) — tier-2

@@ -66,11 +66,11 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * **A root that is not there is SKIPPED, never treated as empty (ADR-0011 D5).** Each pass probes each
  * source's store: an already-Unavailable root is skipped outright (the status is sticky until restart), and
  * a root whose probe fails now is MARKED Unavailable and skipped. A skipped root's LAST-GOOD section is
- * carried into the new snapshot verbatim, because the publication listeners ARE the deletion pipelines - a
- * dropped section would purge that root's search rows AND its `page_checkpoint` rows (durable state) in one
- * publish, i.e. a mass delete caused by an unplugged disk. A never-scanned root simply contributes no
- * section, and the listeners' authority set ([PublicationListener.published]'s `retired`) is what keeps
- * its rows safe there - a set that is EMPTY unless a proof put something in it.
+ * carried into the new snapshot verbatim, because the publication listeners project that section into search and
+ * durable checkpoints. Dropping it would make an outage look like a deletion. Search reads current durable
+ * retired-unbound authority separately, so a previously committed retirement is still cleaned up even when its root
+ * is carried. A never-scanned root simply contributes no section; search retirement authority is read durably by
+ * [SearchIndexer] at each operation.
  *
  * **What is classified is the COMPLETED SCAN, never the precondition** ([scanIfAvailable]). The entry probe
  * says the root was there when the walk STARTED, and a root can vanish in between - a directory iteration whose
@@ -107,9 +107,10 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * residue is honest and bounded - a delete storm past the watcher's queue bound is observationally identical to an
  * unmount, so the epoch refuses to guess and its tail waits for `reconcile` or for the git oracle.
  *
- * The sinks CONSUME that authority and never re-derive it - the checkpoint replace, the search sync, the search
- * generation swap, the id_map supersessions ([Supersession]) and the dirty-page reconcile. They are handed the
- * bindings a proof actually RETIRED, which at the safety floor is the empty set.
+ * The checkpoint replace, the id_map supersessions ([Supersession]) and the dirty-page reconcile consume the
+ * pass-local bindings a proof actually RETIRED, which at the safety floor is the empty set. Search sync and the
+ * search generation swap instead read current durable retired-unbound authority independently, so either operation
+ * can recover a missed publication and suppress stale snapshot input.
  *
  * **One pass:** each file's bytes are read exactly once ([ContentStore.read]), each page's
  * frontmatter values are parsed exactly once ([FrontmatterParser], over the already-read bytes —
@@ -215,19 +216,14 @@ class IndexBuilder(
     /**
      * Notified with each newly published snapshot, synchronously inside the serialized rebuild.
      *
-     * [retired] is the AUTHORITY SET, and it is now a set of PAGES rather than of roots: exactly the bindings an
-     * [AbsenceProof] just RETIRED in the proof-apply transaction, and therefore the only rows a listener may
-     * DELETE. It is the applied RESULT, never the raw proofs - a proof that failed its freshness check
-     * authorizes nothing here either, so a listener cannot delete on the strength of a licence that was revoked
-     * before it could be cashed.
+     * [retired] is the pass-local proof result: exactly the bindings an [AbsenceProof] just RETIRED in the
+     * proof-apply transaction. Non-search projections such as checkpoints consume it as the applied result, never
+     * the raw proofs. The search listener deliberately reads current durable retired-unbound state instead, so it can
+     * recover a missed publication and suppress stale snapshot input.
      *
-     * Everything else a listener holds SURVIVES, and that is the point. "Absent from the snapshot" is not
-     * evidence of anything: a root skipped this pass, a root never scanned since boot, a root whose scan came
-     * back as a partial view, a DETACHED root, a page on a failed submount and a page in a decoy tree all look
-     * identical from here. Handing the listener the POSITIVE, proof-backed set means the compiler - not a
-     * convention, and not the next listener's memory - is what keeps an unplugged disk from performing a mass
-     * delete. The set is non-empty for exactly one reason: an unbroken observation epoch watched a page
-     * it had read stop existing.
+     * Snapshot absence alone grants no retirement authority. Non-search listeners receive the applied pass-local
+     * result, which may come from valid inferred or accepted proofs; search independently reads current durable
+     * retirement state.
      */
     fun interface PublicationListener {
         fun published(snapshot: PageIndex, retired: Set<RootedPageId>)
@@ -297,9 +293,9 @@ class IndexBuilder(
      * [witnessed] is what the pass actually SAW: every rooted path it READ, and the id that file carried
      * (null = it carries none). Absence from this map is NOT a licence.
      *
-     * [proofs] is the ONLY licence to delete: one per root whose observation epoch witnessed a page and
-     * then witnessed it go. [retired] is what the proof-apply transaction actually acted on (a proof whose token was
-     * revoked between the mint and the apply authorizes NOTHING), and it is what the sinks consume.
+     * [proofs] is the proof material considered by this pass and may come from any valid proof source. The applied
+     * rooted ids remain pass-local for non-search projections; the search projection reads current durable retirement
+     * authority when it runs rather than treating these retained proof objects as its current delete set.
      *
      * [observedAt] stamps each root's durable freshness token, so a proof minted from this observation can be
      * checked against a token that a restart, a break or a rebind may since have revoked.
@@ -308,12 +304,11 @@ class IndexBuilder(
         val snapshot: PageIndex,
         val witnessed: Map<RootedPath, Witness>,
         val proofs: List<AbsenceProof>,
-        val retired: Set<RootedPageId>,
         val observedAt: Map<RootName, ObservationId>,
     )
 
     private val holder = AtomicReference(
-        Published(PageIndex.EMPTY, witnessed = emptyMap(), proofs = emptyList(), retired = emptySet(), observedAt = emptyMap()),
+        Published(PageIndex.EMPTY, witnessed = emptyMap(), proofs = emptyList(), observedAt = emptyMap()),
     )
 
     /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
@@ -441,9 +436,10 @@ class IndexBuilder(
             )
         }
 
-        // Carry each SKIPPED root's last-good section forward, so no listener sees a deletion (a never-scanned
-        // root has no previous section and simply contributes none - `section` is total). In registry rank
-        // order, like the sources themselves, so the snapshot is deterministic either way.
+        // Carry each SKIPPED root's last-good section forward, so omission alone cannot remove its published pages
+        // from a listener's projection (a never-scanned root has no previous section and simply contributes none -
+        // `section` is total). Search independently excludes current durable retired-unbound identities. In registry
+        // rank order, like the sources themselves, so the snapshot is deterministic either way.
         //
         // Nothing is filtered out of a carried section. A carried page's ROOTED id cannot also appear in the scanned
         // pages. The load-bearing reason is PROVENANCE: every page in a section carries
@@ -469,7 +465,6 @@ class IndexBuilder(
                 snapshot = snapshot,
                 witnessed = witnessed,
                 proofs = proofs,
-                retired = retired,
                 observedAt = retirements.observations(),
             ),
         )
@@ -910,8 +905,9 @@ class IndexBuilder(
             val where = sourcesByRoot[root]?.root?.localPath ?: "its backing store"
             logger.error {
                 "root '$root' scanned to ZERO pages while holding ${refs.size} durable binding(s): treating it as a BROKEN " +
-                    "VIEW, not a delete. NOTHING is deleted for it (nothing could be - a scan is not a proof), its " +
-                    "last-good pages are carried forward, and it serves 503 rather than the 404 that would tell an agent " +
+                "VIEW, not deletion evidence: these live bindings are retained, while previously retired-unbound " +
+                    "search rows may still be cleaned. Its last-good pages are carried forward, and it serves 503 " +
+                    "rather than the 404 that would tell an agent " +
                     "its citations were never real. Check the mount at $where."
             }
         }
@@ -935,19 +931,20 @@ class IndexBuilder(
      * naive read-`current`-then-`rebuild` would reopen). This is NOT a page rescan: no scan, no
      * checkpoint listener re-fire — just a clean generation swap of the engine over the snapshot
      * already published. Both the reindex endpoint and the `plainbase reindex` CLI route through
-     * here. Returns the page count reported by the reindex response.
+     * here. Returns the count of snapshot pages accepted by current durable retirement authority; it may be smaller
+     * than the published holder when retired pages remain there for non-search projections.
      *
-     * It swaps the engine under the SAME delete authority the pass that published this snapshot ran under, which
-     * is why the two travel together in [Published]. Without it the swap is a mass delete for any root the pass
-     * skipped: an unavailable root has no section in the snapshot, so the engine would re-derive the corpus
-     * WITHOUT it and drop its rows - the D5 lie, performed by a reindex nobody meant as a deletion.
+     * The search projection captures current durable retirement authority inside this serialized operation. That read
+     * recovers a retirement whose earlier publication was lost and filters retired pages out of stale snapshot input.
+     * The explicit set also tells the provider which engine rows may be removed: an empty set preserves every
+     * unretired row absent from the snapshot, including rows belonging to a root carried through an outage. Missing
+     * authority is a read failure, never permission to infer a mass deletion.
      */
     @Synchronized
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
         val published = holder.load()
-        indexer.rebuild(published.snapshot, published.retired)
-        return published.snapshot.pages.size
+        return indexer.rebuild(published.snapshot)
     }
 
     /**
@@ -961,8 +958,8 @@ class IndexBuilder(
      * Targeted single-page reindex (PB-WRITE-1 fix C): re-reads + re-renders ONLY the page at [target],
      * publishes a snapshot identical to the current one except for that page (its own root's section
      * rebuilt, every other section riding through untouched), and upserts that ONE page into search via
-     * [SearchIndexer.syncPage]. O(changed-page) END-TO-END — render O(1), search O(1) (single-page
-     * upsert, NOT the corpus-wide [SearchIndexer.sync] diff), checkpoint O(0) (skipped). Full [rebuild]
+     * [SearchIndexer.syncPage]. The search path performs one rooted authority lookup and splits/indexes one page; it
+     * does not run the corpus-wide [SearchIndexer.sync] diff. Checkpoint replacement is skipped. Full [rebuild]
      * stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher rebuild never
      * interleaves. Bytes and history come from the target root's source.
      *
@@ -993,9 +990,10 @@ class IndexBuilder(
      * pure-function assumption and must either re-render dependents or route through full [rebuild].
      *
      * THROWS [IllegalStateException] if [target] is absent from the snapshot or its file is unreadable on the
-     * SAVE path: the CAS just wrote those bytes, so a missing page is a real invariant violation, never a silent
-     * success. `WritePipeline.reconcileDirtyPages` tolerates a vanished page at its
-     * OWN call site, never here.
+     * SAVE path, or if the target is still retired and unbound when targeted search publication runs. The CAS just
+     * wrote those bytes, so a missing page is a real invariant violation, never a silent success. The retired/unbound
+     * guard occurs after the holder stores the page; `WritePipeline.reconcileDirtyPages` handles that failure at its
+     * own call site through durable dirty-page recovery, never by weakening this guard.
      */
     @Synchronized
     fun reindex(target: RootedPath): PageIndex {
@@ -1060,14 +1058,14 @@ class IndexBuilder(
                 }
             },
         )
-        // The authority set rides through unchanged: this republishes ONE page of an already-scanned root, so it
-        // says nothing new about which roots a pass has walked - and a search reindex racing it must still be
-        // told what the last full pass knew.
+        // Preserve the last full-pass witness, proofs, and observation stamps: targeted reindex republishes ONE page
+        // of an already-scanned root and creates no new full-pass authority. Search checks current durable point
+        // authority independently before indexing this page.
         holder.store(published.copy(snapshot = snapshot))
         logger.info {
             "reindexed page ${reindexed.id.value} (${target.path.value} in '${target.root}'); ${snapshot.pages.size} page(s) published"
         }
-        searchIndexer?.syncPage(reindexed) // genuine O(1) single-page upsert — NOT sync(snapshot), NOT notifyPublished
+        searchIndexer?.syncPage(reindexed) // one-page upsert — NOT sync(snapshot), NOT notifyPublished
         return snapshot
     }
 
@@ -1228,16 +1226,17 @@ class IndexBuilder(
      * where `serve()` calls [rebuild] uncaught, it killed the server outright with a stack trace instead of
      * serving the roots that were perfectly fine. The root is deliberately NOT marked unavailable: it is THERE,
      * a permission or a corrupt repo is fixed in place, and sticky-until-restart would prescribe a restart
-     * nobody needs. So it keeps its last-good section (nothing is deleted for it - nothing proved anything gone),
-     * it keeps serving, and the next pass retries it. The WARN carries the DIRECTORY, because that is the datum
-     * an operator acts on.
+     * nobody needs. A failed or skipped scan grants no new deletion authority; current durable retired-unbound
+     * identities may still be reconciled in search. The root keeps its last-good section, keeps serving, and the next
+     * pass retries it. The WARN carries the DIRECTORY, because that is the datum an operator acts on.
      */
     private fun skipOnLiveFailure(source: Source, failure: Exception): SourceScan? {
         val where = source.root.localPath?.let { " at $it" }.orEmpty()
         logger.warn(failure) {
             "root '${source.root.name}'$where is still there but its scan FAILED (${failure.message}); skipping it and " +
-                "carrying its last-good section forward - NOTHING is deleted for it, the other roots still index, and the " +
-                "next pass retries it"
+                "carrying its last-good section forward - the failed scan grants no new deletion authority; current " +
+                "durable retired-unbound search identities may still be reconciled, the other roots still index, and " +
+                "the next pass retries it"
         }
         return null
     }
@@ -1246,7 +1245,8 @@ class IndexBuilder(
     private fun skipAndCarry(root: RootName, detail: String): SourceScan? {
         logger.warn {
             "root '$root' is no longer available ($detail); skipping its scan and carrying its last-good section " +
-                "forward - NOTHING is deleted for it, and it will serve 503 until it is restored and the server restarted"
+                "forward - the loss grants no new deletion authority; previously committed retired-and-unbound search " +
+                "identities may still be reconciled, and it will serve 503 until it is restored and the server restarted"
         }
         return null
     }

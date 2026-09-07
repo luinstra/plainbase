@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.filesystem.LocalContentStore
@@ -59,17 +60,20 @@ class WritePathCorpusPerfTest : FunSpec({
                 }
             }
             withProvider { provider, _ ->
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 IndexHarness(
                     root,
                     contentStore = observing,
                     listeners = listOf(
-                        IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired)
+                        IndexBuilder.PublicationListener { snap, _ ->
+                            indexer.sync(snap)
                         },
                     ), // rebuild's serve-shape engine sync
                     searchIndexer = indexer, // reindex's propagating syncPage
                 ).use { harness ->
+                    authority = harness.idMap
                     harness.builder.rebuild()
                     val pipeline = harness.writePipeline()
 
@@ -143,16 +147,19 @@ class WritePathCorpusPerfTest : FunSpec({
         // is computable from the test output. Median of 3 (a single create would put raw noise in the slope).
         val create250 = withTempTree(seed = corpusSeed(250)) { root ->
             withProvider { provider, _ ->
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 IndexHarness(
                     root,
                     listeners = listOf(
-                        IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired)
+                        IndexBuilder.PublicationListener { snap, _ ->
+                            indexer.sync(snap)
                         },
                     ),
                     searchIndexer = indexer,
                 ).use { harness ->
+                    authority = harness.idMap
                     harness.builder.rebuild()
                     val pipeline = harness.writePipeline()
                     (0 until 3).map { i -> timedCreate(pipeline, "perf-slope-%02d/created.md".format(i)) }.sorted()[1]
@@ -188,17 +195,20 @@ class WritePathCorpusPerfTest : FunSpec({
                 }
             }
             withProvider { provider, _ ->
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 IndexHarness(
                     root,
                     contentStore = counting,
                     listeners = listOf(
-                        IndexBuilder.PublicationListener { snap, retired ->
-                            indexer.sync(snap, retired)
+                        IndexBuilder.PublicationListener { snap, _ ->
+                            indexer.sync(snap)
                         },
                     ),
                     searchIndexer = indexer,
                 ).use { harness ->
+                    authority = harness.idMap
                     // The serve shape, assembled as WatchingRestHarness/Application.serve() wire it:
                     // scheduler over the builder, watch registered FIRST, then the startup rebuild (§B2).
                     RebuildScheduler(rebuild = { harness.builder.rebuild() }, alarm = ExecutorAlarm()).use { scheduler ->
