@@ -6,6 +6,7 @@ import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.principal.createGrantForTests
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
@@ -111,18 +112,20 @@ private fun measure(slices: List<Pair<String, IntRange>>): Metrics = withSeededT
         IndexBuilder.Source(root, LocalContentStore(trees[index]), NoOpHistoryProvider)
     }
     withProvider { provider, _ ->
-        val indexer = SearchIndexer(provider, SectionSplitter())
+        lateinit var authority: IdMapRepository
+        val indexer = SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
         IndexHarness(
             trees.first(),
             listeners = listOf(
-                IndexBuilder.PublicationListener { snap, retired ->
-                    indexer.sync(snap, retired)
+                IndexBuilder.PublicationListener { snap, _ ->
+                    indexer.sync(snap)
                 },
             ),
             searchIndexer = indexer,
             rootRegistry = registry,
             sources = sources,
         ).use { harness ->
+            authority = harness.idMap
             harness.builder.rebuild() // warmup: the first pass pays cold class loading and an empty-checkpoint diff
             val rebuilds = (0 until 5).map { measureTimeMillis { harness.builder.rebuild() } }.sorted()
             val snapshot = harness.builder.current

@@ -383,8 +383,9 @@ A configured root that is missing at boot, or whose directory vanishes while the
   **never a 404**. Browser navigation is the deliberate exception: it serves the SPA shell with **200** so
   the client can render its outage UI. A 404 tells an agent the page is gone and it should drop its citations;
   the truth is that a disk is unmounted and the content is coming back. Nothing is written on a 503;
-- **nothing is deleted for it.** Its pages stay in the index (carried forward), and its `id_map`,
-  `url_alias`, `page_checkpoint` and `dirty_page` rows are left exactly as they are;
+- **root loss grants no new retirement or purge authority.** Live/unretired pages and their `id_map`, `url_alias`,
+  `page_checkpoint` and `dirty_page` rows are retained; last-good page sections are carried where available. A
+  previously committed retired-and-unbound identity may still be cleaned from derived search during recovery;
 - it still appears in `GET /api/v1/tree` with `"available": false` and an EMPTY subtree (never a stale
   listing), and in `GET /healthz` with a cause (`missing_at_boot` | `vanished` | `watcher_failed`);
 - search results from it are dropped;

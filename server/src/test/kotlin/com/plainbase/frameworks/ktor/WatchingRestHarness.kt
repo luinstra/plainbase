@@ -32,8 +32,13 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
     private val searchDir = Files.createTempDirectory("plainbase-watch-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     private val searchProvider = Fts5SearchProvider(searchDb)
-    private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
-    private val harness: IndexHarness
+    private lateinit var harness: IndexHarness
+    private val searchIndexer = SearchIndexer(
+        searchProvider,
+        SectionSplitter(),
+        { harness.idMap.retiredUnboundIds() },
+        { harness.idMap.isRetiredUnbound(it) },
+    )
     private val scheduler: RebuildScheduler
     private val watch: AutoCloseable
 
@@ -46,8 +51,8 @@ class WatchingRestHarness(fixtureRoot: Path) : AutoCloseable {
             root,
             contentStore = store,
             listeners = listOf(
-                IndexBuilder.PublicationListener { snap, retired ->
-                    searchIndexer.sync(snap, retired)
+                IndexBuilder.PublicationListener { snap, _ ->
+                    searchIndexer.sync(snap)
                 },
             ),
             searchIndexer = searchIndexer,

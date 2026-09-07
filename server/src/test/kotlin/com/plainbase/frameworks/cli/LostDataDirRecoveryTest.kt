@@ -303,7 +303,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
     private val dirtyPages = SqlDelightDirtyPageRepository(database)
     private val citations = CitationFactory()
     private val frontmatter = FrontmatterReader()
-    private val searchIndexer = SearchIndexer(provider, SectionSplitter())
+    private val searchIndexer = SearchIndexer(provider, SectionSplitter(), idMap::retiredUnboundIds, idMap::isRetiredUnbound)
 
     private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", config.contentDir)))
 
@@ -325,7 +325,7 @@ private class BootStack(config: PlainbaseConfig) : AutoCloseable {
         registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(
             IndexBuilder.PublicationListener(checkpoint::replaceFrom),
-            IndexBuilder.PublicationListener { snap, retired -> searchIndexer.sync(snap, retired) },
+            IndexBuilder.PublicationListener { snap, _ -> searchIndexer.sync(snap) },
         ),
         searchIndexer = searchIndexer,
     )

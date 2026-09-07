@@ -2,7 +2,13 @@
 
 package com.plainbase.frameworks.ktor
 
+import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.Principal
+import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.ProofSource
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.PageSearchState
 import com.plainbase.domain.search.SearchProvider
@@ -23,6 +29,7 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.atomics.AtomicBoolean
@@ -48,6 +55,64 @@ class AdminRouteTest : FunSpec({
             // The engine is whole after a full generation swap: a known term still returns its hit.
             val total = harness.searchProvider.search(SearchQuery(text = "blameless", limit = 20, offset = 0)).total
             total shouldBeGreaterThan 0L
+        }
+    }
+
+    test("reindex reports accepted pages and removes a proven victim without changing the holder") {
+        val root = Files.createTempDirectory("pb-admin-retirement-content")
+        val victimId = PageId.require("01900000-0000-7000-8000-000000005001")
+        val anchorId = PageId.require("01900000-0000-7000-8000-000000005002")
+        try {
+            Files.writeString(
+                root.resolve("victim.md"),
+                "---\nid: ${victimId.value}\ntitle: Victim\n---\n\n# Victim\n\nadminvictimterm\n",
+            )
+            Files.writeString(
+                root.resolve("anchor.md"),
+                "---\nid: ${anchorId.value}\ntitle: Anchor\n---\n\n# Anchor\n\nadminanchorterm\n",
+            )
+            restTest(root) { harness ->
+                val victim = RootedPageId(RootName.PRIMARY, victimId)
+                val observation = harness.retirements.observation(RootName.PRIMARY)
+                val bindingEpoch = harness.retirements.bindingEpoch(RootName.PRIMARY)
+                val binding = requireNotNull(harness.idMap.bindingInRoot(RootName.PRIMARY, victimId))
+                val applied = harness.retirements.applyProofs(
+                    proofs = listOf(
+                        AbsenceProof.accepted(
+                            root = RootName.PRIMARY,
+                            source = ProofSource.OPERATOR,
+                            observationId = observation,
+                            bindingEpoch = bindingEpoch,
+                            covers = setOf(BindingRef(binding.path.path, victimId)),
+                        ),
+                    ),
+                    witnessed = emptySet(),
+                    unavailableNow = { emptySet() },
+                )
+                applied shouldBe setOf(victim)
+
+                val holderBefore = harness.builder.current
+                val checkpointsBefore = harness.checkpoints.load()
+                val oldBytes = Files.readAllBytes(root.resolve("victim.md"))
+                harness.searchProvider.indexedState().containsKey(victim) shouldBe true
+                harness.searchProvider.search(SearchQuery("adminvictimterm", 20, 0)).total shouldBe 1L
+                val response = client.post("/api/v1/admin/reindex")
+
+                response.status shouldBe HttpStatusCode.OK
+                val body = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                body.getValue("pages").jsonPrimitive.content.toInt() shouldBe 1
+                harness.searchProvider.indexedState().keys shouldBe
+                    setOf(RootedPageId(RootName.PRIMARY, anchorId))
+                harness.searchProvider.indexedState().containsKey(victim) shouldBe false
+                harness.searchProvider.search(SearchQuery("adminvictimterm", 20, 0)).total shouldBe 0L
+                harness.searchProvider.search(SearchQuery("adminanchorterm", 20, 0)).total shouldBe 1L
+                (harness.builder.current === holderBefore) shouldBe true
+                harness.builder.current.pages.size shouldBe 2
+                harness.checkpoints.load() shouldBe checkpointsBefore
+                Files.readAllBytes(root.resolve("victim.md")) shouldBe oldBytes
+            }
+        } finally {
+            Files.walk(root).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }
 
@@ -131,8 +196,17 @@ private class ReindexFacadeHarness(
 ) : AutoCloseable {
 
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
-    private val indexer = SearchIndexer(engine, SectionSplitter())
-    private val harness = com.plainbase.domain.service.IndexHarness(root, contentStore = store, searchIndexer = indexer)
+    private lateinit var harness: com.plainbase.domain.service.IndexHarness
+    private val indexer = SearchIndexer(
+        engine,
+        SectionSplitter(),
+        { harness.idMap.retiredUnboundIds() },
+        { harness.idMap.isRetiredUnbound(it) },
+    )
+
+    init {
+        harness = com.plainbase.domain.service.IndexHarness(root, contentStore = store, searchIndexer = indexer)
+    }
 
     val routeContext: RouteContext
     val mutate get() = routeContext.mutate

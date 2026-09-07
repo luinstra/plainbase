@@ -76,7 +76,7 @@ class McpHarness(
     private val extraDir = Files.createTempDirectory("plainbase-mcp-extra-roots")
     private val searchDir = Files.createTempDirectory("plainbase-mcp-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
-    private val index: IndexHarness
+    private lateinit var index: IndexHarness
     private val server: EmbeddedServer<*, *>
 
     // All coroutine / blocking-engine work (the client round-trips AND `server.stop`, which itself uses `runBlocking`
@@ -101,13 +101,18 @@ class McpHarness(
         Files.writeString(root.resolve("doc.md"), "---\ntitle: Doc\n---\n\n# Doc\n\nSome body with a [broken](missing.md) link.\n")
         val store = LocalContentStore(root)
         val searchProvider = Fts5SearchProvider(searchDb)
-        val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
+        val searchIndexer = SearchIndexer(
+            searchProvider,
+            SectionSplitter(),
+            { index.idMap.retiredUnboundIds() },
+            { index.idMap.isRetiredUnbound(it) },
+        )
         index = IndexHarness(
             root,
             contentStore = store,
             listeners = listOf(
-                IndexBuilder.PublicationListener { snap, retired ->
-                    searchIndexer.sync(snap, retired)
+                IndexBuilder.PublicationListener { snap, _ ->
+                    searchIndexer.sync(snap)
                 },
             ),
             searchIndexer = searchIndexer,

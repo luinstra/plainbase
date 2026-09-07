@@ -355,9 +355,11 @@ sealed interface TreeNodeDto {
 data class RescanResponse(val status: String, val pages: Int)
 
 /**
- * `POST /api/v1/admin/reindex` response — a convenience like [RescanResponse], NOT a frozen PB-*
- * shape (§A5 says the reindex body is not frozen). Parallels [RescanResponse]: `status` ("ok") and
- * `pages` (the count of pages rebuilt into the search engine). No forever golden pins it.
+ * `POST /api/v1/admin/reindex` response — a convenience like [RescanResponse], NOT a frozen PB-* shape (§A5 says
+ * the reindex body is not frozen). Its field names parallel [RescanResponse], but the counts differ: `RescanResponse`
+ * reports pages in the rescanned snapshot, while `pages` here counts accepted reindex input after current durable
+ * retirement filtering. It excludes retired pages and does not count additional unretired engine rows carried
+ * forward. No forever golden pins it.
  */
 @Serializable
 data class ReindexResponse(val status: String, val pages: Int)

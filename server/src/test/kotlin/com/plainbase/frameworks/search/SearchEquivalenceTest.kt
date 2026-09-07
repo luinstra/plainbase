@@ -1,5 +1,6 @@
 package com.plainbase.frameworks.search
 
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.search.SearchProvider
 import com.plainbase.domain.search.SearchQuery
 import com.plainbase.domain.service.IndexHarness
@@ -49,8 +50,11 @@ class SearchEquivalenceTest : FunSpec({
 
             SearchDb(dbPath).use { db ->
                 val provider = Fts5SearchProvider(db)
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 IndexHarness(content, listeners = listOf(listenerOf(indexer)), searchIndexer = indexer).use { harness ->
+                    authority = harness.idMap
                     snapshot = harness.builder.rebuild()
                     before = capture(provider)
                 }
@@ -74,8 +78,11 @@ class SearchEquivalenceTest : FunSpec({
 
             SearchDb(dbPath).use { db ->
                 val provider = Fts5SearchProvider(db)
-                val indexer = SearchIndexer(provider, SectionSplitter())
+                lateinit var authority: IdMapRepository
+                val indexer =
+                    SearchIndexer(provider, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
                 IndexHarness(content, listeners = listOf(listenerOf(indexer)), searchIndexer = indexer).use { harness ->
+                    authority = harness.idMap
                     snapshot = harness.builder.rebuild()
                     before = capture(provider)
                 }
@@ -86,7 +93,7 @@ class SearchEquivalenceTest : FunSpec({
             SearchDb(dbPath).use { db ->
                 val provider = Fts5SearchProvider(db)
                 // No reindex — only the engine-truth diff sync against the empty (deleted) engine.
-                SearchIndexer(provider, SectionSplitter()).sync(snapshot, retired = emptySet())
+                SearchIndexer(provider, SectionSplitter(), { emptySet() }, { false }).sync(snapshot)
                 equivalent(before, capture(provider))
             }
         }
@@ -94,8 +101,8 @@ class SearchEquivalenceTest : FunSpec({
 })
 
 private fun listenerOf(indexer: SearchIndexer) =
-    com.plainbase.domain.service.IndexBuilder.PublicationListener { snap, retired ->
-        indexer.sync(snap, retired)
+    com.plainbase.domain.service.IndexBuilder.PublicationListener { snap, _ ->
+        indexer.sync(snap)
     }
 
 private fun deleteIndexFiles(dir: Path) {

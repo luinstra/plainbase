@@ -46,20 +46,32 @@ class RestHarness(
     private val searchDir = Files.createTempDirectory("plainbase-rest-search")
     private val searchDb = SearchDb(searchDir.resolve("search.db"))
     val searchProvider = Fts5SearchProvider(searchDb)
-    private val searchIndexer = SearchIndexer(searchProvider, SectionSplitter())
-    private val harness = IndexHarness(
+    private lateinit var harness: IndexHarness
+    private val searchIndexer = SearchIndexer(
+        searchProvider,
+        SectionSplitter(),
+        { harness.idMap.retiredUnboundIds() },
+        { harness.idMap.isRetiredUnbound(it) },
+    )
+
+    init {
+        harness = IndexHarness(
         root,
         contentStore = store,
         history = history,
         listeners = listOf(
-            IndexBuilder.PublicationListener { snap, retired ->
-                searchIndexer.sync(snap, retired)
+            IndexBuilder.PublicationListener { snap, _ ->
+                searchIndexer.sync(snap)
             },
         ),
         searchIndexer = searchIndexer,
-    )
+        )
+    }
 
     val idMap: IdMapRepository get() = harness.idMap
+
+    /** Durable checkpoint state for route tests that prove search-only operations are read-only. */
+    val checkpoints get() = harness.checkpoints
 
     /** The proof-apply transaction (C0): the ONE way a test can make an absence PROVEN rather than merely observed. */
     val retirements get() = harness.retirements

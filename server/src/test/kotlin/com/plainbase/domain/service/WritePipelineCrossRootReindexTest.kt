@@ -6,6 +6,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.model.WriteOutcome
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.principal.grantForTests
+import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPageId
@@ -70,6 +71,9 @@ class WritePipelineCrossRootReindexTest : FunSpec({
             val extraRoot = RootName.require("extra")
             val extraStore = LocalContentStore(extraDir, rootName = extraRoot)
             val search = RecordingSearchProvider()
+            lateinit var authority: IdMapRepository
+            val searchIndexer =
+                SearchIndexer(search, SectionSplitter(), { authority.retiredUnboundIds() }, { authority.isRetiredUnbound(it) })
 
             IndexHarness(
                 root = mainDir,
@@ -80,8 +84,9 @@ class WritePipelineCrossRootReindexTest : FunSpec({
                 ),
                 // NO search publication listener: a full rebuild therefore syncs NOTHING to search, so whatever the
                 // engine ends up holding was put there by the targeted reindex — which is precisely what is on trial.
-                searchIndexer = SearchIndexer(search, SectionSplitter()),
+                searchIndexer = searchIndexer,
             ).use { harness ->
+                authority = harness.idMap
                 harness.builder.rebuild()
                 val before = harness.builder.current.pageAt(RootedPageId(extraRoot, pageId))!!
                 before.root shouldBe extraRoot

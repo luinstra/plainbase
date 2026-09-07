@@ -79,6 +79,8 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                     val targetPath = h.builder.current.pageAt(RootedPageId(RootName.PRIMARY, targetId))!!.path.value
                     h.renders.clear()
                     h.search.reset()
+                    h.wholeReadCalls = 0
+                    h.pointReadCalls = 0
                     h.checkpoint.replaceCalls = 0
                     Files.write(root.resolve(targetPath), "---\ntitle: Page 0\n---\n\n# Page 0\n\nnow $n.\n".toByteArray())
 
@@ -91,6 +93,8 @@ class IndexBuilderReindexTargetedTest : FunSpec({
                     h.search.lastIndexSize shouldBe 1
                     h.search.indexedStateCalls shouldBe 0
                     h.search.rebuildCalls shouldBe 0
+                    h.wholeReadCalls shouldBe 0
+                    h.pointReadCalls shouldBe 1
                     // checkpoint writes = 0 (skipped — sound because url-changing edits never reach reindex).
                     h.checkpoint.replaceCalls shouldBe 0
                 }
@@ -127,10 +131,13 @@ private class ReindexHarness(root: Path) : AutoCloseable {
     private val database = DatabaseFactory.createDatabase(driver)
     private val store = com.plainbase.frameworks.filesystem.LocalContentStore(root)
     private val rootRegistry = RootRegistry.of(listOf(localRoot("docs", root)))
+    private val idMap = SqlDelightIdMapRepository(database)
 
     val renders = ConcurrentHashMap<String, Int>()
     val search = CountingSearchProvider()
     val checkpoint = CountingCheckpoint(SqlDelightPageCheckpointRepository(database))
+    var wholeReadCalls = 0
+    var pointReadCalls = 0
 
     private val countingRenderer = { view: PageIndexView ->
         val delegate = FlexmarkRenderer(view)
@@ -148,14 +155,25 @@ private class ReindexHarness(root: Path) : AutoCloseable {
         rendererFactory = countingRenderer,
         identity = PageIdentityService(UuidV7IdProvider()),
         patcher = FrontmatterPatcher(),
-        idMap = SqlDelightIdMapRepository(database),
+        idMap = idMap,
         aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database)),
         checkpoint = checkpoint,
         citations = CitationFactory(),
         rootRank = rootRegistry::rank,
         registeredRoots = rootRegistry.roots.map { it.name }.toSet(),
         listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
-        searchIndexer = SearchIndexer(search, SectionSplitter()),
+        searchIndexer = SearchIndexer(
+            search,
+            SectionSplitter(),
+            {
+                wholeReadCalls++
+                idMap.retiredUnboundIds()
+            },
+            {
+                pointReadCalls++
+                idMap.isRetiredUnbound(it)
+            },
+        ),
     )
 
     override fun close() = driver.close()

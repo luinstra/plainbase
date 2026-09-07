@@ -40,9 +40,10 @@ import io.github.oshai.kotlinlogging.KotlinLogging
  * page-index pass and then a clean generation-swap rebuild of `DATA_DIR/search.db` from the
  * resulting snapshot, the SAME atomic `IndexBuilder.rebuildSearchIndex()` the endpoint uses.
  *
- * **It covers EVERY configured root, and it publishes a COMPLETE generation or NOTHING.** The rebuild is
- * one generation swap over the whole corpus, so a partial source list is not a partial refresh - it is a
- * DELETE of the roots it left out. Two guards, and the second is the one that holds the line:
+ * **It reports on EVERY configured root, and it publishes a COMPLETE generation or NOTHING.** The rebuild is
+ * one generation swap over the configured corpus, so a partial source list is not a successful partial refresh.
+ * The search rebuild carries engine rows that are not in the current durable retired-unbound set; omission alone
+ * is not delete authority. Two guards, and the second is the one that holds the line:
  * [requireEveryRootAvailable] is a PREFLIGHT (fail early, and actionably, on a corpus that is already
  * half-mounted), while [requireCompleteGeneration] checks the OUTCOME - the snapshot that was actually
  * built - and so also catches the root that goes away DURING the pass, which no preflight can see.
@@ -123,9 +124,8 @@ object ReindexCommand {
             val driver = DatabaseFactory.createDriver(config.appDatabasePath)
             try {
                 SearchDb(config.searchDatabasePath).use { searchDb ->
-                    // The engine count and the published snapshot's page count are the SAME figure - the swap
-                    // re-derives the engine from exactly this snapshot, under one monitor - and the snapshot
-                    // also carries the per-root split the multi-root summary reports.
+                    // The stdout summary remains the fresh page-pass count and per-root breakdown. Search's
+                    // generation swap separately reports accepted input internally after durable retirement filtering.
                     val snapshot = rebuildSearchIndex(config, driver, searchDb, decorate, output)
                     // The command's deterministic stdout result contract.
                     output.result(summary(snapshot, config))
@@ -143,11 +143,9 @@ object ReindexCommand {
      * endpoint uses. The checkpoint listener still runs so down-time-move aliasing stays correct.
      * Returns the published snapshot.
      *
-     * **EVERY configured root is a source (ADR-0011 D7 order), not just main.** The swap is a
-     * GENERATION SWAP: it re-derives the whole engine from the snapshot it is handed, so a main-only
-     * source list would delete every extra root's search rows and report a page count for a fraction of
-     * the corpus. The registry drives the source list here exactly as it drives `RootStores` in
-     * `contentModule` - one wiring rule, two entry points.
+     * **Every configured root is a source.** A main-only source list would omit other roots from the fresh page pass
+     * and report an incomplete corpus, even though unretired engine rows may carry. The registry drives the source
+     * list exactly as it drives `RootStores` in `contentModule`.
      */
     private fun rebuildSearchIndex(
         config: PlainbaseConfig,
@@ -163,7 +161,13 @@ object ReindexCommand {
             requireEveryRootAvailable(registry, stores, output)
             val aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
             val checkpoint = SqlDelightPageCheckpointRepository(database)
-            val searchIndexer = SearchIndexer(Fts5SearchProvider(searchDb), SectionSplitter())
+            val idMap = SqlDelightIdMapRepository(database)
+            val searchIndexer = SearchIndexer(
+                provider = Fts5SearchProvider(searchDb),
+                splitter = SectionSplitter(),
+                retiredUnboundIds = idMap::retiredUnboundIds,
+                isRetiredUnbound = idMap::isRetiredUnbound,
+            )
             val builder = IndexBuilder(
                 // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
                 // process is spawned here (the snapshot's commit fields stay null - harmless for this path).
@@ -174,15 +178,16 @@ object ReindexCommand {
                 rendererFactory = { view -> FlexmarkRenderer(view) },
                 identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
-                idMap = SqlDelightIdMapRepository(database),
+                idMap = idMap,
                 aliasRegistry = aliasRegistry,
                 checkpoint = checkpoint,
                 citations = CitationFactory(),
                 rootRank = registry::rank,
                 registeredRoots = registry.roots.map { it.name }.toSet(),
-                // The offline reindex holds the same DELETE AUTHORITY the server does (the checkpoint listener
-                // below, and the generation swap) - which since C0 means it holds NONE unless an AbsenceProof says
-                // otherwise. A CLI that could reap on its own inference would be a second door into the corpus.
+                // The offline reindex uses the same durable retirement repository as the server. The checkpoint
+                // listener consumes pass-local applied proofs, while SearchIndexer reads current retired-unbound
+                // rows for the generation swap; a CLI that could reap from snapshot omission would be a second
+                // door into the corpus.
                 retirements = SqlDelightRetirementRepository(database),
                 // No search sync listener - only the §B3 checkpoint replace. The search engine is
                 // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
@@ -270,12 +275,10 @@ object ReindexCommand {
     }
 
     /**
-     * The PREFLIGHT: refuses the run up front unless EVERY configured root is there. The server can afford to skip an
-     * unavailable root (`IndexBuilder` carries its last-good section forward, so the swap regenerates its
-     * rows); a fresh CLI process has no last-good section to carry, so a skipped root would contribute NO
-     * section and the generation swap would silently PURGE its search rows - while the summary line reported
-     * a confident count for the roots that happened to be mounted. Derived state or not, an operator running
-     * an offline reindex over a half-mounted corpus wants to hear about it, not to find out from search.
+     * The PREFLIGHT: reports and refuses the run up front unless EVERY configured root is there. The search rebuild
+     * carries unretired engine rows even when a fresh CLI process has no last-good section, but an offline reindex
+     * still has a complete-configured-corpus reporting contract: an operator running over a half-mounted corpus
+     * should hear about it rather than receive a confident count for only the roots that happened to be mounted.
      *
      * This is a courtesy, NOT the guarantee: it answers about the corpus as it was BEFORE the pass, and a check
      * that runs before the thing it protects cannot speak for what happens during it. [requireCompleteGeneration]
@@ -292,27 +295,17 @@ object ReindexCommand {
             output.error("reindex: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
         }
         output.error(
-            "reindex: refusing to rebuild - the search index is rebuilt as ONE generation over every root, so " +
-                "running now would drop the missing root(s) from it. Restore the path(s), or remove the root(s) " +
-                "from the roots {} block if they are gone for good.",
+            "reindex: refusing to rebuild - offline reindex requires every configured root to be available. " +
+                "Restore the path(s), or remove the root(s) from the roots {} block if they are gone for good.",
         )
         throw IllegalStateException("configured root(s) not available: ${missing.joinToString { it.name.value }}")
     }
 
     /**
-     * The POSTCONDITION, and the guard that actually holds the line: the snapshot about to be swapped in carries a
-     * section for EVERY registered root, or nothing is published at all.
-     *
-     * The preflight closes the door and then stops watching it. A root that vanishes DURING [IndexBuilder.rebuild] is
-     * SKIPPED by the carry-forward rule - correct for the server, which still holds that root's last-good section, but
-     * a fresh CLI process has nothing to carry, so the root contributes NO section and the generation swap below would
-     * purge its search rows while this command exited 0 and printed a confident summary. The window is real (a NAS
-     * unmounting mid-scan is precisely when someone is running an offline reindex), and no check that runs BEFORE the
-     * pass can see into it.
-     *
-     * So it asks the only question that cannot be raced: not "is every root there?" but "is every root IN what we just
-     * built?". A missing root aborts before the swap - nothing is written, the previous generation stands untouched,
-     * and the operator is told which root went away.
+     * Requires a section for every registered root before the search generation swap. A fresh CLI process cannot
+     * carry a previous in-memory section if a root vanishes during the page pass. The command therefore refuses an
+     * incomplete result even though unretired engine rows could survive the swap. The previous search generation
+     * remains unchanged; the page pass may already update content or application metadata before this refusal.
      */
     private fun requireCompleteGeneration(registry: RootRegistry, snapshot: PageIndex, output: CommandOutput) {
         val indexed = snapshot.sections.map { it.root }.toSet()
@@ -324,9 +317,9 @@ object ReindexCommand {
             )
         }
         output.error(
-            "reindex: nothing was written - the rebuilt index covers ${indexed.size} of ${registry.roots.size} configured " +
-                "root(s), and swapping THAT in would drop the missing root(s) from search. The previous search index is " +
-                "untouched; restore the path(s) and run it again.",
+            "reindex: refusing to rebuild - the page pass covers ${indexed.size} of ${registry.roots.size} configured " +
+                "root(s). The previous search generation is unchanged; the page pass may already have updated " +
+                "content or application metadata. Restore the path(s) and run it again.",
         )
         throw IllegalStateException("root(s) missing from the rebuilt index: ${missing.joinToString { it.name.value }}")
     }

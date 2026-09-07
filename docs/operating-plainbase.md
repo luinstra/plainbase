@@ -103,6 +103,11 @@ curl -X POST http://localhost:8080/api/v1/admin/reindex
 # {"status":"ok","pages":42}
 ```
 
+`pages` counts published pages accepted as input to this rebuild. Pages currently retired and unbound are
+excluded, even if an older published snapshot still contains them. The count can therefore be smaller than the
+snapshot, and it does not include additional unretired rows carried forward from the search engine. Reindex does
+not change the published page snapshot or its checkpoints.
+
 ### `plainbase reindex` - the OFFLINE/ops path
 
 For when the server is **down**, or for a scripted operational reindex:
@@ -111,6 +116,15 @@ For when the server is **down**, or for a scripted operational reindex:
 CONTENT_DIR=./content DATA_DIR=./data plainbase reindex
 # reindex: rebuilt the search index for 42 page(s) under /abs/path/to/content
 ```
+
+The CLI's fresh complete page pass binds the scanned pages before its explicit swap. On a fresh `DATA_DIR`, this
+matches the accepted input and resulting engine count. The running API rebuild instead filters the existing holder
+after current retirement authority is read; its accepted count can therefore differ from the CLI's fresh scan when
+the holder includes a newly retired page. Both paths may carry additional unretired engine-only rows outside the
+reported input count.
+
+The CLI requires every configured root to be available and the page pass to be complete; otherwise it refuses the
+search generation swap.
 
 Like `serve`, the offline CLIs (`reindex`, `adopt`) read `DATA_DIR/plainbase.conf` (env still wins), so a
 file-configured `storage.backend=object` makes them operate on the bucket mirror - not the local
@@ -130,12 +144,13 @@ reindex: a Plainbase server is holding /abs/path/to/data - stop it, or use POST 
 
 Exit codes: `0` success, `1` runtime failure (including the lock refusal), `2` usage error.
 
-**If a write fails with `database is locked`:** every app DB (`DATA_DIR/plainbase.db`) transaction
-takes SQLite's write lock the moment it opens, so concurrent writers queue rather than interleave. The
-driver waits up to `busy_timeout=3000` ms before giving up, and a publication that rewrites every page
-holds the lock for as long as it runs. Retry the operation; if it keeps failing, a reindex or a large
-publication is probably still in flight. The app DB is **not** WAL - only the derived `search.db` is,
-and it pins its own busy timeout separately.
+**If an operation fails with `database is locked`:** app DB transactions use `BEGIN IMMEDIATE`, including read-only
+transaction bodies, so they take SQLite's reserved write lock when they open. Ordinary bare `SELECT`s are not
+wrapped in those transactions and can coexist with a reserved lock, while overlapping read/write lifetimes can still
+delay a writer's commit. If a reindex or large publication is in flight, wait for it to finish and retry after
+contention clears.
+
+The app DB is not WAL; the derived `search.db` uses WAL and has a separate busy timeout.
 
 ## `search.db` is derived state
 
@@ -182,11 +197,11 @@ Nothing is ever written on a 503, so a retry is safe. A root that is not serving
 its pages as deleted, never reports a conflict against them, and never quietly succeeds a write into
 them.
 
-**2. Nothing is deleted for an unavailable root.** Its pages are carried forward in the index, and its
-`id_map`, `url_alias`, `page_checkpoint` and `dirty_page` rows are left untouched - a routine rebuild
-never prunes state for a root it cannot see. Its proposals stay decidable too: an APPLYING row stays
-APPLYING, a CONFLICTED row is never terminally failed, and an approve or rebase against it answers 503
-rather than rewriting the row.
+**2. Unavailability grants no new absence authority.** Its pages are carried forward in the index, and its
+`id_map`, `url_alias`, `page_checkpoint` and `dirty_page` rows are left untouched. An outage cannot create a
+new retirement, although a retirement already durably committed before the outage may still be cleaned from
+derived search state. Its proposals stay decidable too: an APPLYING row stays APPLYING, a CONFLICTED row is
+never terminally failed, and an approve or rebase against it answers 503 rather than rewriting the row.
 
 ### Checking, and recovering
 
@@ -248,18 +263,32 @@ explicit `POST /api/v1/admin/rescan` all probe the root and mark it on the spot.
 rescan for this.
 
 Once marked, nothing serves that root's content - that is the invariant. The exposure is therefore bounded to
-reads issued in the seconds *before* detection, and even those touch no durable state: no write is
-mis-answered and no deletion runs, because every one of those paths probes the disk itself.
+reads issued in the seconds *before* detection. Those reads do not themselves retire anything: the probes prevent a
+missing root from becoming deletion evidence, while search reconciliation may still finish previously committed
+retirements using durable authority.
 
 ### Reindexing while a root is unavailable
 
-`POST /api/v1/admin/reindex` rebuilds the search engine from the current snapshot. If a root has been
-unavailable **since boot**, it was never scanned, so it has no snapshot section - and a reindex during
-that episode DROPS its search rows. That is accepted and safe: `search.db` is derived state (above), the
-root's hits are filtered out during the episode anyway, and the first rebuild after you restore the root
-and restart re-indexes it completely. Its `page_checkpoint` rows - durable state - are never touched by a
-reindex. A root that vanished MID-RUN is unaffected either way (its carried section is still in the
-snapshot).
+`POST /api/v1/admin/reindex` retains existing unretired search rows even when their root is unavailable, detached,
+or absent from the published snapshot. It removes identities currently retired and unbound, including retirements
+whose earlier search update failed. Retired pages still present in an older or carried snapshot are excluded from
+search input, so that snapshot cannot reintroduce them. Reindex leaves the published snapshot and `page_checkpoint`
+rows unchanged. Retaining engine rows does not make an unavailable root's content available.
+
+Full search reconciliation reads the current retired-and-unbound identities accumulated over the app database's
+lifetime. A generation rebuild also stages those identities as exclusions. This work can grow even when the live
+tree is small; bounded insertion batches do not bound total work. Targeted page updates use an indexed lookup for
+one rooted identity.
+
+These operations share the serialized index builder. App DB contention can delay retirement reads; a retirement read
+can hold a shared lock while consuming result rows, delaying a concurrent binding commit. If overlap exceeds the
+configured three-second busy timeout, either read or commit may fail `SQLITE_BUSY`. This is conditional, not every
+long read. A failed retirement read makes no search changes for that operation.
+
+A targeted save whose bytes landed but whose search update failed follows the existing dirty-page recovery path. If
+the identity remains retired and unbound, reconciliation can continue failing and logging across restarts; a retained
+dirty row has no automatic expiry. A legitimate same-path reclaim permits indexing again. A dirty row already
+removed by an accepted retirement proof is not recreated by the search failure.
 
 ### Adding or removing a root: a config edit plus a restart
 

@@ -26,8 +26,9 @@ import com.plainbase.domain.root.RootedPageId
  *
  * `search.db` cannot join that transaction and does not need to. Per ADR-0004 it is a SEPARATE database on raw
  * JDBC precisely because it is DERIVED state: the app-DB commit is the point of truth, `SearchIndexer.sync`
- * brings search into line afterwards, and a crash between the two leaves a STALE SEARCH ROW - a wrong hit, not
- * a lost page, and exactly the failure ADR-0004 already accepts. Do not invent an outbox for a derived store.
+ * brings search into line afterwards, and a crash between the two leaves a STALE SEARCH ROW until later
+ * reconciliation using durable authority - a wrong hit, not a lost page, and exactly the failure ADR-0004 already
+ * accepts. Do not invent an outbox for a derived store.
  *
  * **C0 shipped this idle** - nothing minted an [AbsenceProof], so the reaper was real, tested, and unusable. Since
  * then EPOCH (C2), OBJECT_LIST (C3), GIT (C4 - which also rides checkpoint advances through here) and OPERATOR (C5's
@@ -37,8 +38,9 @@ import com.plainbase.domain.root.RootedPageId
 interface RetirementRepository {
 
     /**
-     * Retires every binding an [AbsenceProof] covers, and returns the rooted ids actually retired (which is what
-     * the publication sinks then act on - they never re-derive the authority for themselves).
+     * Retires every binding an [AbsenceProof] covers, and returns the rooted ids actually retired. Checkpoint and
+     * other non-search publication sinks consume this pass-local result; the derived search projection reads current
+     * durable retirement authority so a missed publication can be repaired later.
      *
      * A proof is applied only when ALL of these hold, re-checked INSIDE the transaction:
      *  - it **SURVIVES [witnessed]** ([AbsenceProof.survives]) - an INFERRED absence is a conclusion drawn from a gap

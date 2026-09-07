@@ -126,6 +126,28 @@ SELECT *
 FROM retired_binding
 WHERE root = :root AND id = :id;
 
+-- Search retirement authority: a tombstone is current only while its rooted identity has no live binding.
+-- Project only the rooted key so the search layer cannot accidentally depend on retirement metadata.
+selectRetiredUnboundIds:
+SELECT rb.root, rb.id
+FROM retired_binding rb
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM id_map m
+  WHERE m.root = rb.root AND m.id = rb.id
+);
+
+selectRetiredUnboundByRootId:
+SELECT rb.root, rb.id
+FROM retired_binding rb
+WHERE rb.root = :root
+  AND rb.id = :id
+  AND NOT EXISTS (
+    SELECT 1
+    FROM id_map m
+    WHERE m.root = rb.root AND m.id = rb.id
+  );
+
 selectAllBindings:
 SELECT *
 FROM id_map;

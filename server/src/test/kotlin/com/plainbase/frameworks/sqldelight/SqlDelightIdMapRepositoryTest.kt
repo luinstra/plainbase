@@ -8,8 +8,13 @@ import com.plainbase.domain.model.IdentityIssue
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdBinding
+import com.plainbase.domain.repository.Stage
 import com.plainbase.domain.repository.Supersession
+import com.plainbase.domain.root.AbsenceProof
+import com.plainbase.domain.root.BindingRef
+import com.plainbase.domain.root.ProofSource
 import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPageId
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.ktor.livePathOf
 import io.kotest.assertions.throwables.shouldThrowAny
@@ -291,6 +296,133 @@ class SqlDelightIdMapRepositoryTest : FunSpec({
             repo.bind(pathB, idY, materialized = true)
             driver.queryLong("SELECT count(*) FROM id_map") shouldBe 2L
             driver.queryLong("SELECT count(*) FROM id_map WHERE length(id) != 16") shouldBe 0L
+        }
+    }
+
+    test("retired-unbound whole and point reads agree across roots, reclaim, refusal, and defensive live state") {
+        withRepo { repo, driver ->
+            val extraPath = RootedPath(extra, TreePath.require("mirror/x.md"))
+            val refusedPath = RootedPath(main, TreePath.require("refused.md"))
+            val importedLivePath = RootedPath(main, TreePath.require("imported.md"))
+            val rootedMainX = RootedPageId(main, idX)
+            val rootedMainY = RootedPageId(main, idY)
+            val rootedExtraX = RootedPageId(extra, idX)
+
+            repo.retiredUnboundIds() shouldBe emptySet()
+            repo.isRetiredUnbound(rootedMainX) shouldBe false
+
+            repo.bind(pathA, idX, materialized = true)
+            repo.bind(pathA, idY, materialized = true, supersession = witnessedAll)
+            repo.retiredUnboundIds() shouldBe setOf(rootedMainX)
+            repo.isRetiredUnbound(rootedMainX) shouldBe true
+            repo.isRetiredUnbound(rootedExtraX) shouldBe false
+
+            repo.bind(extraPath, idX, materialized = true)
+            repo.retiredUnboundIds() shouldBe setOf(rootedMainX)
+            repo.isRetiredUnbound(rootedExtraX) shouldBe false
+
+            repo.bind(refusedPath, idX, materialized = true) shouldBe
+                BindOutcome.Refused(idX, heldBy = pathA, retired = true)
+            repo.isRetiredUnbound(rootedMainX) shouldBe true
+
+            repo.bind(pathA, idX, materialized = true) shouldBe BindOutcome.Bound
+            repo.retiredUnboundIds() shouldBe setOf(rootedMainY)
+            repo.isRetiredUnbound(rootedMainX) shouldBe false
+            repo.retiredAt(main, idX).shouldBeNull()
+
+            // Import-shaped inconsistency: retain a real tombstone, then add a live row for the same rooted key
+            // below the typed bind boundary. The anti-live predicate must fail closed for both query shapes.
+            repo.bind(pathA, idY, materialized = true, supersession = witnessedAll)
+            driver.execute(
+                identifier = null,
+                sql = "INSERT INTO id_map(root, path, id, materialized) VALUES (?, ?, ?, ?)",
+                parameters = 4,
+                binders = {
+                    bindString(0, main.value)
+                    bindString(1, importedLivePath.path.value)
+                    bindBytes(2, PageIdColumnAdapter.encode(idX))
+                    bindLong(3, 1L)
+                },
+            )
+            repo.retiredUnboundIds() shouldBe emptySet()
+            repo.isRetiredUnbound(rootedMainX) shouldBe false
+
+            // The reads are direct and read-only: all live/tombstone state remains exactly as imported.
+            repo.bindingInRoot(main, idX)?.path shouldBe importedLivePath
+            repo.retiredAt(main, idX)?.path shouldBe pathA
+            repo.retiredBindings().single { it.path.root == main && it.id == idX }.path shouldBe pathA
+        }
+    }
+
+    test("a real accepted proof retires the rooted binding, deletes recovery state, and leaves authority reads read-only") {
+        withRepo { repo, driver ->
+            val database = DatabaseFactory.createDatabase(driver)
+            val retirements = SqlDelightRetirementRepository(database)
+            val checkpoints = SqlDelightPageCheckpointRepository(database)
+            val dirty = SqlDelightDirtyPageRepository(database)
+            val rooted = RootedPageId(main, idX)
+            val survivorPath = RootedPath(extra, TreePath.require("survivor.md"))
+            val survivor = RootedPageId(extra, idY)
+
+            retirements.observation(main)
+            retirements.observation(extra)
+            repo.bind(pathA, idX, materialized = true)
+            repo.bind(survivorPath, idY, materialized = true)
+            checkpoints.replace(
+                mapOf(
+                    rooted to TreePath.require("guide"),
+                    survivor to survivorPath.path,
+                ),
+            )
+            dirty.mark(idX, pathA, expectedHash = "sha256:" + "a".repeat(64), stage = Stage.WRITING)
+            dirty.mark(idY, survivorPath, expectedHash = "sha256:" + "b".repeat(64), stage = Stage.WRITING)
+
+            val observationId = retirements.observation(main)
+            val bindingEpoch = retirements.bindingEpoch(main)
+            val binding = requireNotNull(repo.bindingInRoot(main, idX))
+            val applied = retirements.applyProofs(
+                proofs = listOf(
+                    AbsenceProof.accepted(
+                        root = main,
+                        source = ProofSource.OPERATOR,
+                        observationId = observationId,
+                        bindingEpoch = bindingEpoch,
+                        covers = setOf(BindingRef(binding.path.path, idX)),
+                    ),
+                ),
+                witnessed = emptySet(),
+                unavailableNow = { emptySet() },
+            )
+            applied shouldBe setOf(rooted)
+            repo.bindingInRoot(main, idX).shouldBeNull()
+            repo.retiredAt(main, idX) shouldNotBe null
+            checkpoints.load() shouldBe mapOf(survivor to survivorPath.path)
+            dirty.all().map { it.pageId } shouldBe listOf(idY)
+
+            val stateBeforeReads = listOf(
+                repo.bindings(),
+                repo.retiredBindings(),
+                checkpoints.load(),
+                dirty.all(),
+                retirements.observations(),
+                retirements.bindingEpoch(main),
+                retirements.bindingEpoch(extra),
+            )
+            repo.retiredUnboundIds() shouldBe setOf(rooted)
+            repo.isRetiredUnbound(rooted) shouldBe true
+            repo.isRetiredUnbound(survivor) shouldBe false
+            repo.isRetiredUnbound(RootedPageId(main, idY)) shouldBe false
+            repo.isRetiredUnbound(RootedPageId(extra, idY)) shouldBe false
+            val stateAfterReads = listOf(
+                repo.bindings(),
+                repo.retiredBindings(),
+                checkpoints.load(),
+                dirty.all(),
+                retirements.observations(),
+                retirements.bindingEpoch(main),
+                retirements.bindingEpoch(extra),
+            )
+            stateAfterReads shouldBe stateBeforeReads
         }
     }
 })
