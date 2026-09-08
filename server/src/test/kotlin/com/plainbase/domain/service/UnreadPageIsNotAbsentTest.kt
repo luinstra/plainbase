@@ -17,7 +17,7 @@ import io.kotest.matchers.shouldBe
  * **AN UNKNOWN ABSENCE IS NEVER A FACT - including one that arrives through the READ.**
  *
  * A scan is a WALK followed by a READ of each thing it walked, and `SourceScan.complete` describes only the WALK
- * ([IndexBuilder.SourceScan.complete]: *"Did the backend see the WHOLE tree?"*). So a page the walk ENUMERATED and
+ * ([SourceScan.complete]: *"Did the backend see the WHOLE tree?"*). So a page the walk ENUMERATED and
  * the read could not produce bytes for is dropped from the pass's drafts - and it is therefore missing from the
  * WITNESS map of a scan that still calls itself COMPLETE.
  *

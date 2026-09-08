@@ -33,7 +33,8 @@ import io.kotest.matchers.nulls.shouldNotBeNull
  *  - **durable-read window** - following the commit-3 GIT drill's constructor-seam shape, temporarily add a live
  *    binding-epoch read to `AbsencePass`, bind it to `retirements::bindingEpoch` in `capture`, and re-point
  *    `mintEpoch`'s `bindingEpochs.getValue(root)` to that seam. The read is later than BOTH stages, so BOTH rows go RED.
- *  - **scan-end window** - move `AbsencePass.capture` below the `sources.mapNotNull { scanIfAvailable(it) }` scan while
+ *  - **scan-end window** - move `AbsencePass.capture` below the
+ *    `sources.mapNotNull { sourceReader.read(it.root, it.store, it.history) }` scan while
  *    keeping it above `confirmEpochs`' durable snapshot. Only the SECOND row goes red; the durable-read row stays green.
  *    This is the one that earns the second row its separate existence, and the reason a single back-out is not proof:
  *    the first bug hid the second for a whole round.

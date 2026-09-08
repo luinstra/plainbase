@@ -2,17 +2,11 @@
 
 package com.plainbase.domain.service
 
-import com.plainbase.domain.content.ContentFile
-import com.plainbase.domain.content.ContentFolder
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
-import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.history.Commit
-import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
-import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
@@ -53,7 +47,6 @@ import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.root.Witness
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.io.IOException
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
@@ -72,7 +65,7 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * is carried. A never-scanned root simply contributes no section; search retirement authority is read durably by
  * [SearchIndexer] at each operation.
  *
- * **What is classified is the COMPLETED SCAN, never the precondition** ([scanIfAvailable]). The entry probe
+ * **What is classified is the materialized scan result, never the precondition** ([IndexSourceReader.read]). The entry probe
  * says the root was there when the walk STARTED, and a root can vanish in between - a directory iteration whose
  * tree disappears mid-walk can return SHORT (or empty) without throwing anything. So the root is re-probed at
  * HANDOFF, and a scan whose root is gone by then is skipped and carried like any other loss. A short scan cannot
@@ -255,6 +248,9 @@ class IndexBuilder(
     /** The ONE 404-vs-503 rule ([AbsenceClassifier]), over the SAME durable index this pass binds into. Never re-derived here. */
     private val absence = AbsenceClassifier(idMap)
 
+    /** The one eager source materializer, sharing the targeted-path classifiers above. */
+    private val sourceReader = IndexSourceReader(frontmatterParser, absence, availability, rootLoss)
+
     /**
      * The roots whose corpus THIS PROCESS has actually seen on disk - and a **SERVING HINT with ZERO
      * delete authority.** Read [publishLimbo] for what it is now allowed to decide, which is exactly one thing:
@@ -332,7 +328,7 @@ class IndexBuilder(
         // AbsencePass.capture owns the effectful establish, stamp, and git bracket order. It runs once here before
         // the scan loop so every mint reasons from the same fixed pre-evidence capture.
         val pass = AbsencePass.capture(epochs, retirements, idMap, bindings, sources, localSources, gitOracleRoots)
-        val observed = sources.mapNotNull { scanIfAvailable(it) }
+        val observed = sources.mapNotNull { sourceReader.read(it.root, it.store, it.history) }
         // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
         // every page we looked at, because "is this the tree our rows describe?" is exactly what it is deciding.
         val seen: Map<RootedPath, Witness> = observed.flatMap { scan ->
@@ -342,8 +338,8 @@ class IndexBuilder(
         }.toMap()
 
         val confirmations = confirmEpochs(observed)
-        // Keep manifest selection about WALK completeness only: preserve this gate's existing choice of when to read a
-        // manifest, while mintObjectList independently requires matching-root walk and page-read success.
+        // A complete observed walk selects which object manifests are read. Minting separately requires a complete
+        // walk and successful selected-page reads for the matching root.
         val manifests = sources.filter { it.root.backend is RootBackend.Object }
             .filter { source -> observed.any { it.root == source.root.name && it.complete } }
             .mapNotNull { source -> source.manifests?.latestManifest()?.let { source.root.name to it } }
@@ -394,10 +390,9 @@ class IndexBuilder(
         // is no longer any code path by which it could become some.
         scans.filter { it.complete && it.drafts.isNotEmpty() }.forEach { corpusSeen += it.root }
 
-        // The scan's own issue rows are persisted only once the scan that produced them COMPLETED. Recording
-        // them as they were found would leave rows behind from a pass that never happened: a scan that dies
-        // half-way is SKIPPED and its last-good section carried, so its half-walked path/URL collisions describe
-        // a tree nobody indexed. The identity issues below ride the resolve, which only ever sees full scans.
+        // Issue and identity work sees every materialized result, including a result with complete=false. Recording
+        // waits until every source materialization returns, so a skipped/aborted source cannot leave buffered issues
+        // behind from a pass that never happened.
         val raisedIssues = mutableListOf<IdentityIssue>()
         scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
 
@@ -627,8 +622,8 @@ class IndexBuilder(
          * decide which identities may retire. The rows wait in limbo (503, self-healing) and a later successful poll may
          * refute the rename or retire a genuinely absent binding. A DRAINED bucket is unaffected: it lists nothing, so
          * a mirror holding nothing holds the whole of it. [scans] supplies both the observations consumed here and the
-         * walk-completeness observation. Preserve the call site's existing manifest-read selection; this minter must
-         * independently require matching-root walk completeness and selected-page read success.
+         * walk-completeness observation. Manifest-read selection uses walk completeness; this minter independently
+         * enforces matching-root walk and selected-page read completeness.
          */
         fun mintObjectList(
             manifests: Map<RootName, ObjectManifest>,
@@ -1098,247 +1093,6 @@ class IndexBuilder(
         }
     }
 
-    /** One page's in-flight state: read once, frontmatter parsed once, bytes kept for the single render. */
-    private class Draft(
-        val file: ContentFile,
-        val bytes: ByteArray,
-        val frontmatter: Frontmatter,
-    )
-
-    /**
-     * One source's materialized scan result: drafts in path order, URLs assigned, last-commits batched — and the
-     * path/URL-collision [issues] it raised, BUFFERED rather than persisted as they were found, so an
-     * abandoned (root-loss) scan leaves no rows describing a tree it never finished walking. The caller
-     * records them once the source result has returned rather than while it is being assembled.
-     */
-    private data class SourceScan(
-        val root: RootName,
-        val drafts: List<Draft>,
-        val folders: List<ContentFolder>,
-        val assets: Set<TreePath>,
-        val urls: CanonicalUrlBuilder.Result,
-        val commits: Map<TreePath, Commit>,
-        val issues: List<IdentityIssue>,
-        /** Did the backend see the WHOLE tree ([ScanResult.complete])? Only a complete walk gets delete authority. */
-        val complete: Boolean,
-        /**
-         * Did every case-sensitive leaf `.md` candidate selected by this invocation yield [ContentRead.Bytes]?
-         * This is read evidence only: it is neither a filesystem snapshot guarantee nor a frontmatter identity
-         * guarantee. Only matching-root OBJECT_LIST minting consults it; copies preserve it unchanged.
-         */
-        val pageReadsComplete: Boolean,
-        /**
-         * **The bound-only paths the WALK enumerated and the READ could not produce bytes for** - and the reason
-         * [complete] is not the whole story about what this pass knows. All candidate read failures clear
-         * [pageReadsComplete], but only [ContentRead.AbsenceUnknown] paths enter this set.
-         *
-         * A scan is a walk followed by a read of each thing it walked, and [complete] describes only the WALK. So a
-         * page that lost a race between the two (an `rm`, a `git checkout` of another branch, a sync tool's
-         * delete-then-write) drops out of [drafts] while the scan still, correctly, calls itself complete - and it is
-         * then MISSING FROM THE WITNESS MAP of a scan that saw the whole tree. The epoch mints its proof from exactly
-         * that difference, so without this set the page we merely FAILED TO READ reads as a page that is GONE, and
-         * `AbsenceUnknown` - the carrier for *"the bytes are not there and we cannot prove they are gone"* - becomes
-         * the one thing this design forbids it to become.
-         *
-         * These paths are therefore neither WITNESSED nor ABSENT. They are the third answer, and they go to LIMBO.
-         */
-        val unread: Set<TreePath>,
-    )
-
-    private class Identity(
-        val id: PageId,
-        val materialized: Boolean,
-    )
-
-    /**
-     * [scan]s ONE source unless its root is not there - in which case it is MARKED (if the probe is what
-     * discovered it), SKIPPED, and its last-good section carried forward by the caller. Null means skipped.
-     *
-     * **The scan is classified where it is HANDED OVER, not where it is started.** The entry probe below is a
-     * cheap fail-fast, and it is all it is: what the pass grants delete authority to is the SourceScan that
-     * came back, so that is what gets re-probed. A tree that vanishes DURING the walk does not have to throw -
-     * a directory stream can simply run out of entries - and a short scan of a live root should not be mistaken
-     * for a WITNESS of the pages it failed to reach. Probing the artifact instead of the precondition makes that
-     * structural rather than lucky.
-     *
-     * The classifier's carrier set is DERIVED from what `scan(source)` actually COLLABORATES with, not from
-     * the NIO ladder - because this is a COMPOSITE rooted operation, not a store call:
-     *  - `store.scan()` / `store.readClassified()` -> `IOException` (total over the store's NIO surface, once
-     *    the directory-stream normalization has run);
-     *  - `store.readClassified()`'s `RootDown` arm -> a `RootUnavailable` we throw ourselves;
-     *  - `history.lastCommits()` -> every git call is `git -C <workTree>`, so a gone work tree exits non-zero
-     *    and raises a [HistoryCommandException];
-     *  - `idMap.record`/`bind` (a DB in DATA_DIR, a different tree) and the pure parser/URL builder -> nothing
-     *    a vanished root can do. A throw from those is a GENUINE fault and takes the live-root arm.
-     *
-     * So it is those three and NOT `catch (Exception)`: a widened catch would swallow a programming error into
-     * a skipped root, and the whole point of [skipOnLiveFailure]'s WARN is that a live root's failure stays
-     * visible instead of being laundered into "the disk is gone".
-     */
-    private fun scanIfAvailable(source: Source): SourceScan? {
-        val root = source.root.name
-        return when {
-            !availability.current().isAvailable(root) -> {
-                logger.warn { "root '$root' is unavailable; skipping its scan and carrying its last-good section forward" }
-                null
-            }
-
-            rootLoss.markIfGone(root, source.store) ->
-                skipAndCarry(root, "its backing tree is not traversable")
-
-            else -> runCatching { scan(source) }.fold(
-                onSuccess = { scan ->
-                    when {
-                        rootLoss.markIfGone(root, source.store) ->
-                            skipAndCarry(root, "it vanished while being scanned, so the tree it handed back is not a corpus")
-                        else -> scan
-                    }
-                },
-                onFailure = { failure ->
-                    when (failure) {
-                        is RootUnavailable -> {
-                            availability.markUnavailable(failure.root, failure.reason)
-                            logger.warn {
-                                "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward"
-                            }
-                            null
-                        }
-
-                        is IOException -> classifyScanFailure(source, failure)
-                        is HistoryCommandException -> classifyScanFailure(source, failure)
-                        else -> throw failure
-                    }
-                },
-            )
-        }
-    }
-
-    /**
-     * The rebuild's arm of the shared [RootLossClassifier] rule: a failure whose re-probe FAILS means the root
-     * vanished mid-operation - the same hazard class, since a half-scanned section is a partial mass-delete - so
-     * mark, skip and carry. A failure whose re-probe still PASSES is NOT a disappearance (a parser bug, a corrupt
-     * repo, an unknown git flag, a `chmod 000` subdirectory) and takes [skipOnLiveFailure]. A request-serving
-     * surface wants the classifier's `guarding` (mark and 503); a rebuild wants to keep going over the roots
-     * that ARE there, which is this.
-     */
-    private fun classifyScanFailure(source: Source, failure: Exception): SourceScan? {
-        val root = source.root.name
-        if (rootLoss.markIfGone(root, source.store)) {
-            return skipAndCarry(root, "it vanished while being scanned (${failure.message})")
-        }
-        return skipOnLiveFailure(source, failure)
-    }
-
-    /**
-     * A LIVE root whose scan failed: fail THAT root's pass, not the whole rebuild. The old rethrow escaped the
-     * per-root loop, so one unreadable subdirectory in one extra root failed every root's pass - and at boot,
-     * where `serve()` calls [rebuild] uncaught, it killed the server outright with a stack trace instead of
-     * serving the roots that were perfectly fine. The root is deliberately NOT marked unavailable: it is THERE,
-     * a permission or a corrupt repo is fixed in place, and sticky-until-restart would prescribe a restart
-     * nobody needs. A failed or skipped scan grants no new deletion authority; current durable retired-unbound
-     * identities may still be reconciled in search. The root keeps its last-good section, keeps serving, and the next
-     * pass retries it. The WARN carries the DIRECTORY, because that is the datum an operator acts on.
-     */
-    private fun skipOnLiveFailure(source: Source, failure: Exception): SourceScan? {
-        val where = source.root.localPath?.let { " at $it" }.orEmpty()
-        logger.warn(failure) {
-            "root '${source.root.name}'$where is still there but its scan FAILED (${failure.message}); skipping it and " +
-                "carrying its last-good section forward - the failed scan grants no new deletion authority; current " +
-                "durable retired-unbound search identities may still be reconciled, the other roots still index, and " +
-                "the next pass retries it"
-        }
-        return null
-    }
-
-    /** The loss is already published; this is the skip. Marking is what stops the carried section from being SERVED as live. */
-    private fun skipAndCarry(root: RootName, detail: String): SourceScan? {
-        logger.warn {
-            "root '$root' is no longer available ($detail); skipping its scan and carrying its last-good section " +
-                "forward - the loss grants no new deletion authority; previously committed retired-and-unbound search " +
-                "identities may still be reconciled, and it will serve 503 until it is restored and the server restarted"
-        }
-        return null
-    }
-
-    /** Scans ONE source end-to-end (files, frontmatter, per-root URLs, batched last-commits). */
-    private fun scan(source: Source): SourceScan {
-        val root = source.root.name
-        val scan = source.store.scan()
-
-        // Every selected Markdown candidate must yield bytes for OBJECT_LIST authority.
-        var pageReadsComplete = true
-        // Bound pages observed by the walk but unread remain unwitnessed without establishing absence; this preserves
-        // the bound-only semantics of [SourceScan.unread].
-        val unread = mutableSetOf<TreePath>()
-        val drafts = scan.files
-            .filter { it.path.name.endsWith(".md") }
-            .sortedBy { it.path.value }
-            .mapNotNull { file ->
-                // CLASSIFIED, not `checkNotNull`: a plain null read cannot tell a page that vanished mid-scan from
-                // the whole ROOT going away (which must mark + skip + carry). The old checkNotNull raised an
-                // IllegalStateException that walked straight past the classifier above, leaving the root AVAILABLE
-                // and its carried section being served - the D5 lie.
-                //
-                // [AbsenceClassifier] treats a page that vanished between the walk and the read as NOT WITNESSED: it drops out
-                // of this pass's drafts, so it is in no snapshot, and - if the durable index still binds it - it lands
-                // in LIMBO, which reads 503 rather than 404 until the page is seen again or a proof settles it. It
-                // used to `error()`, which killed the whole rebuild (and, at boot, the server) over one file losing
-                // a race with an ordinary `rm` - taking every OTHER root's pass down with it.
-                val bytes = when (val read = absence.read(source.store, RootedPath(root, file.path))) {
-                    is ContentRead.Bytes -> read.bytes
-                    ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
-                    ContentRead.AbsenceUnknown -> {
-                        pageReadsComplete = false
-                        // ...and it is recorded as UNREAD, which is what actually keeps that last promise. Dropping the
-                        // draft is only half of it: a page missing from the witness map of a COMPLETE scan is precisely
-                        // what the epoch mints an absence proof from, so without this line the log below is a lie and
-                        // the row is reaped (tombstone, checkpoint, and the dirty_page row that is the interrupted
-                        // save's only recovery record). An unknown is not a fact.
-                        unread += file.path
-                        logger.warn {
-                            "page ${file.path.value} in '$root' vanished between the walk and the read; it is NOT witnessed " +
-                                "this pass and its durable row goes to LIMBO - nothing is deleted for it"
-                        }
-                        return@mapNotNull null
-                    }
-                    ContentRead.ConfirmedAbsent -> {
-                        pageReadsComplete = false
-                        logger.warn { "page ${file.path.value} in '$root' vanished between the walk and the read; it was never indexed" }
-                        return@mapNotNull null
-                    }
-                }
-                Draft(file, bytes, frontmatterParser.parse(bytes))
-            }
-        val assets = scan.files.filterNot { it.path.name.endsWith(".md") }.map { it.path }.toSet()
-
-        // Per-root URL construction: the builder is pure and per-tree, so per-root URL uniqueness
-        // falls out of calling it once per source (alias semantics apply per root, not across roots).
-        val urls = CanonicalUrlBuilder.build(
-            root = root,
-            pages = drafts.map { CanonicalUrlBuilder.PageInput(it.file.path, it.file.rawName, it.frontmatter.scalar("slug")) },
-            folders = scan.folders,
-        )
-
-        // ONE batched last-commit read per source (fix-C corollary): never one query per page.
-        // NoOp → empty map → every commit null off Git (the frozen-golden invariant). The map is
-        // keyed by the same TreePath the draft carries; an uncommitted page is simply absent (→ null).
-        // It is also the LAST thing that can raise root loss here, which is why the issues below are
-        // handed BACK rather than recorded: nothing this scan found is persisted until all of it is in hand.
-        val commits = source.history.lastCommits(drafts.map { it.file.path })
-        return SourceScan(
-            root = root,
-            drafts = drafts,
-            folders = scan.folders,
-            assets = assets,
-            urls = urls,
-            commits = commits,
-            issues = scan.issues.map { it.toIdentityIssue(root) } + urls.issues,
-            complete = scan.complete,
-            pageReadsComplete = pageReadsComplete,
-            unread = unread,
-        )
-    }
-
     /** The URL-complete, render-empty skeleton page for one draft. */
     private fun provisionalPage(scan: SourceScan, draft: Draft, identityOf: Identity): IndexedPage {
         val assignment = scan.urls.byPage.getValue(draft.file.path)
@@ -1608,12 +1362,6 @@ class IndexBuilder(
             existing == null -> aliasRegistry.register(target, page.rooted)
             // existing == page.rooted: already registered — nothing to do.
         }
-    }
-
-    private fun ScanIssue.toIdentityIssue(root: RootName): IdentityIssue = when (this) {
-        // The loser's raw name passes through verbatim — building a TreePath from it would
-        // NFC-normalize it back into keptPath, erasing the one value that distinguishes the loser.
-        is ScanIssue.PathCollision -> IdentityIssue.PathCollision(root = root, keptPath = path, loserRawName = loserRawName)
     }
 
     private val TreePath.stem: String get() = name.removeSuffix(".md")
