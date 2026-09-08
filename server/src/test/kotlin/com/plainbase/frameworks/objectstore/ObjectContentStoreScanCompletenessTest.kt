@@ -8,22 +8,20 @@ import io.kotest.matchers.shouldBe
 import java.nio.file.Files
 
 /**
- * DELETE AUTHORITY for the object backend (ADR-0011 D5): the mirror is the tree this store SERVES, and a WARM boot
- * is allowed to hand back an INCOMPLETE one - a GET that failed, a mirror write that failed, deferred so a
- * transient bucket fault cannot stop the server. The rebuild walks that mirror, and a walk cannot tell a page whose
- * GET failed from a page an operator deleted: both are simply not there.
+ * Tests the object store's walk-completeness observation (ADR-0011 D5). A warm hydrate may defer a failed GET or
+ * mirror write so boot can continue. Scans still return the files present in the mirror, but report incomplete
+ * while the mirror does not hold the latest listed generation.
  *
- * So the store says which one it is. `ScanResult.complete = false` while any object is deferred withholds the pass's
- * DELETE AUTHORITY over this root (`IndexBuilder`), and withholds nothing else: the pages the mirror DID hydrate
- * publish and serve exactly as they always did. That split is the entire point - a transient GET failure must not
- * blank a site, and it must not delete its rows either.
+ * An incomplete walk cannot support a new OBJECT_LIST absence proof. A complete walk is only one prerequisite:
+ * selected-page reads and binding/proof checks are covered by separate indexing integration tests. Previously
+ * committed retirements can still be reconciled independently of this scan evidence.
  */
 class ObjectContentStoreScanCompletenessTest : FunSpec({
 
     val deferred = TreePath.require("deferred.md")
     val hydrated = TreePath.require("hydrated.md")
 
-    test("a hydrate that DEFERRED an object scans INCOMPLETE - and still publishes every page it did hydrate") {
+    test("a hydrate that DEFERRED an object scans INCOMPLETE - and retains hydrated files in the scan") {
         HybridFixture().use { hybrid ->
             hybrid.fake.seed(hybrid.mirror.resolveRepoRelativePath(hydrated), "# Hydrated\n".toByteArray())
             val key = hybrid.mirror.resolveRepoRelativePath(deferred)
@@ -33,10 +31,10 @@ class ObjectContentStoreScanCompletenessTest : FunSpec({
             hybrid.store.hydrate() // non-strict: must NOT throw
 
             val scan = hybrid.store.scan()
-            withClue("a mirror with holes in it is not a corpus: nothing may be DELETED for this root") {
+            withClue("an incomplete walk supplies no new OBJECT_LIST retirement evidence") {
                 scan.complete shouldBe false
             }
-            withClue("...and nothing is withheld from the READ path either - the site does not go blank over one GET") {
+            withClue("hydrated files remain in the incomplete scan") {
                 scan.files.map { it.path } shouldContain hydrated
             }
         }
@@ -63,10 +61,10 @@ class ObjectContentStoreScanCompletenessTest : FunSpec({
             hybrid.store.scan().complete shouldBe false
 
             // The bucket is reachable again (`failNextGetFor` consumed itself), so this hydrate fetches what the
-            // last one deferred. Delete authority comes BACK - the root was never unhealthy, only unproven.
+            // last one deferred. The next hydrate restores the mirror's walk-completeness evidence.
             hybrid.store.hydrate()
 
-            withClue("a root that heals must not stay unauthoritative forever: the next pass may delete again") {
+            withClue("a successful retry restores walk completeness") {
                 hybrid.store.scan().complete shouldBe true
             }
             hybrid.store.scan().files.map { it.path } shouldContain deferred
@@ -90,7 +88,7 @@ class ObjectContentStoreScanCompletenessTest : FunSpec({
 
             // The object is REPLACED at the bucket (a new etag) and the GET that would bring it down fails. The mirror
             // file still EXISTS - it is simply the WRONG GENERATION. A manifest of bare key names could not tell the
-            // difference, and the root would take delete authority over a mirror it had never actually verified.
+            // difference, and treating the mirror as complete would supply false walk evidence for a new OBJECT_LIST retirement.
             hybrid.fake.seed(key, "# Hydrated, rewritten\n".toByteArray())
             hybrid.fake.failNextGetFor += key
             hybrid.store.pollOnce()

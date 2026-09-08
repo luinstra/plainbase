@@ -185,10 +185,12 @@ class ObjectContentStore(
      *
      * **`complete` is DERIVED AT CALL TIME from the latest generation, and it is never a flag** (C3): this mirror is
      * a whole view of the bucket exactly when it holds, as a REGULAR FILE, every key the last complete LIST returned,
-     * at the etag that LIST returned for it ([mirrorHoldsGeneration]). A pass gets DELETE AUTHORITY over this root on
-     * that and on nothing weaker - and nothing is withheld from the READ path by it: every page the mirror does hold
-     * still publishes and still serves, which is the whole point of the split. A transient GET failure must never
-     * blank a site, and it must never delete its rows either.
+     * at the etag that LIST returned for it ([mirrorHoldsGeneration]). That supplies the required WALK-completeness
+     * observation, not the whole OBJECT_LIST proof: the indexing pass also requires every selected Markdown candidate
+     * to yield bytes and its binding/proof checks to pass. A pass gets DELETE AUTHORITY only after those gates, while
+     * every readable page the mirror does hold still publishes and still serves. A transient GET failure must never
+     * blank a site. An incomplete walk supplies no new OBJECT_LIST retirement evidence; previously committed
+     * retirements may still reconcile independently.
      *
      * A store that has never completed a LIST answers `false`, and that is not pedantry: it has listed nothing, so it
      * vouches for nothing - including for the claim that its mirror is a whole view of a corpus. (PREVIEW adopt lives
@@ -207,7 +209,7 @@ class ObjectContentStore(
      *
      * The etags are the point, and a bare key list is the bug this replaces: "the file exists" would let **stale
      * same-path bytes** (an object re-uploaded at a new etag whose GET then failed) and **a DIRECTORY where a file
-     * should be** read as COMPLETE, handing the pass delete authority over a mirror it never actually verified. That
+     * should be** read as COMPLETE, supplying the pass with false complete-walk evidence. That
      * is the `mirrorHasRaw`-checks-existence-not-identity bug walking straight back in through the fix meant to close
      * it. Present AND current, or the generation is not materialized here.
      */
@@ -690,9 +692,9 @@ class ObjectContentStore(
         logger.info { "hydrated mirror from the bucket: ${listed.size} object(s), $healed fetched, $unhealed unhealed" }
         if (unhealed > 0) {
             logger.warn {
-                "$unhealed object(s) could not be hydrated into the mirror: this root serves the pages it DID hydrate " +
-                    "but is refused delete authority until the mirror holds the whole listing - nothing of its is deleted, " +
-                    "and the poll keeps retrying"
+                "$unhealed object(s) could not be hydrated into the mirror; readable mirror pages remain available " +
+                    "and the poll keeps retrying. An incomplete mirror scan cannot authorize new OBJECT_LIST retirements; " +
+                    "search may still remove rows for previously committed retirements"
             }
         }
     }

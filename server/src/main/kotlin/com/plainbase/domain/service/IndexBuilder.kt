@@ -342,8 +342,8 @@ class IndexBuilder(
         }.toMap()
 
         val confirmations = confirmEpochs(observed)
-        // Deliberately paired with mintObjectList's completeness belt: this gate suppresses the manifest read, while
-        // the mint-side gate must remain fail-closed if this call-site selection is ever simplified.
+        // Keep manifest selection about WALK completeness only: preserve this gate's existing choice of when to read a
+        // manifest, while mintObjectList independently requires matching-root walk and page-read success.
         val manifests = sources.filter { it.root.backend is RootBackend.Object }
             .filter { source -> observed.any { it.root == source.root.name && it.complete } }
             .mapNotNull { source -> source.manifests?.latestManifest()?.let { source.root.name to it } }
@@ -611,29 +611,31 @@ class IndexBuilder(
          * and every guard lives there rather than here, so this is only the plumbing: hand the latch the manifest and
          * the witness, take back the bindings it says are provably gone, and stamp them with the root's current token.
          *
-         * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
-         * arm, and it is the common one: a store that has listed nothing knows nothing.
+         * A root that has never completed a successful LIST has no manifest and mints nothing. A failed poll LIST leaves
+         * the previous generation in place and ends that poll.
          *
-         * **And the mirror must hold the WHOLE generation, which is what [SourceScan.complete] means for an object root**
-         * (`ObjectContentStore.scan` derives it from `mirrorHoldsGeneration`). The LIST is the authority about the
-         * BUCKET and it needs no help from the mirror to say a key is gone, but the REFUTATION is made of pages we READ,
-         * and on an object root we read the MIRROR. A poll whose GET of one key failed drops it and "retries next cycle",
-         * so the published generation NAMES a key the mirror does not hold. If that key is a RENAMED page, the id that
-         * would have refuted its old binding is sitting in an object we never fetched, and a LIST returns keys and etags,
-         * never frontmatter ids, so the manifest cannot supply it either. Absence proven by the bucket, refutation
-         * withheld by the mirror: we would retire a page that MOVED.
+         * The mirror must hold the WHOLE generation, as required by [SourceScan.complete]; [ObjectContentStore.scan]
+         * derives that observation from its `mirrorHoldsGeneration` check. This is the required walk-completeness gate,
+         * not the whole OBJECT_LIST proof. A failed poll GET does not remove or invalidate that key's existing mirror
+         * state, although other keys can still progress. A newly listed key may therefore remain unmaterialized;
+         * without its bytes, the pass cannot read the identity that could refute retirement of its old binding. LIST
+         * supplies keys and etags, not frontmatter IDs.
          *
-         * So we do not prove what we could not read. The rows wait in limbo (503, self-healing) and the next poll fetches
-         * the key and converges. A DRAINED bucket is unaffected: it lists nothing, so a mirror holding nothing holds the
-         * whole of it. [scans] exists solely for the kept-verbatim completeness belt; the call site already gates the
-         * manifest read behind the same condition.
+         * Even a complete scan can be followed by cache loss before an enumerated Markdown candidate is read.
+         * [SourceScan.pageReadsComplete] closes that window: the matching-root OBJECT_LIST proof is withheld when any
+         * selected candidate fails to yield bytes, while readable pages still publish and the binding/proof checks still
+         * decide which identities may retire. The rows wait in limbo (503, self-healing) and a later successful poll may
+         * refute the rename or retire a genuinely absent binding. A DRAINED bucket is unaffected: it lists nothing, so
+         * a mirror holding nothing holds the whole of it. [scans] supplies both the observations consumed here and the
+         * walk-completeness observation. Preserve the call site's existing manifest-read selection; this minter must
+         * independently require matching-root walk completeness and selected-page read success.
          */
         fun mintObjectList(
             manifests: Map<RootName, ObjectManifest>,
             scans: List<SourceScan>,
             witnessed: Map<RootedPath, Witness>,
         ): List<AbsenceProof> = manifests.entries.mapNotNull { (root, manifest) ->
-            if (scans.none { it.root == root && it.complete }) return@mapNotNull null
+            if (scans.none { it.root == root && it.complete && it.pageReadsComplete }) return@mapNotNull null
             val gone = proven(root, manifest, witnessed)
             if (gone.isEmpty()) {
                 null
@@ -1104,10 +1106,10 @@ class IndexBuilder(
     )
 
     /**
-     * One source's COMPLETED scan: drafts in path order, URLs assigned, last-commits batched — and the
+     * One source's materialized scan result: drafts in path order, URLs assigned, last-commits batched — and the
      * path/URL-collision [issues] it raised, BUFFERED rather than persisted as they were found, so an
      * abandoned (root-loss) scan leaves no rows describing a tree it never finished walking. The caller
-     * records them once the scan has come back whole.
+     * records them once the source result has returned rather than while it is being assembled.
      */
     private data class SourceScan(
         val root: RootName,
@@ -1120,8 +1122,15 @@ class IndexBuilder(
         /** Did the backend see the WHOLE tree ([ScanResult.complete])? Only a complete walk gets delete authority. */
         val complete: Boolean,
         /**
-         * **The paths the WALK enumerated and the READ could not produce bytes for** - and the reason [complete] is
-         * not the whole story about what this pass knows.
+         * Did every case-sensitive leaf `.md` candidate selected by this invocation yield [ContentRead.Bytes]?
+         * This is read evidence only: it is neither a filesystem snapshot guarantee nor a frontmatter identity
+         * guarantee. Only matching-root OBJECT_LIST minting consults it; copies preserve it unchanged.
+         */
+        val pageReadsComplete: Boolean,
+        /**
+         * **The bound-only paths the WALK enumerated and the READ could not produce bytes for** - and the reason
+         * [complete] is not the whole story about what this pass knows. All candidate read failures clear
+         * [pageReadsComplete], but only [ContentRead.AbsenceUnknown] paths enter this set.
          *
          * A scan is a walk followed by a read of each thing it walked, and [complete] describes only the WALK. So a
          * page that lost a race between the two (an `rm`, a `git checkout` of another branch, a sync tool's
@@ -1256,8 +1265,10 @@ class IndexBuilder(
         val root = source.root.name
         val scan = source.store.scan()
 
-        // The walk saw these; the read could not produce their bytes. NOT witnessed, and NOT absent - see
-        // [SourceScan.unread]. Collected here because this is the only place that knows the difference.
+        // Every selected Markdown candidate must yield bytes for OBJECT_LIST authority.
+        var pageReadsComplete = true
+        // Bound pages observed by the walk but unread remain unwitnessed without establishing absence; this preserves
+        // the bound-only semantics of [SourceScan.unread].
         val unread = mutableSetOf<TreePath>()
         val drafts = scan.files
             .filter { it.path.name.endsWith(".md") }
@@ -1277,6 +1288,7 @@ class IndexBuilder(
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
                     ContentRead.AbsenceUnknown -> {
+                        pageReadsComplete = false
                         // ...and it is recorded as UNREAD, which is what actually keeps that last promise. Dropping the
                         // draft is only half of it: a page missing from the witness map of a COMPLETE scan is precisely
                         // what the epoch mints an absence proof from, so without this line the log below is a lie and
@@ -1290,6 +1302,7 @@ class IndexBuilder(
                         return@mapNotNull null
                     }
                     ContentRead.ConfirmedAbsent -> {
+                        pageReadsComplete = false
                         logger.warn { "page ${file.path.value} in '$root' vanished between the walk and the read; it was never indexed" }
                         return@mapNotNull null
                     }
@@ -1321,6 +1334,7 @@ class IndexBuilder(
             commits = commits,
             issues = scan.issues.map { it.toIdentityIssue(root) } + urls.issues,
             complete = scan.complete,
+            pageReadsComplete = pageReadsComplete,
             unread = unread,
         )
     }
