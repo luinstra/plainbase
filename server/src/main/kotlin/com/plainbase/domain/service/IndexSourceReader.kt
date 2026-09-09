@@ -16,12 +16,7 @@ import com.plainbase.domain.root.UnavailableCause
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 
-/**
- * Reads one registered content source into an eager, passive [SourceScan]. The builder owns capture, proof handling,
- * identity, persistence, rendering, and publication; this class only materializes source data and buffers scan issues.
- * The reader leaves buffered issue recording and identity binding to the later coordinator after all materialized
- * source results are available; it does not own the coordinator's earlier capture or classifier repository reads.
- */
+/** Reads one source into an eager [SourceScan]; the coordinator owns proof, identity, persistence, and publication. */
 internal class IndexSourceReader(
     private val frontmatterParser: FrontmatterParser,
     private val absence: AbsenceClassifier,
@@ -30,17 +25,9 @@ internal class IndexSourceReader(
 ) {
 
     /**
-     * Reads [root] unless its availability is sticky or the entry probe finds it gone. The entry probe is outside the
-     * captured operation; only [scan] is classified as a scan failure, and a successful materialization is re-probed
-     * before it is handed back to [IndexBuilder.rebuild]. A non-null result may have [SourceScan.complete] false and
-     * still participates in the coordinator; null means that the whole source was skipped.
-     *
-     * The classified exceptions follow this composite operation's collaborators: store scan/read I/O can raise
-     * IOException, a classified RootDown becomes RootUnavailable, and the batched history read can raise
-     * HistoryCommandException. RootUnavailable preserves its supplied root/reason; the other two re-probe before
-     * deciding whether the root is gone or merely failed this pass. Do not widen failure classification to every
-     * Exception: unexpected parser/URL or other programming faults must propagate, rather than become skip-and-carry.
-     * Buffered issue recording and identity binding happen later in the coordinator.
+     * Reads [root] with entry and exit probes. A non-null incomplete [SourceScan] still participates; null means the
+     * source was skipped and carried. Scan/history I/O failures are re-probed to distinguish root loss from a live
+     * scan failure; parser, URL, and other unexpected failures propagate.
      */
     fun read(root: Root, store: ContentStore, history: HistoryProvider): SourceScan? {
         val rootName = root.name
@@ -79,12 +66,7 @@ internal class IndexSourceReader(
         }
     }
 
-    /**
-     * The rebuild arm of the shared root-loss rule: a failed re-probe marks, skips, and carries; a live root keeps the
-     * original failure visible and retries on the next pass. Unexpected parser/URL faults propagate. This helper only
-     * classifies caught scan/history failures; buffered issue recording and identity binding remain later coordinator
-     * effects, after all materialized source results are in hand.
-     */
+    /** A failed re-probe marks, skips, and carries; a live root keeps the failure visible for the next pass. */
     private fun classifyScanFailure(root: Root, store: ContentStore, failure: Exception): SourceScan? {
         val rootName = root.name
         if (rootLoss.markIfGone(rootName, store)) {
@@ -93,11 +75,7 @@ internal class IndexSourceReader(
         return skipOnLiveFailure(root, failure)
     }
 
-    /**
-     * A live root whose scan failed: fail that root's pass, not [IndexBuilder.rebuild]. The root is deliberately not
-     * marked unavailable: it is still present, the operator can fix the permission or repository in place, and the
-     * next pass retries it. No issue is persisted from this incomplete materialization.
-     */
+    /** Skips a live root's failed scan without marking it unavailable, so the next pass can retry it. */
     private fun skipOnLiveFailure(root: Root, failure: Exception): SourceScan? {
         val where = root.localPath?.let { " at $it" }.orEmpty()
         logger.warn(failure) {
@@ -109,7 +87,7 @@ internal class IndexSourceReader(
         return null
     }
 
-    /** The loss is already published; this is the skip. */
+    /** Skips a root already classified as unavailable; its last-good section is carried. */
     private fun skipAndCarry(root: RootName, detail: String): SourceScan? {
         logger.warn {
             "root '$root' is no longer available ($detail); skipping its scan and carrying its last-good section " +
@@ -119,11 +97,7 @@ internal class IndexSourceReader(
         return null
     }
 
-    /**
-     * Scans one source end-to-end: files, frontmatter, per-root URLs, and one batched last-commit read. This is eager
-     * source materialization: it performs source I/O but does not record issues or bind identities, and parser/URL
-     * faults remain visible to the caller.
-     */
+    /** Materializes files, frontmatter, URLs, and one batched history read without recording or binding anything. */
     private fun scan(root: Root, store: ContentStore, history: HistoryProvider): SourceScan {
         val rootName = root.name
         val scan = store.scan()
@@ -134,8 +108,8 @@ internal class IndexSourceReader(
             .filter { it.path.name.endsWith(".md") }
             .sortedBy { it.path.value }
             .mapNotNull { file ->
-                // The classifier is bound-only: an uncertain read race is not a deletion fact. It stays in unread and
-                // limbo, while a confirmed absence only withholds read evidence for the matching object proof.
+                // An uncertain read is buffered as unread and stays in limbo; a confirmed absence only withholds
+                // read evidence for the matching object proof.
                 val bytes = when (val read = absence.read(store, RootedPath(rootName, file.path))) {
                     is ContentRead.Bytes -> read.bytes
                     ContentRead.RootDown -> throw RootUnavailable(rootName, UnavailableCause.VANISHED)
@@ -159,17 +133,14 @@ internal class IndexSourceReader(
                 Draft(file, bytes, frontmatterParser.parse(bytes))
             }
         val assets = scan.files.filterNot { it.path.name.endsWith(".md") }.map { it.path }.toSet()
-        // Preserve ContentFile.rawName verbatim. Converting it through TreePath would normalize NFC and erase the
-        // raw-name distinction that CanonicalUrlBuilder uses to select a collision winner and report its loser.
+        // Keep rawName verbatim: TreePath would normalize Unicode and erase the collision diagnostic's loser name.
         val urls = CanonicalUrlBuilder.build(
             root = rootName,
             pages = drafts.map { CanonicalUrlBuilder.PageInput(it.file.path, it.file.rawName, it.frontmatter.scalar("slug")) },
             folders = scan.folders,
         )
-        // Read last commits once per source, never once per page. NoOp returns an empty map, so non-Git and
-        // uncommitted pages retain null commit metadata. This is the last potentially failing source-I/O operation
-        // inside scan; return its buffered issues only after it succeeds. The reader still re-probes successful
-        // materialization, and the coordinator records issues only after all source materializations finish.
+        // Read commits once per source. Buffered issues are returned only after this last source-I/O operation
+        // succeeds; the coordinator records them after all materializations finish.
         val commits = history.lastCommits(drafts.map { it.file.path })
         return SourceScan(
             root = rootName,
@@ -185,14 +156,13 @@ internal class IndexSourceReader(
         )
     }
 
-    // Preserve the raw loser name for the collision diagnostic. Converting it through TreePath would normalize NFC
-    // and erase the raw-name distinction that the collision report is required to retain.
+    // Preserve the raw loser name; TreePath normalization would change the collision diagnostic.
     private fun ScanIssue.toIdentityIssue(root: RootName): IdentityIssue = when (this) {
         is ScanIssue.PathCollision -> IdentityIssue.PathCollision(root = root, keptPath = path, loserRawName = loserRawName)
     }
 
     private companion object {
-        // Keep the old category so established operator filters and diagnostic grouping survive relocation.
+        // Keep the existing logger category for operator filtering and diagnostic grouping.
         private val logger = KotlinLogging.logger("com.plainbase.domain.service.IndexBuilder")
     }
 }

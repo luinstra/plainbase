@@ -18,12 +18,8 @@ internal class Draft(
 )
 
 /**
- * One source's materialized scan result: drafts in path order, URLs assigned, last-commits batched — and the
- * path/URL-collision [issues] it raised, BUFFERED rather than persisted as they were found, so an abandoned
- * (root-loss) scan leaves no rows describing a tree it never finished walking. The coordinator records them only
- * after ALL source materializations return, so a materialized result with [complete] false still participates while a
- * null from [IndexSourceReader.read] means the whole source was skipped. The reader never records or binds these
- * values itself.
+ * One source's materialized result. Scan and URL issues stay buffered until all sources return, so an abandoned scan
+ * leaves no persisted issues. Incomplete results participate; null from [IndexSourceReader.read] means the source was skipped.
  */
 internal data class SourceScan(
     val root: RootName,
@@ -33,18 +29,13 @@ internal data class SourceScan(
     val urls: CanonicalUrlBuilder.Result,
     val commits: Map<TreePath, Commit>,
     val issues: List<IdentityIssue>,
-    /** Did the backend see the WHOLE tree ([com.plainbase.domain.content.ScanResult.complete])? */
+    /** Whether the backend saw the whole tree ([com.plainbase.domain.content.ScanResult.complete]). */
     val complete: Boolean,
-    /**
-     * Read evidence only: did every selected case-sensitive Markdown candidate yield bytes? This is neither an
-     * atomic filesystem snapshot nor an identity guarantee. The coordinator consults it only when minting an
-     * OBJECT_LIST proof for this matching root, and [SourceScan.copy] retains it unchanged when drafts are filtered.
-     */
+    /** True only when every selected Markdown candidate yielded bytes; used for a matching-root OBJECT_LIST proof. */
     val pageReadsComplete: Boolean,
     /**
-     * Paths the walk enumerated but the bound-only absence classifier returned [ContentRead.AbsenceUnknown] for.
-     * Such a read race is not evidence of deletion: the coordinator keeps the binding in limbo rather than reaping
-     * it. Confirmed absences clear [pageReadsComplete] but do not enter this set.
+     * Enumerated paths with [ContentRead.AbsenceUnknown], retained in limbo.
+     * Confirmed absences clear [pageReadsComplete] but do not enter this set.
      */
     val unread: Set<TreePath>,
 )
