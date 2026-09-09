@@ -176,16 +176,18 @@ class PageIdentityService(
 }
 
 /**
- * The precondition BOTH resolve-then-bind passes (`IndexBuilder`, `AdoptionPass`) check immediately before they
- * make a plan DURABLE: one id, one page. Every rule above is meant to guarantee it, and the point of checking is
+ * The precondition BOTH resolve-then-bind passes ([IndexIdentityAssignments.resolveIdentities], [AdoptionPass])
+ * check immediately before they make a plan DURABLE: one id, one page. Every rule above is meant to guarantee it,
+ * and the point of checking is
  * that a rule can be wrong - `duplicate()` reused a `mappedId` blind for a whole release, and nothing between
  * there and the disk would have noticed.
  *
  * It has to run BEFORE the binds because a durable duplicate cannot be walked back: `id_map.bind` is key-complete
  * within a root, so a second bind of the same id in ONE root DELETES the first page's row, and the only existing
  * check ([PageIndex]'s `byRootedId`) runs AFTER the whole loop - it throws on a snapshot whose rows are already
- * rewritten, and it throws again on every boot that follows. Failing HERE aborts a pass that has changed nothing:
- * the last-good snapshot stands, the rows stand, and the fault is loud, named, and fixable.
+ * rewritten, and it throws again on every boot that follows. Failing HERE aborts this helper before its binds:
+ * the last-good snapshot stands, while earlier durable coordinator effects, if any, remain, and the fault is loud,
+ * named, and fixable.
  *
  * The rule is PER ROOT (per-root identity, C5): the same id in two DIFFERENT roots is legal, so the check groups by
  * ([RootedPageId]) - one id per page WITHIN a root - and a cross-root duplicate passes.

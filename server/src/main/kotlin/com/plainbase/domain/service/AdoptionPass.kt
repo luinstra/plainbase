@@ -393,7 +393,7 @@ class AdoptionPass(
             .filter { it.name.endsWith(".md") }
             .sortedBy { it.value }
             .mapNotNull { path ->
-                // CLASSIFIED, not `checkNotNull` (the `IndexBuilder.scan` rule, which this had escaped): a bare
+                // CLASSIFIED, not `checkNotNull` (the indexing reader's classified-read rule, which this had escaped): a bare
                 // null read cannot tell a page deleted mid-scan from a root that went away UNDER the scan, and
                 // the resulting IllegalStateException would walk straight past the `guarding` boundary above -
                 // bypassing the classifier, leaving the root unmarked, and handing the CLI a stack trace where

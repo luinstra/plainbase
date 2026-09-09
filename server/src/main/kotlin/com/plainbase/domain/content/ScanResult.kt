@@ -14,10 +14,10 @@ data class ScanResult(
     val folders: List<ContentFolder>,
     val issues: List<ScanIssue>,
     /**
-     * Did this walk see the WHOLE tree, or only part of it? A view with holes in it is not a corpus, and the
-     * difference decides DELETE AUTHORITY (ADR-0011 D5): the rebuild admits only a COMPLETE scan to its
-     * authority set, so an incomplete one publishes the pages it did find and deletes nothing for the pages
-     * it did not.
+     * Did this walk see the whole tree or only part of it? Walk completeness is required evidence for inferred
+     * absence; it is not by itself a deletion proof. An incomplete scan can still supply readable pages, but cannot
+     * grant new absence authority for entries it did not reach. The OBJECT_LIST consumer additionally requires
+     * successful reads of every selected Markdown candidate and its binding/proof checks.
      *
      * A filesystem walk is complete by construction (a tree it could not read RAISES; a tree that went away
      * mid-walk is caught by the root-loss probe), which is why the default is true. The object backend is the

@@ -23,8 +23,8 @@ import kotlin.concurrent.thread
  * the defect a naive read-`current`-then-`rebuild` would reopen (a reindex from snapshot N landing
  * its `rebuild(N)` AFTER a watcher synced N+1, leaving search stale indefinitely).
  *
- * The proof is deterministic by construction: a watcher rebuild is observed BLOCKED at the same
- * monitor while a reindex holds it, then released. Whichever ran first, after both finish the
+ * The proof is deterministic by construction: the watcher rebuild holds the shared monitor while its scan parks,
+ * and the concurrent reindex is observed BLOCKED at that monitor until the watcher is released. Whichever ran first, after both finish the
  * engine MUST agree with the final published snapshot — never the older one.
  */
 class IndexBuilderReindexConcurrencyTest : FunSpec({
@@ -74,12 +74,12 @@ class IndexBuilderReindexConcurrencyTest : FunSpec({
                     // The content changes on disk (the watcher's world): "freshterm" replaces "staleterm".
                     writePage(dir, "old.md", "---\ntitle: Old\n---\n\n# Old\n\nfreshterm only now.\n")
 
-                    // Start the watcher rebuild; it parks inside its scan, holding nothing yet.
+                    // Start the watcher rebuild; its @Synchronized rebuild holds the shared monitor while its scan parks.
                     val watcher = thread(name = "watcher-rebuild") { builder.rebuild() }
                     secondScanEntered.await(10, TimeUnit.SECONDS) shouldBe true
 
-                    // Fire the reindex; it must BLOCK at the @Synchronized monitor the watcher will
-                    // take to publish — proving snapshot-read + engine-rebuild can't interleave.
+                    // Fire the reindex; it must BLOCK at the @Synchronized monitor held by the watcher — proving
+                    // snapshot-read + engine-rebuild can't interleave.
                     val reindex = thread(name = "reindex") { builder.rebuildSearchIndex() }
                     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
                     while (reindex.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)

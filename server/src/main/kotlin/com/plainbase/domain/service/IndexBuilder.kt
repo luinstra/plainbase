@@ -2,27 +2,19 @@
 
 package com.plainbase.domain.service
 
-import com.plainbase.domain.content.ContentFile
-import com.plainbase.domain.content.ContentFolder
 import com.plainbase.domain.content.ContentRead
 import com.plainbase.domain.content.ContentStore
-import com.plainbase.domain.content.ScanIssue
 import com.plainbase.domain.content.TreePath
-import com.plainbase.domain.history.Commit
-import com.plainbase.domain.history.HistoryCommandException
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.model.IdentityIssue
-import com.plainbase.domain.page.Frontmatter
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.IndexedPage
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.page.PageIndexView
-import com.plainbase.domain.page.RootSection
 import com.plainbase.domain.principal.ManageGrant
 import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.render.RenderedPage
-import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdBinding
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
@@ -53,113 +45,26 @@ import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.root.Witness
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.io.IOException
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 /**
- * Serialized index pass over N root sources (ADR-0011):
- * scan → frontmatter → identity → URLs → render metadata → one immutable [PageIndex] of per-root
- * sections, published atomically. The full scan runs at startup and on rescan through the admin route.
- * The runtime wires EVERY registered root as a source, in registry order.
+ * Coordinates source materialization, absence proofs, identity assignment, and snapshot assembly across registered
+ * roots (ADR-0011), then atomically publishes one immutable [PageIndex].
  *
- * **A root that is not there is SKIPPED, never treated as empty (ADR-0011 D5).** Each pass probes each
- * source's store: an already-Unavailable root is skipped outright (the status is sticky until restart), and
- * a root whose probe fails now is MARKED Unavailable and skipped. A skipped root's LAST-GOOD section is
- * carried into the new snapshot verbatim, because the publication listeners project that section into search and
- * durable checkpoints. Dropping it would make an outage look like a deletion. Search reads current durable
- * retired-unbound authority separately, so a previously committed retirement is still cleaned up even when its root
- * is carried. A never-scanned root simply contributes no section; search retirement authority is read durably by
- * [SearchIndexer] at each operation.
+ * [IndexSourceReader] probes for root loss. An unavailable or failed root is skipped and its last-good section carried;
+ * an incomplete scan still participates, while a never-scanned root contributes no section. Missing pages grant no
+ * deletion authority: only [AbsenceProof] (EPOCH, OBJECT_LIST, or GIT) and accepted OPERATOR decisions can retire a
+ * binding. Other absences remain in [RootLimbo], and search reads current durable retired-unbound authority itself.
  *
- * **What is classified is the COMPLETED SCAN, never the precondition** ([scanIfAvailable]). The entry probe
- * says the root was there when the walk STARTED, and a root can vanish in between - a directory iteration whose
- * tree disappears mid-walk can return SHORT (or empty) without throwing anything. So the root is re-probed at
- * HANDOFF, and a scan whose root is gone by then is skipped and carried like any other loss. A short scan cannot
- * authorize a deletion whatever it claims to be - nothing can, without a proof - but it can
- * still poison the WITNESS map with a tree that was falling apart as we read it, so the probe stays.) A scan that
- * THROWS is classified the same way; what a LIVE-root failure costs is THAT root's pass, never the whole
- * rebuild - one unreadable subdirectory in one extra root must not take the other roots (or, at boot, the
- * server) down with it. It is not marked unavailable either: a chmod is fixed in place, and sticky
- * unavailability would prescribe a restart nobody needs. It skips, carries, WARNs loudly, and the next pass
- * retries it.
+ * Witnesses are pass-local rooted read evidence. All sources resolve before binding, with roots ordered by rank and
+ * duplicates resolved within a root by frontmatter and path order. Identity is root-scoped (ADR-0012), and
+ * [Supersession] prevents changes under roots this pass did not scan.
  *
- * **A scan proves the pages it READ. It does not prove the pages it did not read are DELETED (the safety floor).** That is a
- * theorem, not a bug: an empty mount point, a deliberately emptied root, a partially-restored tree and a decoy
- * tree produce IDENTICAL observations, and four rounds were spent computing an answer to a question that has
- * none. So this pass no longer INFERS a deletion from ANYTHING - not from a zero-page scan, not from a corpus
- * this process once saw (a snapshot from T cashed at T+n; with ext4 inode reuse it handed a REAPED corpus full
- * authority), not from a page "located" in another root (which cannot tell a MOVE from a COPY), and above all
- * not from `drafts.isNotEmpty()`, under which ONE decoy file bought authority over a thousand rows. The whole
- * admission apparatus is DELETED, and nothing replaces it, because there is nothing honest to replace it with.
- * ([corpusSeen] survives with its teeth pulled: it decides 503-vs-404 and it decides nothing else.)
- *
- * What a pass publishes instead is what it actually SAW: a [Witness] per rooted path it READ, carrying the id
- * that file turned out to hold. Absence from that map is NOT a licence - it means "we did not read this",
- * which is exactly as consistent with an unplugged disk as with a delete. The ONLY licence to delete is an
- * [AbsenceProof].
- *
- * **The observation-epoch proof source mints the first one ([AbsencePass.mintEpoch]), making an ordinary delete converge again.** An
- * [ObservationEpoch] that has watched a tree WITHOUT A GAP since it read a page - fully covered, identity-stable,
- * scanned end to end - and now does not find it has evidence rather than an inference, and evidence is the only
- * thing that has ever been allowed to delete anything here. Every other absence still ends in LIMBO ([RootLimbo]):
- * carried, served as "come back later", never destroyed, self-healing the moment the page is witnessed again. The
- * residue is honest and bounded - a delete storm past the watcher's queue bound is observationally identical to an
- * unmount, so the epoch refuses to guess and its tail waits for `reconcile` or for the git oracle.
- *
- * The checkpoint replace, the id_map supersessions ([Supersession]) and the dirty-page reconcile consume the
- * pass-local bindings a proof actually RETIRED, which at the safety floor is the empty set. Search sync and the
- * search generation swap instead read current durable retired-unbound authority independently, so either operation
- * can recover a missed publication and suppress stale snapshot input.
- *
- * **One pass:** each file's bytes are read exactly once ([ContentStore.read]), each page's
- * frontmatter values are parsed exactly once ([FrontmatterParser], over the already-read bytes —
- * render only re-detects the block boundary, never the values), and each page is rendered exactly
- * once ([MarkdownRenderer.render]). The same in-hand bytes also yield the page's verbatim
- * `markdown` and its content hash ([CitationFactory]), so the read path never touches disk for
- * pages. The parse runs up front because URL construction needs every page's `slug` BEFORE any
- * page renders — rendered links embed other pages' canonical URLs — so render happens against a
- * URL-complete skeleton snapshot built first, each root's pages against that root's [PageIndex.view].
- *
- * **Per-root identity:** an id is scoped to its ROOT. The SAME frontmatter id may live in several
- * roots at once, each answering its own rooted permalink `/p/{root}/{id}` - a cross-root duplicate is no longer a
- * contest, and rank (which compares ROOTS) decides SOURCE precedence only, never an id transfer between roots. A
- * genuine duplicate is WITHIN one root, resolved in the pass's rank-then-frontmatter-then-path order (the previously-bound path keeps
- * the id; the loser reassigns). All sources still resolve together before any bind so that in-pass order is
- * well-defined. A binding's liveness and supersedability are classified by the shared [BindingVisibility] rule over
- * the scanned/registered root sets (D16): a pass NEVER supersedes a binding under a root it did not scan, the same
- * no-delete rule the carried-forward section implements - a skipped root's page stays IN the snapshot, so taking its
- * id would destroy a durable binding an outage gave no authority to touch and put a duplicate `(root, id)`
- * in the snapshot (a rebuild crash).
- *
- * **Safe publication, no `@Volatile`:** the new snapshot is built entirely off to the side and
- * published with a single [AtomicReference.store]; [current] readers always observe a complete,
- * internally consistent, deeply immutable [PageIndex] — old or new, never torn — and stay
- * lock-free. [rebuild] itself is `@Synchronized` (rescans are rare): two concurrent rebuilds
- * could otherwise publish out of order — the earlier-scanned one finishing later would regress
- * [current] to a stale world (a classic lost update).
- *
- * **Move aliases, including moves while down via the persisted checkpoint:** a known id whose
- * canonical URL path changed since the previously published snapshot leaves its old (root, path)
- * behind as a `url_alias` row; the registry maps rooted paths straight to page ids, so chains
- * collapse on write (one hop after any number of moves). On the FIRST rebuild after startup the
- * previous paths come from the persisted [PageCheckpointRepository] instead of the (empty) holder,
- * so a materialized page moved while the server was down still records its alias. `redirect_from`
- * frontmatter registers through the same construction, in the declaring page's root namespace; a
- * live canonical path always shadows an alias (dropped, with a recorded `redirect_conflict` issue).
- *
- * Identity binding mirrors `AdoptionPass` RECORD semantics over the in-hand bytes (zero content
- * writes): id_map rows plus issues, sources in rank order and, within each root, frontmatter-carrying
- * pages before the rest and then by path, so duplicate resolution is deterministic.
- *
- * **Publication listeners:** after the snapshot publishes, [rebuild],
- * still inside its serialized section — synchronously invokes every registered
- * [PublicationListener], so listeners (checkpoint replace, search sync) can never interleave or
- * run against a superseded snapshot. A throwing listener is caught and logged here: the publish
- * has already happened and stands, the remaining listeners still run, and nothing propagates to
- * any [rebuild] caller (a failed search sync is repaired for free by the next sync's engine-truth
- * diff). The save path calls [rebuild], so a saved page is searchable before the save
- * returns — this listener chain IS that hook; nothing else to build.
+ * Bytes and frontmatter are read once, and each page is rendered once from a URL-complete skeleton. [current] is
+ * published atomically; synchronized rebuilds prevent stale publication. The persisted checkpoint seeds the first
+ * rebuild for aliases after downtime. Listeners run after publication: [Exception] is contained and logged, [Error]
+ * propagates, and no rollback is promised for earlier durable effects.
  */
 class IndexBuilder(
     sources: List<Source>,
@@ -175,56 +80,28 @@ class IndexBuilder(
     private val registeredRoots: Set<RootName>,
     private val listeners: List<PublicationListener> = emptyList(),
     private val searchIndexer: SearchIndexer? = null,
-    /** The availability HOLDER, not a captured map: this builder both READS it (skip a sticky-Unavailable root)
-     *  and WRITES it (mark a root whose probe just failed). Defaulted so single-root constructions stay terse. */
+    /** Shared availability state used for both skip checks and root-loss marking. */
     private val availability: RootAvailability = RootAvailability(kotlin.time.Clock.System),
-    /**
-     * The safety floor's proof-apply transaction - the ONE deleter, and the durable freshness token it checks against.
-     * Defaulted to a repository that holds no proofs and grants no tokens so single-root constructions stay
-     * terse; the runtime wires the real one.
-     */
+    /** Proof-apply transaction and durable freshness checks; the runtime supplies the real repository. */
     private val retirements: RetirementRepository = NoRetirements,
-    /** The DERIVED limbo set, republished every pass. Never stored: a stored flag is another snapshot used later. */
+    /** Derived limbo state, republished each pass rather than stored as snapshot data. */
     private val limbo: RootLimbo = RootLimbo(),
-    /**
-     * The observation epochs - the ONE proof source this pass mints from, and the reason a legitimate delete
-     * converges again. Defaulted to an epoch over [NoRetirements], which cannot mint a token anything will honor, so
-     * the many single-root constructions stay terse AND stay at the safety floor: they observe, and they reap nothing.
-     */
+    /** Observation-epoch proof source; the default cannot mint an honored token. */
     private val epochs: ObservationEpoch = ObservationEpoch(NoRetirements, RootConvergence()),
-    /**
-     * The binding latch - the OTHER proof source, and the one that decides whether a bucket LIST is evidence about
-     * OUR corpus or about somebody else's. Defaulted to a latch with no durable table behind it, which records
-     * nothing, promotes nothing and therefore grants nothing: the safety floor, again as a value rather than as a policy.
-     */
+    /** Binding-latch proof source for deciding whether an object LIST describes this corpus. */
     private val bindings: BindingLatch = BindingLatch(NoTopology),
 ) {
 
-    /** One root's inputs: its topology entry, its content tree, and its history. */
+    /** One root's topology entry, content store, history, and optional object manifest source. */
     data class Source(
         val root: Root,
         val store: ContentStore,
         val history: HistoryProvider,
-        /**
-         * The binding-latch proof source for an OBJECT-backed root: the latest complete bucket LIST. Null for a local root,
-         * which has no bucket to list and earns its authority the other way (an observation epoch) - and null for
-         * every construction that wires no manifest at all, which therefore mints no `OBJECT_LIST` proof.
-         */
+        /** Latest complete bucket LIST source for an object root; null means no OBJECT_LIST proof source. */
         val manifests: ObjectManifestProvider? = null,
     )
 
-    /**
-     * Notified with each newly published snapshot, synchronously inside the serialized rebuild.
-     *
-     * [retired] is the pass-local proof result: exactly the bindings an [AbsenceProof] just RETIRED in the
-     * proof-apply transaction. Non-search projections such as checkpoints consume it as the applied result, never
-     * the raw proofs. The search listener deliberately reads current durable retired-unbound state instead, so it can
-     * recover a missed publication and suppress stale snapshot input.
-     *
-     * Snapshot absence alone grants no retirement authority. Non-search listeners receive the applied pass-local
-     * result, which may come from valid inferred or accepted proofs; search independently reads current durable
-     * retirement state.
-     */
+    /** Called synchronously after publication with the pass-local bindings retired by proof application. */
     fun interface PublicationListener {
         fun published(snapshot: PageIndex, retired: Set<RootedPageId>)
     }
@@ -234,94 +111,47 @@ class IndexBuilder(
         require(names.size == names.toSet().size) {
             "duplicate source root(s): ${names.groupingBy { it }.eachCount().filterValues { it > 1 }.keys.joinToString(", ")}"
         }
-        // A root the rank source does not know comes back -1, which would otherwise silently sort
-        // it FIRST - i.e. silently seat an unknown root as the top-rank winner.
+        // Unknown roots would sort before ranked roots when the rank function returns -1.
         sources.forEach { source ->
             require(rootRank(source.root.name) >= 0) { "source root '${source.root.name}' is unknown to the registry rank" }
         }
     }
 
-    // Sorted by the shared D7 rank, enforced by construction rather than trusted from the caller, so the pass has
-    // ONE deterministic source order (and with it a deterministic section order). Per-root identity (ADR-0012)
-    // dissolved the cross-root contest this sort used to decide, so rank no longer picks an id winner and plays no
-    // part inside a root at all. Within-root resolution order is established separately, by `precedenceOrdered`.
+    // Enforce one deterministic source and section order. Rank does not choose an id across roots (ADR-0012).
     private val sources: List<Source> = sources.sortedBy { rootRank(it.root.name) }
 
     private val sourcesByRoot: Map<RootName, Source> = this.sources.associateBy { it.root.name }
 
-    /** The shared root-loss rule (probe → mark), over the SAME holder this builder reads and writes. */
+    /** Shared root-loss rule over the availability holder. */
     private val rootLoss = RootLossClassifier(availability)
 
-    /** The ONE 404-vs-503 rule ([AbsenceClassifier]), over the SAME durable index this pass binds into. Never re-derived here. */
+    /** Shared 404-vs-503 rule over the durable index. */
     private val absence = AbsenceClassifier(idMap)
 
-    /**
-     * The roots whose corpus THIS PROCESS has actually seen on disk - and a **SERVING HINT with ZERO
-     * delete authority.** Read [publishLimbo] for what it is now allowed to decide, which is exactly one thing:
-     * whether an empty scan of a rooted tree answers 503 or 404.
-     *
-     * It used to be the corpus-loss tripwire's exoneration, and as a DELETE oracle it was unrepairable: a
-     * snapshot taken at T and cashed at T+n, which under ext4 inode reuse hands a REAPED corpus full authority
-     * (ledger A2). That power is gone - deletion needs an [AbsenceProof] now, and this is not one.
-     *
-     * What it still does is tell "the operator emptied this root under a running server" from "the volume went
-     * away", and NOTHING can do that (they are the same observation - the theorem again). The difference is the
-     * COST of being wrong, and that is the whole reason it survives: wrong here means a page reads 404 instead
-     * of 503, which is bad; wrong as a delete oracle meant the corpus. Without it, deleting the last page of a
-     * root would mark the WHOLE root unavailable and 503 it, sticky until restart - a product-breaking answer to
-     * an ordinary edit.
-     *
-     * **This serving hint is deliberately retained.** The per-ROW limbo 503 ([AbsenceClassifier]) is
-     * strictly finer-grained and it does subsume the READ half of this hint: a limbo page answers 503
-     * `absence_unverified` whether or not its root is marked. What it does NOT subsume is the WRITE half. An empty
-     * mount point passes `available()` (it is a readable, searchable directory), so an unmarked root would accept a
-     * CREATE and lay a partial skeleton of the operator's tree into the mount point - the exact resurrection the
-     * whole D5 design exists to prevent, arriving through the one surface a per-page rule cannot see. So the
-     * root-granular BROKEN-VIEW mark stays for the case it was always about (a root that scanned to zero pages
-     * having never shown this process a corpus - a failed mount at boot), and the per-row rule handles everything
-     * finer than that, including the partial restore this mark never could.
-     *
-     * Touched only from inside the `@Synchronized` [rebuild], so it needs no atomics.
-     */
+    /** Eager source materializer using the shared classifiers. */
+    private val sourceReader = IndexSourceReader(frontmatterParser, absence, availability, rootLoss)
+
+    /** Identity resolver and binder using the builder's repositories and patcher. */
+    private val identityAssignments = IndexIdentityAssignments(idMap, identity, patcher)
+
+    /** Snapshot assembly; source reads, authority, and publication remain in this coordinator. */
+    private val snapshotAssembler = IndexSnapshotAssembler(rendererFactory, citations)
+
+    /** Serving-only hint: a previously seen corpus may treat an empty scan as 404, never as delete authority. */
     private val corpusSeen = mutableSetOf<RootName>()
 
-    /**
-     * What a pass PUBLISHES - swapped as ONE value, because they are one fact. Reading the snapshot from one
-     * field and its authority from another could pair a fresh snapshot with a stale authority, i.e. hand a
-     * consumer permission to delete rows on the strength of a pass that never ran.
-     *
-     * [witnessed] is what the pass actually SAW: every rooted path it READ, and the id that file carried
-     * (null = it carries none). Absence from this map is NOT a licence.
-     *
-     * [proofs] is the proof material considered by this pass and may come from any valid proof source. The applied
-     * rooted ids remain pass-local for non-search projections; the search projection reads current durable retirement
-     * authority when it runs rather than treating these retained proof objects as its current delete set.
-     *
-     * [observedAt] stamps each root's durable freshness token, so a proof minted from this observation can be
-     * checked against a token that a restart, a break or a rebind may since have revoked.
-     */
-    private data class Published(
-        val snapshot: PageIndex,
-        val witnessed: Map<RootedPath, Witness>,
-        val proofs: List<AbsenceProof>,
-        val observedAt: Map<RootName, ObservationId>,
-    )
+    /** The atomically published snapshot; authority evidence remains pass-local. */
+    private val holder = AtomicReference<PageIndex>(PageIndex.EMPTY)
 
-    private val holder = AtomicReference(
-        Published(PageIndex.EMPTY, witnessed = emptyMap(), proofs = emptyList(), observedAt = emptyMap()),
-    )
+    /** The published snapshot, initially [PageIndex.EMPTY]. */
+    val current: PageIndex get() = holder.load()
 
-    /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
-    val current: PageIndex get() = holder.load().snapshot
-
-    /** Runs the full pass and atomically publishes (and returns) the new snapshot (serialized — see class doc). */
+    /** Runs the serialized full pass and atomically publishes the new snapshot. */
     @Synchronized
     fun rebuild(): PageIndex {
-        val previous = holder.load().snapshot
-        // Checkpoint as previous snapshot: the first rebuild after startup (holder still the EMPTY
-        // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
-        // move performed while the server was down still records its alias. Every later rebuild
-        // compares against the previous published snapshot, exactly as before.
+        val previous = holder.load()
+        // The EMPTY holder is the startup sentinel: use the persisted checkpoint for the first alias comparison,
+        // then use the previous published snapshot.
         val previousUrlPaths: Map<RootedPageId, TreePath?> =
             if (previous === PageIndex.EMPTY) {
                 checkpoint.load()
@@ -329,12 +159,10 @@ class IndexBuilder(
                 previous.pages.associate { it.rooted to it.urlPath }
             }
 
-        // AbsencePass.capture owns the effectful establish, stamp, and git bracket order. It runs once here before
-        // the scan loop so every mint reasons from the same fixed pre-evidence capture.
+        // Capture freshness once, before scanning or other evidence reads.
         val pass = AbsencePass.capture(epochs, retirements, idMap, bindings, sources, localSources, gitOracleRoots)
-        val observed = sources.mapNotNull { scanIfAvailable(it) }
-        // What the pass READ, and the id each file carried. This is the FULL witness - the latch is entitled to see
-        // every page we looked at, because "is this the tree our rows describe?" is exactly what it is deciding.
+        val observed = sources.mapNotNull { sourceReader.read(it.root, it.store, it.history) }
+        // Witness every rooted path read, including pages later excluded as suspect; the latch uses this full view.
         val seen: Map<RootedPath, Witness> = observed.flatMap { scan ->
             scan.drafts.map { draft ->
                 RootedPath(scan.root, draft.file.path) to Witness(patcher.readIdValue(draft.bytes)?.let(PageId::of))
@@ -342,8 +170,7 @@ class IndexBuilder(
         }.toMap()
 
         val confirmations = confirmEpochs(observed)
-        // Deliberately paired with mintObjectList's completeness belt: this gate suppresses the manifest read, while
-        // the mint-side gate must remain fail-closed if this call-site selection is ever simplified.
+        // Manifest selection needs a complete walk; minting also requires selected-page reads for the matching root.
         val manifests = sources.filter { it.root.backend is RootBackend.Object }
             .filter { source -> observed.any { it.root == source.root.name && it.complete } }
             .mapNotNull { source -> source.manifests?.latestManifest()?.let { source.root.name to it } }
@@ -351,17 +178,9 @@ class IndexBuilder(
         val absence = pass.mintEpoch(confirmations) + pass.mintObjectList(manifests, observed, witnessed = seen)
         val gitMint = pass.mintGit(observed)
         val proofs: List<AbsenceProof> = absence + gitMint.proofs
-        // **Every (root, id) this pass READ** - handed to the only deleter, which REFUSES to retire a binding whose
-        // rooted id is in it ([AbsenceProof.survives]). A page we are looking at is not a page that is absent, and a
-        // renamed page is the everyday case: its old path is "absent" to every source we have, while its id sits in
-        // the file we just read under the new name. The witness is the FULL one (before the suspect-tree filter)
-        // because the question is only ever "are we looking at it?", and the witness is PER-ROOT: an
-        // id read in root B refutes only an absence claimed in root B.
-        // Standing is handed over as a FUNCTION, not a value, and that is the exact opposite of the stamps above on
-        // purpose. A stamp wants the EARLIEST value, so anything moving afterwards fails the compare; a lost root wants
-        // the LATEST, so a mark landing at any point before the reap is still honoured. Both directions are the
-        // fail-closed one for what they guard - and "latest" has to mean inside the apply transaction, not here at the
-        // call site, which is why the deleter does the calling.
+        // Pass-local witnessed rooted ids refute retirement. Keep availability live inside applyProofs: stamps use
+        // the captured early value, while root-loss checks must observe the latest mark inside the transaction.
+        // Apply before identity binding, which advances freshness and must see this pass's tombstones.
         val retired: Set<RootedPageId> = retirements.applyProofs(
             proofs = proofs,
             witnessed = seen.entries.mapNotNullTo(mutableSetOf()) { (rootedPath, w) ->
@@ -371,16 +190,8 @@ class IndexBuilder(
             advances = gitMint.advances,
         )
 
-        // **A suspect tree may not DISPLACE the incumbents it does not carry** (the binding latch). The latch guards the ABSENCE
-        // half; this is the door beside it. On a root whose binding is UNRESOLVED - a swapped bucket, a first sight -
-        // a decoy file at an at-risk path carrying a DIFFERENT id needs no absence proof to destroy anything:
-        // displacement is POSITIVE evidence ("we read the file, and it no longer holds that id"), so the bind would
-        // tombstone the incumbent and turn a protected page into a 410 before the binding is trusted at all.
-        //
-        // So those drafts are dropped from this pass entirely: not bound, not published, not witnessed. Their
-        // incumbents fall to LIMBO and read 503 - "we do not know what we are looking at" - which is the honest
-        // answer and the self-healing one. (Minted proofs above are unaffected: they were computed from the FULL
-        // witness, which is what the latch needs to decide whether the tree is ours in the first place.)
+        // A suspect object draft must not displace an incumbent before the binding is trusted. Drop it from binding,
+        // publication, and witnessing; its incumbent remains in limbo. Proofs use the full witness computed above.
         val suspect = suspectDrafts(seen)
         val scans = if (suspect.isEmpty()) {
             observed
@@ -389,85 +200,23 @@ class IndexBuilder(
         }
         val witnessed: Map<RootedPath, Witness> = if (suspect.isEmpty()) seen else seen - suspect
         val scannedRoots: Set<RootName> = scans.filter { it.complete }.map { it.root }.toSet()
-        // The SERVING hint (see [corpusSeen]) - a complete walk that came back holding pages. It decides 503-vs-404
-        // for a later empty scan of this root, and it decides NOTHING ELSE. It is not delete authority, and there
-        // is no longer any code path by which it could become some.
+        // A complete non-empty scan updates the serving-only 503-vs-404 hint; it grants no proof authority.
         scans.filter { it.complete && it.drafts.isNotEmpty() }.forEach { corpusSeen += it.root }
 
-        // The scan's own issue rows are persisted only once the scan that produced them COMPLETED. Recording
-        // them as they were found would leave rows behind from a pass that never happened: a scan that dies
-        // half-way is SKIPPED and its last-good section carried, so its half-walked path/URL collisions describe
-        // a tree nobody indexed. The identity issues below ride the resolve, which only ever sees full scans.
+        // Incomplete materialized scans participate. Record buffered issues only after every source returns.
         val raisedIssues = mutableListOf<IdentityIssue>()
         scans.forEach { scan -> scan.issues.forEach { record(raisedIssues, it) } }
 
-        val identities = resolveIdentities(scans, witnessed, scannedRoots, raisedIssues)
+        val identities = identityAssignments.resolveIdentities(scans, witnessed, scannedRoots, registeredRoots, raisedIssues)
 
-        // Build ALL provisional sections, then render each root's pages against ITS view of the
-        // ONE URL-complete skeleton (identity and URLs final; render fields filled below).
-        val provisionalSections = scans.map { scan ->
-            RootSection(
-                root = scan.root,
-                pages = scan.drafts.map { draft ->
-                    provisionalPage(scan, draft, identities.getValue(RootedPath(scan.root, draft.file.path)))
-                },
-                folders = scan.folders,
-                assets = scan.assets,
-            )
-        }
-        val provisional = PageIndex(provisionalSections)
-        val scanned = scans.zip(provisionalSections) { scan, section ->
-            val renderer = rendererFactory(provisional.view(scan.root))
-            section.copy(
-                pages = section.pages.zip(scan.drafts) { page, draft ->
-                    val rendered = renderer.render(page.path, draft.bytes)
-                    page.copy(
-                        title = draft.frontmatter.scalar("title")
-                            ?: rendered.headings.firstOrNull { it.level == 1 }?.text
-                            ?: page.path.stem,
-                        html = rendered.html,
-                        headings = rendered.headings.toList(),
-                        links = rendered.links.toList(),
-                        // The search sections are captured from the SAME single render: no extra read,
-                        // no second parse (see the IndexedPage.sections doc for the accepted memory cost).
-                        sections = rendered.sections.toList(),
-                    )
-                },
-            )
-        }
-
-        // Carry each SKIPPED root's last-good section forward, so omission alone cannot remove its published pages
-        // from a listener's projection (a never-scanned root has no previous section and simply contributes none -
-        // `section` is total). Search independently excludes current durable retired-unbound identities. In registry
-        // rank order, like the sources themselves, so the snapshot is deterministic either way.
-        //
-        // Nothing is filtered out of a carried section. A carried page's ROOTED id cannot also appear in the scanned
-        // pages. The load-bearing reason is PROVENANCE: every page in a section carries
-        // that section's own root (true at each producer, and asserted by PageIndex's init), the elvis below fires
-        // only for a root with NO scanned section, and RootedPageId equality includes the root - so a carried
-        // page's rooted id cannot appear among the scanned ones. That proof depends on the elvis meaning exactly
-        // "no scanned section for this root". Re-key the carry on scan COMPLETENESS and a carried root could
-        // coexist with a scanned section of its own root, at which point the deadness needs re-proving. If that
-        // ever happens it now fails LOUDLY in PageIndex's init - on the duplicate-root-section `require` if the
-        // carry adds a second section for the root, or on the duplicate-(root, id) `check` if the pages were merged
-        // into the scanned one - rather than silently dropping the page and logging a warning, which is the
-        // better of the two failures.
-        val sections = sources.mapNotNull { source ->
-            val root = source.root.name
-            scanned.firstOrNull { it.root == root }
-                ?: previous.sections.firstOrNull { it.root == root }
-        }
-
-        val snapshot = PageIndex(sections)
-        recordAliases(previousUrlPaths, snapshot, raisedIssues)
-        holder.store(
-            Published(
-                snapshot = snapshot,
-                witnessed = witnessed,
-                proofs = proofs,
-                observedAt = retirements.observations(),
-            ),
+        val snapshot = snapshotAssembler.assemble(
+            scans = scans,
+            identities = identities,
+            roots = sources.map { it.root.name },
+            previous = previous,
         )
+        recordAliases(previousUrlPaths, snapshot, raisedIssues)
+        holder.store(snapshot)
         finishRebuild(snapshot, retired, witnessed, scannedRoots, raisedIssues)
         return snapshot
     }
@@ -490,10 +239,7 @@ class IndexBuilder(
                 "${snapshot.sections.sumOf { it.folders.size }} folder(s); " +
                 "${snapshot.pages.count { it.urlPath == null }} excluded from path space" + breakdown
         }
-        // An identity issue used to land in the `identity_issue` table and NOWHERE else, so a corpus that raises
-        // one on every pass - a pasted duplicate is the common case, and it never self-heals - was invisible
-        // unless an operator opened the admin list. The identity policy is defensible only if the person who can fix
-        // it can find out, so say it once per rebuild, at WARN, naming the paths.
+        // Surface this pass's issues once at WARN so operators can find the affected paths.
         if (raisedIssues.isNotEmpty()) {
             logger.warn {
                 val shown = raisedIssues.take(MAX_LOGGED_ISSUES).joinToString("; ") { it.summary() }
@@ -504,21 +250,13 @@ class IndexBuilder(
         notifyPublished(snapshot, retired)
     }
 
-    /**
-     * Runs the effectful EPOCH bookkeeping after the scan. A skipped or incomplete local root breaks its epoch; a
-     * complete scan earns a confirmation from the epoch state machine. Minting belongs to [AbsencePass.mintEpoch].
-     *
-     * [durable] is read here, before the binds: the confirmation is about the row the page had, and
-     * `resolveIdentities` is about to rewrite that table. ([publishLimbo] re-reads it afterwards on purpose because it
-     * answers the opposite question, about the rows that are left.)
-     */
+    /** Confirms complete local scans for the epoch source; skipped or incomplete scans break the epoch. */
     private fun confirmEpochs(scans: List<SourceScan>): Map<RootName, ObservationEpoch.EpochConfirmation> {
         val durable = idMap.bindings().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
         return localSources
             .mapNotNull { source ->
                 val root = source.root.name
-                // SKIPPED and SHORT are the same fact here - we did not see this tree - and they break the epoch for
-                // the same reason. The skip is where the availability mark and the scan failure both arrive.
+                // Skipped and incomplete scans both mean the tree was not fully observed.
                 val scan = scans.firstOrNull { it.root == root }?.takeIf { it.complete }
                 if (scan == null) {
                     epochs.broke(root, BreakCause.SCAN_FAILED)
@@ -527,29 +265,14 @@ class IndexBuilder(
                 epochs.scanned(
                     root = root,
                     witnessed = scan.drafts.mapTo(mutableSetOf()) { it.file.path },
-                    // The walk saw these and the read could not produce them: neither witnessed nor absent, and the
-                    // difference between a page that is GONE and a page we merely could not read this pass.
+                    // An uncertain read is neither witnessed nor absent.
                     unread = scan.unread,
                     durable = durable[root].orEmpty().toSet(),
                 )?.let { root to it }
             }.toMap()
     }
 
-    /**
-     * The immutable absence-authority pass: capture freshness before evidence, then mint every inferred proof source
-     * from that capture. The only licence to delete comes from EPOCH, OBJECT_LIST, or GIT here; OPERATOR is accepted
-     * elsewhere, and an absence outside those sources is never believed. [capture] owns the fixed pre-evidence order
-     * and its rationale; mint order among the three sources is not load-bearing.
-     *
-     * STAMP PROVENANCE exception: OBJECT_LIST's binding half arrives as [ObjectManifest.bindingEpoch] and EPOCH's
-     * observation half as [ObservationEpoch.EpochConfirmation.observationId], each captured with its evidence. The
-     * field fence forbids a live token-answering capability, not those explicitly captured values.
-     *
-     * Enforced by construction, with a spelling and field-list tripwire as its teeth rather than a proof. Any change
-     * to the capture order, or to any mint's stamp provenance, gets a harness row or a watched back-out first.
-     * Suppressions or flags outside the scanned literals, reflection, and companion or delegated authority shapes
-     * remain review responsibilities.
-     */
+    /** Captures freshness before evidence, then mints EPOCH, OBJECT_LIST, and GIT proofs from that capture. */
     @OptIn(InferredProofMint::class)
     private class AbsencePass private constructor(
         private val proven: (RootName, ObjectManifest, Map<RootedPath, Witness>) -> Set<BindingRef>,
@@ -560,10 +283,10 @@ class IndexBuilder(
         private val bindingEpochs: Map<RootName, BindingEpoch>,
         private val headsBefore: Map<RootName, String>,
     ) {
-        /** The GIT mint's two outputs: absence proofs to apply, and checkpoint advances that ride the same transaction. */
+        /** GIT proofs and checkpoint advances applied together. */
         data class GitMint(val proofs: List<AbsenceProof>, val advances: List<GitCheckpointAdvance>)
 
-        /** The token-free read projection of one eligible root's history provider. */
+        /** Read-only history operations for one eligible root. */
         class GitReads(
             val currentHead: () -> String?,
             val isAncestor: (String, String) -> Boolean,
@@ -571,25 +294,8 @@ class IndexBuilder(
         )
 
         /**
-         * **The EPOCH proof source: what makes an online delete converge.**
-         *
-         * A page is proven gone when an epoch that WITNESSED it, an unbroken observation of an identity-stable tree,
-         * fully watched and scanned end to end, looks again and does not find it. Nothing here trusts a delete EVENT:
-         * the events are what make us LOOK, and [ObservationEpoch] decides whether looking is worth anything.
-         *
-         * The four ways this can fail all fail CLOSED, into limbo and never into a delete:
-         *  - **an object root gets no epoch at all.** Its watch is a POLLER over a mirror, so "the page is not in the
-         *    mirror" says nothing about the bucket, and a rebound or wrong bucket would drain the mirror and read as a
-         *    corpus-wide delete. Its authority is a complete `OBJECT_LIST` under the binding latch, which is the
-         *    thing that can actually see what the bucket holds.
-         *  - **a root this pass could not scan** (unavailable, vanished, a live-root failure) BREAKS its epoch. That is
-         *    the availability mark and the scan failure, arriving as the same fact: we stopped watching.
-         *  - **an INCOMPLETE scan** breaks it too. A view with holes in it is not an observation of a tree, and a page
-         *    "missing" from a walk that could not see the whole tree is not missing at all.
-         *  - **partial watch coverage, a break, or a restart** are the epoch's own business ([ObservationEpoch]).
-         *
-         * [bindingEpochs] is the caller's pre-evidence capture; [capture] carries the argument for why a restore's
-         * re-bind landing after it must lose `applyProofs`' two-token compare.
+         * An epoch proves an online absence only after continuous coverage of an identity-stable tree. Object roots
+         * use OBJECT_LIST instead; skipped or incomplete scans break the epoch and leave rows in limbo.
          */
         fun mintEpoch(confirmations: Map<RootName, ObservationEpoch.EpochConfirmation>): List<AbsenceProof> =
             confirmations.entries.map { (root, confirmation) ->
@@ -603,47 +309,22 @@ class IndexBuilder(
             }
 
         /**
-         * **The OBJECT_LIST proof source: an object root converges a delete without ever believing the wrong bucket.**
-         *
-         * An object root gets no observation epoch: its watch is a POLLER over a mirror, and "the page is not in the
-         * mirror" says nothing about the bucket. What it gets instead is the bucket itself: a COMPLETE LIST is positive
-         * proof of absence, *of the bucket it listed*. Whether that bucket is OURS is the [BindingLatch]'s question,
-         * and every guard lives there rather than here, so this is only the plumbing: hand the latch the manifest and
-         * the witness, take back the bindings it says are provably gone, and stamp them with the root's current token.
-         *
-         * A root with no manifest (never listed, or its last LIST failed) mints nothing at all. That is the fail-closed
-         * arm, and it is the common one: a store that has listed nothing knows nothing.
-         *
-         * **And the mirror must hold the WHOLE generation, which is what [SourceScan.complete] means for an object root**
-         * (`ObjectContentStore.scan` derives it from `mirrorHoldsGeneration`). The LIST is the authority about the
-         * BUCKET and it needs no help from the mirror to say a key is gone, but the REFUTATION is made of pages we READ,
-         * and on an object root we read the MIRROR. A poll whose GET of one key failed drops it and "retries next cycle",
-         * so the published generation NAMES a key the mirror does not hold. If that key is a RENAMED page, the id that
-         * would have refuted its old binding is sitting in an object we never fetched, and a LIST returns keys and etags,
-         * never frontmatter ids, so the manifest cannot supply it either. Absence proven by the bucket, refutation
-         * withheld by the mirror: we would retire a page that MOVED.
-         *
-         * So we do not prove what we could not read. The rows wait in limbo (503, self-healing) and the next poll fetches
-         * the key and converges. A DRAINED bucket is unaffected: it lists nothing, so a mirror holding nothing holds the
-         * whole of it. [scans] exists solely for the kept-verbatim completeness belt; the call site already gates the
-         * manifest read behind the same condition.
+         * Mints OBJECT_LIST only for a complete matching-root scan whose selected Markdown candidates were all read.
+         * The [BindingLatch] decides whether the listed bucket is this corpus; no manifest means no proof. Unread
+         * candidates withhold the proof while readable pages still publish and affected rows remain in limbo.
          */
         fun mintObjectList(
             manifests: Map<RootName, ObjectManifest>,
             scans: List<SourceScan>,
             witnessed: Map<RootedPath, Witness>,
         ): List<AbsenceProof> = manifests.entries.mapNotNull { (root, manifest) ->
-            if (scans.none { it.root == root && it.complete }) return@mapNotNull null
+            if (scans.none { it.root == root && it.complete && it.pageReadsComplete }) return@mapNotNull null
             val gone = proven(root, manifest, witnessed)
             if (gone.isEmpty()) {
                 null
             } else {
-                // The binding-epoch stamp is the MANIFEST's, co-read with `rowsAtStart` at the pagination boundary; a
-                // mint-time read a poll cycle later would already reflect a restore's re-bind and match the reap it
-                // must forbid. The wider poll-to-mint gap this source alone has is closed by the LATCH, not by
-                // ordering: `ObjectListRebindBetweenPollAndMintTest` measured `proven` refusing on the binding
-                // comparison first, with the UNRESOLVED trust check behind it. That test's KDoc is the durable record
-                // of the trusted-again deferral (owner-accepted, no tracked issue).
+                // Use the manifest's evidence-bound binding epoch, not a later live read. The latch also closes the
+                // poll-to-mint rebind window (see ObjectListRebindBetweenPollAndMintTest).
                 AbsenceProof.inferred(
                     root = root,
                     source = ProofSource.OBJECT_LIST,
@@ -655,38 +336,10 @@ class IndexBuilder(
         }
 
         /**
-         * **The GIT proof source: OFFLINE delete convergence.**
-         *
-         * An operator deletes pages while the server is DOWN (`git rm && git commit`, then boot). No epoch witnessed the
-         * absence and no LIST can attest it, so without this the rows sit in limbo forever. This is the one oracle that
-         * survives a shutdown: **recorded human intent**, a commit range that deleted the path, on a HEAD that DESCENDS
-         * from the last one we recorded, confirmed by THIS pass's complete walk. Rename safety is free: a `git mv` is a
-         * `D old` in the range, and the file the pass READ under the new name refutes the cover in the apply transaction.
-         *
-         * Three gates hold for EVERY advance, the baseline included. There is no advance without a present, complete,
-         * head-STABLE scan:
-         *  - **G1** the pre-scan head is absent (no repo, no commits, shallow, failure) -> skip the root.
-         *  - **G2** the post-scan head is null or moved since G1 (the bracket) -> skip: a `git rm` mid-walk must not let
-         *    the advance swallow the range it landed in, or the row it deletes pins in limbo permanently.
-         *  - **G3** no present, complete scan -> skip: a range confirmed by a partial view is not confirmed.
-         *
-         * Then, on the recorded checkpoint `oldHead`:
-         *  - **null** -> BASELINE: record the current head, mint NOTHING (first sight establishes a baseline, never a
-         *    range). A pre-upgrade offline delete is the accepted residue.
-         *  - **== postHead** -> nothing new.
-         *  - **not an ancestor of postHead** -> fail closed (a force-push or `pull --rebase` rewrote history): no proof,
-         *    no advance, and the checkpoint pins until reconcile re-baselines.
-         *  - otherwise -> the range's `.md` deletions this pass did NOT enumerate and did NOT fail to read become the
-         *    cover. The checkpoint advances iff none of the range's deletions is UNREAD. The advance is
-         *    RESOLUTION-based, not reap-based: an empty effective reap set still advances (a restored file would
-         *    otherwise re-diff an ever-growing range forever), and an UNREAD path in the range withholds it (the walk
-         *    saw it, the read failed, so it is neither witnessed nor proven gone, and `AbsenceUnknown` may no more
-         *    advance a checkpoint than mint a proof).
-         *
-         * [durable] is read HERE, before the binds and before `applyProofs`, exactly like [IndexBuilder.confirmEpochs]:
-         * the proof is about the row a page HAD when the pass observed it gone. The mint runs INSIDE `rebuild`, where
-         * the witness exists, never a boot path where an honest empty witness would refute nothing and a `git mv` would
-         * split.
+         * Mints offline-delete proofs from a complete, head-stable scan and advances the checkpoint in the same
+         * transaction. A null checkpoint establishes a baseline only; equal heads do nothing, rewrites fail closed,
+         * and unread deleted paths withhold the advance. The effective cover is resolution-based, so an empty reap
+         * still advances after the range is safely resolved.
          */
         fun mintGit(scans: List<SourceScan>): GitMint {
             val durableByRoot = durable().groupBy({ it.path.root }, { BindingRef(it.path.path, it.id) })
@@ -762,29 +415,11 @@ class IndexBuilder(
 
         companion object {
             /**
-             * The fixed pre-evidence capture: establish, then stamp, then the HEAD bracket, all before the earliest
-             * evidence read. Calling this effectful function twice would revoke the first capture's tokens.
-             *
-             * [ObservationEpoch.establish] runs FIRST because opening an epoch REVOKES, and a revoke landing mid-pass
-             * is indistinguishable at the freshness compare from a watcher BREAK. Past this point nothing this pass
-             * does moves either token, so any later movement (a break, or a perfectly healthy concurrent save) fails
-             * this pass's proofs closed. Captured any later, a stamp folds in the exact event it exists to detect: a
-             * re-bind of a covered key would survive the binding half's `applyProofs` compare, and a mid-pass break
-             * would be stamped with its own post-break token and reap a tree we had stopped watching.
-             *
-             * Observation stamps precede the binding capture, and stamping the token `establish` HANDS BACK is
-             * load-bearing: a re-read after the open (or after the binding capture) could absorb a break landing
-             * between the two operations and stamp exactly the value `applyProofs` is about to compare. An UNOBSERVED
-             * root falls back to a plain read so the map covers every source: GIT deliberately needs no epoch, since
-             * an offline `git rm` must converge on an unobserved root. [gitOracleRoots] is a subset of [localSources],
-             * so the binding capture covers EPOCH and GIT; OBJECT_LIST takes its binding half from the manifest, and
-             * OPERATOR arrives pre-evidence elsewhere.
-             *
-             * The HEAD bracket freezes each eligible root's head before the scan; the mint re-reads HEAD and requires
-             * equality, so a `git rm && commit` landing during the walk yields no proof and no advance. The
-             * repositories enter only as parameters: after construction no field can answer a live freshness token,
-             * and [durable], [gitCheckpoint], and the [GitReads] members are DELIBERATELY-LIVE non-token reads of
-             * bindings and git evidence (SHAs, ancestry, deleted paths).
+             * Before evidence: establish epochs, reuse their returned observation tokens (singular read otherwise),
+             * capture local binding epochs, then capture Git HEADs. Re-reading an established token could absorb a
+             * concurrent break; late binding stamps could absorb a rebind that should invalidate the proof.
+             * EPOCH uses its confirmation's observation token; OBJECT_LIST uses its manifest's binding epoch.
+             * Git HEAD must still match after the scan, or neither proof nor checkpoint advance is allowed.
              */
             fun capture(
                 epochs: ObservationEpoch,
@@ -823,32 +458,15 @@ class IndexBuilder(
         }
     }
 
-    /**
-     * The roots the git oracle may speak about, in ONE place: the two halves of the HEAD bracket are the same
-     * question asked twice, and a predicate that lives at both ends is a predicate that can drift at one of them.
-     */
+    /** Roots eligible for the Git HEAD bracket and oracle. */
     private val gitOracleRoots: List<Source>
         get() = sources.filter { it.root.backend is RootBackend.Local && it.history.enabled }
 
-    /**
-     * The roots that can carry an EPOCH, and so the roots whose binding stamp a pass captures, in ONE place - for the
-     * reason above, sharpened: a predicate spelled at both the capture and the mint is a predicate that can drift at
-     * one of them, and a drift here would hand a mint a root its stamp map has no entry for.
-     */
+    /** Local roots eligible for epoch and binding stamps. */
     private val localSources: List<Source>
         get() = sources.filter { it.root.backend is RootBackend.Local }
 
-    /**
-     * The drafts this pass must NOT bind: a file at an at-risk path, under a root whose binding is still UNRESOLVED,
-     * carrying an id that is NOT the incumbent's (see the call site for why binding it would destroy a permalink).
-     *
-     * The two arms it deliberately leaves alone:
-     *  - a file carrying **NO** id displaces nothing. Its identity comes from the `id_map` row itself (pre-materialized
-     *    identity is path-keyed), so the incumbent id is what it binds to - which is also why an UNMATERIALIZED page
-     *    must not be quarantined here: it would take a legitimate install's own pages away from it while its binding
-     *    waits for the operator reconcile it can never earn by witness.
-     *  - a file carrying the incumbent's OWN id is the page witnessing itself. That is the promotion path, not a threat.
-     */
+    /** Drafts that would displace an untrusted object binding with a different id. */
     private fun suspectDrafts(witnessed: Map<RootedPath, Witness>): Set<RootedPath> =
         sources.filter { it.root.backend is RootBackend.Object }
             .flatMapTo(mutableSetOf()) { source ->
@@ -858,29 +476,7 @@ class IndexBuilder(
                     .map { (path, _) -> path }
             }
 
-    /**
-     * `limbo = durableRows - witnessed - retired`, recomputed from scratch every pass and never stored.
-     *
-     * A row that lands here is not a deletion and not a page - it is an OPEN QUESTION, and it stays open until
-     * the page is witnessed again (it drops out of the next derivation, with no code running - that is what
-     * "self-healing" has to mean to be worth anything) or a proof settles it.
-     *
-     * It also drives the ONE thing the deleted corpus-loss tripwire did that was never about deleting: a root
-     * whose scan came back EMPTY while its durable rows say it holds content is a BROKEN VIEW, and its pages must
-     * not be SERVED as 404 - the answer that tells an agent to drop its citations. [UnavailableCause
-     * .CORPUS_MISSING] is what turns them into an honest 503, and it is preserved here verbatim.
-     *
-     * **It is a SERVING HINT and carries ZERO delete authority:** `available()` is demoted to a
-     * hint - a write fail-fast and a health signal, never an input to anything that deletes. That is the whole
-     * difference from the tripwire it replaces: the old rule used this same observation to hand out and withhold
-     * DELETE AUTHORITY, which is a question an empty directory can never answer. Deletion now needs a proof, so
-     * being wrong here costs a 503 instead of a corpus.
-     *
-     * [AbsenceClassifier] makes the READ 503 per-ROW off the durable binding, so every page here already
-     * answers `absence_unverified` without this mark. The mark survives for the WRITE side, which no per-page rule
-     * can reach: an empty mount point is a perfectly writable directory, and an unmarked root would let a create
-     * lay a skeleton corpus into it. See [corpusSeen].
-     */
+    /** Publishes `durableRows - witnessed - retired` as limbo and derives the root-level serving hint. */
     private fun publishLimbo(witnessed: Map<RootedPath, Witness>, scannedRoots: Set<RootName>) {
         val stranded = idMap.bindings()
             .filterNot { it.path in witnessed }
@@ -896,10 +492,7 @@ class IndexBuilder(
         }
         val witnessedRoots = witnessed.keys.mapTo(mutableSetOf()) { it.root }
         for ((root, refs) in stranded) {
-            // A root we WATCHED hold pages and then watched go empty reads as 404, not 503 - the [corpusSeen]
-            // hint, and the ONLY thing it is still allowed to decide. Deleting the last page of a root is an
-            // ordinary edit, and answering it with a sticky 503 over the whole root would be a worse lie than the
-            // one this mark exists to prevent.
+            // A previously witnessed root may serve an empty scan as 404; this hint never authorizes deletion.
             if (root !in scannedRoots || root in witnessedRoots || root in corpusSeen) continue
             availability.markUnavailable(root, UnavailableCause.CORPUS_MISSING)
             val where = sourcesByRoot[root]?.root?.localPath ?: "its backing store"
@@ -913,128 +506,53 @@ class IndexBuilder(
         }
     }
 
-    /**
-     * The MANAGE-gated rescan entry (A3): the admin `rescan` route reaches the full pass ONLY through this thin
-     * wrapper, which requires a [ManageGrant] minted by `PolicyService.checkManage()`. The no-arg [rebuild] stays
-     * for the MANY internal callers (the watcher loop, startup reconcile, the create route's post-write index, the
-     * asset facade's post-write rebuild) — they are not a manage admin action, so they keep the ungated path.
-     * "Gain a grant param, keep the logic": the gated overload is the new surface, the body is the shared no-arg.
-     */
+    /** Manage-gated rescan entry; internal callers use the no-arg [rebuild]. */
     fun rebuild(@Suppress("UNUSED_PARAMETER") grant: ManageGrant): PageIndex = rebuild()
 
     /**
-     * Search-only full rebuild (the S8 reindex path): reads the CURRENT published snapshot AND
-     * rebuilds the search engine from it, both inside the SAME monitor [rebuild]/[notifyPublished]
-     * use. So a concurrent watcher rebuild either fully precedes this (the reindex sees its
-     * snapshot) or fully follows it (its own [SearchIndexer.sync] runs afterward) — it can never
-     * interleave to roll the engine back to a stale generation (the debate-caught regression a
-     * naive read-`current`-then-`rebuild` would reopen). This is NOT a page rescan: no scan, no
-     * checkpoint listener re-fire — just a clean generation swap of the engine over the snapshot
-     * already published. Both the reindex endpoint and the `plainbase reindex` CLI route through
-     * here. Returns the count of snapshot pages accepted by current durable retirement authority; it may be smaller
-     * than the published holder when retired pages remain there for non-search projections.
-     *
-     * The search projection captures current durable retirement authority inside this serialized operation. That read
-     * recovers a retirement whose earlier publication was lost and filters retired pages out of stale snapshot input.
-     * The explicit set also tells the provider which engine rows may be removed: an empty set preserves every
-     * unretired row absent from the snapshot, including rows belonging to a root carried through an outage. Missing
-     * authority is a read failure, never permission to infer a mass deletion.
+     * Rebuilds search from the current published snapshot under the rebuild monitor. This is a generation swap, not a
+     * page rescan or publication-listener replay. Durable retirement authority is read during the operation so stale
+     * snapshot pages are filtered; missing authority is a read failure, not mass-deletion permission.
      */
     @Synchronized
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
-        val published = holder.load()
-        return indexer.rebuild(published.snapshot)
+        val snapshot = holder.load()
+        return indexer.rebuild(snapshot)
     }
 
-    /**
-     * The MANAGE-gated reindex entry (A3): the admin `reindex` route + the `plainbase reindex` CLI reach the
-     * engine generation-swap ONLY through this thin wrapper, which requires a [ManageGrant]. The no-arg
-     * [rebuildSearchIndex] stays the internal surface (same gain-a-param-keep-the-logic shape as [rebuild]).
-     */
+    /** Manage-gated entry for the search generation swap. */
     fun rebuildSearchIndex(@Suppress("UNUSED_PARAMETER") grant: ManageGrant): Int = rebuildSearchIndex()
 
     /**
-     * Targeted single-page reindex (PB-WRITE-1 fix C): re-reads + re-renders ONLY the page at [target],
-     * publishes a snapshot identical to the current one except for that page (its own root's section
-     * rebuilt, every other section riding through untouched), and upserts that ONE page into search via
-     * [SearchIndexer.syncPage]. The search path performs one rooted authority lookup and splits/indexes one page; it
-     * does not run the corpus-wide [SearchIndexer.sync] diff. Checkpoint replacement is skipped. Full [rebuild]
-     * stays the startup/admin/watcher path. Shares the rebuild monitor, so a watcher rebuild never
-     * interleaves. Bytes and history come from the target root's source.
+     * Re-reads and re-renders only [target], a fixed [RootedPath] chosen by the write (ADR-0012), then stores the
+     * updated snapshot and calls [SearchIndexer.syncPage]. It does not run a whole-listener/search diff, replace
+     * checkpoints, or update aliases; renames use [rebuild]. The current root view supplies complete URLs.
      *
-     * **The target is a [RootedPath], NOT a page id, and that is the whole point (ADR-0012).** A page id does
-     * not name a location on its own: under per-root identity the SAME id may be live in several roots at once,
-     * so resolving one here would be picking a root, not reading one. This method runs DOWNSTREAM of a CAS
-     * that has already put bytes on ONE root's disk, and it takes a FRESH snapshot — so resolving the id here
-     * would let a rebuild landing in that window send the reindex at a DIFFERENT root's file, splitting disk
-     * truth from index truth. Taking the location the bytes actually went to makes that unreachable rather than
-     * unlikely: the caller pins the write target, and this can never re-derive another owner from it.
-     *
-     * The caller (`WritePipeline.write`) has ALREADY rejected any id/slug/redirect_from change (the
-     * edit-classification guard), so this page's identity, urlPath, and aliases are unchanged — only
-     * its bytes-derived fields (markdown, contentHash, html, headings, links, sections, title) are
-     * recomputed. So this does NOT call [notifyPublished] (which would fire the O(corpus) checkpoint
-     * replace) and does NOT call [recordAliases]: there is nothing checkpoint- or alias-relevant to
-     * change. A genuine rename never reaches here; it is a deferred rename operation through full [rebuild].
-     *
-     * Rendered against the CURRENT published snapshot's per-root view (URL-complete: every OTHER page's
-     * canonical URL is final), so this page's outbound links resolve exactly as in a full rebuild.
-     *
-     * **Cross-page render coherence — a documented invariant, not a tracked feature.** Re-rendering
-     * one page is correct iff a page's HTML/headings/links/sections are a pure function of its OWN
-     * content (plus the unchanged URL-complete view). That holds today: the renderer embeds other
-     * pages' URLs but never their content (no backlinks, no transclusion, no server-rendered
-     * child-lists), and folder landing pages are client-rendered (ADR-0003). TRIPWIRE for whoever
-     * later adds backlinks / transclusion / "pages that mention this one": that feature breaks the
-     * pure-function assumption and must either re-render dependents or route through full [rebuild].
-     *
-     * THROWS [IllegalStateException] if [target] is absent from the snapshot or its file is unreadable on the
-     * SAVE path, or if the target is still retired and unbound when targeted search publication runs. The CAS just
-     * wrote those bytes, so a missing page is a real invariant violation, never a silent success. The retired/unbound
-     * guard occurs after the holder stores the page; `WritePipeline.reconcileDirtyPages` handles that failure at its
-     * own call site through durable dirty-page recovery, never by weakening this guard.
+     * Rendering must depend only on the page's own content and that URL view; folder landing pages remain
+     * client-rendered (ADR-0003). The bounded history lookup preserves the save path's cost; the page is stored
+     * before targeted search, whose failure is recovered as dirty state.
      */
     @Synchronized
     fun reindex(target: RootedPath): PageIndex {
-        val published = holder.load()
-        val previous = published.snapshot
+        val previous = holder.load()
         val page = previous.byPath[target]
             ?: error("reindex($target): page not in the published snapshot — a save-path invariant violation")
         val source = sourcesByRoot[target.root]
             ?: error("reindex($target): no source for root '${target.root}' - the snapshot outran this builder's wiring")
-        // The cheap belt for the ALREADY-MARKED case - a save into a vanished root must not half-run. The
-        // facade's gate normally fires first, so this is an internal-path guard, not the 503 surface: when it
-        // does fire mid-save, WritePipeline's post-write catch absorbs it into the honest WrittenButUnindexed
-        // (the bytes ARE on disk, the dirty mark IS retained). A STATUS cannot answer for the UNMARKED window,
-        // though, which is what the two classified calls below are for.
+        // Check the live mark before reading; the classified read handles an unmarked root that vanishes mid-save.
         if (!availability.current().isAvailable(target.root)) throw RootUnavailable(target.root, UnavailableCause.VANISHED)
         val bytes = when (val read = absence.read(source.store, target)) {
             is ContentRead.Bytes -> read.bytes
-            // The store has already MARKED on its way out; this throw is only the carrier. Without it the read's
-            // null became an error() the pipeline's blanket catch absorbed - the right wire answer, but the root
-            // was never marked, so every subsequent READ kept serving its carried content.
+            // Carry the store's root-loss mark through the write pipeline.
             ContentRead.RootDown -> throw RootUnavailable(target.root, UnavailableCause.VANISHED)
-            // BOTH absences are an invariant violation HERE and nowhere else: the CAS wrote these bytes moments ago,
-            // on this path, in this root. Whichever way the index reads it, the file is not supposed to be missing -
-            // so this stays a loud error() that the pipeline's post-write catch turns into WrittenButUnindexed (the
-            // bytes ARE on disk, the dirty mark IS retained). This is not the [AbsenceClassifier] read surface; it is a
-            // save-path invariant, and softening it would hide a lost write behind a retry.
+            // A CAS just wrote this path, so either absence is a save-path invariant failure, not a normal read result.
             ContentRead.ConfirmedAbsent, ContentRead.AbsenceUnknown ->
                 error("reindex($target): ${target.path.value} unreadable just after a CAS write")
         }
         val parsed = frontmatterParser.parse(bytes)
         val rendered = rendererFactory(previous.view(target.root)).render(target.path, bytes)
-        // One genuinely O(1) last-commit lookup for just this page (D-3, reversed by re-review P2-1): a
-        // BOUNDED `git log --max-count=1 -- path`, NEVER `lastCommits` — which has no cap and buffers the
-        // page's FULL history before parsing, so for a heavily-edited page every save/reconcile would read
-        // the whole history (unbounded; can time out / null the commit). `log(path, 1)` shares `rebuild`'s
-        // first-parent attribution, so the citation SHA stays consistent between the two paths.
-        //
-        // The git read takes the SAME exit boundary every other rooted backend call does ([RootLossClassifier]):
-        // `git -C <workTree>` on a gone work tree raises a HistoryCommandException, which - unclassified - would
-        // be absorbed by the pipeline with the root left AVAILABLE. A live-root git fault still rethrows as the
-        // honest 500.
+        // Use the bounded one-page history lookup and the same root-loss boundary as full rebuild.
         val commit = rootLoss.guarding(target.root, source.store) { source.history.log(target.path, limit = 1).firstOrNull()?.sha }
         val reindexed = page.copy(
             frontmatter = parsed,
@@ -1047,8 +565,7 @@ class IndexBuilder(
             links = rendered.links.toList(),
             sections = rendered.sections.toList(),
         )
-        // Matched by PATH, like the lookup: the page occupying the written location is the one to replace, and
-        // an id match here would re-introduce the very re-derivation the RootedPath target exists to prevent.
+        // Replace by path, preserving the write target's root and location.
         val snapshot = PageIndex(
             previous.sections.map { section ->
                 if (section.root == target.root) {
@@ -1058,27 +575,16 @@ class IndexBuilder(
                 }
             },
         )
-        // Preserve the last full-pass witness, proofs, and observation stamps: targeted reindex republishes ONE page
-        // of an already-scanned root and creates no new full-pass authority. Search checks current durable point
-        // authority independently before indexing this page.
-        holder.store(published.copy(snapshot = snapshot))
+        // Store before targeted search; search checks current durable retirement authority independently.
+        holder.store(snapshot)
         logger.info {
             "reindexed page ${reindexed.id.value} (${target.path.value} in '${target.root}'); ${snapshot.pages.size} page(s) published"
         }
-        searchIndexer?.syncPage(reindexed) // one-page upsert — NOT sync(snapshot), NOT notifyPublished
+        searchIndexer?.syncPage(reindexed) // One-page upsert; no full search diff or publication listeners.
         return snapshot
     }
 
-    /**
-     * Renders a SUBMITTED Markdown buffer for the (private, non-contractual W3b) preview pane: PB-SLUG-1
-     * heading ids + PB-LINK-1 link rewriting via the SAME [rendererFactory] every index render uses (the
-     * single-renderer rule: preview NEVER constructs its own renderer). Link resolution is against
-     * [root]'s view of the CURRENT published snapshot [current] (so `[[other page]]` / relative links
-     * resolve as a reader would see them); [sourcePath] is the buffer's notional location for
-     * relative-href resolution (the editor's page path, or a synthetic root path when previewing a
-     * not-yet-saved buffer). READ-ONLY: nothing is read from disk, nothing is published, no snapshot
-     * swap — a pure function of [bytes] + the live view.
-     */
+    /** Renders a submitted Markdown buffer against the current root view without source I/O or publication. */
     fun renderPreview(root: RootName, sourcePath: TreePath, bytes: ByteArray): RenderedPage =
         rendererFactory(current.view(root)).render(sourcePath, bytes)
 
@@ -1089,431 +595,34 @@ class IndexBuilder(
                 listener.published(snapshot, retired)
             }.onFailure { failure ->
                 if (failure is Error) throw failure
-                // Exception, not Throwable: narrower than the literal "nothing propagates" policy, so a JVM Error
-                // (OOM/SOE) still fails loudly.
+                // Contain Exception but let JVM Error terminate the rebuild.
                 logger.error(failure) { "publication listener failed; the published snapshot stands" }
             }
         }
     }
 
-    /** One page's in-flight state: read once, frontmatter parsed once, bytes kept for the single render. */
-    private class Draft(
-        val file: ContentFile,
-        val bytes: ByteArray,
-        val frontmatter: Frontmatter,
-    )
-
-    /**
-     * One source's COMPLETED scan: drafts in path order, URLs assigned, last-commits batched — and the
-     * path/URL-collision [issues] it raised, BUFFERED rather than persisted as they were found, so an
-     * abandoned (root-loss) scan leaves no rows describing a tree it never finished walking. The caller
-     * records them once the scan has come back whole.
-     */
-    private data class SourceScan(
-        val root: RootName,
-        val drafts: List<Draft>,
-        val folders: List<ContentFolder>,
-        val assets: Set<TreePath>,
-        val urls: CanonicalUrlBuilder.Result,
-        val commits: Map<TreePath, Commit>,
-        val issues: List<IdentityIssue>,
-        /** Did the backend see the WHOLE tree ([ScanResult.complete])? Only a complete walk gets delete authority. */
-        val complete: Boolean,
-        /**
-         * **The paths the WALK enumerated and the READ could not produce bytes for** - and the reason [complete] is
-         * not the whole story about what this pass knows.
-         *
-         * A scan is a walk followed by a read of each thing it walked, and [complete] describes only the WALK. So a
-         * page that lost a race between the two (an `rm`, a `git checkout` of another branch, a sync tool's
-         * delete-then-write) drops out of [drafts] while the scan still, correctly, calls itself complete - and it is
-         * then MISSING FROM THE WITNESS MAP of a scan that saw the whole tree. The epoch mints its proof from exactly
-         * that difference, so without this set the page we merely FAILED TO READ reads as a page that is GONE, and
-         * `AbsenceUnknown` - the carrier for *"the bytes are not there and we cannot prove they are gone"* - becomes
-         * the one thing this design forbids it to become.
-         *
-         * These paths are therefore neither WITNESSED nor ABSENT. They are the third answer, and they go to LIMBO.
-         */
-        val unread: Set<TreePath>,
-    )
-
-    private class Identity(
-        val id: PageId,
-        val materialized: Boolean,
-    )
-
-    /**
-     * [scan]s ONE source unless its root is not there - in which case it is MARKED (if the probe is what
-     * discovered it), SKIPPED, and its last-good section carried forward by the caller. Null means skipped.
-     *
-     * **The scan is classified where it is HANDED OVER, not where it is started.** The entry probe below is a
-     * cheap fail-fast, and it is all it is: what the pass grants delete authority to is the SourceScan that
-     * came back, so that is what gets re-probed. A tree that vanishes DURING the walk does not have to throw -
-     * a directory stream can simply run out of entries - and a short scan of a live root should not be mistaken
-     * for a WITNESS of the pages it failed to reach. Probing the artifact instead of the precondition makes that
-     * structural rather than lucky.
-     *
-     * The classifier's carrier set is DERIVED from what `scan(source)` actually COLLABORATES with, not from
-     * the NIO ladder - because this is a COMPOSITE rooted operation, not a store call:
-     *  - `store.scan()` / `store.readClassified()` -> `IOException` (total over the store's NIO surface, once
-     *    the directory-stream normalization has run);
-     *  - `store.readClassified()`'s `RootDown` arm -> a `RootUnavailable` we throw ourselves;
-     *  - `history.lastCommits()` -> every git call is `git -C <workTree>`, so a gone work tree exits non-zero
-     *    and raises a [HistoryCommandException];
-     *  - `idMap.record`/`bind` (a DB in DATA_DIR, a different tree) and the pure parser/URL builder -> nothing
-     *    a vanished root can do. A throw from those is a GENUINE fault and takes the live-root arm.
-     *
-     * So it is those three and NOT `catch (Exception)`: a widened catch would swallow a programming error into
-     * a skipped root, and the whole point of [skipOnLiveFailure]'s WARN is that a live root's failure stays
-     * visible instead of being laundered into "the disk is gone".
-     */
-    private fun scanIfAvailable(source: Source): SourceScan? {
-        val root = source.root.name
-        return when {
-            !availability.current().isAvailable(root) -> {
-                logger.warn { "root '$root' is unavailable; skipping its scan and carrying its last-good section forward" }
-                null
-            }
-
-            rootLoss.markIfGone(root, source.store) ->
-                skipAndCarry(root, "its backing tree is not traversable")
-
-            else -> runCatching { scan(source) }.fold(
-                onSuccess = { scan ->
-                    when {
-                        rootLoss.markIfGone(root, source.store) ->
-                            skipAndCarry(root, "it vanished while being scanned, so the tree it handed back is not a corpus")
-                        else -> scan
-                    }
-                },
-                onFailure = { failure ->
-                    when (failure) {
-                        is RootUnavailable -> {
-                            availability.markUnavailable(failure.root, failure.reason)
-                            logger.warn {
-                                "root '$root' vanished mid-scan; skipping it and carrying its last-good section forward"
-                            }
-                            null
-                        }
-
-                        is IOException -> classifyScanFailure(source, failure)
-                        is HistoryCommandException -> classifyScanFailure(source, failure)
-                        else -> throw failure
-                    }
-                },
-            )
-        }
-    }
-
-    /**
-     * The rebuild's arm of the shared [RootLossClassifier] rule: a failure whose re-probe FAILS means the root
-     * vanished mid-operation - the same hazard class, since a half-scanned section is a partial mass-delete - so
-     * mark, skip and carry. A failure whose re-probe still PASSES is NOT a disappearance (a parser bug, a corrupt
-     * repo, an unknown git flag, a `chmod 000` subdirectory) and takes [skipOnLiveFailure]. A request-serving
-     * surface wants the classifier's `guarding` (mark and 503); a rebuild wants to keep going over the roots
-     * that ARE there, which is this.
-     */
-    private fun classifyScanFailure(source: Source, failure: Exception): SourceScan? {
-        val root = source.root.name
-        if (rootLoss.markIfGone(root, source.store)) {
-            return skipAndCarry(root, "it vanished while being scanned (${failure.message})")
-        }
-        return skipOnLiveFailure(source, failure)
-    }
-
-    /**
-     * A LIVE root whose scan failed: fail THAT root's pass, not the whole rebuild. The old rethrow escaped the
-     * per-root loop, so one unreadable subdirectory in one extra root failed every root's pass - and at boot,
-     * where `serve()` calls [rebuild] uncaught, it killed the server outright with a stack trace instead of
-     * serving the roots that were perfectly fine. The root is deliberately NOT marked unavailable: it is THERE,
-     * a permission or a corrupt repo is fixed in place, and sticky-until-restart would prescribe a restart
-     * nobody needs. A failed or skipped scan grants no new deletion authority; current durable retired-unbound
-     * identities may still be reconciled in search. The root keeps its last-good section, keeps serving, and the next
-     * pass retries it. The WARN carries the DIRECTORY, because that is the datum an operator acts on.
-     */
-    private fun skipOnLiveFailure(source: Source, failure: Exception): SourceScan? {
-        val where = source.root.localPath?.let { " at $it" }.orEmpty()
-        logger.warn(failure) {
-            "root '${source.root.name}'$where is still there but its scan FAILED (${failure.message}); skipping it and " +
-                "carrying its last-good section forward - the failed scan grants no new deletion authority; current " +
-                "durable retired-unbound search identities may still be reconciled, the other roots still index, and " +
-                "the next pass retries it"
-        }
-        return null
-    }
-
-    /** The loss is already published; this is the skip. Marking is what stops the carried section from being SERVED as live. */
-    private fun skipAndCarry(root: RootName, detail: String): SourceScan? {
-        logger.warn {
-            "root '$root' is no longer available ($detail); skipping its scan and carrying its last-good section " +
-                "forward - the loss grants no new deletion authority; previously committed retired-and-unbound search " +
-                "identities may still be reconciled, and it will serve 503 until it is restored and the server restarted"
-        }
-        return null
-    }
-
-    /** Scans ONE source end-to-end (files, frontmatter, per-root URLs, batched last-commits). */
-    private fun scan(source: Source): SourceScan {
-        val root = source.root.name
-        val scan = source.store.scan()
-
-        // The walk saw these; the read could not produce their bytes. NOT witnessed, and NOT absent - see
-        // [SourceScan.unread]. Collected here because this is the only place that knows the difference.
-        val unread = mutableSetOf<TreePath>()
-        val drafts = scan.files
-            .filter { it.path.name.endsWith(".md") }
-            .sortedBy { it.path.value }
-            .mapNotNull { file ->
-                // CLASSIFIED, not `checkNotNull`: a plain null read cannot tell a page that vanished mid-scan from
-                // the whole ROOT going away (which must mark + skip + carry). The old checkNotNull raised an
-                // IllegalStateException that walked straight past the classifier above, leaving the root AVAILABLE
-                // and its carried section being served - the D5 lie.
-                //
-                // [AbsenceClassifier] treats a page that vanished between the walk and the read as NOT WITNESSED: it drops out
-                // of this pass's drafts, so it is in no snapshot, and - if the durable index still binds it - it lands
-                // in LIMBO, which reads 503 rather than 404 until the page is seen again or a proof settles it. It
-                // used to `error()`, which killed the whole rebuild (and, at boot, the server) over one file losing
-                // a race with an ordinary `rm` - taking every OTHER root's pass down with it.
-                val bytes = when (val read = absence.read(source.store, RootedPath(root, file.path))) {
-                    is ContentRead.Bytes -> read.bytes
-                    ContentRead.RootDown -> throw RootUnavailable(root, UnavailableCause.VANISHED)
-                    ContentRead.AbsenceUnknown -> {
-                        // ...and it is recorded as UNREAD, which is what actually keeps that last promise. Dropping the
-                        // draft is only half of it: a page missing from the witness map of a COMPLETE scan is precisely
-                        // what the epoch mints an absence proof from, so without this line the log below is a lie and
-                        // the row is reaped (tombstone, checkpoint, and the dirty_page row that is the interrupted
-                        // save's only recovery record). An unknown is not a fact.
-                        unread += file.path
-                        logger.warn {
-                            "page ${file.path.value} in '$root' vanished between the walk and the read; it is NOT witnessed " +
-                                "this pass and its durable row goes to LIMBO - nothing is deleted for it"
-                        }
-                        return@mapNotNull null
-                    }
-                    ContentRead.ConfirmedAbsent -> {
-                        logger.warn { "page ${file.path.value} in '$root' vanished between the walk and the read; it was never indexed" }
-                        return@mapNotNull null
-                    }
-                }
-                Draft(file, bytes, frontmatterParser.parse(bytes))
-            }
-        val assets = scan.files.filterNot { it.path.name.endsWith(".md") }.map { it.path }.toSet()
-
-        // Per-root URL construction: the builder is pure and per-tree, so per-root URL uniqueness
-        // falls out of calling it once per source (alias semantics apply per root, not across roots).
-        val urls = CanonicalUrlBuilder.build(
-            root = root,
-            pages = drafts.map { CanonicalUrlBuilder.PageInput(it.file.path, it.file.rawName, it.frontmatter.scalar("slug")) },
-            folders = scan.folders,
-        )
-
-        // ONE batched last-commit read per source (fix-C corollary): never one query per page.
-        // NoOp → empty map → every commit null off Git (the frozen-golden invariant). The map is
-        // keyed by the same TreePath the draft carries; an uncommitted page is simply absent (→ null).
-        // It is also the LAST thing that can raise root loss here, which is why the issues below are
-        // handed BACK rather than recorded: nothing this scan found is persisted until all of it is in hand.
-        val commits = source.history.lastCommits(drafts.map { it.file.path })
-        return SourceScan(
-            root = root,
-            drafts = drafts,
-            folders = scan.folders,
-            assets = assets,
-            urls = urls,
-            commits = commits,
-            issues = scan.issues.map { it.toIdentityIssue(root) } + urls.issues,
-            complete = scan.complete,
-            unread = unread,
-        )
-    }
-
-    /** The URL-complete, render-empty skeleton page for one draft. */
-    private fun provisionalPage(scan: SourceScan, draft: Draft, identityOf: Identity): IndexedPage {
-        val assignment = scan.urls.byPage.getValue(draft.file.path)
-        return IndexedPage(
-            id = identityOf.id,
-            root = scan.root,
-            path = draft.file.path,
-            slug = assignment.slug,
-            urlPath = assignment.urlPath,
-            title = draft.file.path.stem,
-            frontmatter = draft.frontmatter,
-            materialized = identityOf.materialized,
-            // Captured from the one read, alongside everything else the page serves: the
-            // payload a request answers with is coherent BY CONSTRUCTION (see IndexedPage doc).
-            markdown = String(draft.bytes, Charsets.UTF_8),
-            contentHash = citations.contentHash(draft.bytes),
-            commit = scan.commits[draft.file.path]?.sha,
-            html = "",
-            headings = emptyList(),
-            links = emptyList(),
-            sections = emptyList(),
-        )
-    }
-
-    /**
-     * Path-keyed identity over the in-hand bytes uses the same precedence/duplicate seam as `AdoptionPass`
-     * RECORD, run ONCE globally across all sources in a deterministic order: roots by rank, then within
-     * each root frontmatter-carrying drafts first (`precedenceOrdered`), then by path. Rank orders the
-     * roots and nothing else - it picks no id winner (ADR-0012).
-     *
-     * **RESOLVE THE WHOLE CORPUS, THEN BIND IT** - the `AdoptionPass` two-phase split, for the same
-     * reason and now literally the same seam. Binding INLINE, as this used to, made the loser issue
-     * UNRECORDABLE for one specific WITHIN-root loser: a page that ends up with NO frontmatter id of its own and
-     * whose `id_map` row is swept out from under it mid-pass. The winner's key-complete bind DELETES that row on
-     * its way through, so when the loser's own draft came up for resolution its `mappedId` read back null - and a
-     * page with no frontmatter id and no mapping is not a duplicate, it is a VIRGIN PAGE. It minted a fresh id,
-     * silently, so the `/p/{root}/{id}` permalink its readers held stopped naming it, with no `DuplicateId` issue
-     * recorded anywhere. A durable permalink reassignment with no record is precisely the outcome the
-     * loser-behalf issue recording exists to make impossible.
-     *
-     * **The reachable shape of that loser is narrower than it used to be, and naming it precisely matters** -
-     * this paragraph is the most-cited justification for the split, and a justification that has quietly become
-     * unreachable is how a defence gets refactored away. Since [BindingVisibility.isOwner] gained the
-     * materialized-aware path-reuse gate, an UNMATERIALIZED owner is never displaced at all (its file was never
-     * expected to carry the id, so witnessing it carry none confirms nothing), which used to be the headline
-     * example here and no longer occurs. What remains reachable is the MATERIALIZED page whose `id:` line was
-     * STRIPPED externally: the gate correctly stops treating it as the owner, a claimant takes the id, its row is
-     * swept, and it then has neither frontmatter id nor mapping - a virgin page, silently minted. (A file whose
-     * `id:` was REWRITTEN to some other valid id is not this case: it resolves on the frontmatter arm under its
-     * new id and is never a virgin page.)
-     *
-     * Resolving first fixes it at the root: every draft's `mappedId` is read against the id_map as it stood
-     * BEFORE this pass touched it, so the beaten owner still sees the contested id, `PageIdentityService`
-     * reaches its owner check on the id_map arm (the arm its doc says an inline-binding pass can never reach),
-     * and the loser reassigns WITH its issue. The binds then replay the resolved plan in the same rank-then-frontmatter-then-path
-     * order, so the winner's key-complete bind still lands before the loser's row is rewritten.
-     */
-    private fun resolveIdentities(
-        scans: List<SourceScan>,
-        witnessed: Map<RootedPath, Witness>,
-        scannedRoots: Set<RootName>,
-        // Collects what this pass RAISED, so [rebuild] can warn about it. Deliberately not re-read from
-        // `idMap.issues()`: that decode path deliberately has no production caller, and giving it one would turn a
-        // stale mid-branch row into a crash on every rebuild.
-        raised: MutableList<IdentityIssue>,
-    ): Map<RootedPath, Identity> {
-        // The ONE supersession rule, built once and handed to BOTH the resolver below and every bind it
-        // produces - so the plan the pass makes and the writes the repository will accept cannot disagree.
-        //
-        // [Supersession.proven] is deliberately NOT passed, and the reason is an ORDERING rather than a rule: the
-        // proof-apply transaction has ALREADY run by the time we get here, so every binding a proof covered is gone
-        // from `id_map` and there is no incumbent left for that arm to displace. It would be vacuous, and a vacuous
-        // authority argument is worse than none - it reads like a working safety net.
-        //
-        // **So do not move `applyProofs` after this call and expect `proven` to carry the weight: nothing passes it.**
-        // (The order is load-bearing in the other direction too - it is what lets the tombstone arm of `ownerOf` below
-        // see THIS pass's own retirements, so a copied or restored file carrying a just-retired id is refused rather
-        // than handed a dead page's permalink.)
-        val supersession = Supersession(witnessed = witnessed.keys, scannedRoots = scannedRoots, registeredRoots = registeredRoots)
-        val claimed = HashMap<RootedPageId, RootedPath>()
-        val resolved = LinkedHashMap<RootedPath, PageIdentityService.Assignment>() // rank-then-frontmatter-then-path = the bind order
-        for (scan in scans) {
-            // Within one root, a valid frontmatter id travels with its page before an unmaterialized
-            // newcomer at the vacated path can reuse the stale id_map row. The sort is stable, so
-            // duplicate frontmatter claims retain path order, and the outer loop preserves root rank.
-            val precedenceOrdered = scan.drafts.sortedBy { draft ->
-                patcher.readIdValue(draft.bytes)?.let(PageId::of) == null
-            }
-            for (draft in precedenceOrdered) {
-                val path = RootedPath(scan.root, draft.file.path)
-                val assignment = identity.resolve(
-                    path = path,
-                    rawFrontmatterId = patcher.readIdValue(draft.bytes),
-                    // Read against the PRE-PASS id_map (nothing has been bound yet), which is what lets a beaten
-                    // id_map-only owner still see the contested id and lose it with an issue rather than silently.
-                    mappedId = idMap.find(path)?.id,
-                    // Within-run claims first, then id_map bindings classified by the shared D16 rule - and then
-                    // the TOMBSTONES, because a retired id is RESERVED FOREVER within its root: it belongs to the
-                    // page that earned it and to nothing else. All three arms are ROOT-SCOPED to this draft's own
-                    // root: a cross-root duplicate is legal, so ownerOf never returns an
-                    // owner in another root and the same id living in two roots is not a contest.
-                    ownerOf = { id ->
-                        claimed[RootedPageId(path.root, id)]
-                            ?: idMap.bindingInRoot(path.root, id)
-                                ?.takeIf { binding ->
-                                    // isLive + the path-reuse gate, as ONE shared question - see [BindingVisibility.isOwner]
-                                    // for why an unmaterialized owner carrying no `id:` is witnessing itself, not reused.
-                                    BindingVisibility.isOwner(binding, witnessed, scannedRoots, registeredRoots, supersession)
-                                }
-                                ?.path
-                            ?: idMap.retiredAt(path.root, id)?.path
-                    },
-                )
-                claimed[RootedPageId(path.root, assignment.id)] = path
-                resolved[path] = assignment
-            }
-        }
-
-        // The plan is checked BEFORE it is made durable, because a durable duplicate cannot be walked back: the
-        // winner's key-complete bind sweeps the loser's row, the loser walks off with the permalink, and
-        // `PageIndex`'s own `byRootedId` uniqueness check throws only AFTER all of that has landed - so every
-        // subsequent boot dies in the same place, on rows nothing will now rewrite. A failed pass changes
-        // nothing and carries the last-good snapshot; that is strictly the better failure.
-        requireDistinctIds(resolved.mapValues { (_, assignment) -> assignment.id })
-
-        val identities = HashMap<RootedPath, Identity>()
-        for ((path, assignment) in resolved) {
-            val materialized = assignment.source == PageIdentityService.Source.FRONTMATTER
-            // Rank-then-frontmatter-then-path order (the map's insertion order): the winner's key-complete bind sweeps the loser's
-            // stale row BEFORE the loser rebinds itself, so no page ever reads back an identity this pass has
-            // already reassigned. The ISSUE lands with the bind that supersedes it, never after it or not at all.
-            //
-            // The bind is handed the SAME [Supersession] the resolve above ran under, so a REFUSAL means the two
-            // disagreed - a rule-drift bug, not a data condition. It is checked rather than ignored for the same
-            // reason [requireDistinctIds] is: `duplicate()` reused a `mappedId` blind for a whole release and
-            // nothing between there and the disk noticed. bind() refuses BEFORE it writes anything, so the abort
-            // costs a pass and destroys nothing - which is strictly better than a silently stolen permalink.
-            val outcome = idMap.bind(path, assignment.id, materialized = materialized, supersession = supersession)
-            check(outcome is BindOutcome.Bound) {
-                "identity resolution awarded ${assignment.id.value} to ${path.path.value} in '${path.root}', and the bind " +
-                    "REFUSED it: ${(outcome as BindOutcome.Refused).let {
-                        "held by ${it.heldBy}${if (it.retired) " (retired)" else ""}"
-                    }}. " +
-                    "The resolver and the bind gate disagree about who owns that id - no supersession is safe under that."
-            }
-            assignment.issue?.let { record(raised, it) }
-            identities[path] = Identity(assignment.id, materialized)
-        }
-        return identities
-    }
-
-    /**
-     * Records an identity issue AND remembers it for the rebuild WARN. Every `idMap.record` on the rebuild path
-     * goes through here: the first version of the WARN threaded only the resolver's issues and silently omitted
-     * every alias conflict, so a corpus whose only permanent problem was a shadowed redirect stayed as invisible
-     * as before.
-     */
+    /** Records a scan or alias issue for durable storage and the rebuild warning. */
     private fun record(into: MutableList<IdentityIssue>, issue: IdentityIssue) {
         idMap.record(issue)
         into += issue
     }
 
-    /** Alias semantics for one rebuild: move detection, `redirect_from`, then the shadow sweep. */
+    /** Records move aliases, `redirect_from`, and shadow conflicts for one rebuild. */
     private fun recordAliases(
         previousUrlPaths: Map<RootedPageId, TreePath?>,
         snapshot: PageIndex,
-        // Alias conflicts are identity issues too, and just as invisible: they were recorded straight to the
-        // table, so the rebuild WARN would have claimed to report "identity issues this pass" while silently
-        // omitting every dropped move alias and shadowed redirect.
+        // Keep alias conflicts in the same raised-issue accumulator as other identity issues.
         raised: MutableList<IdentityIssue>,
     ) {
         val liveCanonicals = snapshot.byUrlPath.keys
 
-        // Move/rename/slug-change detection: a known id whose canonical (root, URL path) changed
-        // since the previous snapshot leaves the old rooted path behind as an alias — unless a live
-        // canonical now claims it (live always wins; nothing to register, the conflict is recorded
-        // instead). The alias lands in the OLD root's namespace.
-        //
-        // The previous paths come from the previous published snapshot — or, on the first rebuild
-        // after startup, from the persisted checkpoint of the last published snapshot, which closes the down-time-move
-        // gap for MATERIALIZED pages (the id travels in the file). An unmaterialized page moved
-        // while down still gets a fresh id and no alias: the accepted path-keyed-identity
-        // trade-off, restated, not fixed here.
+        // Register a changed rooted canonical path as an alias unless a live canonical shadows it. The first rebuild
+        // uses the persisted checkpoint, so materialized moves during downtime are included.
         snapshot.pages.forEach { page ->
             recordMoveAlias(page, previousUrlPaths, liveCanonicals, raised)
         }
 
-        // redirect_from registration: file-path values converted through the same URL construction,
-        // in the declaring page's root namespace.
+        // Register redirect_from values in the declaring page's root namespace.
         for (page in snapshot.pages) {
             for (raw in page.frontmatter.strings("redirect_from")) {
                 val target = CanonicalUrlBuilder.redirectUrlPath(raw)
@@ -1525,7 +634,7 @@ class IndexBuilder(
             }
         }
 
-        // Shadow sweep: an alias persisted earlier that a live canonical path claims now is dropped.
+        // Drop aliases shadowed by live canonical paths.
         for (canonical in liveCanonicals) {
             aliasRegistry.dropShadowed(canonical)?.let { dropped ->
                 record(
@@ -1546,7 +655,7 @@ class IndexBuilder(
         liveCanonicals: Set<RootedPath>,
         raised: MutableList<IdentityIssue>,
     ) {
-        // EXACT rooted match ONLY: cross-root movement is undecidable.
+        // Match the exact rooted identity; cross-root movement is not inferred.
         val priorKey = page.rooted.takeIf { it in previousUrlPaths } ?: return
         val oldUrlPath = previousUrlPaths.getValue(priorKey) ?: return
         val old = RootedPath(priorKey.root, oldUrlPath)
@@ -1596,26 +705,14 @@ class IndexBuilder(
         }
     }
 
-    private fun ScanIssue.toIdentityIssue(root: RootName): IdentityIssue = when (this) {
-        // The loser's raw name passes through verbatim — building a TreePath from it would
-        // NFC-normalize it back into keptPath, erasing the one value that distinguishes the loser.
-        is ScanIssue.PathCollision -> IdentityIssue.PathCollision(root = root, keptPath = path, loserRawName = loserRawName)
-    }
-
     private val TreePath.stem: String get() = name.removeSuffix(".md")
 
-    /**
-     * A one-line rendering for the rebuild WARN. Deliberately NOT `AdoptCommand.describe`: that is operator CLI
-     * output with its own wording contract (a smoke test greps it), this is a log line, and coupling them would
-     * make a log tweak a CLI change.
-     */
+    /** Formats one issue for the rebuild warning without coupling it to CLI output. */
     private fun IdentityIssue.summary(): String = when (this) {
-        // "resolved first", NOT "keeps it": the two are the same in the ordinary copied-file case, but when the
-        // winner goes on to RE-IDENTIFY itself the id ends up retired and nobody holds it. On a console line
-        // whose whole purpose is telling an operator where to look, "keeps it" would send them to the wrong file.
+        // Say "resolved first" because the winner may later re-identify and no longer hold the id.
         is IdentityIssue.DuplicateId ->
             "duplicate_id $id: $root:${keptPath.value} resolved first, ${reassignedPath.value} reassigned"
-        // These two carry their reason in `message`, and it is the only part that says what to DO about them.
+        // The message contains the actionable reason.
         is IdentityIssue.PatchRefused -> "patch_refused $root:${path.value}: $message"
         is IdentityIssue.RedirectConflict -> "redirect_conflict $root:${path.value}: $message"
         is IdentityIssue.PathCollision -> "path_collision $root:${keptPath.value} (excluded sibling '$loserRawName')"
@@ -1626,7 +723,7 @@ class IndexBuilder(
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        /** Enough to act on without turning a pathological corpus into a wall of log. The count is always exact. */
+        /** Bound warning detail while retaining the exact total count. */
         private const val MAX_LOGGED_ISSUES = 5
     }
 }

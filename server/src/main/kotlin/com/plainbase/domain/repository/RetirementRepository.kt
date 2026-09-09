@@ -131,7 +131,7 @@ interface RetirementRepository {
      */
     fun bindingEpoch(root: RootName): BindingEpoch
 
-    /** Every root's current token. Reporting/health; a pass stamps the value `ObservationEpoch.establish` hands it. */
+    /** Snapshot of currently stored observation tokens for reporting/health; unlike [observation], it does not establish missing rows. */
     fun observations(): Map<RootName, ObservationId>
 
     /**

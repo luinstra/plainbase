@@ -25,7 +25,7 @@ import kotlin.system.measureTimeMillis
  * **Atomic swap (no `@Volatile`, lock-free readers):** readers hammering [IndexBuilder.current]
  * during repeated rebuilds must only ever observe a COMPLETE snapshot — internally consistent maps
  * and a page count belonging to one of the two tree states, never a torn in-between. The snapshot
- * is deeply immutable and published via a single `AtomicReference.set`, so any violation here
+ * is deeply immutable and published via a single `AtomicReference.store`, so any violation here
  * means the builder leaked shared mutable state.
  *
  * **Serialized rebuilds:** [IndexBuilder.rebuild] is `@Synchronized` — unsynchronized, an
