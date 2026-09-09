@@ -1221,6 +1221,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             val builder = Class.forName("com.plainbase.domain.service.IndexBuilder")
             val fields = builder.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.associate { it.name to it.type.name }
             fields shouldBe EXPECTED_INDEX_BUILDER_FIELDS
+            builder.getDeclaredField("holder").genericType.render() shouldBe
+                "java.util.concurrent.atomic.AtomicReference<com.plainbase.domain.page.PageIndex>"
         }
     }
 
@@ -1861,8 +1863,10 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                 val loaded = Class.forName(binaryName, false, this::class.java.classLoader)
                 loaded.authorityLabel() shouldBe label
             }
-            Class.forName("com.plainbase.domain.service.IndexBuilder\$Published", false, this::class.java.classLoader)
-                .authorityNames() shouldBe setOf("Published")
+            val publishedAbsence = runCatching {
+                Class.forName("com.plainbase.domain.service.IndexBuilder\$Published", false, this::class.java.classLoader)
+            }.exceptionOrNull()
+            (publishedAbsence is ClassNotFoundException) shouldBe true
             Class.forName(
                 "com.plainbase.domain.service.IndexBuilder\$PublicationListener",
                 false,
@@ -2771,7 +2775,6 @@ private val FORBIDDEN_AUTHORITY_TYPES = mapOf(
     "com.plainbase.domain.root.ObjectManifestProvider" to "ObjectManifestProvider",
     "com.plainbase.domain.root.ObjectManifest" to "ObjectManifest",
     "com.plainbase.domain.service.IndexBuilder" to "IndexBuilder",
-    "com.plainbase.domain.service.IndexBuilder\$Published" to "Published",
     "com.plainbase.domain.service.IndexBuilder\$PublicationListener" to "PublicationListener",
     "com.plainbase.domain.service.SearchIndexer" to "SearchIndexer",
 )
@@ -4481,7 +4484,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "IdProvider.kt|IdProvider", "IdResolution.kt|IdResolution", "IdResolution.kt|IdResolution.One",
     "IdResolution.kt|IdResolution.Ambiguous", "IdResolution.kt|IdResolution.None", "IdResolution.kt|AmbiguousPageId",
     "IndexBuilder.kt|IndexBuilder", "IndexBuilder.kt|IndexBuilder.Source", "IndexBuilder.kt|IndexBuilder.PublicationListener",
-    "IndexBuilder.kt|IndexBuilder.Published", "IndexBuilder.kt|IndexBuilder.AbsencePass",
+    "IndexBuilder.kt|IndexBuilder.AbsencePass",
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitMint",
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitReads", "IndexBuilder.kt|IndexBuilder.AbsencePass.Companion",
     "IndexBuilder.kt|IndexBuilder.Companion",

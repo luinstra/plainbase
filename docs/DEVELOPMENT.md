@@ -129,3 +129,47 @@ summary, §5.8):
 Native-image constraints are load-bearing stack choices, not preferences:
 Ktor **CIO** (never Netty), **kotlinx.serialization** only (no Jackson/Gson),
 **SQLDelight** (not Exposed), Koin **constructor DSL** only.
+
+### Indexing and direct snapshot publication
+
+The indexing coordinator performs one serialized pass per rebuild. Its current
+sequence is: capture the previous snapshot and checkpoint, capture observation
+and binding freshness, read each source eagerly, establish witnesses and
+confirmation data, mint proof tokens, apply those proofs, persist and accumulate
+filtered scan issues, resolve identity, assemble the immutable `PageIndex`, register move
+aliases, atomically store that single snapshot, then apply limbo/diagnostic
+effects and invoke publication listeners. A successful empty rebuild is still
+a real snapshot; the initial `PageIndex.EMPTY` value is only the pre-build
+sentinel.
+
+`IndexSourceReader` owns source materialization and buffers scan issues; the
+coordinator records those buffered issues only after every source
+materialization returns.
+`AbsencePass` owns the fixed freshness capture and proof-source plumbing;
+`IndexIdentityAssignments` owns identity resolution and binding; and
+`IndexSnapshotAssembler` owns immutable page/index assembly. Alias, checkpoint,
+and search collaborators retain their own ports and persistence responsibilities.
+All non-null scans, including incomplete scans, contribute their materialized
+data and diagnostics; a skipped source is null, so its last-good section is
+carried forward and does not become deletion authority. A matching-root object
+scan also requires selected page reads to be complete before it can support
+object-list absence evidence.
+
+The capture still performs the required per-root singular observation and
+binding-epoch reads, and required live-authority checks remain. The old late bulk `observations()` read was unused
+publication metadata and is gone; no rollback path or new authority policy was
+introduced. The holder is the one atomic publication point, and listener
+failures leave that published snapshot standing. Targeted `reindex` loads one
+previous snapshot, stores its one-page replacement before `SearchIndexer.syncPage`,
+and deliberately does not fire the full checkpoint/search listener chain; a
+targeted search-sync failure propagates after publication.
+
+An unmarked live-root scan failure is skipped and retried on the next pass; a
+root marked unavailable is sticky until restart. Deferred per-page recovery is
+separate from that availability state. The safety rule remains that only explicit
+EPOCH, OBJECT_LIST, GIT, or accepted OPERATOR authority can retire an absent
+binding. See [ADR-0011](decisions/0011-multi-root-document-directories.md) and
+[ADR-0012](decisions/0012-per-root-page-identity.md) for tracked rationale;
+the local/gitignored absence-authority plan
+`../.crew/plans/draft-implementation-plans-to-get-plainbase-design.md` and phase
+records under `.crew/reports/` are supplemental execution context.

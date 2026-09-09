@@ -75,35 +75,34 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * unavailability would prescribe a restart nobody needs. It skips, carries, WARNs loudly, and the next pass
  * retries it.
  *
- * **A scan proves the pages it READ. It does not prove the pages it did not read are DELETED (the safety floor).** That is a
- * theorem, not a bug: an empty mount point, a deliberately emptied root, a partially-restored tree and a decoy
- * tree produce IDENTICAL observations, and four rounds were spent computing an answer to a question that has
- * none. So this pass no longer INFERS a deletion from ANYTHING - not from a zero-page scan, not from a corpus
- * this process once saw (a snapshot from T cashed at T+n; with ext4 inode reuse it handed a REAPED corpus full
- * authority), not from a page "located" in another root (which cannot tell a MOVE from a COPY), and above all
- * not from `drafts.isNotEmpty()`, under which ONE decoy file bought authority over a thousand rows. The whole
- * admission apparatus is DELETED, and nothing replaces it, because there is nothing honest to replace it with.
- * ([corpusSeen] survives with its teeth pulled: it decides 503-vs-404 and it decides nothing else.)
+ * **A scan proves the pages it READ. It does not prove the pages it did not read are DELETED (the safety floor).** An
+ * empty mount point, a deliberately emptied root, a partially-restored tree and a decoy tree produce identical
+ * observations, so none of them grants deletion authority. Inferred absence is admitted only through an
+ * [AbsenceProof] minted by EPOCH, OBJECT_LIST, or GIT; accepted OPERATOR decisions enter through their own path.
+ * Zero-page scans, [corpusSeen], pages found in another root, and `drafts.isNotEmpty()` remain serving or binding
+ * inputs only and never become proof. Absence from the [Witness] map therefore grants no authority by itself without
+ * an independent valid proof; it remains limbo, not deletion.
  *
- * What a pass publishes instead is what it actually SAW: a [Witness] per rooted path it READ, carrying the id
- * that file turned out to hold. Absence from that map is NOT a licence - it means "we did not read this",
- * which is exactly as consistent with an unplugged disk as with a delete. The ONLY licence to delete is an
- * [AbsenceProof].
+ * During a pass, the coordinator keeps what it actually SAW as a [Witness] per rooted path it READ, carrying the id
+ * that file turned out to hold. Witnesses are pass-local evidence used by proof application, identity, and limbo;
+ * they are not published metadata. Absence from that map is NOT a licence - it means "we did not read this", which
+ * is exactly as consistent with an unplugged disk as with a delete. The ONLY licence to delete is an [AbsenceProof].
  *
  * **The observation-epoch proof source mints the first one ([AbsencePass.mintEpoch]), making an ordinary delete converge again.** An
  * [ObservationEpoch] that has watched a tree WITHOUT A GAP since it read a page - fully covered, identity-stable,
  * scanned end to end - and now does not find it has evidence rather than an inference, and evidence is the only
- * thing that has ever been allowed to delete anything here. Every other absence still ends in LIMBO ([RootLimbo]):
+ * thing that has ever been allowed to delete anything here. Every other absence without an independent valid proof
+ * still ends in LIMBO ([RootLimbo]):
  * carried, served as "come back later", never destroyed, self-healing the moment the page is witnessed again. The
  * residue is honest and bounded - a delete storm past the watcher's queue bound is observationally identical to an
  * unmount, so the epoch refuses to guess and its tail waits for `reconcile` or for the git oracle.
  *
- * The checkpoint replace, the id_map supersessions ([Supersession]) and the dirty-page reconcile consume the
- * pass-local bindings a proof actually RETIRED, which at the safety floor is the empty set. Search sync and the
- * search generation swap instead read current durable retired-unbound authority independently, so either operation
- * can recover a missed publication and suppress stale snapshot input.
+ * The checkpoint listener consumes the pass-local bindings a proof actually RETIRED, while identity binding uses the
+ * witnessed and scanned-root inputs through [Supersession]. Search sync and the search generation swap instead read
+ * current durable retired-unbound authority independently, so either operation can recover a missed publication and
+ * suppress stale snapshot input.
  *
- * **One pass:** each file's bytes are read exactly once ([ContentStore.read]), each page's
+ * **One pass:** each file's bytes are read exactly once ([ContentStore.readClassified]), each page's
  * frontmatter values are parsed exactly once ([FrontmatterParser], over the already-read bytes —
  * render only re-detects the block boundary, never the values), and each page is rendered exactly
  * once ([MarkdownRenderer.render]). The same in-hand bytes also yield the page's verbatim
@@ -146,11 +145,13 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * **Publication listeners:** after the snapshot publishes, [rebuild],
  * still inside its serialized section — synchronously invokes every registered
  * [PublicationListener], so listeners (checkpoint replace, search sync) can never interleave or
- * run against a superseded snapshot. A throwing listener is caught and logged here: the publish
- * has already happened and stands, the remaining listeners still run, and nothing propagates to
- * any [rebuild] caller (a failed search sync is repaired for free by the next sync's engine-truth
- * diff). The save path calls [rebuild], so a saved page is searchable before the save
- * returns — this listener chain IS that hook; nothing else to build.
+ * run against a superseded snapshot. An [Exception] from a listener is caught and logged here: the
+ * publish has already happened and stands, and the remaining listeners still run. A JVM [Error]
+ * propagates. A failed search sync is repaired for free by the next sync's engine-truth diff.
+ * Ordinary edits reach targeted [reindex] through [WritePipeline], where propagating [SearchIndexer.syncPage]
+ * failure becomes `WrittenButUnindexed`; new-page creation runs a full [rebuild] and then targeted [reindex].
+ * The best-effort full-rebuild listener path therefore does not by itself promise searchability before a save
+ * returns. The full listener chain remains the publication hook for rebuild callers; no rollback is attempted.
  */
 class IndexBuilder(
     sources: List<Source>,
@@ -285,39 +286,16 @@ class IndexBuilder(
      */
     private val corpusSeen = mutableSetOf<RootName>()
 
-    /**
-     * What a pass PUBLISHES - swapped as ONE value, because they are one fact. Reading the snapshot from one
-     * field and its authority from another could pair a fresh snapshot with a stale authority, i.e. hand a
-     * consumer permission to delete rows on the strength of a pass that never ran.
-     *
-     * [witnessed] is what the pass actually SAW: every rooted path it READ, and the id that file carried
-     * (null = it carries none). Absence from this map is NOT a licence.
-     *
-     * [proofs] is the proof material considered by this pass and may come from any valid proof source. The applied
-     * rooted ids remain pass-local for non-search projections; the search projection reads current durable retirement
-     * authority when it runs rather than treating these retained proof objects as its current delete set.
-     *
-     * [observedAt] stamps each root's durable freshness token, so a proof minted from this observation can be
-     * checked against a token that a restart, a break or a rebind may since have revoked.
-     */
-    private data class Published(
-        val snapshot: PageIndex,
-        val witnessed: Map<RootedPath, Witness>,
-        val proofs: List<AbsenceProof>,
-        val observedAt: Map<RootName, ObservationId>,
-    )
-
-    private val holder = AtomicReference(
-        Published(PageIndex.EMPTY, witnessed = emptyMap(), proofs = emptyList(), observedAt = emptyMap()),
-    )
+    /** The one atomically published snapshot; authority evidence remains pass-local in the coordinator and helpers. */
+    private val holder = AtomicReference<PageIndex>(PageIndex.EMPTY)
 
     /** The published snapshot — always complete and consistent ([PageIndex.EMPTY] before the first build). */
-    val current: PageIndex get() = holder.load().snapshot
+    val current: PageIndex get() = holder.load()
 
     /** Runs the full pass and atomically publishes (and returns) the new snapshot (serialized — see class doc). */
     @Synchronized
     fun rebuild(): PageIndex {
-        val previous = holder.load().snapshot
+        val previous = holder.load()
         // Checkpoint as previous snapshot: the first rebuild after startup (holder still the EMPTY
         // sentinel) compares against the persisted checkpoint of the last published snapshot, so a
         // move performed while the server was down still records its alias. Every later rebuild
@@ -409,14 +387,7 @@ class IndexBuilder(
             previous = previous,
         )
         recordAliases(previousUrlPaths, snapshot, raisedIssues)
-        holder.store(
-            Published(
-                snapshot = snapshot,
-                witnessed = witnessed,
-                proofs = proofs,
-                observedAt = retirements.observations(),
-            ),
-        )
+        holder.store(snapshot)
         finishRebuild(snapshot, retired, witnessed, scannedRoots, raisedIssues)
         return snapshot
     }
@@ -895,8 +866,8 @@ class IndexBuilder(
     @Synchronized
     fun rebuildSearchIndex(): Int {
         val indexer = requireNotNull(searchIndexer) { "rebuildSearchIndex() needs a SearchIndexer; none was wired into this IndexBuilder" }
-        val published = holder.load()
-        return indexer.rebuild(published.snapshot)
+        val snapshot = holder.load()
+        return indexer.rebuild(snapshot)
     }
 
     /**
@@ -949,8 +920,7 @@ class IndexBuilder(
      */
     @Synchronized
     fun reindex(target: RootedPath): PageIndex {
-        val published = holder.load()
-        val previous = published.snapshot
+        val previous = holder.load()
         val page = previous.byPath[target]
             ?: error("reindex($target): page not in the published snapshot — a save-path invariant violation")
         val source = sourcesByRoot[target.root]
@@ -1010,10 +980,10 @@ class IndexBuilder(
                 }
             },
         )
-        // Preserve the last full-pass witness, proofs, and observation stamps: targeted reindex republishes ONE page
-        // of an already-scanned root and creates no new full-pass authority. Search checks current durable point
-        // authority independently before indexing this page.
-        holder.store(published.copy(snapshot = snapshot))
+        // Targeted reindex republishes ONE page of an already-scanned root and creates no new full-pass authority.
+        // Witnesses, proofs, and observation stamps remain pass-local; search checks current durable point authority
+        // independently before indexing this page.
+        holder.store(snapshot)
         logger.info {
             "reindexed page ${reindexed.id.value} (${target.path.value} in '${target.root}'); ${snapshot.pages.size} page(s) published"
         }
