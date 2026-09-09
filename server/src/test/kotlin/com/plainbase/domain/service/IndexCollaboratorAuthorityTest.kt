@@ -3,13 +3,20 @@ package com.plainbase.domain.service
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.BindOutcome
+import com.plainbase.domain.repository.IdMapRepository
+import com.plainbase.domain.repository.RetirementRepository
+import com.plainbase.domain.repository.Supersession
 import com.plainbase.domain.root.Root
 import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootedPath
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import java.lang.reflect.GenericArrayType
+import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Type
@@ -991,7 +998,9 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             "availability" to RootAvailability::class.java.name,
             "rootLoss" to RootLossClassifier::class.java.name,
         )
-        if (instanceFields != expectedInstanceFields) {
+        val sortedInstanceFields = instanceFields.sortedWith(compareBy({ it.first }, { it.second }))
+        val sortedExpectedInstanceFields = expectedInstanceFields.sortedWith(compareBy({ it.first }, { it.second }))
+        if (sortedInstanceFields != sortedExpectedInstanceFields) {
             violations += "instance fields=$instanceFields, expected=$expectedInstanceFields"
         }
         val expectedReaderStaticFields = mapOf(
@@ -1210,6 +1219,220 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             val fields = builder.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.associate { it.name to it.type.name }
             fields shouldBe EXPECTED_INDEX_BUILDER_FIELDS
         }
+    }
+
+    test("identity helper direct surface") {
+        val helper = Class.forName("com.plainbase.domain.service.IndexIdentityAssignments")
+        val constructors = helper.declaredConstructors.toList()
+        val expectedConstructor = listOf(
+            com.plainbase.domain.repository.IdMapRepository::class.java,
+            PageIdentityService::class.java,
+            FrontmatterPatcher::class.java,
+        )
+        val violations = mutableListOf<String>()
+        if (constructors.size != 1) {
+            violations += "constructor count=${constructors.size}, expected=1"
+        }
+        constructors.forEachIndexed { index, constructor ->
+            if (constructor.parameterTypes.toList() != expectedConstructor) {
+                violations += "constructor[$index] types=${constructor.parameterTypes.toList()}, expected=$expectedConstructor"
+            }
+            val directForbidden = constructor.parameterTypes.drop(1).mapNotNull { type -> type.authorityLabel() } +
+                constructor.genericParameterTypes.drop(1).flatMap { it.authorityNames() + it.deferredNames() }
+            if (directForbidden.isNotEmpty()) violations += "constructor[$index] forbidden types=$directForbidden"
+        }
+        val instanceFields = helper.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.map { it.name to it.type.name }
+        val expectedInstanceFields = listOf(
+            "idMap" to com.plainbase.domain.repository.IdMapRepository::class.java.name,
+            "identity" to PageIdentityService::class.java.name,
+            "patcher" to FrontmatterPatcher::class.java.name,
+        )
+        val sortedInstanceFields = instanceFields.sortedWith(compareBy({ it.first }, { it.second }))
+        val sortedExpectedInstanceFields = expectedInstanceFields.sortedWith(compareBy({ it.first }, { it.second }))
+        if (sortedInstanceFields != sortedExpectedInstanceFields) {
+            violations += "instance fields=$instanceFields, expected=$expectedInstanceFields"
+        }
+        if (helper.declaredFields.any { Modifier.isStatic(it.modifiers) }) {
+            violations += "static fields=${helper.declaredFields.filter { Modifier.isStatic(it.modifiers) }.map { it.name }}"
+        }
+        val expectedStaticMethods = setOf(
+            "resolveIdentities\$lambda\$1(java.util.HashMap,com.plainbase.domain.root.RootedPath," +
+                "com.plainbase.domain.service.IndexIdentityAssignments,java.util.Map,java.util.Set,java.util.Set," +
+                "com.plainbase.domain.repository.Supersession,com.plainbase.domain.page.PageId):" +
+                "com.plainbase.domain.root.RootedPath",
+            "access\$getPatcher\$p(com.plainbase.domain.service.IndexIdentityAssignments):" +
+                "com.plainbase.domain.service.FrontmatterPatcher",
+        )
+        val actualStaticMethods = helper.declaredMethods.filter { Modifier.isStatic(it.modifiers) }.map { method ->
+            "${method.name}(${method.parameterTypes.joinToString(",") { it.name }}):${method.returnType.name}"
+        }.toSet()
+        if (actualStaticMethods != expectedStaticMethods) {
+            violations += "static methods=$actualStaticMethods, expected=$expectedStaticMethods"
+        }
+        val instanceMethods = helper.declaredMethods.filter { !Modifier.isStatic(it.modifiers) && !Modifier.isPrivate(it.modifiers) }
+        if (instanceMethods.map { it.name } != listOf("resolveIdentities")) {
+            violations += "externally callable instance methods=${instanceMethods.map { it.name }}, expected=[resolveIdentities]"
+        }
+        val resolve = instanceMethods.singleOrNull { it.name == "resolveIdentities" }
+        if (resolve != null) {
+            val expectedParameters = listOf(
+                "java.util.List<com.plainbase.domain.service.SourceScan>",
+                "java.util.Map<com.plainbase.domain.root.RootedPath,com.plainbase.domain.root.Witness>",
+                "java.util.Set<com.plainbase.domain.root.RootName>",
+                "java.util.Set<com.plainbase.domain.root.RootName>",
+                "java.util.List<com.plainbase.domain.model.IdentityIssue>",
+            )
+            if (resolve.parameterTypes.toList() != listOf(
+                    Class.forName("java.util.List"),
+                    Class.forName("java.util.Map"),
+                    Class.forName("java.util.Set"),
+                    Class.forName("java.util.Set"),
+                    Class.forName("java.util.List"),
+                )
+            ) {
+                violations += "resolve parameters=${resolve.parameterTypes.toList()}"
+            }
+            if (resolve.returnType != Class.forName("java.util.Map")) {
+                violations += "resolve return=${resolve.returnType.name}, expected=java.util.Map"
+            }
+            if (resolve.genericParameterTypes.map { it.render() } != expectedParameters ||
+                resolve.genericReturnType.render() !=
+                "java.util.Map<com.plainbase.domain.root.RootedPath,com.plainbase.domain.service.Identity>"
+            ) {
+                violations += "resolve generic signature=${resolve.genericParameterTypes.map { it.render() }} -> " +
+                    "${resolve.genericReturnType.render()}"
+            }
+        }
+        withClue("identity helper direct surface: ${violations.joinToString("; ")}") {
+            violations.shouldBeEmpty()
+        }
+        helper.enclosingClass shouldBe null
+        helper.declaredClasses.toList() shouldBe emptyList()
+
+        val source = Files.readString(serviceRoot.resolve("IndexIdentityAssignments.kt"))
+        sourcePublicSignatureAuthorityViolations("IndexIdentityAssignments.kt", source).shouldBeEmpty()
+        val sourceUnit = KotlinSourceUnit("IndexIdentityAssignments.kt", source)
+        val expectedConstructorTokens = listOf(
+            "internal", "class", "IndexIdentityAssignments", "(",
+            "private", "val", "idMap", ":", "IdMapRepository", ",",
+            "private", "val", "identity", ":", "PageIdentityService", ",",
+            "private", "val", "patcher", ":", "FrontmatterPatcher", ",", ")",
+        )
+        val expectedResolveTokens = listOf(
+            "fun", "resolveIdentities", "(", "scans", ":", "List", "<", "SourceScan", ">", ",",
+            "witnessed", ":", "Map", "<", "RootedPath", ",", "Witness", ">", ",",
+            "scannedRoots", ":", "Set", "<", "RootName", ">", ",",
+            "registeredRoots", ":", "Set", "<", "RootName", ">", ",",
+            "raised", ":", "MutableList", "<", "IdentityIssue", ">", ",", ")", ":", "Map", "<",
+            "RootedPath", ",", "Identity", ">",
+        )
+        sourceUnit.readerSourceSchemaViolations(
+            expectedConstructorTokens,
+            expectedResolveTokens,
+            className = "IndexIdentityAssignments",
+            operationName = "resolveIdentities",
+            diagnosticLabel = "identity",
+        ).shouldBeEmpty()
+
+        val identitySchemaFixture = """
+            package com.plainbase.domain.service
+            internal class IndexIdentityAssignments(
+                private val idMap: IdMapRepository,
+                private val identity: PageIdentityService,
+                private val patcher: FrontmatterPatcher,
+            ) {
+                fun resolveIdentities(
+                    scans: List<SourceScan>,
+                    witnessed: Map<RootedPath, Witness>,
+                    scannedRoots: Set<RootName>,
+                    registeredRoots: Set<RootName>,
+                    raised: MutableList<IdentityIssue>,
+                ): Map<RootedPath, Identity> = TODO()
+            }
+        """.trimIndent()
+        KotlinSourceUnit("identity-schema-positive.kt", identitySchemaFixture).readerSourceSchemaViolations(
+            expectedConstructorTokens,
+            expectedResolveTokens,
+            className = "IndexIdentityAssignments",
+            operationName = "resolveIdentities",
+            diagnosticLabel = "identity",
+        ).shouldBeEmpty()
+        fun assertIdentitySchemaMismatch(schemaViolations: List<String>, expectedPrefix: String) {
+            schemaViolations.size shouldBe 1
+            schemaViolations.single().startsWith(expectedPrefix) shouldBe true
+        }
+        listOf(
+            "idMap" to "IdMapRepository",
+            "identity" to "PageIdentityService",
+            "patcher" to "FrontmatterPatcher",
+        ).forEach { (name, type) ->
+            val nullable = identitySchemaFixture.replace("private val $name: $type", "private val $name: $type?")
+            assertIdentitySchemaMismatch(
+                KotlinSourceUnit("identity-nullable-$name.kt", nullable).readerSourceSchemaViolations(
+                    expectedConstructorTokens,
+                    expectedResolveTokens,
+                    className = "IndexIdentityAssignments",
+                    operationName = "resolveIdentities",
+                    diagnosticLabel = "identity",
+                ),
+                "identity constructor tokens=",
+            )
+        }
+        val missingRegistered = identitySchemaFixture.replace("registeredRoots: Set<RootName>,", "")
+        assertIdentitySchemaMismatch(
+            KotlinSourceUnit("identity-missing-registered.kt", missingRegistered).readerSourceSchemaViolations(
+                expectedConstructorTokens,
+                expectedResolveTokens,
+                className = "IndexIdentityAssignments",
+                operationName = "resolveIdentities",
+                diagnosticLabel = "identity",
+            ),
+            "identity resolveIdentities tokens=",
+        )
+        val swappedRegistered = identitySchemaFixture
+            .replace("scannedRoots", "__SCANNED_ROOTS__")
+            .replace("registeredRoots", "scannedRoots")
+            .replace("__SCANNED_ROOTS__", "registeredRoots")
+        assertIdentitySchemaMismatch(
+            KotlinSourceUnit("identity-swapped-registered.kt", swappedRegistered).readerSourceSchemaViolations(
+                expectedConstructorTokens,
+                expectedResolveTokens,
+                className = "IndexIdentityAssignments",
+                operationName = "resolveIdentities",
+                diagnosticLabel = "identity",
+            ),
+            "identity resolveIdentities tokens=",
+        )
+        listOf(
+            "nullable-result" to "Map<RootedPath, Identity>?",
+            "wrong-result" to "Map<RootedPath, String>",
+        ).forEach { (label, resultType) ->
+            val wrongResult = identitySchemaFixture.replace("Map<RootedPath, Identity>", resultType)
+            assertIdentitySchemaMismatch(
+                KotlinSourceUnit("identity-$label.kt", wrongResult).readerSourceSchemaViolations(
+                    expectedConstructorTokens,
+                    expectedResolveTokens,
+                    className = "IndexIdentityAssignments",
+                    operationName = "resolveIdentities",
+                    diagnosticLabel = "identity",
+                ),
+                "identity resolveIdentities tokens=",
+            )
+        }
+        val extraCallback = identitySchemaFixture.replace(
+            "private val patcher: FrontmatterPatcher,",
+            "private val patcher: FrontmatterPatcher,\n        private val callback: () -> Unit,",
+        )
+        assertIdentitySchemaMismatch(
+            KotlinSourceUnit("identity-extra-callback.kt", extraCallback).readerSourceSchemaViolations(
+                expectedConstructorTokens,
+                expectedResolveTokens,
+                className = "IndexIdentityAssignments",
+                operationName = "resolveIdentities",
+                diagnosticLabel = "identity",
+            ),
+            "identity constructor tokens=",
+        )
     }
 
     test("passive schema") {
@@ -1447,6 +1670,8 @@ class IndexCollaboratorAuthorityTest : FunSpec({
             Root::class.java,
             ContentStore::class.java,
             HistoryProvider::class.java,
+            PageIdentityService::class.java,
+            FrontmatterPatcher::class.java,
         )
         dependencies.forEach { dependency ->
             val violations = dependency.publicApiAuthorityViolations(productionIndex)
@@ -1483,6 +1708,13 @@ class IndexCollaboratorAuthorityTest : FunSpec({
         )
         withClue("the dependency audit entry point must connect reached JVM types to exact source signatures: $erasedFixtureViolations") {
             erasedFixtureSourceViolations shouldBe expectedErasedFixtureSourceViolations
+        }
+        val admittedErasedFixtureViolations = ErasedSignatureFixture::class.java
+            .publicApiAuthorityViolations(erasedFixtureIndex, allowForbiddenEntry = true)
+        val admittedErasedFixtureSourceViolations = admittedErasedFixtureViolations
+            .filter { it.startsWith("${erasedFixtureSource.path}:") }
+        withClue("entry-only admission must preserve exact reached source diagnostics: $admittedErasedFixtureViolations") {
+            admittedErasedFixtureSourceViolations shouldBe expectedErasedFixtureSourceViolations
         }
         val inferredFixtureSource = KotlinSourceUnit(
             "com/plainbase/domain/service/InferredErasedSignatureFixture.kt",
@@ -1558,6 +1790,40 @@ class IndexCollaboratorAuthorityTest : FunSpec({
         }
         withClue("safe substituted generic API remains clean") {
             InheritedSafeFixture::class.java.publicApiAuthorityViolations().shouldBeEmpty()
+        }
+        withClue("IdMapRepository's own public port is admitted only as the traversal seed") {
+            com.plainbase.domain.repository.IdMapRepository::class.java
+                .publicApiAuthorityViolations(allowForbiddenEntry = true)
+                .shouldBeEmpty()
+            com.plainbase.domain.repository.IdMapRepository::class.java
+                .publicApiAuthorityViolations() shouldBe setOf("IdMapRepository")
+        }
+        withClue("entry-only admission still rejects forbidden types on public API edges") {
+            IdMapEntryAuthorityFixture::class.java
+                .publicApiAuthorityViolations(allowForbiddenEntry = true) shouldBe setOf("RetirementRepository")
+        }
+        withClue("ordinary IdMapRepository exposure remains rejected") {
+            ListAuthorityFixture::class.java.publicApiAuthorityViolations() shouldBe setOf("IdMapRepository")
+        }
+        withClue("the real IdMapRepository seed is clean only with its exact bridge receiver admission") {
+            IdMapRepository::class.java.publicApiAuthorityViolations(productionIndex, allowForbiddenEntry = true)
+                .shouldBeEmpty()
+        }
+        withClue("synthetic accessors remain part of the public authority graph") {
+            val fixture = SyntheticAccessorAuthorityFixture::class.java
+            val accessors = fixture.declaredMethods.filter { it.name == "access\$getRepository\$p" }
+            accessors.size shouldBe 1
+            val accessor = accessors.single()
+            accessor.isSynthetic shouldBe true
+            Modifier.isPublic(accessor.modifiers) shouldBe true
+            Modifier.isStatic(accessor.modifiers) shouldBe true
+            accessor.parameterTypes.toList() shouldBe listOf(fixture)
+            accessor.returnType shouldBe RetirementRepository::class.java
+            fixture.declaredMethods.filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
+                .flatMap { method -> listOf(method.genericReturnType) + method.genericParameterTypes.toList() }
+                .flatMap { it.authorityNames() }
+                .shouldBeEmpty()
+            fixture.publicApiAuthorityViolations() shouldBe setOf("RetirementRepository")
         }
     }
 
@@ -1825,20 +2091,23 @@ private fun KotlinSourceUnit.topLevelDeclarationTokenSequences(): Map<String, Li
 private fun KotlinSourceUnit.readerSourceSchemaViolations(
     expectedConstructorTokens: List<String>,
     expectedReadTokens: List<String>,
+    className: String = "IndexSourceReader",
+    operationName: String = "read",
+    diagnosticLabel: String = "reader",
 ): List<String> {
     val readerClasses = indexed.declarations.filter {
-        it.kind == SourceDeclarationKind.CLASS && it.name == "IndexSourceReader" && it.ownerQualifiedName == null
+        it.kind == SourceDeclarationKind.CLASS && it.name == className && it.ownerQualifiedName == null
     }
     val reader = readerClasses.singleOrNull()
-        ?: return listOf("reader source has ${readerClasses.size} direct IndexSourceReader declarations, expected=1")
+        ?: return listOf("$diagnosticLabel source has ${readerClasses.size} direct $className declarations, expected=1")
     val readMethods = indexed.declarations.filter {
         it.kind == SourceDeclarationKind.FUNCTION &&
-            it.name == "read" &&
+            it.name == operationName &&
             it.ownerQualifiedName == reader.qualifiedName &&
             it.visibility == "public"
     }
     if (readMethods.size != 1) {
-        return listOf("reader source has ${readMethods.size} direct public read declarations, expected=1")
+        return listOf("$diagnosticLabel source has ${readMethods.size} direct public $operationName declarations, expected=1")
     }
     fun headerTokens(declaration: LocatedSourceDeclaration): List<String> {
         var start = declaration.tokenIndex
@@ -1849,10 +2118,10 @@ private fun KotlinSourceUnit.readerSourceSchemaViolations(
     val actualReadTokens = headerTokens(readMethods.single())
     return buildList {
         if (actualConstructorTokens != expectedConstructorTokens) {
-            add("reader constructor tokens=$actualConstructorTokens, expected=$expectedConstructorTokens")
+            add("$diagnosticLabel constructor tokens=$actualConstructorTokens, expected=$expectedConstructorTokens")
         }
         if (actualReadTokens != expectedReadTokens) {
-            add("reader read tokens=$actualReadTokens, expected=$expectedReadTokens")
+            add("$diagnosticLabel $operationName tokens=$actualReadTokens, expected=$expectedReadTokens")
         }
     }
 }
@@ -2121,13 +2390,36 @@ private val FORBIDDEN_AUTHORITY_TYPES = mapOf(
 
 private fun Class<*>.authorityLabel(): String? = FORBIDDEN_AUTHORITY_TYPES[name]
 
-private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex? = null): Set<String> {
+private fun Method.isAdmittedIdMapBindDefaultReceiver(): Boolean =
+    declaringClass == IdMapRepository::class.java &&
+        name == "bind\$default" &&
+        Modifier.isPublic(modifiers) &&
+        Modifier.isStatic(modifiers) &&
+        isSynthetic &&
+        parameterTypes.toList() == listOf(
+            IdMapRepository::class.java,
+            RootedPath::class.java,
+            PageId::class.java,
+            java.lang.Boolean.TYPE,
+            Supersession::class.java,
+            java.lang.Integer.TYPE,
+            Any::class.java,
+        ) &&
+        returnType == BindOutcome::class.java
+
+private fun Method.authorityGenericParameterTypes(): List<Type> =
+    genericParameterTypes.drop(if (isAdmittedIdMapBindDefaultReceiver()) 1 else 0)
+
+private fun Class<*>.publicApiAuthorityViolations(
+    sourceIndex: KotlinSourceIndex? = null,
+    allowForbiddenEntry: Boolean = false,
+): Set<String> {
     val violations = mutableSetOf<String>()
     data class VisitKey(val type: Class<*>, val bindings: String)
     val visited = mutableSetOf<VisitKey>()
     val visitedTypeEdges = mutableSetOf<String>()
     val reachedTypeNames = mutableSetOf<String>()
-    lateinit var visitClass: (Class<*>, Map<TypeVariable<*>, Type>, String) -> Unit
+    lateinit var visitClass: (Class<*>, Map<TypeVariable<*>, Type>, String, Boolean) -> Unit
 
     fun isLibrary(type: Class<*>): Boolean = type.name.startsWith("java.") || type.name.startsWith("kotlin.") ||
         type.name.startsWith("io.github.") || type.name.startsWith("org.jetbrains.")
@@ -2143,7 +2435,7 @@ private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex
                 if (type.isArray) {
                     visit(type.componentType, bindings, "$origin[]")
                 } else {
-                    visitClass(type, bindings, origin)
+                    visitClass(type, bindings, origin, false)
                 }
             }
             is ParameterizedType -> {
@@ -2152,7 +2444,7 @@ private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex
                     visit(argument, bindings, "$origin arg[$index]")
                 }
                 val raw = type.rawType as? Class<*>
-                if (raw != null) visitClass(raw, bindingsFor(type, bindings), origin)
+                if (raw != null) visitClass(raw, bindingsFor(type, bindings), origin, false)
             }
             is WildcardType -> {
                 type.upperBounds.forEach { visit(it, bindings, "$origin upper") }
@@ -2162,8 +2454,8 @@ private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex
         }
     }
 
-    visitClass = fun(type: Class<*>, bindings: Map<TypeVariable<*>, Type>, origin: String) {
-        type.authorityLabel()?.let {
+    visitClass = fun(type: Class<*>, bindings: Map<TypeVariable<*>, Type>, origin: String, entry: Boolean) {
+        type.authorityLabel()?.takeUnless { entry }?.let {
             violations += it
             return
         }
@@ -2174,7 +2466,7 @@ private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex
         type.fields.filter { Modifier.isPublic(it.modifiers) }.forEach { visit(it.genericType, bindings, "$origin field ${it.name}") }
         type.methods.filter { Modifier.isPublic(it.modifiers) }.forEach { method ->
             visit(method.genericReturnType, bindings, "$origin method ${method.name} return")
-            method.genericParameterTypes.forEachIndexed { index, parameter ->
+            method.authorityGenericParameterTypes().forEachIndexed { index, parameter ->
                 visit(parameter, bindings, "$origin method ${method.name} arg[$index]")
             }
         }
@@ -2182,7 +2474,7 @@ private fun Class<*>.publicApiAuthorityViolations(sourceIndex: KotlinSourceIndex
         type.genericInterfaces.forEach { visit(it, bindings, "$origin interface") }
     }
 
-    visitClass(this, emptyMap(), name)
+    visitClass(this, emptyMap(), name, allowForbiddenEntry)
     sourceIndex?.publicSignatureAuthorityViolations(reachedTypeNames)?.let { violations += it }
     return violations
 }
@@ -2976,6 +3268,7 @@ private val ADMITTED_INDEXING_PATHS = setOf(
     "com/plainbase/domain/service/IndexInputs.kt",
     "com/plainbase/domain/service/IndexSourceReader.kt",
     "com/plainbase/domain/service/IndexBuilder.kt",
+    "com/plainbase/domain/service/IndexIdentityAssignments.kt",
 )
 
 private val ERASED_AUTHORITY_FQNS = mapOf(
@@ -3553,6 +3846,16 @@ private class PrivateAuthorityStorageFixture(private val repository: com.plainba
     fun safe(): String = repository.toString()
 }
 
+private class IdMapEntryAuthorityFixture {
+    fun exposed(): List<com.plainbase.domain.repository.RetirementRepository> = emptyList()
+}
+
+private class SyntheticAccessorAuthorityFixture(private val repository: com.plainbase.domain.repository.RetirementRepository) {
+    class Reader {
+        fun text(owner: SyntheticAccessorAuthorityFixture): String = owner.repository.toString()
+    }
+}
+
 private class DeferredFixture {
     fun lazyValue(): Lazy<Draft> = lazy { error("fixture only") }
     fun sequenceValue(): Sequence<Draft> = emptySequence()
@@ -3638,7 +3941,8 @@ private class LocalValueOrderFixture {
 private val EXPECTED_SERVICE_PATHS = setOf(
     "AbsenceClassifier.kt", "AdminFacade.kt", "AdoptionPass.kt", "AgentDirectCommitDecision.kt", "ApiTokenService.kt",
     "ApplyDisposition.kt", "BindingVisibility.kt", "CanonicalUrlBuilder.kt", "CitationFactory.kt", "FrontmatterPatcher.kt",
-    "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexInputs.kt", "IndexSourceReader.kt", "LinkChecker.kt",
+    "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt", "IndexSourceReader.kt",
+    "LinkChecker.kt",
     "LinkResolver.kt", "LoginService.kt", "MutatingFacade.kt", "PageIdentityService.kt", "PageRootResolver.kt",
     "PageService.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
     "ProposalIdProvider.kt", "ProposalService.kt", "ReadFacade.kt", "RebuildScheduler.kt", "RootLossClassifier.kt",
@@ -3669,6 +3973,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "rootLoss" to "com.plainbase.domain.service.RootLossClassifier",
     "absence" to "com.plainbase.domain.service.AbsenceClassifier",
     "sourceReader" to "com.plainbase.domain.service.IndexSourceReader",
+    "identityAssignments" to "com.plainbase.domain.service.IndexIdentityAssignments",
     "corpusSeen" to "java.util.Set",
     "holder" to "java.util.concurrent.atomic.AtomicReference",
 )
@@ -3728,6 +4033,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitReads", "IndexBuilder.kt|IndexBuilder.AbsencePass.Companion",
     "IndexBuilder.kt|IndexBuilder.Companion",
     "IndexInputs.kt|Draft", "IndexInputs.kt|SourceScan", "IndexInputs.kt|Identity",
+    "IndexIdentityAssignments.kt|IndexIdentityAssignments",
     "IndexSourceReader.kt|IndexSourceReader", "IndexSourceReader.kt|IndexSourceReader.Companion",
     "LinkChecker.kt|LinkChecker", "LinkChecker.kt|LinkChecker.Sweep", "LinkChecker.kt|LinkReport", "LinkChecker.kt|BrokenLink",
     "LinkChecker.kt|BrokenLinkReason", "LinkChecker.kt|BrokenLinkReason.Unresolved", "LinkChecker.kt|BrokenLinkReason.UnknownAnchor",
