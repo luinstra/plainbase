@@ -16,9 +16,8 @@ import kotlin.concurrent.thread
 
 /**
  * The teardown contract `serve()` leans on: the SIGTERM hook and the clean-exit `finally` BOTH call
- * [GracefulShutdown.run], so it must be idempotent, ordered, throw-tolerant and bounded. The SIGTERM path
- * itself (the signal reaching the hook, and the log line it leaves) is verified against the real binary, not
- * here: this repo has rejected process-harness tests three times over, and an in-JVM test cannot fake a signal.
+ * [GracefulShutdown.run], so it must be idempotent, ordered, throw-tolerant and bounded.
+ * ServerBootCliContractTest separately characterizes startup, SIGTERM delivery and process exit status.
  */
 class GracefulShutdownTest : FunSpec({
 

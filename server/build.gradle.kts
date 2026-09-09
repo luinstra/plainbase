@@ -1,5 +1,7 @@
 import org.graalvm.buildtools.gradle.tasks.BuildNativeImageTask
+import org.gradle.api.tasks.ClasspathNormalizer
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.UUID
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -278,6 +280,18 @@ sourceSets {
 // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
 tasks.test {
     useJUnitPlatform()
+    // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
+    val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+    inputs.files(mainRuntimeClasspathInput)
+        .withPropertyName("plainbaseMainRuntimeClasspath")
+        .withNormalizer(ClasspathNormalizer::class)
+    doFirst {
+        systemProperty("plainbase.test.mainRuntimeClasspath", mainRuntimeClasspathInput.asPath)
+        systemProperty(
+            "plainbase.test.evidenceDir",
+            layout.buildDirectory.dir("reports/cli-contract/run-${UUID.randomUUID()}").get().asFile.absolutePath,
+        )
+    }
     // Fold the native-smoke source set into the JVM `test` run so the JVM suite stays complete.
     val nativeTestSourceSet = sourceSets["nativeTest"]
     testClassesDirs += nativeTestSourceSet.output.classesDirs
