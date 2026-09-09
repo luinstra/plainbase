@@ -4,6 +4,9 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.history.HistoryProvider
 import com.plainbase.domain.page.FrontmatterParser
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.page.PageIndex
+import com.plainbase.domain.page.PageIndexView
+import com.plainbase.domain.render.MarkdownRenderer
 import com.plainbase.domain.repository.BindOutcome
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.RetirementRepository
@@ -1435,6 +1438,222 @@ class IndexCollaboratorAuthorityTest : FunSpec({
         )
     }
 
+    test("snapshot assembler direct surface") {
+        val assembler = Class.forName("com.plainbase.domain.service.IndexSnapshotAssembler")
+        val expectedConstructor = listOf(Function1::class.java, CitationFactory::class.java)
+        val expectedConstructorGeneric = listOf(
+            "kotlin.jvm.functions.Function1<? super com.plainbase.domain.page.PageIndexView,? extends " +
+                "com.plainbase.domain.render.MarkdownRenderer>",
+            "com.plainbase.domain.service.CitationFactory",
+        )
+        val expectedFields = listOf(
+            "rendererFactory" to Function1::class.java.name,
+            "citations" to CitationFactory::class.java.name,
+        )
+        val expectedFieldGeneric = mapOf(
+            "rendererFactory" to "kotlin.jvm.functions.Function1<com.plainbase.domain.page.PageIndexView," +
+                "com.plainbase.domain.render.MarkdownRenderer>",
+            "citations" to "com.plainbase.domain.service.CitationFactory",
+        )
+        val expectedRendererFactoryConstructorGeneric = expectedConstructorGeneric.first()
+        val expectedRendererFactoryFieldGeneric = expectedFieldGeneric.getValue("rendererFactory")
+        val violations = mutableListOf<String>()
+        val constructors = assembler.declaredConstructors.toList()
+        if (constructors.size != 1) violations += "constructor count=${constructors.size}, expected=1"
+        constructors.forEachIndexed { index, constructor ->
+            if (constructor.parameterTypes.toList() != expectedConstructor) {
+                violations += "constructor[$index] types=${constructor.parameterTypes.toList()}, expected=$expectedConstructor"
+            }
+            if (constructor.genericParameterTypes.map { it.render() } != expectedConstructorGeneric) {
+                violations += "constructor[$index] generic types=${constructor.genericParameterTypes.map { it.render() }}, " +
+                    "expected=$expectedConstructorGeneric"
+            }
+            val forbidden = constructor.genericParameterTypes.flatMapIndexed { parameterIndex, type ->
+                val isExactRendererFactory =
+                    parameterIndex == 0 && type.render() == expectedRendererFactoryConstructorGeneric
+                type.authorityNames(forbiddenTypes = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES) +
+                    type.deferredNames().let { deferred ->
+                        if (isExactRendererFactory) deferred - "Function" else deferred
+                    }
+            }
+            if (forbidden.isNotEmpty()) violations += "assembler constructor[$index] forbidden types=$forbidden"
+        }
+        val fields = assembler.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }
+        val actualFields = fields.map { it.name to it.type.name }.sortedWith(compareBy({ it.first }, { it.second }))
+        val sortedExpectedFields = expectedFields.sortedWith(compareBy({ it.first }, { it.second }))
+        if (actualFields != sortedExpectedFields) {
+            violations += "instance fields=$actualFields, expected=$sortedExpectedFields"
+        }
+        if (fields.any { !Modifier.isFinal(it.modifiers) }) violations += "non-final fields=${fields.map { it.name }}"
+        if (assembler.declaredFields.any { Modifier.isStatic(it.modifiers) }) {
+            violations += "static fields=${assembler.declaredFields.filter { Modifier.isStatic(it.modifiers) }.map { it.name }}"
+        }
+        fields.forEach { field ->
+            val expected = expectedFieldGeneric[field.name]
+            if (field.genericType.render() != expected) {
+                violations += "field ${field.name} generic type=${field.genericType.render()}, expected=$expected"
+            }
+            val forbidden = field.genericType.authorityNames(forbiddenTypes = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES) +
+                field.genericType.deferredNames().let { deferred ->
+                    if (field.name == "rendererFactory" && field.genericType.render() == expectedRendererFactoryFieldGeneric) {
+                        deferred - "Function"
+                    } else {
+                        deferred
+                    }
+                }
+            if (forbidden.isNotEmpty()) violations += "assembler field ${field.name} forbidden types=$forbidden"
+        }
+        if (assembler.enclosingClass != null) violations += "enclosing class=${assembler.enclosingClass.name}"
+        if (assembler.declaredClasses.isNotEmpty()) violations += "nested classes=${assembler.declaredClasses.toList()}"
+
+        val actualStaticMethods = assembler.declaredMethods.filter { Modifier.isStatic(it.modifiers) }
+            .map { method ->
+                "${method.name}(${method.parameterTypes.joinToString(",") { it.name }}):${method.returnType.name}"
+            }.toSet()
+        if (actualStaticMethods != emptySet<String>()) {
+            violations += "static methods=$actualStaticMethods, expected=[]"
+        }
+
+        val instanceMethods = assembler.declaredMethods.filter { !Modifier.isStatic(it.modifiers) && !Modifier.isPrivate(it.modifiers) }
+        if (instanceMethods.map { it.name } != listOf("assemble")) {
+            violations += "externally callable instance methods=${instanceMethods.map { it.name }}, expected=[assemble]"
+        }
+        instanceMethods.singleOrNull { it.name == "assemble" }?.let { assemble ->
+            val expectedParameters = listOf(
+                "java.util.List<com.plainbase.domain.service.SourceScan>",
+                "java.util.Map<com.plainbase.domain.root.RootedPath,com.plainbase.domain.service.Identity>",
+                "java.util.List<com.plainbase.domain.root.RootName>",
+                "com.plainbase.domain.page.PageIndex",
+            )
+            if (assemble.returnType != PageIndex::class.java) {
+                violations += "assemble return type=${assemble.returnType.name}, expected=${PageIndex::class.java.name}"
+            }
+            if (assemble.parameterTypes.toList() != listOf(List::class.java, Map::class.java, List::class.java, PageIndex::class.java)) {
+                violations += "assemble parameter types=${assemble.parameterTypes.toList()}"
+            }
+            if (assemble.genericParameterTypes.map { it.render() } != expectedParameters) {
+                violations += "assemble generic parameters=${assemble.genericParameterTypes.map { it.render() }}, " +
+                    "expected=$expectedParameters"
+            }
+            if (assemble.genericReturnType.render() != "com.plainbase.domain.page.PageIndex") {
+                violations += "assemble generic return=${assemble.genericReturnType.render()}"
+            }
+            val deferredOrAuthority = assemble.genericReturnType.deferredNames() +
+                assemble.genericReturnType.authorityNames(forbiddenTypes = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES)
+            if (deferredOrAuthority.isNotEmpty()) violations += "assembler assemble result types=$deferredOrAuthority"
+        }
+        withClue("snapshot assembler direct surface: ${violations.joinToString("; ")}") {
+            violations.shouldBeEmpty()
+        }
+
+        val sourceUnit = KotlinSourceUnit("IndexSnapshotAssembler.kt", Files.readString(serviceRoot.resolve("IndexSnapshotAssembler.kt")))
+        val expectedConstructorTokens = listOf(
+            "internal", "class", "IndexSnapshotAssembler", "(",
+            "private", "val", "rendererFactory", ":", "(", "PageIndexView", ")", "-", ">", "MarkdownRenderer", ",",
+            "private", "val", "citations", ":", "CitationFactory", ",", ")",
+        )
+        val expectedAssembleTokens = listOf(
+            "fun", "assemble", "(", "scans", ":", "List", "<", "SourceScan", ">", ",",
+            "identities", ":", "Map", "<", "RootedPath", ",", "Identity", ">", ",",
+            "roots", ":", "List", "<", "RootName", ">", ",",
+            "previous", ":", "PageIndex", ",", ")", ":", "PageIndex",
+        )
+        sourceUnit.readerSourceSchemaViolations(
+            expectedConstructorTokens,
+            expectedAssembleTokens,
+            className = "IndexSnapshotAssembler",
+            operationName = "assemble",
+            diagnosticLabel = "assembler",
+        ).shouldBeEmpty()
+        sourcePublicSignatureAuthorityViolations(
+            "IndexSnapshotAssembler.kt",
+            Files.readString(serviceRoot.resolve("IndexSnapshotAssembler.kt")),
+            authorityFqns = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES.sourceAuthorityFqns(),
+        ).shouldBeEmpty()
+
+        val sourceFixture = """
+            package com.plainbase.domain.service
+            internal class IndexSnapshotAssembler(
+                private val rendererFactory: (PageIndexView) -> MarkdownRenderer,
+                private val citations: CitationFactory,
+            ) {
+                fun assemble(
+                    scans: List<SourceScan>,
+                    identities: Map<RootedPath, Identity>,
+                    roots: List<RootName>,
+                    previous: PageIndex,
+                ): PageIndex = TODO()
+            }
+        """.trimIndent()
+        fun assertAssemblerSchemaMismatch(source: String, expectedPrefix: String) {
+            val mismatches = KotlinSourceUnit("assembler-fixture.kt", source).readerSourceSchemaViolations(
+                expectedConstructorTokens,
+                expectedAssembleTokens,
+                className = "IndexSnapshotAssembler",
+                operationName = "assemble",
+                diagnosticLabel = "assembler",
+            )
+            mismatches.size shouldBe 1
+            mismatches.single().startsWith(expectedPrefix) shouldBe true
+        }
+        KotlinSourceUnit("assembler-positive.kt", sourceFixture).readerSourceSchemaViolations(
+            expectedConstructorTokens,
+            expectedAssembleTokens,
+            className = "IndexSnapshotAssembler",
+            operationName = "assemble",
+            diagnosticLabel = "assembler",
+        ).shouldBeEmpty()
+        listOf(
+            "rendererFactory" to "(PageIndexView) -> MarkdownRenderer?",
+            "citations" to "CitationFactory?",
+        ).forEach { (name, type) ->
+            assertAssemblerSchemaMismatch(
+                sourceFixture.replace(
+                    if (name == "rendererFactory") "(PageIndexView) -> MarkdownRenderer" else "CitationFactory",
+                    type,
+                ),
+                "assembler constructor tokens=",
+            )
+        }
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace(
+                "private val rendererFactory: (PageIndexView) -> MarkdownRenderer",
+                "private val rendererFactory: ((PageIndexView) -> MarkdownRenderer)?",
+            ),
+            "assembler constructor tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace("(PageIndexView) -> MarkdownRenderer", "(PageIndex) -> MarkdownRenderer"),
+            "assembler constructor tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace("(PageIndexView) -> MarkdownRenderer", "(PageIndexView) -> PageIndex"),
+            "assembler constructor tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace(
+                "private val citations: CitationFactory,",
+                "private val callback: () -> Unit,\n        private val citations: CitationFactory,",
+            ),
+            "assembler constructor tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace(
+                "private val rendererFactory: (PageIndexView) -> MarkdownRenderer,\n    private val citations: CitationFactory,",
+                "private val citations: CitationFactory,\n    private val rendererFactory: (PageIndexView) -> MarkdownRenderer,",
+            ),
+            "assembler constructor tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace(": PageIndex = TODO()", ": PageIndex? = TODO()"),
+            "assembler assemble tokens=",
+        )
+        assertAssemblerSchemaMismatch(
+            sourceFixture.replace(": PageIndex = TODO()", ": Lazy<PageIndex> = TODO()"),
+            "assembler assemble tokens=",
+        )
+    }
+
     test("passive schema") {
         val expected = mapOf(
             "com.plainbase.domain.service.Draft" to listOf(
@@ -1679,6 +1898,21 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                 violations.shouldBeEmpty()
             }
         }
+        listOf(
+            CitationFactory::class.java,
+            MarkdownRenderer::class.java,
+            PageIndexView::class.java,
+            PageIndex::class.java,
+        ).forEach { dependency ->
+            val violations = dependency.publicApiAuthorityViolations(
+                productionIndex,
+                forbiddenTypes = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES,
+                sourceAuthorityFqns = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES.sourceAuthorityFqns(),
+            )
+            withClue("assembler dependency authority leaks from ${dependency.name}: $violations") {
+                violations.shouldBeEmpty()
+            }
+        }
         val erasedFixtureSource = KotlinSourceUnit(
             "com/plainbase/domain/service/ErasedSignatureFixture.kt",
             """
@@ -1824,6 +2058,32 @@ class IndexCollaboratorAuthorityTest : FunSpec({
                 .flatMap { it.authorityNames() }
                 .shouldBeEmpty()
             fixture.publicApiAuthorityViolations() shouldBe setOf("RetirementRepository")
+        }
+    }
+
+    test("assembler materialized result graph") {
+        val pageIndexViolations = PageIndex::class.java.materializedDataGraphViolations()
+        withClue("PageIndex materialized payload graph must remain eager and authority-free: $pageIndexViolations") {
+            pageIndexViolations.shouldBeEmpty()
+        }
+        val positiveViolations = MaterializedPositiveFixture::class.java.materializedDataGraphViolations()
+        withClue("ordinary nested materialized values remain allowed: $positiveViolations") {
+            positiveViolations.shouldBeEmpty()
+        }
+        val deferredViolations = MaterializedDeferredFixture::class.java.materializedDataGraphViolations()
+        withClue("nested deferred materialized values are rejected independently: $deferredViolations") {
+            deferredViolations.any { it.contains("Lazy") } shouldBe true
+        }
+        val authorityViolations = MaterializedAuthorityFixture::class.java.materializedDataGraphViolations()
+        withClue("nested authority materialized values are rejected independently: $authorityViolations") {
+            authorityViolations.any { it.contains("RetirementRepository") } shouldBe true
+        }
+        val unknownViolations = MaterializedUnknownWrapperFixture::class.java.materializedDataGraphViolations()
+        withClue("unknown materialized application types fail closed with a diagnostic: $unknownViolations") {
+            unknownViolations shouldBe setOf(
+                "${MaterializedUnknownWrapperFixture::class.java.name} field wrapped: " +
+                    "unreviewed materialized application type ${MaterializedUnknownPayload::class.java.name}",
+            )
         }
     }
 
@@ -2335,25 +2595,28 @@ private fun Type.deferredNames(seen: MutableSet<Type> = mutableSetOf()): Set<Str
 private fun Type.authorityNames(
     bindings: Map<TypeVariable<*>, Type> = emptyMap(),
     seen: MutableSet<Type> = mutableSetOf(),
+    forbiddenTypes: Map<String, String> = FORBIDDEN_AUTHORITY_TYPES,
 ): Set<String> {
     val resolved = if (this is TypeVariable<*> && this in bindings) bindings.getValue(this) else this
     if (!seen.add(resolved)) return emptySet()
     return when (resolved) {
         is Class<*> -> buildSet {
-            resolved.authorityLabel()?.let(::add)
-            if (resolved.isArray) addAll(resolved.componentType.authorityNames(bindings, seen))
+            resolved.authorityLabel(forbiddenTypes)?.let(::add)
+            if (resolved.isArray) addAll(resolved.componentType.authorityNames(bindings, seen, forbiddenTypes))
         }
         is ParameterizedType -> buildSet {
-            addAll(resolved.rawType.authorityNames(bindings, seen))
-            resolved.ownerType?.let { addAll(it.authorityNames(bindings, seen)) }
-            resolved.actualTypeArguments.forEach { addAll(it.authorityNames(bindings, seen)) }
+            addAll(resolved.rawType.authorityNames(bindings, seen, forbiddenTypes))
+            resolved.ownerType?.let { addAll(it.authorityNames(bindings, seen, forbiddenTypes)) }
+            resolved.actualTypeArguments.forEach { addAll(it.authorityNames(bindings, seen, forbiddenTypes)) }
         }
         is WildcardType -> buildSet {
-            resolved.upperBounds.forEach { addAll(it.authorityNames(bindings, seen)) }
-            resolved.lowerBounds.forEach { addAll(it.authorityNames(bindings, seen)) }
+            resolved.upperBounds.forEach { addAll(it.authorityNames(bindings, seen, forbiddenTypes)) }
+            resolved.lowerBounds.forEach { addAll(it.authorityNames(bindings, seen, forbiddenTypes)) }
         }
-        is TypeVariable<*> -> buildSet { resolved.bounds.forEach { addAll(it.authorityNames(bindings, seen)) } }
-        is GenericArrayType -> resolved.genericComponentType.authorityNames(bindings, seen)
+        is TypeVariable<*> -> buildSet {
+            resolved.bounds.forEach { addAll(it.authorityNames(bindings, seen, forbiddenTypes)) }
+        }
+        is GenericArrayType -> resolved.genericComponentType.authorityNames(bindings, seen, forbiddenTypes)
         else -> emptySet()
     }
 }
@@ -2369,6 +2632,131 @@ private fun Class<*>.typeGraphViolations(): Set<String> = buildSet {
         addAll(method.genericReturnType.deferredOrAuthorityNames())
         method.genericParameterTypes.forEach { addAll(it.deferredOrAuthorityNames()) }
     }
+}
+
+private val MATERIALIZED_DATA_TYPES = setOf(
+    "com.plainbase.domain.page.PageIndex",
+    "com.plainbase.domain.page.RootSection",
+    "com.plainbase.domain.page.IndexedPage",
+    "com.plainbase.domain.page.Frontmatter",
+    "com.plainbase.domain.page.FrontmatterValue",
+    "com.plainbase.domain.page.FrontmatterValue\$Scalar",
+    "com.plainbase.domain.page.FrontmatterValue\$StringList",
+    "com.plainbase.domain.page.Heading",
+    "com.plainbase.domain.model.PageLink",
+    "com.plainbase.domain.model.LinkOutcome",
+    "com.plainbase.domain.model.LinkOutcome\$Resolved",
+    "com.plainbase.domain.model.LinkOutcome\$Resolved\$Page",
+    "com.plainbase.domain.model.LinkOutcome\$Resolved\$Asset",
+    "com.plainbase.domain.model.LinkOutcome\$Resolved\$External",
+    "com.plainbase.domain.model.LinkOutcome\$Resolved\$Anchor",
+    "com.plainbase.domain.model.LinkOutcome\$Broken",
+    "com.plainbase.domain.model.LinkOutcome\$BrokenReason",
+    "com.plainbase.domain.render.RenderedSection",
+    "com.plainbase.domain.content.ContentFolder",
+    "com.plainbase.domain.content.FolderMeta",
+    "com.plainbase.domain.content.TreePath",
+    "com.plainbase.domain.root.RootedPath",
+    "com.plainbase.domain.root.RootedPageId",
+    "com.plainbase.domain.root.RootName",
+    "com.plainbase.domain.page.PageId",
+    "com.plainbase.domain.page.PageIndexView",
+    "com.plainbase.domain.page.PageIndex\$SectionView",
+    "com.plainbase.domain.service.MaterializedPositiveFixture",
+    "com.plainbase.domain.service.MaterializedNestedPositiveFixture",
+    "com.plainbase.domain.service.MaterializedDeferredFixture",
+    "com.plainbase.domain.service.MaterializedNestedDeferredFixture",
+    "com.plainbase.domain.service.MaterializedAuthorityFixture",
+    "com.plainbase.domain.service.MaterializedNestedAuthorityFixture",
+)
+
+private val MATERIALIZED_SEALED_VARIANTS = mapOf(
+    "com.plainbase.domain.page.FrontmatterValue" to listOf(
+        "com.plainbase.domain.page.FrontmatterValue\$Scalar",
+        "com.plainbase.domain.page.FrontmatterValue\$StringList",
+    ),
+    "com.plainbase.domain.model.LinkOutcome" to listOf(
+        "com.plainbase.domain.model.LinkOutcome\$Resolved",
+        "com.plainbase.domain.model.LinkOutcome\$Resolved\$Page",
+        "com.plainbase.domain.model.LinkOutcome\$Resolved\$Asset",
+        "com.plainbase.domain.model.LinkOutcome\$Resolved\$External",
+        "com.plainbase.domain.model.LinkOutcome\$Resolved\$Anchor",
+        "com.plainbase.domain.model.LinkOutcome\$Broken",
+    ),
+)
+
+private val MATERIALIZED_RETAINED_TYPES = mapOf(
+    "com.plainbase.domain.page.PageIndex" to listOf("com.plainbase.domain.page.PageIndex\$SectionView"),
+)
+
+private fun Class<*>.materializedDataGraphViolations(): Set<String> {
+    val root = this
+    val violations = mutableSetOf<String>()
+    val visited = mutableSetOf<String>()
+    lateinit var visitClass: (Class<*>, String) -> Unit
+
+    fun visit(type: Type, origin: String) {
+        val deferred = type.deferredNames()
+        deferred.forEach { violations += "$origin: deferred $it" }
+        val authority = type.authorityNames(forbiddenTypes = ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES)
+        authority.forEach { violations += "$origin: authority $it" }
+        when (type) {
+            is TypeVariable<*> -> type.bounds.forEach { visit(it, "$origin bound") }
+            is GenericArrayType -> visit(type.genericComponentType, "$origin[]")
+            is WildcardType -> {
+                type.upperBounds.forEach { visit(it, "$origin upper") }
+                type.lowerBounds.forEach { visit(it, "$origin lower") }
+            }
+            is ParameterizedType -> {
+                type.ownerType?.let { visit(it, "$origin owner") }
+                type.actualTypeArguments.forEachIndexed { index, argument -> visit(argument, "$origin arg[$index]") }
+                (type.rawType as? Class<*>)?.let { visitClass(it, origin) }
+            }
+            is Class<*> -> {
+                if (type.isArray) {
+                    visit(type.componentType, "$origin[]")
+                } else {
+                    visitClass(type, origin)
+                }
+            }
+        }
+    }
+
+    visitClass = fun(type: Class<*>, origin: String) {
+        val isLibraryType =
+            type.isPrimitive ||
+                type.name.startsWith("java.") ||
+                type.name.startsWith("kotlin.") ||
+                type.name.startsWith("io.github.") ||
+                type.name.startsWith("org.jetbrains.")
+        if (isLibraryType) {
+            return
+        }
+        if (type != root && type.name !in MATERIALIZED_DATA_TYPES) {
+            violations += "$origin: unreviewed materialized application type ${type.name}"
+            return
+        }
+        if (!visited.add(type.name)) return
+        type.declaredConstructors.forEachIndexed { constructorIndex, constructor ->
+            constructor.genericParameterTypes.forEachIndexed { parameterIndex, parameter ->
+                visit(parameter, "$origin constructor[$constructorIndex] arg[$parameterIndex]")
+            }
+        }
+        type.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.forEach { field ->
+            visit(field.genericType, "$origin field ${field.name}")
+        }
+        MATERIALIZED_RETAINED_TYPES[type.name].orEmpty().forEach { retainedName ->
+            val retained = Class.forName(retainedName, false, type.classLoader)
+            visitClass(retained, "$origin retained ${retained.simpleName}")
+        }
+        MATERIALIZED_SEALED_VARIANTS[type.name].orEmpty().forEach { variantName ->
+            val variant = Class.forName(variantName, false, type.classLoader)
+            visitClass(variant, "$origin variant ${variant.simpleName}")
+        }
+    }
+
+    visit(this, name)
+    return violations
 }
 
 private val FORBIDDEN_AUTHORITY_TYPES = mapOf(
@@ -2388,7 +2776,18 @@ private val FORBIDDEN_AUTHORITY_TYPES = mapOf(
     "com.plainbase.domain.service.SearchIndexer" to "SearchIndexer",
 )
 
-private fun Class<*>.authorityLabel(): String? = FORBIDDEN_AUTHORITY_TYPES[name]
+private val ASSEMBLER_FORBIDDEN_AUTHORITY_TYPES = FORBIDDEN_AUTHORITY_TYPES + mapOf(
+    "com.plainbase.domain.content.ContentStore" to "ContentStore",
+    "com.plainbase.domain.history.HistoryProvider" to "HistoryProvider",
+    "com.plainbase.domain.repository.PageCheckpointRepository" to "PageCheckpointRepository",
+    "com.plainbase.domain.service.UrlAliasRegistry" to "UrlAliasRegistry",
+    "com.plainbase.domain.root.RootAvailability" to "RootAvailability",
+    "com.plainbase.domain.root.RootLimbo" to "RootLimbo",
+    "java.util.concurrent.atomic.AtomicReference" to "AtomicReference",
+)
+
+private fun Class<*>.authorityLabel(forbiddenTypes: Map<String, String> = FORBIDDEN_AUTHORITY_TYPES): String? =
+    forbiddenTypes[name]
 
 private fun Method.isAdmittedIdMapBindDefaultReceiver(): Boolean =
     declaringClass == IdMapRepository::class.java &&
@@ -2413,6 +2812,8 @@ private fun Method.authorityGenericParameterTypes(): List<Type> =
 private fun Class<*>.publicApiAuthorityViolations(
     sourceIndex: KotlinSourceIndex? = null,
     allowForbiddenEntry: Boolean = false,
+    forbiddenTypes: Map<String, String> = FORBIDDEN_AUTHORITY_TYPES,
+    sourceAuthorityFqns: Map<String, String> = ERASED_AUTHORITY_FQNS,
 ): Set<String> {
     val violations = mutableSetOf<String>()
     data class VisitKey(val type: Class<*>, val bindings: String)
@@ -2455,7 +2856,7 @@ private fun Class<*>.publicApiAuthorityViolations(
     }
 
     visitClass = fun(type: Class<*>, bindings: Map<TypeVariable<*>, Type>, origin: String, entry: Boolean) {
-        type.authorityLabel()?.takeUnless { entry }?.let {
+        type.authorityLabel(forbiddenTypes)?.takeUnless { entry }?.let {
             violations += it
             return
         }
@@ -2475,9 +2876,17 @@ private fun Class<*>.publicApiAuthorityViolations(
     }
 
     visitClass(this, emptyMap(), name, allowForbiddenEntry)
-    sourceIndex?.publicSignatureAuthorityViolations(reachedTypeNames)?.let { violations += it }
+    sourceIndex?.publicSignatureAuthorityViolations(
+        reachedTypeNames,
+        authorityFqns = sourceAuthorityFqns,
+    )?.let { violations += it }
     return violations
 }
+
+private fun Map<String, String>.sourceAuthorityFqns(): Map<String, String> =
+    entries.associate { (binaryName, _) ->
+        binaryName.substringAfterLast('.').substringAfterLast('$') to binaryName.replace('$', '.')
+    }
 
 private fun Map<TypeVariable<*>, Type>.signature(): String =
     entries.sortedBy { it.key.name }.joinToString { "${it.key.name}=${it.value.render()}" }
@@ -2747,7 +3156,10 @@ private class KotlinSourceIndex(private val units: List<KotlinSourceUnit>) {
         }
     }
 
-    fun publicSignatureAuthorityViolations(reachedTypeNames: Set<String>? = null): Set<String> {
+    fun publicSignatureAuthorityViolations(
+        reachedTypeNames: Set<String>? = null,
+        authorityFqns: Map<String, String> = ERASED_AUTHORITY_FQNS,
+    ): Set<String> {
         val reached = reachedTypeNames?.map { it.replace('$', '.') }?.toSet()
         return units.flatMapTo(mutableSetOf()) { unit ->
             val candidates = if (reached == null) {
@@ -2775,13 +3187,13 @@ private class KotlinSourceIndex(private val units: List<KotlinSourceUnit>) {
                         resolved.cycle.isNotEmpty() ->
                             "${unit.path}:${unit.indexed.lineOf(unit.tokens[index].offset)}:${declaration.qualifiedName}:" +
                                 "$spelling -> alias cycle ${resolved.cycle.joinToString(" -> ")}"
-                        resolved.allIdentities.any { it in ERASED_AUTHORITY_FQNS.values } ->
+                        resolved.allIdentities.any { it in authorityFqns.values } ->
                             "${unit.path}:${unit.indexed.lineOf(unit.tokens[index].offset)}:${declaration.qualifiedName}:" +
-                                "$spelling -> ${resolved.allIdentities.filter { it in ERASED_AUTHORITY_FQNS.values }.joinToString(", ")}"
+                                "$spelling -> ${resolved.allIdentities.filter { it in authorityFqns.values }.joinToString(", ")}"
                         else -> null
                     }
                 }
-                val inferredFinding = inferredAuthorityReference(unit, declaration)?.let { (index, spelling, target) ->
+                val inferredFinding = inferredAuthorityReference(unit, declaration, authorityFqns)?.let { (index, spelling, target) ->
                     "${unit.path}:${unit.indexed.lineOf(unit.tokens[index].offset)}:${declaration.qualifiedName}:" +
                         "$spelling -> $target"
                 }
@@ -2793,13 +3205,14 @@ private class KotlinSourceIndex(private val units: List<KotlinSourceUnit>) {
     private fun inferredAuthorityReference(
         unit: KotlinSourceUnit,
         declaration: LocatedSourceDeclaration,
+        authorityFqns: Map<String, String>,
     ): Triple<Int, String, String>? {
         val expression = inferredExpressionRange(unit, declaration) ?: return null
         val (start, limit) = expression
         val call = directConstructorCall(unit, start, limit) ?: return null
         val (callStart, spelling) = call
         val resolved = resolveExpressionReference(unit, callStart)
-        val target = resolved.identity?.takeIf { resolved.namespace == SourceNamespace.TYPE && it in ERASED_AUTHORITY_FQNS.values }
+        val target = resolved.identity?.takeIf { resolved.namespace == SourceNamespace.TYPE && it in authorityFqns.values }
             ?: return null
         return Triple(callStart, spelling, target)
     }
@@ -3269,6 +3682,7 @@ private val ADMITTED_INDEXING_PATHS = setOf(
     "com/plainbase/domain/service/IndexSourceReader.kt",
     "com/plainbase/domain/service/IndexBuilder.kt",
     "com/plainbase/domain/service/IndexIdentityAssignments.kt",
+    "com/plainbase/domain/service/IndexSnapshotAssembler.kt",
 )
 
 private val ERASED_AUTHORITY_FQNS = mapOf(
@@ -3802,8 +4216,13 @@ private fun angleClose(tokens: List<LexToken>, open: Int): Int? {
     return null
 }
 
-private fun sourcePublicSignatureAuthorityViolations(path: String, source: String): Set<String> =
-    KotlinSourceIndex(authorityDefinitionUnits() + KotlinSourceUnit(path, source)).publicSignatureAuthorityViolations()
+private fun sourcePublicSignatureAuthorityViolations(
+    path: String,
+    source: String,
+    authorityFqns: Map<String, String> = ERASED_AUTHORITY_FQNS,
+): Set<String> =
+    KotlinSourceIndex(authorityDefinitionUnits() + KotlinSourceUnit(path, source))
+        .publicSignatureAuthorityViolations(authorityFqns = authorityFqns)
 
 private fun authorityDefinitionUnits(): List<KotlinSourceUnit> = listOf(
     KotlinSourceUnit(
@@ -3898,6 +4317,38 @@ private class BenignPublishedFixture {
     fun exposed(): Published = error("fixture only")
 }
 
+private data class MaterializedPositiveFixture(
+    val nested: MaterializedNestedPositiveFixture,
+)
+
+private data class MaterializedNestedPositiveFixture(
+    val section: com.plainbase.domain.page.RootSection,
+)
+
+private data class MaterializedDeferredFixture(
+    val nested: MaterializedNestedDeferredFixture,
+)
+
+private data class MaterializedNestedDeferredFixture(
+    val value: Lazy<String>,
+)
+
+private data class MaterializedAuthorityFixture(
+    val nested: MaterializedNestedAuthorityFixture,
+)
+
+private data class MaterializedNestedAuthorityFixture(
+    val repository: RetirementRepository,
+)
+
+private class MaterializedUnknownWrapperFixture {
+    val wrapped: MaterializedUnknownPayload? = null
+}
+
+private data class MaterializedUnknownPayload(
+    val value: String,
+)
+
 private typealias InferredEpochAlias = com.plainbase.domain.root.BindingEpoch
 
 private class InferredErasedSignatureFixture {
@@ -3941,7 +4392,8 @@ private class LocalValueOrderFixture {
 private val EXPECTED_SERVICE_PATHS = setOf(
     "AbsenceClassifier.kt", "AdminFacade.kt", "AdoptionPass.kt", "AgentDirectCommitDecision.kt", "ApiTokenService.kt",
     "ApplyDisposition.kt", "BindingVisibility.kt", "CanonicalUrlBuilder.kt", "CitationFactory.kt", "FrontmatterPatcher.kt",
-    "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt", "IndexSourceReader.kt",
+    "IdProvider.kt", "IdResolution.kt", "IndexBuilder.kt", "IndexIdentityAssignments.kt", "IndexInputs.kt",
+    "IndexSnapshotAssembler.kt", "IndexSourceReader.kt",
     "LinkChecker.kt",
     "LinkResolver.kt", "LoginService.kt", "MutatingFacade.kt", "PageIdentityService.kt", "PageRootResolver.kt",
     "PageService.kt", "PolicyService.kt", "ProposalAuthorLabeler.kt", "ProposalBaseReader.kt", "ProposalFacade.kt",
@@ -3974,6 +4426,7 @@ private val EXPECTED_INDEX_BUILDER_FIELDS = mapOf(
     "absence" to "com.plainbase.domain.service.AbsenceClassifier",
     "sourceReader" to "com.plainbase.domain.service.IndexSourceReader",
     "identityAssignments" to "com.plainbase.domain.service.IndexIdentityAssignments",
+    "snapshotAssembler" to "com.plainbase.domain.service.IndexSnapshotAssembler",
     "corpusSeen" to "java.util.Set",
     "holder" to "java.util.concurrent.atomic.AtomicReference",
 )
@@ -4033,7 +4486,7 @@ private val EXPECTED_SERVICE_DECLARATIONS = setOf(
     "IndexBuilder.kt|IndexBuilder.AbsencePass.GitReads", "IndexBuilder.kt|IndexBuilder.AbsencePass.Companion",
     "IndexBuilder.kt|IndexBuilder.Companion",
     "IndexInputs.kt|Draft", "IndexInputs.kt|SourceScan", "IndexInputs.kt|Identity",
-    "IndexIdentityAssignments.kt|IndexIdentityAssignments",
+    "IndexIdentityAssignments.kt|IndexIdentityAssignments", "IndexSnapshotAssembler.kt|IndexSnapshotAssembler",
     "IndexSourceReader.kt|IndexSourceReader", "IndexSourceReader.kt|IndexSourceReader.Companion",
     "LinkChecker.kt|LinkChecker", "LinkChecker.kt|LinkChecker.Sweep", "LinkChecker.kt|LinkReport", "LinkChecker.kt|BrokenLink",
     "LinkChecker.kt|BrokenLinkReason", "LinkChecker.kt|BrokenLinkReason.Unresolved", "LinkChecker.kt|BrokenLinkReason.UnknownAnchor",
