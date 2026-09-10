@@ -17,12 +17,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Seam (g), every mirror-apply-failure site, under the native image (an injected [FileAtomics]
- * throw is an NIO-edge divergence surface): GET-heal apply failure, precondition/ambiguous
- * read-back heal failure, poll-apply failure, hydrate-apply failure - plus the REV 4
- * CAS-after-failed-heal edge (map-absent, read-back heal write fails, still no `!!`/NPE). A
- * MINIMAL local [ObjectStoreClient]/[FileAtomics] test double (this source set cannot see the
- * Kotest-based `FakeObjectStore` in `src/test` - kotlin.test only, kept lean per policy).
+ * Native [FileAtomics] failure coverage: GET/read-back heal, hydrate-apply, and CAS-after-failed-heal behavior.
+ * Poll-apply coverage remains in [ObjectContentStoreConcurrencyTest]; this source set cannot see its JVM-test-source
+ * `FakeObjectStore`. Native-main friendship exposes production seams, not JVM test sources.
  */
 @Tag("native")
 class ObjectMirrorApplyFailureTest {
@@ -121,13 +118,10 @@ class ObjectMirrorApplyFailureTest {
         }
     }
 
-    // NOTE: the poll-apply-failure site is NOT reachable from this source set - `pollOnce()` is
-    // `internal` in `ObjectContentStore`, and `nativeTest` is not friend-associated with `main` for
-    // Kotlin internal visibility (unlike the default `test` source set). It is covered instead as a
-    // JVM/Kotest twin in `ObjectContentStoreConcurrencyTest.kt` (`src/test`), which reuses the SAME
-    // `FileAtomics`-throw injection mechanism - the divergence surface under test here is the NIO
-    // primitive (`FileAtomics.Real`/temp+ATOMIC_MOVE), which the other three sites below (all reached
-    // through PUBLIC API) already exercise natively.
+    // NOTE: the poll-apply-failure site remains covered as a JVM/Kotest twin in
+    // `ObjectContentStoreConcurrencyTest.kt` (`src/test`), which reuses the SAME `FileAtomics`-throw injection
+    // mechanism. This native source set keeps its lean public-API/NIO surface proofs here; this test covers
+    // hydrate-apply failure against the native fixture.
 
     @Test
     fun `hydrate-apply failure - boot does NOT fail on a single-key mirror-write error, the key stays absent`() {

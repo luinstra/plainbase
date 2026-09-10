@@ -13,8 +13,8 @@ import kotlin.io.path.readText
  * The A3 compile-time floor's RUNTIME witness (the synthesis's "no production mint outside PolicyService"
  * source-scan). The HARD guarantee against a FUTURE external module is the COMPILER: the grant constructors are
  * `internal`, so nothing outside the `:server` module can construct a grant. WITHIN `:server` the only legitimate
- * production mint site is `PolicyService`; the `grantForTests*` factories are PUBLIC test-only helpers (so both
- * `src/test` AND `src/nativeTest` can mint — `src/nativeTest` has no friend path to `main`/`src/test`).
+ * production mint site is `PolicyService`; the `grantForTests*` factories are PUBLIC test-only helpers so the JVM
+ * and native source sets can mint through one deliberate seam without widening the grant constructors.
  *
  * This scan asserts that NO production source file (`src/main`) outside `PolicyService.kt` constructs a grant OR
  * calls a `grantForTests*` factory — the in-`:server` half of the threat model. (`Grants.kt` DEFINES the

@@ -35,10 +35,8 @@ import java.nio.file.Path
  *  4. `--git-dir` and `--git-common-dir` resolve to the SAME place - the definitive linked-worktree signature (a
  *     worktree's git-dir is private, its common-dir is the shared one), and a belt behind check 1.
  *
- * A PURE refusal-text function (the `detachedRootsRefusal` idiom): it decides, it does not exit. Public (not
- * `internal`) for the same reason [com.plainbase.frameworks.filesystem.FileAtomics] is - the native-test source set,
- * which is where a guard about REAL `git` subprocesses belongs, is not associated with `main` for internal
- * visibility.
+ * A PURE refusal-text function (the `detachedRootsRefusal` idiom): it decides, it does not exit. Public so callers
+ * can exercise the guard with an explicitly supplied [GitExecutor].
  */
 fun nativeRootGuardFailure(exec: GitExecutor, declaredRoot: Path): String? {
     val prefix = "the root at $declaredRoot declares `history = native`, but"

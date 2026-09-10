@@ -82,6 +82,12 @@ val nativeTest: SourceSet =
         // image (risk R6), keeping one committed copy as the single source of truth.
         resources.srcDir("src/test/resources")
     }
+
+// The native source set uses main's internal runtime seams directly. Associate the Kotlin compilation with main;
+// keep the explicit source-set output classpaths above because the native image wiring still consumes them.
+kotlin.target.compilations.getByName("nativeTest")
+    .associateWith(kotlin.target.compilations.getByName("main"))
+
 configurations["nativeTestImplementation"].extendsFrom(configurations["implementation"])
 configurations["nativeTestRuntimeOnly"].extendsFrom(configurations["runtimeOnly"])
 

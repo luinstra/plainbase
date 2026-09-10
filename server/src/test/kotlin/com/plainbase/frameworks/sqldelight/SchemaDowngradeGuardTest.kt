@@ -7,12 +7,8 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 
 /**
- * The FORWARD-only old-binary guard's no-leak lifecycle (§8.2, R7 part 2): `DatabaseFactory.migrateOrClose`, handed a
- * driver whose delegate is stamped NEWER than this binary, THROWS the named guard error AND closes the handle EXACTLY
- * once - the observable proof that a rejected boot does not leak the open connection (an idle leaked connection holds no
- * lock a reopen check could catch). Lives in the JVM `test` source set because `migrateOrClose` is `internal` (visible
- * from the friend-pathed `test`, not from `nativeTest`); it drives an IN-MEMORY delegate, so it needs no JDBC/JNI seam.
- * The in-image half (the real file-backed refuse + read-only serve) is `SchemaDowngradeGuardNativeTest`.
+ * The in-memory delegated driver pins exactly one close when schema rejection occurs;
+ * [SchemaDowngradeGuardNativeTest] supplies the real file-backed JDBC/native coverage.
  */
 class SchemaDowngradeGuardTest : FunSpec({
 
