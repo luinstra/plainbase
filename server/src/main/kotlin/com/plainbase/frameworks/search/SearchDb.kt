@@ -25,7 +25,13 @@ import kotlin.io.path.createDirectories
  * event-loop thread, so the serving layer dispatches search calls on `Dispatchers.IO` before
  * they reach this class (the S4 route owns that hop; tests and the sync path may call directly).
  */
-class SearchDb(path: Path) : AutoCloseable {
+@Suppress("TooGenericExceptionCaught")
+class SearchDb internal constructor(
+    path: Path,
+    private val connectionOpener: (String) -> Connection,
+) : AutoCloseable {
+
+    constructor(path: Path) : this(path, { url -> DriverManager.getConnection(url) })
 
     private val url = "jdbc:sqlite:$path"
     private val writer: Connection
@@ -33,9 +39,28 @@ class SearchDb(path: Path) : AutoCloseable {
 
     init {
         path.parent?.createDirectories()
-        writer = open()
-        ensureSchema()
-        repeat(READER_POOL_SIZE) { readers.put(open()) }
+        val acquired = mutableListOf<Connection>()
+        try {
+            writer = open()
+            acquired += writer
+            ensureSchema()
+            repeat(READER_POOL_SIZE) {
+                val reader = open()
+                acquired += reader
+                readers.put(reader)
+            }
+        } catch (failure: Throwable) {
+            acquired.forEach { connection ->
+                runCatching { connection.close() }
+                    .onFailure { cleanup ->
+                        if (cleanup !== failure) {
+                            failure.addSuppressed(cleanup)
+                        }
+                        logger.warn(cleanup) { "closing a partially constructed search.db connection failed" }
+                    }
+            }
+            throw failure
+        }
     }
 
     /** Runs [block] on the single writer connection (serialized — §B5 writer confinement). */
@@ -56,10 +81,23 @@ class SearchDb(path: Path) : AutoCloseable {
         synchronized(writer) { writer.close() }
     }
 
-    private fun open(): Connection = DriverManager.getConnection(url).apply {
-        createStatement().use { statement ->
-            statement.execute("PRAGMA journal_mode=WAL")
-            statement.execute("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS")
+    private fun open(): Connection {
+        val connection = connectionOpener(url)
+        return try {
+            connection.createStatement().use { statement ->
+                statement.execute("PRAGMA journal_mode=WAL")
+                statement.execute("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS")
+            }
+            connection
+        } catch (failure: Throwable) {
+            runCatching { connection.close() }
+                .onFailure { cleanup ->
+                    if (cleanup !== failure) {
+                        failure.addSuppressed(cleanup)
+                    }
+                    logger.warn(cleanup) { "closing a failed search.db connection setup failed" }
+                }
+            throw failure
         }
     }
 
