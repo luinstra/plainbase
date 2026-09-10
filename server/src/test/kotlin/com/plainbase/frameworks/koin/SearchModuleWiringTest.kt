@@ -1,8 +1,12 @@
 package com.plainbase.frameworks.koin
 
+import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
+import com.plainbase.domain.repository.RetirementRepository
+import com.plainbase.domain.root.ObservationEpoch
+import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.search.SearchProvider
@@ -12,6 +16,8 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -19,8 +25,12 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * DI wiring for the S2 search stack, end to end through the REAL module graph: [searchModule]
@@ -37,17 +47,21 @@ class SearchModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
+                val config = PlainbaseConfig.fromEnv(env)
+                val openers = ServerOpeners()
+                val inputs = prepareRootBootInputs(config, openers.openLocal)
                 val app = koinApplication {
                     modules(
-                        module { single { PlainbaseConfig.fromEnv(env) } }, // configModule, env pinned to temp dirs
-                        contentModule,
+                        module { single { config } },
+                        createContentModule(config, inputs, openers.openObject),
                         repositoryModule,
-                        historyModule,
+                        createHistoryModule(config, inputs.history),
                         indexModule,
                         searchModule,
                     )
                 }
                 try {
+                    inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                     val provider = app.koin.get<SearchProvider>()
                     provider.shouldBeInstanceOf<Fts5SearchProvider>()
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 1
@@ -69,18 +83,22 @@ class SearchModuleWiringTest : FunSpec({
         }) { root ->
             withTempTree(seed = {}) { dataDir ->
                 val env = mapOf("CONTENT_DIR" to root.toString(), "DATA_DIR" to dataDir.toString())
+                val config = PlainbaseConfig.fromEnv(env)
+                val openers = ServerOpeners()
+                val inputs = prepareRootBootInputs(config, openers.openLocal)
                 val app = koinApplication {
                     modules(
-                        module { single { PlainbaseConfig.fromEnv(env) } },
-                        contentModule,
+                        module { single { config } },
+                        createContentModule(config, inputs, openers.openObject),
                         repositoryModule,
-                        historyModule,
+                        createHistoryModule(config, inputs.history),
                         checkpointModule,
                         indexModule,
                         searchModule,
                     )
                 }
                 try {
+                    inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 2
                     val builder = app.koin.get<IndexBuilder>()
                     val provider = app.koin.get<SearchProvider>()
@@ -117,4 +135,67 @@ class SearchModuleWiringTest : FunSpec({
             }
         }
     }
+
+    test("a prepared LOCAL rebind reaches the real graph epoch before a later rebuild") {
+        val base = Files.createTempDirectory("plainbase-search-rebind")
+        val original = Files.createDirectory(base.resolve("content"))
+        val replacement = Files.createDirectory(base.resolve("replacement"))
+        val dataDir = Files.createDirectory(base.resolve("data"))
+        val retained = base.resolve("content-retained")
+        writePage(original, "docs/widget.md", "# Original\n\nrebind source\n")
+        writePage(replacement, "docs/widget.md", "# Replacement\n\nrebind target\n")
+        try {
+            val config = PlainbaseConfig.fromEnv(
+                mapOf("CONTENT_DIR" to original.toString(), "DATA_DIR" to dataDir.toString()),
+            )
+            val openers = ServerOpeners()
+            val inputs = prepareRootBootInputs(config, openers.openLocal)
+            var driver: SqlDriver? = null
+            val app = koinApplication {
+                modules(
+                    module { single { config } },
+                    createContentModule(config, inputs, openers.openObject),
+                    createRepositoryModule(
+                        openDriver = { path -> openers.openDriver(path).also { driver = it } },
+                    ),
+                    createHistoryModule(config, inputs.history),
+                    indexModule,
+                    searchModule,
+                )
+            }
+            try {
+                inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
+                val builder = app.koin.get<IndexBuilder>()
+                builder.rebuild()
+                val retirements = app.koin.get<RetirementRepository>()
+                val before = retirements.observation(RootName.PRIMARY)
+                val originalKey = fileKey(original)
+
+                Files.move(original, retained)
+                Files.move(replacement, original)
+                val replacementKey = fileKey(original)
+                originalKey shouldNotBe replacementKey
+
+                val store = inputs.localStores.getValue(RootName.PRIMARY)
+                store.available() shouldBe true
+                val after = retirements.observation(RootName.PRIMARY)
+                after.value shouldBe before.value + 1
+                app.koin.get<RootAvailability>() shouldBeSameInstanceAs inputs.availability
+                inputs.availability.current().isAvailable(RootName.PRIMARY) shouldBe true
+            } finally {
+                try {
+                    app.close()
+                } finally {
+                    driver?.close()
+                }
+            }
+        } finally {
+            if (Files.exists(retained)) retained.toFile().deleteRecursively()
+            base.toFile().deleteRecursively()
+        }
+    }
 })
+
+private fun fileKey(path: Path): Any = requireNotNull(
+    Files.readAttributes(path, BasicFileAttributes::class.java).fileKey(),
+) { "the fixture filesystem does not expose directory file keys" }

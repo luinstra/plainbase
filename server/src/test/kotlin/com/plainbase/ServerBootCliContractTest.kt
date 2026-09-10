@@ -3,12 +3,14 @@ package com.plainbase
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.GitResult
+import com.plainbase.frameworks.search.SearchDb
 import io.kotest.core.spec.IsolationMode
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.core.test.TestCaseOrder
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotBeBlank
+import io.kotest.matchers.string.shouldNotContain
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -23,6 +25,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import java.sql.DriverManager
 import java.time.Duration
 import java.util.Comparator
 import java.util.concurrent.Executors
@@ -107,15 +111,71 @@ class ServerBootCliContractTest : FunSpec({
         }
     }
 
+    test("invalidObjectEndpointRemainsPreLock") {
+        watchdog.runCase("invalidObjectEndpointRemainsPreLock") {
+            Fixture("invalid-object-endpoint", watchdog).use { fixture ->
+                val result = fixture.runHoldingDataDirLock(
+                    "invalidObjectEndpointRemainsPreLock", storageBackend = "object",
+                    extraEnvironment = mapOf(
+                        "PLAINBASE_S3_ENDPOINT" to "not-an-http-url",
+                        "PLAINBASE_S3_BUCKET" to "docs",
+                        "PLAINBASE_S3_ACCESS_KEY_ID" to "key",
+                        "PLAINBASE_S3_SECRET_ACCESS_KEY" to "secret",
+                    ),
+                )
+                result.exitCode shouldBe 1
+                result.stderrText shouldContain "serve: storage.object.endpoint is not an absolute http(s) URL"
+                result.stderrText shouldNotContain "another Plainbase process is holding"
+            }
+        }
+    }
+
+    test("missingObjectCredentialsRemainPreLock") {
+        watchdog.runCase("missingObjectCredentialsRemainPreLock") {
+            Fixture("missing-object-credentials", watchdog).use { fixture ->
+                val result = fixture.runHoldingDataDirLock(
+                    "missingObjectCredentialsRemainPreLock", storageBackend = "object",
+                    extraEnvironment = mapOf(
+                        "PLAINBASE_S3_ENDPOINT" to "https://127.0.0.1:1",
+                        "PLAINBASE_S3_BUCKET" to "docs",
+                    ),
+                )
+                result.exitCode shouldBe 1
+                result.stderrText shouldContain "serve: PLAINBASE_S3_ACCESS_KEY_ID and PLAINBASE_S3_SECRET_ACCESS_KEY are required"
+                result.stderrText shouldNotContain "another Plainbase process is holding"
+            }
+        }
+    }
+
     test("heldDataLock") {
         watchdog.runCase("heldDataLock") {
             Fixture("held-data-lock", watchdog).use { fixture ->
+                seedCliV17Database(fixture.data.resolve("plainbase.db"))
+                seedCliSearchDatabase(fixture.data.resolve("search.db"))
+                val mirror = Files.createDirectories(fixture.data.resolve("mirror"))
+                Files.writeString(mirror.resolve("sentinel.md"), "must remain untouched")
+                val before = captureCliHeldLockObservation(fixture.data, mirror)
                 val lock = requireNotNull(DataDirLock.tryAcquire(fixture.data))
                 try {
                     val result = fixture.run("heldDataLock")
                     result.exitCode shouldBe 1
                     result.stderrText shouldContain "serve: another Plainbase process is holding ${fixture.data}"
                     result.stderrText shouldContain "stop it before starting a second instance"
+                    val objectResult = fixture.run(
+                        "heldDataLockObjectPriorSchema",
+                        storageBackend = "object",
+                        extraEnvironment = mapOf(
+                            "PLAINBASE_S3_ENDPOINT" to "https://127.0.0.1:1",
+                            "PLAINBASE_S3_BUCKET" to "docs",
+                            "PLAINBASE_S3_ACCESS_KEY_ID" to "key",
+                            "PLAINBASE_S3_SECRET_ACCESS_KEY" to "secret",
+                        ),
+                    )
+                    objectResult.exitCode shouldBe 1
+                    objectResult.stderrText shouldContain "serve: another Plainbase process is holding ${fixture.data}"
+                    val after = captureCliHeldLockObservation(fixture.data, mirror)
+                    after shouldBe before
+                    writeCliHeldLockObservation(before, after)
                 } finally {
                     lock.close()
                 }
@@ -188,7 +248,7 @@ private const val STREAM_DEADLINE_MILLIS = 5_000L
 private const val STREAM_CLOSE_JOIN_DEADLINE_MILLIS = 500L
 private const val CLEANUP_DEADLINE_MILLIS = 10_000L
 private const val FORCE_KILL_REAP_DEADLINE_MILLIS = 2_000L
-private const val SUITE_DEADLINE_MILLIS = 340_000L
+private const val SUITE_DEADLINE_MILLIS = 460_000L
 private const val SIGTERM_EXIT_STATUS = 143
 
 private lateinit var httpClient: HttpClient
@@ -254,10 +314,28 @@ private class Fixture(
         port: String = loopbackSocket().use { it.localPort.toString() },
         host: String = "127.0.0.1",
         gitEnabled: Boolean = false,
+        storageBackend: String = "local",
+        extraEnvironment: Map<String, String> = emptyMap(),
     ): CompletedChild =
-        withChild(caseName, port, host, gitEnabled) { child ->
+        withChild(caseName, port, host, gitEnabled, storageBackend, extraEnvironment) { child ->
             child.awaitExit(PROCESS_DEADLINE_MILLIS)
         }
+
+    fun runHoldingDataDirLock(
+        caseName: String,
+        port: String = loopbackSocket().use { it.localPort.toString() },
+        host: String = "127.0.0.1",
+        gitEnabled: Boolean = false,
+        storageBackend: String = "local",
+        extraEnvironment: Map<String, String> = emptyMap(),
+    ): CompletedChild {
+        val lock = requireNotNull(DataDirLock.tryAcquire(data))
+        return try {
+            run(caseName, port, host, gitEnabled, storageBackend, extraEnvironment)
+        } finally {
+            lock.close()
+        }
+    }
 
     fun runHealthy(caseName: String): CompletedChild {
         val port = loopbackSocket().use { it.localPort.toString() }
@@ -279,11 +357,13 @@ private class Fixture(
         port: String,
         host: String,
         gitEnabled: Boolean,
+        storageBackend: String = "local",
+        extraEnvironment: Map<String, String> = emptyMap(),
         block: (RunningChild) -> CompletedChild,
     ): CompletedChild {
         val child =
             try {
-                launch(caseName, port, host, gitEnabled)
+                launch(caseName, port, host, gitEnabled, storageBackend, extraEnvironment)
             } catch (failure: Throwable) {
                 writeFailureOutcome(caseName, failure)
                 throw failure
@@ -323,7 +403,14 @@ private class Fixture(
         return requireNotNull(result)
     }
 
-    private fun launch(caseName: String, port: String, host: String, gitEnabled: Boolean): RunningChild {
+    private fun launch(
+        caseName: String,
+        port: String,
+        host: String,
+        gitEnabled: Boolean,
+        storageBackend: String,
+        extraEnvironment: Map<String, String>,
+    ): RunningChild {
         watchdog.check()
         val java = Path.of(System.getProperty("java.home"), "bin", "java")
         val classpath = System.getProperty(MAIN_RUNTIME_CLASSPATH_PROPERTY).orEmpty()
@@ -340,13 +427,13 @@ private class Fixture(
             "LC_ALL" to locale(),
             "DATA_DIR" to data.toString(),
             "CONTENT_DIR" to content.toString(),
-            "PLAINBASE_STORAGE_BACKEND" to "local",
+            "PLAINBASE_STORAGE_BACKEND" to storageBackend,
             "PLAINBASE_GIT_ENABLED" to gitEnabled.toString(),
             "PLAINBASE_AUTH_MODE" to "off",
             "PLAINBASE_HOST" to host,
             "PLAINBASE_PORT" to port,
             "PLAINBASE_LOG_LEVEL" to "INFO",
-        )
+        ).apply { putAll(extraEnvironment) }
         val argv = listOf(
             java.toString(),
             "--enable-native-access=ALL-UNNAMED",
@@ -809,6 +896,97 @@ private fun resolvedGit(): Path {
         .firstOrNull { Files.isExecutable(it) }
         ?.toRealPath()
         ?: error("git is required on the test JVM PATH")
+}
+
+private data class CliV17Signature(val userVersion: Long, val columns: List<String>, val observation: Long)
+
+private data class CliHeldLockObservation(
+    val appFamily: Map<String, String>,
+    val searchFamily: Map<String, String>,
+    val appSchema: CliV17Signature,
+    val mirror: Map<String, String>,
+)
+
+private fun seedCliV17Database(path: Path) {
+    DriverManager.getConnection("jdbc:sqlite:$path").use { raw ->
+        raw.createStatement().use { statement ->
+            statement.execute(
+                "CREATE TABLE root_observation (root TEXT NOT NULL PRIMARY KEY, observation_id INTEGER NOT NULL)",
+            )
+            statement.execute("INSERT INTO root_observation(root, observation_id) VALUES ('docs', 100)")
+            statement.execute("PRAGMA user_version = 17")
+        }
+    }
+}
+
+private fun seedCliSearchDatabase(path: Path) {
+    SearchDb(path).close()
+}
+
+private fun captureCliHeldLockObservation(data: Path, mirror: Path): CliHeldLockObservation =
+    CliHeldLockObservation(
+        appFamily = cliFingerprintFamily(cliFileFamily(data, "plainbase.db")),
+        searchFamily = cliFingerprintFamily(cliFileFamily(data, "search.db")),
+        appSchema = cliV17Signature(data.resolve("plainbase.db")),
+        mirror = cliFingerprintFamily(cliTreeSnapshot(mirror)),
+    )
+
+private fun cliV17Signature(path: Path): CliV17Signature =
+    DriverManager.getConnection("jdbc:sqlite:file:${path.toAbsolutePath().normalize()}?mode=ro").use { raw ->
+        val version = raw.createStatement().use { statement ->
+            statement.executeQuery("PRAGMA user_version").use { result ->
+                check(result.next())
+                result.getLong(1)
+            }
+        }
+        val columns = raw.createStatement().use { statement ->
+            statement.executeQuery("PRAGMA table_info(root_observation)").use { result ->
+                buildList {
+                    while (result.next()) add(result.getString("name"))
+                }
+            }
+        }
+        val observation = raw.createStatement().use { statement ->
+            statement.executeQuery("SELECT observation_id FROM root_observation WHERE root = 'docs'").use { result ->
+                check(result.next())
+                result.getLong(1)
+            }
+        }
+        CliV17Signature(version, columns, observation)
+    }
+
+private fun cliFileFamily(dir: Path, stem: String): Map<String, ByteArray> =
+    listOf(stem, "$stem-wal", "$stem-shm", "$stem-journal")
+        .filter { Files.exists(dir.resolve(it)) }
+        .associateWith { Files.readAllBytes(dir.resolve(it)) }
+
+private fun cliTreeSnapshot(root: Path): Map<String, ByteArray> =
+    Files.walk(root).use { paths ->
+        paths.filter { Files.isRegularFile(it) }
+            .map { root.relativize(it).toString() to Files.readAllBytes(it) }
+            .toList()
+            .toMap()
+    }
+
+private fun cliFingerprintFamily(family: Map<String, ByteArray>): Map<String, String> = family.mapValues { (_, bytes) ->
+    MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+}
+
+private fun writeCliHeldLockObservation(before: CliHeldLockObservation, after: CliHeldLockObservation) {
+    Files.createDirectories(evidenceDirectory)
+    Files.writeString(
+        evidenceDirectory.resolve("heldDataLockObjectPriorSchema.state"),
+        buildString {
+            appendLine("before.app_family=${before.appFamily}")
+            appendLine("after.app_family=${after.appFamily}")
+            appendLine("before.search_family=${before.searchFamily}")
+            appendLine("after.search_family=${after.searchFamily}")
+            appendLine("before.app_schema=${before.appSchema}")
+            appendLine("after.app_schema=${after.appSchema}")
+            appendLine("before.mirror=${before.mirror}")
+            appendLine("after.mirror=${after.mirror}")
+        },
+    )
 }
 
 private fun locale(): String =

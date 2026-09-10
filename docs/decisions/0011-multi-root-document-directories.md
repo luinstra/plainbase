@@ -177,7 +177,8 @@ chokepoint: `.git` is a real directory; `rev-parse --show-toplevel` equals the r
 sides toRealPath); `--show-superproject-working-tree` is empty; git-dir == git-common-dir.
 Violations are loud boot errors naming the failed check. Legacy/synthesized main keeps `auto` -
 today's laxer detection including the deliberate .git-as-file worktree acceptance
-(`HistoryModule.kt`, gitEnabled) - so existing worktree deployments are grandfathered, never
+(`frameworks/runtime/RootHistorySelection.kt`, gitEnabled) - so existing worktree deployments are grandfathered,
+never
 broken by an upgrade. (Synthesis #4; C1 stores the mode, C4 enforces.)
 
 ### D5 - an unavailable root is 503 and sticky; unavailability grants no new purge authority

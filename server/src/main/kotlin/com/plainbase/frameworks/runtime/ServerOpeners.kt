@@ -5,7 +5,6 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.config.PlainbaseConfig
-import com.plainbase.frameworks.filesystem.FileAtomics
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStore
@@ -28,15 +27,7 @@ internal data class LocalStoreInputs(
 internal class ServerOpeners(
     val openDriver: (Path) -> SqlDriver = { path -> DatabaseFactory.createDriver(path) },
     val openLocal: (LocalStoreInputs) -> LocalContentStore = { inputs ->
-        LocalContentStore(
-            root = inputs.root,
-            ignoreRules = inputs.ignoreRules,
-            exclusions = inputs.exclusions,
-            atomics = FileAtomics.Real,
-            rootName = inputs.rootName,
-            onRootUnavailable = inputs.onRootUnavailable,
-            onIdentityRebind = inputs.onIdentityRebind,
-        )
+        RootStoreFactory.local(inputs)
     },
     val openObject: (
         PlainbaseConfig,

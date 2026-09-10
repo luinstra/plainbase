@@ -3,6 +3,7 @@ package com.plainbase.frameworks.spike
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.search.PageDocuments
 import com.plainbase.domain.search.SearchQuery
@@ -13,8 +14,8 @@ import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.systemCommandOutput
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
-import com.plainbase.frameworks.koin.contentModule
-import com.plainbase.frameworks.koin.historyModule
+import com.plainbase.frameworks.koin.createContentModule
+import com.plainbase.frameworks.koin.createHistoryModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.repositoryModule
 import com.plainbase.frameworks.koin.restModule
@@ -25,6 +26,8 @@ import com.plainbase.frameworks.ktor.plainbaseModule
 import com.plainbase.frameworks.mcp.MCP_PATH
 import com.plainbase.frameworks.mcp.McpTools
 import com.plainbase.frameworks.objectstore.SigV4Signer
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.security.Argon2PasswordHasher
@@ -495,14 +498,24 @@ object NativeSpike {
                 "PLAINBASE_GIT_ENABLED" to "false", // no git gate in the spike
             ),
         )
+        val openers = ServerOpeners()
+        val bootInputs = prepareRootBootInputs(config, openers.openLocal)
         val app = koinApplication {
             modules(
                 module { single { config } },
-                contentModule, repositoryModule, securityModule, indexModule, checkpointModule, searchModule, historyModule, restModule,
+                createContentModule(config, bootInputs, openers.openObject),
+                repositoryModule,
+                securityModule,
+                indexModule,
+                checkpointModule,
+                searchModule,
+                createHistoryModule(config, bootInputs.history),
+                restModule,
             )
         }
         val koin = app.koin
         try {
+            bootInputs.signals.arm(koin.get<ObservationEpoch>()::broke)
             val builder = koin.get<IndexBuilder>()
             builder.rebuild()
             val seedPageId = builder.current.pages.first().id.value

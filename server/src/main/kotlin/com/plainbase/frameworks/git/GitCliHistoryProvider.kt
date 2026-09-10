@@ -44,9 +44,9 @@ class GitCliHistoryProvider(
     private val maintenance: (() -> Unit)? = null,
     // C5 MUST-BIND 3: the object-mode shared write monitor (`GitRepoLocks.repoWrite`), so a concurrent
     // `GitBundleDr.ship()`'s `bundle create` cannot tear a commit's ref mutation (HOLE B / Cluster-3a).
-    // Null on LOCAL (the historyModule wiring never passes one there) - unwrapped, byte-identical to
+    // Null on LOCAL (prepared LOCAL history never passes one there) - unwrapped, byte-identical to
     // pre-C5 behavior.
-    private val repoWriteMonitor: Any? = null,
+    internal val repoWriteMonitor: Any? = null,
     // C5 BLOCKING-1 (review fold): true ONLY for the object-mode wiring, whose `.git` lives at the
     // mirror root and is expected to be transiently MISSING or INCOMPLETE (a fresh boot, a crash
     // mid-restore) - `GitBundleDr.restore()` owns diagnosing and repairing that INSIDE the data-dir

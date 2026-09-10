@@ -68,7 +68,7 @@ class ServerRunNativeTest {
     }
 
     @Test
-    fun `an object run closes pre-lock resources while the native data lock remains held`() {
+    fun `an object run defers construction while the native data lock remains held`() {
         withBoundedFixtureBase("plainbase-server-run-native-object") { base ->
             val data = Files.createDirectory(base.resolve("data"))
             val content = base.resolve("unused-content")
@@ -131,15 +131,15 @@ class ServerRunNativeTest {
                 )
 
                 assertEquals(1, status)
-                assertEquals(1, driverOpens.get())
-                assertEquals(1, driverCloses.get())
-                assertEquals(1, objectOpens.get())
-                assertEquals(1, objectCloses.get())
+                assertEquals(0, driverOpens.get())
+                assertEquals(0, driverCloses.get())
+                assertEquals(0, objectOpens.get())
+                assertEquals(0, objectCloses.get())
                 assertEquals(0, searchOpens.get())
                 assertEquals(0, searchCloses.get())
                 assertEquals(1, contextCloses.get())
-                assertEquals(before + 1, ObjectContentStore.constructions.get())
-                assertEquals(true, Files.exists(data.resolve("plainbase.db")))
+                assertEquals(before, ObjectContentStore.constructions.get())
+                assertEquals(false, Files.exists(data.resolve("plainbase.db")))
                 assertTrue(Files.readAllBytes(sentinel).contentEquals(mirrorBefore))
             } finally {
                 held.close()

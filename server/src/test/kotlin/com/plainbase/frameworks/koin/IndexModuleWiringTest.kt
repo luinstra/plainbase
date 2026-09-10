@@ -2,6 +2,9 @@ package com.plainbase.frameworks.koin
 
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.service.IndexBuilder
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -21,13 +24,16 @@ import org.koin.dsl.module
 class IndexModuleWiringTest : FunSpec({
 
     test("the production module set resolves IndexBuilder (indexModule is installed)") {
+        val config = PlainbaseConfig.fromEnv(emptyMap())
+        val openers = ServerOpeners()
+        val inputs = prepareRootBootInputs(config, openers.openLocal)
         val app = koinApplication {
             modules(
-                configModule,
-                contentModule,
+                module { single { config } },
+                createContentModule(config, inputs, openers.openObject),
                 repositoryModule,
                 securityModule,
-                historyModule,
+                createHistoryModule(config, inputs.history),
                 indexModule,
                 module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
             )

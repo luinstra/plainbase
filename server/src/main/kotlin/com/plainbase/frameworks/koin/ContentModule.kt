@@ -1,6 +1,7 @@
 package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.content.ContentStore
+import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.repository.DirtyPageRepository
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.NoRetirements
@@ -8,30 +9,21 @@ import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
-import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
-import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.RowsAtStart
-import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStore
-import com.plainbase.frameworks.runtime.LocalStoreInputs
-import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.RootBootInputs
 import org.koin.dsl.module
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.time.Clock
-
-/** R9 test hook: counts constructions of the contentDir [LocalContentStore] provider below. */
-internal val contentDirStoreConstructions = AtomicInteger()
 
 /**
  * Wires the content tree adapter. Constructor DSL only - no reflection (native-image gate).
@@ -39,16 +31,23 @@ internal val contentDirStoreConstructions = AtomicInteger()
  * `content.ignore` globs are a future config surface (Phase 2+); for now the [IgnoreRules]
  * always-ignore set (`.git`, dotfiles) is sufficient, so the glob list is empty.
  *
- * Both concrete providers are declared UNCONDITIONALLY but are LAZY: the lambda runs only when the
- * provider is RESOLVED, and the port alias resolves exactly one of them per `storage.backend` - the
- * other stays a dead provider, never constructed (R9, counter-proven by
- * `LocalBootNoObjectConstructionTest`). In object mode nothing resolves the contentDir store (the
- * `historyModule` `repoPath` lambda is lazy and backend-conditional), so CONTENT_DIR is never touched.
+ * The LOCAL stores are prepared before the lock and registered here by identity. The OBJECT primary stays a lazy
+ * definition so resolving this module never opens its transport or its database.
  */
-internal fun createContentModule(openers: ServerOpeners) = module {
-    single { IgnoreRules() }
-    single<RootRegistry> { RootRegistry.of(get<PlainbaseConfig>().roots.list) }
-    single { RootAvailability(Clock.System) }
+internal fun createContentModule(
+    config: PlainbaseConfig,
+    inputs: RootBootInputs,
+    openObject: (
+        PlainbaseConfig,
+        IgnoreRules,
+        () -> Set<TreePath>,
+        (TreePath) -> Boolean,
+        () -> RowsAtStart,
+    ) -> ObjectContentStore,
+) = module {
+    single { inputs.ignoreRules }
+    single<RootRegistry> { inputs.registry }
+    single { inputs.availability }
     // The availability holder's non-sticky twin: `serve()` records each watcher's coverage into it and `/healthz`
     // reads it. ONE instance for both, which is the whole reason it is a single - two would report a convergence
     // nobody observed.
@@ -72,66 +71,38 @@ internal fun createContentModule(openers: ServerOpeners) = module {
     // looking at is the tree our rows describe. It degrades on the SAME boot-gate seal as the epochs above, and for
     // the same reason: a graph with no app database has no durable latch, so it can promote nothing and grant nothing.
     single { BindingLatch(getOrNull() ?: NoTopology) }
-    single<LocalContentStore> {
-        val config = get<PlainbaseConfig>()
-        contentDirStoreConstructions.incrementAndGet() // R9: object boot must never run this lambda
-        val primary = get<RootRegistry>().primary
-        // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
-        // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
-        // and its writes would re-trigger every rebuild.
-        openers.openLocal(
-            LocalStoreInputs(
-                root = requireNotNull(primary.localPath),
-                ignoreRules = get(),
-                exclusions = listOf(config.dataDir),
-                rootName = primary.name,
-                onRootUnavailable = { get<RootAvailability>().markUnavailable(primary.name, UnavailableCause.VANISHED) },
-                // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
-                // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
-                onIdentityRebind = { get<ObservationEpoch>().broke(primary.name, BreakCause.IDENTITY_REBIND) },
-            ),
-        )
+    val primary = inputs.registry.primary
+    if (inputs.localStores.containsKey(primary.name)) {
+        single<LocalContentStore> { inputs.localStores.getValue(primary.name) }
     }
-    // The per-root content trees. Construction for a configured root is ALWAYS allowed and is INERT for a missing
-    // path (the store's init only normalizes paths - it touches no disk); what availability suppresses is OPERATION:
-    // a root that is not there is never scanned and never watched. So there is no pre-probing before construction
-    // anywhere, which is what keeps the wiring straightforward.
     single {
-        val config = get<PlainbaseConfig>()
-        val registry = get<RootRegistry>()
-        val availability = get<RootAvailability>()
-        val ignoreRules = get<IgnoreRules>()
-        // The primary rides the backend-selected store, taken EXPLICITLY; this fold sees ONLY extras (the C4
-        // HistoryModule bug shape, which RootWiringArchitectureTest pins out).
-        RootStores(
-            mapOf(registry.primary.name to get<ContentStore>()) +
-                registry.extras.associate { root ->
-                    root.name to openers.openLocal(
-                        LocalStoreInputs(
-                            root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                            ignoreRules = ignoreRules,
-                            // Extras inherit the primary's DATA_DIR exclusion so a legally-nested data dir is never walked
-                            // as content.
-                            exclusions = listOf(config.dataDir),
-                            rootName = root.name,
-                            onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
-                            // Resolved INSIDE the callback, like `onRootUnavailable` above: it fires on a rebind, not on a
-                            // construction, so the boot gate's graph never has to hold an epoch it has no business holding.
-                            onIdentityRebind = { get<ObservationEpoch>().broke(root.name, BreakCause.IDENTITY_REBIND) },
-                        ),
-                    )
-                },
-        )
+        val primaryStore = inputs.localStores[primary.name] ?: run {
+            check(config.storage.backend == StorageBackend.OBJECT) {
+                "no prepared LOCAL store for root '${primary.name}': the required LOCAL input was omitted"
+            }
+            get<ContentStore>()
+        }
+        val stores = buildMap {
+            put(primary.name, primaryStore)
+            inputs.registry.extras.forEach { root ->
+                put(
+                    root.name,
+                    requireNotNull(inputs.localStores[root.name]) {
+                        "no prepared LOCAL store for root '${root.name}': the required LOCAL input was omitted"
+                    },
+                )
+            }
+        }
+        RootStores(stores)
     }
     single<ObjectContentStore> {
-        val config = get<PlainbaseConfig>()
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
-        val primary = get<RootRegistry>().primary.name
-        openers.openObject(
+        val primary = inputs.registry.primary.name
+        openObject(
             config,
-            get(),
+            inputs.ignoreRules,
             // Object mode is always a synthesized main, so every dirty row IS main's; the factory
             // wants bare TreePaths of the main mirror.
             { dirtyPages.all().map { it.path.path }.toSet() },
@@ -149,18 +120,14 @@ internal fun createContentModule(openers: ServerOpeners) = module {
             },
         )
     }
-    // Backend selection (Q9): the port ALIASES the selected backend's concrete adapter (one instance,
-    // two keys). Consumers depend on the backend-neutral ContentStore; the git-history wiring binds to
-    // the concrete local store's resolveRepoRelativePath surface lazily (historyModule).
+    // Backend selection aliases the selected concrete adapter; the other backend remains unconstructed.
     single<ContentStore> {
-        when (get<PlainbaseConfig>().storage.backend) {
+        when (config.storage.backend) {
             StorageBackend.LOCAL -> get<LocalContentStore>()
             StorageBackend.OBJECT -> get<ObjectContentStore>()
         }
     }
 }
-
-val contentModule = createContentModule(ServerOpeners())
 
 /**
  * The per-root [ContentStore] map, built from the registry - so a name it does not hold is a PROGRAMMING error, not
@@ -178,14 +145,6 @@ class RootStores(private val byRoot: Map<RootName, ContentStore>) {
     operator fun get(root: RootName): ContentStore = requireNotNull(byRoot[root]) {
         "no store for root '$root': a per-root lookup ran on an unregistered root - resolve PageRootResolver.statusOf first"
     }
-
-    /**
-     * [root]'s tree as the CONCRETE local adapter, or null when it is not one (an object-backed main). The git
-     * wiring needs it for `resolveRepoRelativePath`: staging git paths is a local-filesystem concern the
-     * backend-neutral port deliberately does not carry, and a git path re-derived from the NFC `TreePath` would be a
-     * phantom that does not match the real file on a normalization-preserving filesystem.
-     */
-    fun localOrNull(root: RootName): LocalContentStore? = byRoot[root] as? LocalContentStore
 
     /**
      * [root]'s bucket listings, or null when it is not object-backed (C3). The rebuild's OBJECT_LIST proof source:

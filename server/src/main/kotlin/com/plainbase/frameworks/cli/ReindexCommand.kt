@@ -145,7 +145,7 @@ object ReindexCommand {
      *
      * **Every configured root is a source.** A main-only source list would omit other roots from the fresh page pass
      * and report an incomplete corpus, even though unretired engine rows may carry. The registry drives the source
-     * list exactly as it drives `RootStores` in `contentModule`.
+     * list exactly as it drives `RootStores` in `createContentModule`.
      */
     private fun rebuildSearchIndex(
         config: PlainbaseConfig,
@@ -205,7 +205,7 @@ object ReindexCommand {
     }
 
     /**
-     * One store per configured root - the offline twin of `contentModule`'s `RootStores`: main rides the
+     * One store per configured root - the offline twin of `createContentModule`'s `RootStores`: main rides the
      * backend-selected store, and extras are LOCAL-only (D10 keeps object mode single-root). Name-keyed; its
      * insertion order is nobody's contract (the source list is built from `registry.roots`, and `IndexBuilder`
      * re-sorts by rank anyway). A failure part-way through closes whatever was already opened, so an unreachable

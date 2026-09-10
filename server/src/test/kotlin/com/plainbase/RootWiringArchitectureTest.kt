@@ -5,6 +5,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.string.shouldContain
 import java.nio.file.Files
 import kotlin.io.path.extension
 import kotlin.io.path.isRegularFile
@@ -92,6 +93,14 @@ class RootWiringArchitectureTest : FunSpec({
         names.containsAll(
             setOf("HistoryModule.kt", "ContentModule.kt", "AdoptCommand.kt", "ReindexCommand.kt", "RootRegistry.kt"),
         ).shouldBeTrue()
+    }
+
+    test("the minimal LOCAL factory is present and is used at the preparation boundary") {
+        val runtime = mainRoot.resolve("frameworks/runtime")
+        runtime.resolve("RootStoreFactory.kt").readText() shouldContain "internal object RootStoreFactory"
+        runtime.resolve("RootStoreFactory.kt").readText() shouldContain "LocalContentStore("
+        runtime.resolve("ServerOpeners.kt").readText() shouldContain "RootStoreFactory.local(inputs)"
+        runtime.resolve("RootBootPreparation.kt").readText() shouldContain "openLocal("
     }
 
     test(

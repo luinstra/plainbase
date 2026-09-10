@@ -7,6 +7,8 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.S3ObjectClient
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import org.koin.dsl.koinApplication
@@ -16,7 +18,7 @@ import java.nio.file.Files
 /**
  * History-only graph check: resolving `HistoryProvider` + calling `gateCheck()` for an
  * object+`git.enabled=true` graph must construct ZERO [ObjectContentStore]/[S3ObjectClient]. The
- * object-mode `repoPath` lambda resolves the store on CALL (commit time), never while this history
+ * object-mode `repoPath` callback is deferred until the prepared mirror is armed, never while this history
  * graph is wired or checked. The gate check must PASS even though `DATA_DIR/mirror` does not exist
  * yet; this test never creates it and proves the construction counters directly.
  */
@@ -27,8 +29,17 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
         val s3Before = S3ObjectClient.constructions.get()
 
         withTempDataDir { dataDir ->
+            val config = objectGitEnabledConfig(dataDir)
+            val openers = ServerOpeners()
+            val inputs = prepareRootBootInputs(config, openers.openLocal)
             val app = koinApplication {
-                modules(objectGitEnabledConfigModule(dataDir), contentModule, repositoryModule, securityModule, historyModule)
+                modules(
+                    module { single { config } },
+                    createContentModule(config, inputs, openers.openObject),
+                    repositoryModule,
+                    securityModule,
+                    createHistoryModule(config, inputs.history),
+                )
             }
             try {
                 val history = app.koin.get<HistoryProvider>()
@@ -49,9 +60,7 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
     // Local), hence this second, synthesized-from-env graph.
     test("object synthesis (main has no local path): HistoryProvider resolves and gate-checks without throwing") {
         withTempDataDir { dataDir ->
-            val objectEnvConfig = module {
-                single {
-                    PlainbaseConfig.fromEnv(
+            val objectEnvConfig = PlainbaseConfig.fromEnv(
                         mapOf(
                             "DATA_DIR" to dataDir.toString(),
                             "PLAINBASE_STORAGE_BACKEND" to "object",
@@ -62,10 +71,16 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
                             "PLAINBASE_GIT_ENABLED" to "true",
                         ),
                     )
-                }
-            }
+            val openers = ServerOpeners()
+            val inputs = prepareRootBootInputs(objectEnvConfig, openers.openLocal)
             val app = koinApplication {
-                modules(objectEnvConfig, contentModule, repositoryModule, securityModule, historyModule)
+                modules(
+                    module { single { objectEnvConfig } },
+                    createContentModule(objectEnvConfig, inputs, openers.openObject),
+                    repositoryModule,
+                    securityModule,
+                    createHistoryModule(objectEnvConfig, inputs.history),
+                )
             }
             try {
                 app.koin.get<HistoryProvider>().gateCheck()
@@ -76,21 +91,18 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
     }
 })
 
-private fun objectGitEnabledConfigModule(dataDir: java.nio.file.Path) = module {
-    single {
-        PlainbaseConfig.fromEnv(emptyMap()).copy(
-            dataDir = dataDir,
-            storage = StorageConfig(
-                backend = StorageBackend.OBJECT,
-                endpoint = "https://acct.example.com",
-                bucket = "docs",
-                accessKeyId = "k",
-                secretAccessKey = "s",
-            ),
-            git = GitConfig(enabled = true),
-        )
-    }
-}
+private fun objectGitEnabledConfig(dataDir: java.nio.file.Path): PlainbaseConfig =
+    PlainbaseConfig.fromEnv(emptyMap()).copy(
+        dataDir = dataDir,
+        storage = StorageConfig(
+            backend = StorageBackend.OBJECT,
+            endpoint = "https://acct.example.com",
+            bucket = "docs",
+            accessKeyId = "k",
+            secretAccessKey = "s",
+        ),
+        git = GitConfig(enabled = true),
+    )
 
 private fun withTempDataDir(block: (java.nio.file.Path) -> Unit) {
     val dir = Files.createTempDirectory("plainbase-object-boot-no-transport")

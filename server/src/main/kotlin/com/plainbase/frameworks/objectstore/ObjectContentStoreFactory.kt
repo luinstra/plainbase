@@ -9,7 +9,7 @@ import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 
 /**
- * The ONE construction recipe for the object-backend hybrid, shared by `contentModule` and the
+ * The ONE construction recipe for the object-backend hybrid, shared by `createContentModule` and the
  * offline CLIs (`adopt`/`reindex`) so the three build it one way, never three: the SigV4 client from
  * `storage.object.*`, the inner mirror over `DATA_DIR/mirror` (app-owned derived state, Q10), and
  * the etag map at `DATA_DIR/mirror-state` (M1).

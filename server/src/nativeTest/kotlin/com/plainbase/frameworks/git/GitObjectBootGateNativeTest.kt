@@ -37,7 +37,7 @@ class GitObjectBootGateNativeTest {
                 defaultCommitter = CommitIdentity("Plainbase", "plainbase@localhost"),
                 clock = fixedClock,
                 maintenance = {},
-                objectMode = true, // the real object-mode wiring this test models (`historyModule`)
+                objectMode = true, // the prepared object-mode history selection this test models
             )
 
             provider.gateCheck() // must not throw - this is the whole assertion

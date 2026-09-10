@@ -1,5 +1,9 @@
 package com.plainbase
 
+import app.cash.sqldelight.db.QueryResult
+import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlPreparedStatement
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.classic.spi.ThrowableProxy
@@ -7,17 +11,27 @@ import ch.qos.logback.core.AppenderBase
 import ch.qos.logback.core.read.ListAppender
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.page.PageId
+import com.plainbase.domain.repository.AgentMode
+import com.plainbase.domain.root.HistoryMode
+import com.plainbase.domain.root.Root
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootBackend
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.frameworks.cli.CommandOutput
 import com.plainbase.frameworks.cli.WriteIntent
 import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.config.RootsConfig
+import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.lifecycle.ServerRunControl
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.ObjectStoreException
+import com.plainbase.frameworks.runtime.LocalStoreInputs
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
@@ -32,6 +46,10 @@ import io.kotest.matchers.types.shouldNotBeSameInstanceAs
 import org.koin.core.context.GlobalContext
 import org.slf4j.LoggerFactory
 import java.net.ServerSocket
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -132,6 +150,9 @@ class ServerRunTest : FunSpec({
         withLocalFixture { content, data ->
             requireNoGlobalContext()
             val events = Collections.synchronizedList(mutableListOf<String>())
+            val bootAvailability = AtomicReference<RootAvailability>()
+            val runtimeContext = AtomicReference<RouteContext>()
+            val watcherRoots = Collections.synchronizedList(mutableListOf<RootName>())
             val port = freePort()
             var hook: Thread? = null
             val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
@@ -149,6 +170,9 @@ class ServerRunTest : FunSpec({
                                 hook = installed
                                 events += "hook:${installed.name}"
                             },
+                            onBootAvailability = bootAvailability::set,
+                            onRuntimeContext = runtimeContext::set,
+                            onWatcherRegistration = watcherRoots::add,
                             closeDriver = { driver ->
                                 requireLockHeld(data)
                                 driver.close()
@@ -170,6 +194,8 @@ class ServerRunTest : FunSpec({
                 val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
 
                 status shouldBe 0
+                requireNotNull(bootAvailability.get()) shouldBeSameInstanceAs requireNotNull(runtimeContext.get()).availability
+                watcherRoots shouldContainExactly listOf(RootName.PRIMARY)
                 hook shouldNotBe null
                 events.count { it == "driver" } shouldBe 1
                 events.count { it == "search" } shouldBe 1
@@ -601,7 +627,7 @@ class ServerRunTest : FunSpec({
         }
     }
 
-    test("an OBJECT run preserves current pre-lock construction and refuses a held DATA_DIR lock without hydration") {
+    test("an OBJECT run defers resource construction and refuses a held DATA_DIR lock without hydration") {
         val base = Files.createTempDirectory("plainbase-server-run-object")
         withFixtureScope(base) {
             val data = Files.createDirectory(base.resolve("data"))
@@ -665,15 +691,15 @@ class ServerRunTest : FunSpec({
                     )
                 }
                 status shouldBe 1
-                driverOpens.get() shouldBe 1
-                driverCloses.get() shouldBe 1
-                objectOpens.get() shouldBe 1
-                objectCloses.get() shouldBe 1
+                driverOpens.get() shouldBe 0
+                driverCloses.get() shouldBe 0
+                objectOpens.get() shouldBe 0
+                objectCloses.get() shouldBe 0
                 searchOpens.get() shouldBe 0
                 searchCloses.get() shouldBe 0
                 contextCloses.get() shouldBe 1
-                ObjectContentStore.constructions.get() shouldBe before + 1
-                Files.exists(data.resolve("plainbase.db")) shouldBe true
+                ObjectContentStore.constructions.get() shouldBe before
+                Files.exists(data.resolve("plainbase.db")) shouldBe false
                 treeFingerprint(mirror) shouldBe mirrorBefore
             } finally {
                 lock.close()
@@ -778,6 +804,256 @@ class ServerRunTest : FunSpec({
             interrupted.await(1, TimeUnit.SECONDS) shouldBe true
             timeout.message shouldContain "100ms"
             requireNotNull(observedWorker.get()).isAlive shouldBe false
+        }
+    }
+
+    test("localSignalsDrainBeforeDetachedGuard") {
+        withLocalFixture { content, data ->
+            val database = data.resolve("plainbase.db")
+            seedCurrentDatabase(database)
+            seedObservation(database, 100L)
+            val replacement = Files.createDirectory(content.parent.resolve("replacement"))
+            Files.writeString(replacement.resolve("index.md"), "# Replacement\n")
+            val retainedKey = requireNotNull(
+                Files.readAttributes(
+                    content,
+                    java.nio.file.attribute.BasicFileAttributes::class.java,
+                ).fileKey(),
+            )
+            val replacementKey = AtomicReference<Any?>()
+            val localInputs = AtomicReference<LocalStoreInputs>()
+            val observations = Collections.synchronizedList(mutableListOf<RootObservationWrite>())
+            val driverRef = AtomicReference<ProductionOracleDriver>()
+            val defaults = ServerOpeners()
+            val runOpeners = ServerOpeners(
+                openDriver = { path ->
+                    val real = defaults.openDriver(path)
+                    ProductionOracleDriver(real, RootName.PRIMARY, observations).also(driverRef::set)
+                },
+                openLocal = { inputs ->
+                    localInputs.set(inputs)
+                    val store = defaults.openLocal(inputs)
+                    Files.move(inputs.root, content.parent.resolve("original-retained"))
+                    Files.move(replacement, inputs.root)
+                    replacementKey.set(
+                        Files.readAttributes(inputs.root, java.nio.file.attribute.BasicFileAttributes::class.java).fileKey(),
+                    )
+                    store
+                },
+            )
+            val bootAvailability = AtomicReference<RootAvailability>()
+            val runtimeContext = AtomicReference<RouteContext>()
+            val status = runServerBounded {
+                runServer(
+                    localConfig(content, data),
+                    RecordingOutput(),
+                    runOpeners,
+                    ServerRunControl(
+                        onBootAvailability = bootAvailability::set,
+                        onRuntimeContext = runtimeContext::set,
+                        startServer = { server ->
+                            val driver = requireNotNull(driverRef.get())
+                            driver.detachedRootQueries.get() shouldBe 1
+                            synchronized(driver.detachedObservationTokens) {
+                                driver.detachedObservationTokens.toList()
+                            } shouldContainExactly listOf(101L)
+                            retainedKey shouldNotBe replacementKey.get()
+                            val availability = requireNotNull(bootAvailability.get())
+                            availability shouldBeSameInstanceAs requireNotNull(runtimeContext.get()).availability
+                            availability.current().isAvailable(RootName.PRIMARY) shouldBe true
+
+                            val before = synchronized(observations) { observations.size }
+                            val invokingThread = Thread.currentThread()
+                            requireNotNull(localInputs.get()).onIdentityRebind()
+                            val writes = synchronized(observations) { observations.toList().drop(before) }
+                            val matchingWrites = writes.filter { write ->
+                                write.root == RootName.PRIMARY && write.thread === invokingThread
+                            }
+                            matchingWrites.size shouldBe 1
+                            matchingWrites.single().root shouldBe RootName.PRIMARY
+                            matchingWrites.single().thread shouldBeSameInstanceAs invokingThread
+                            availability.current().isAvailable(RootName.PRIMARY) shouldBe true
+                            server.start(wait = false)
+                            server.stop()
+                        },
+                        closeDriver = { driver ->
+                            requireLockHeld(data)
+                            driver.close()
+                        },
+                        closeSearch = { search ->
+                            requireLockHeld(data)
+                            search.close()
+                        },
+                        closeContext = { app ->
+                            requireLockHeld(data)
+                            app.close()
+                        },
+                    ),
+                )
+            }
+
+            status shouldBe 0
+            driverRef.get()?.detachedRootQueries?.get() shouldBe 1
+        }
+    }
+
+    test("missingExtraRetainsAvailabilityAcrossHandoff") {
+        withLocalFixture { content, data ->
+            val extra = content.parent.resolve("missing-extra")
+            val extraName = RootName.require("extra")
+            val pageId = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5c")
+            seedCurrentDatabase(data.resolve("plainbase.db"))
+            seedBinding(data.resolve("plainbase.db"), extraName, TreePath.require("notes/rollback.md"), pageId)
+            val roots = RootsConfig.of(
+                listOf(
+                    Root(RootName.PRIMARY, RootBackend.Local(content), editable = true, history = HistoryMode.OFF),
+                    Root(extraName, RootBackend.Local(extra), editable = true, history = HistoryMode.OFF),
+                ),
+                origin = RootsOrigin.EXPLICIT,
+            )
+            val config = PlainbaseConfig(
+                contentDir = content,
+                dataDir = data,
+                host = "127.0.0.1",
+                port = freePort(),
+                auth = AuthConfig(mode = AuthMode.BUILTIN),
+                git = GitConfig(enabled = false),
+                roots = roots,
+            )
+            val inputsByRoot = ConcurrentHashMap<RootName, LocalStoreInputs>()
+            val defaults = ServerOpeners()
+            val bootAvailability = AtomicReference<RootAvailability>()
+            val runtimeContext = AtomicReference<RouteContext>()
+            val watchedRoots = Collections.synchronizedList(mutableListOf<RootName>())
+            val status = runServerBounded {
+                runServer(
+                    config,
+                    RecordingOutput(),
+                    openers = ServerOpeners(
+                        openLocal = { inputs ->
+                            inputsByRoot[inputs.rootName] = inputs
+                            defaults.openLocal(inputs)
+                        },
+                    ),
+                    control = ServerRunControl(
+                        onBootAvailability = bootAvailability::set,
+                        onRuntimeContext = runtimeContext::set,
+                        onWatcherRegistration = watchedRoots::add,
+                        startServer = { server ->
+                            val boot = requireNotNull(bootAvailability.get())
+                            val context = requireNotNull(runtimeContext.get())
+                            boot shouldBeSameInstanceAs context.availability
+                            boot.current().unavailable.getValue(extraName).cause shouldBe
+                                com.plainbase.domain.root.UnavailableCause.MISSING_AT_BOOT
+                            context.availability.current().unavailable.getValue(extraName).cause shouldBe
+                                com.plainbase.domain.root.UnavailableCause.MISSING_AT_BOOT
+                            watchedRoots shouldContainExactly listOf(RootName.PRIMARY)
+
+                            server.start(wait = false)
+                            try {
+                                val minted = context.tokens.mint("missing-extra", AgentMode.READ_ONLY)
+                                val response = HttpClient.newHttpClient().send(
+                                    HttpRequest.newBuilder(
+                                        URI("http://127.0.0.1:${config.port}/api/v1/pages/${pageId.value}"),
+                                    ).header("Authorization", "Bearer ${minted.plaintext}").GET().build(),
+                                    HttpResponse.BodyHandlers.ofString(),
+                                )
+                                response.statusCode() shouldBe 503
+                                response.body() shouldContain "root_unavailable"
+
+                                requireNotNull(inputsByRoot[RootName.PRIMARY]).onRootUnavailable()
+                                boot.current().unavailable.getValue(RootName.PRIMARY).cause shouldBe
+                                    com.plainbase.domain.root.UnavailableCause.VANISHED
+                                requireNotNull(inputsByRoot[extraName]).onRootUnavailable()
+                                boot.current().unavailable.getValue(extraName).cause shouldBe
+                                    com.plainbase.domain.root.UnavailableCause.MISSING_AT_BOOT
+                                context.availability shouldBeSameInstanceAs boot
+                            } finally {
+                                server.stop()
+                            }
+                        },
+                        closeDriver = { driver ->
+                            requireLockHeld(data)
+                            driver.close()
+                        },
+                        closeSearch = { search ->
+                            requireLockHeld(data)
+                            search.close()
+                        },
+                        closeContext = { app ->
+                            requireLockHeld(data)
+                            app.close()
+                        },
+                    ),
+                )
+            }
+            status shouldBe 0
+        }
+    }
+
+    test("objectHistoryCallbacksReadyBeforeRestore") {
+        withLocalFixture { content, data ->
+            seedCurrentDatabase(data.resolve("plainbase.db"))
+            val mirror = Files.createDirectories(data.resolve("mirror"))
+            Files.exists(mirror.resolve(".git")) shouldBe false
+            val beforeWorkers = liveDrWorkers()
+            val output = RecordingOutput()
+            val driverOpens = AtomicInteger()
+            val objectOpens = AtomicInteger()
+            val objectCloses = AtomicInteger()
+            val driverCloses = AtomicInteger()
+            val contextCloses = AtomicInteger()
+            val driverAcquiredWithLock = AtomicReference<Boolean?>()
+            val objectAcquiredWithLock = AtomicReference<Boolean?>()
+            val defaults = ServerOpeners()
+            val status = runServerBounded {
+                runServer(
+                    objectConfigFromEnv(content, data, endpointPort = freePort(), gitEnabled = true),
+                    output,
+                    openers = ServerOpeners(
+                        openDriver = { path ->
+                            driverOpens.incrementAndGet()
+                            driverAcquiredWithLock.set(dataDirLockHeld(data))
+                            defaults.openDriver(path)
+                        },
+                        openObject = { config, ignore, dirty, isDirty, rows ->
+                            objectOpens.incrementAndGet()
+                            objectAcquiredWithLock.set(dataDirLockHeld(data))
+                            defaults.openObject(config, ignore, dirty, isDirty, rows)
+                        },
+                    ),
+                    control = ServerRunControl(
+                        closeDriver = { driver ->
+                            requireLockHeld(data)
+                            driverCloses.incrementAndGet()
+                            driver.close()
+                        },
+                        closeObject = { store ->
+                            requireLockHeld(data)
+                            objectCloses.incrementAndGet()
+                            store.close()
+                        },
+                        closeContext = { app ->
+                            requireLockHeld(data)
+                            contextCloses.incrementAndGet()
+                            app.close()
+                        },
+                    ),
+                )
+            }
+            val survivingWorkers = liveDrWorkers() - beforeWorkers
+            val diagnostics = synchronized(output.errors) { output.errors.toList() }
+            status shouldBe 1
+            survivingWorkers shouldBe emptySet()
+            driverOpens.get() shouldBe 1
+            objectOpens.get() shouldBe 1
+            driverAcquiredWithLock.get() shouldBe true
+            objectAcquiredWithLock.get() shouldBe true
+            driverCloses.get() shouldBe 1
+            objectCloses.get() shouldBe 1
+            contextCloses.get() shouldBe 1
+            diagnostics.single() shouldContain "object storage endpoint is unreachable"
+            diagnostics.single().contains("object history callbacks are not armed") shouldBe false
         }
     }
 })
@@ -1011,6 +1287,13 @@ private fun requireLockHeld(data: Path) {
     }
 }
 
+private fun dataDirLockHeld(data: Path): Boolean {
+    val attempt = DataDirLock.tryAcquire(data)
+    if (attempt == null) return true
+    attempt.close()
+    return false
+}
+
 private fun requireLockAvailable(data: Path) {
     val attempt = DataDirLock.tryAcquire(data) ?: error("DATA_DIR lock was not released")
     attempt.close()
@@ -1028,3 +1311,104 @@ private fun treeFingerprint(root: Path): String? {
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
+
+private fun seedCurrentDatabase(path: Path) {
+    DatabaseFactory.createDriver(path).use { driver ->
+        val database = DatabaseFactory.createDatabase(driver)
+        database.rootObservationQueries.upsertObservation(root = RootName.PRIMARY, observationId = 100L)
+    }
+}
+
+private fun seedObservation(path: Path, observationId: Long) {
+    DatabaseFactory.createDriver(path).use { driver ->
+        DatabaseFactory.createDatabase(driver).rootObservationQueries.upsertObservation(
+            root = RootName.PRIMARY,
+            observationId = observationId,
+        )
+    }
+}
+
+private fun seedBinding(path: Path, root: RootName, pathInRoot: TreePath, id: PageId) {
+    DatabaseFactory.createDriver(path).use { driver ->
+        SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)).bind(
+            RootedPath(root, pathInRoot),
+            id,
+            materialized = false,
+        )
+    }
+}
+
+private data class RootObservationWrite(val root: RootName, val observationId: Long?, val thread: Thread)
+
+private class ProductionOracleDriver(
+    private val delegateDriver: SqlDriver,
+    private val detachedRoot: RootName,
+    val observationWrites: MutableList<RootObservationWrite>,
+) : SqlDriver by delegateDriver {
+    val detachedRootQueries = AtomicInteger()
+    val detachedObservationTokens = Collections.synchronizedList(mutableListOf<Long?>())
+
+    override fun execute(
+        identifier: Int?,
+        sql: String,
+        parameters: Int,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<Long> {
+        val normalized = normalizeSql(sql)
+        val boundRoot = AtomicReference<String?>()
+        val observingWrite = normalized.startsWith("INSERT INTO ROOT_OBSERVATION")
+        val wrappedBinders = if (observingWrite && binders != null) {
+            {
+                val delegateStatement = this
+                val observingStatement = object : SqlPreparedStatement by delegateStatement {
+                    override fun bindString(index: Int, string: String?) {
+                        if (index == 0) boundRoot.set(string)
+                        delegateStatement.bindString(index, string)
+                    }
+                }
+                binders.invoke(observingStatement)
+            }
+        } else {
+            binders
+        }
+        val result = delegateDriver.execute(identifier, sql, parameters, wrappedBinders)
+        if (observingWrite) {
+            val root = RootName.require(requireNotNull(boundRoot.get()) { "root_observation write did not bind root" })
+            val observation = readObservation(delegateDriver, root)
+            synchronized(observationWrites) {
+                observationWrites += RootObservationWrite(root, observation, Thread.currentThread())
+            }
+        }
+        return result
+    }
+
+    override fun <R> executeQuery(
+        identifier: Int?,
+        sql: String,
+        mapper: (SqlCursor) -> QueryResult<R>,
+        parameters: Int,
+        binders: (SqlPreparedStatement.() -> Unit)?,
+    ): QueryResult<R> {
+        if (normalizeSql(sql) == "SELECT DISTINCT ROOT FROM ID_MAP") {
+            detachedRootQueries.incrementAndGet()
+            synchronized(detachedObservationTokens) {
+                detachedObservationTokens += readObservation(delegateDriver, detachedRoot)
+            }
+        }
+        return delegateDriver.executeQuery(identifier, sql, mapper, parameters, binders)
+    }
+}
+
+private fun readObservation(driver: SqlDriver, root: RootName): Long? = driver.executeQuery(
+    identifier = null,
+    sql = "SELECT observation_id FROM root_observation WHERE root = ?",
+    mapper = { cursor -> QueryResult.Value(if (cursor.next().value) cursor.getLong(0) else null) },
+    parameters = 1,
+    binders = { bindString(0, root.value) },
+).value
+
+private fun normalizeSql(sql: String): String = sql.replace(Regex("\\s+"), " ").trim().uppercase()
+
+private fun liveDrWorkers(): Set<Thread> = Thread.getAllStackTraces().keys
+    .filter { it.isAlive && it.name in setOf("plainbase-bundle-dr-ship", "plainbase-bundle-dr-cadence") }
+    .toSet()

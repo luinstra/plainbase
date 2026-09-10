@@ -35,7 +35,7 @@ import kotlin.time.Clock
  *    bucket bundle fresh, dispatched onto the owned single-thread [shipExecutor] ([onCommit] is the
  *    synchronous variant for the boot reconcile + tests).
  *
- * [locks] are SHARED with the object-mode [GitCliHistoryProvider] (`historyModule`'s `single<GitRepoLocks>`):
+ * [locks] are SHARED with the object-mode [GitCliHistoryProvider] through the prepared root-history selection:
  * `repoWrite` excludes a commit's ref mutation from this class's `bundle create`/reconcile ref mutation
  * (HOLE B); `ship` single-flights the whole ship operation so an older ship can never land after a newer
  * one, and a graceful-shutdown flush racing an in-flight cadence ship is serialized the same way.
@@ -55,11 +55,11 @@ class GitBundleDr(
     /** The server identity (author == committer) for the boot reconcile commit (FORK 3: never a human/agent identity). */
     private val identity: CommitIdentity,
     private val clock: Clock,
-    /** The SAME raw-on-disk repo-relative path function `historyModule` binds for the object-mode [GitCliHistoryProvider]. */
+    /** The SAME raw-on-disk repo-relative path function supplied to the object-history selection. */
     private val repoPath: (TreePath) -> String,
     /** Where this class's own per-op temp indexes live (the reconcile commit); created lazily. */
     private val gitHome: Path,
-    private val locks: GitRepoLocks,
+    internal val locks: GitRepoLocks,
     private val alarm: RebuildScheduler.Alarm = ExecutorAlarm(threadName = "plainbase-bundle-dr-cadence"),
     /**
      * The ONE owned worker every ASYNC ship runs on (R1/R2): both the per-save dispatch ([onCommitAsync])
@@ -321,7 +321,7 @@ class GitBundleDr(
      * decides whether a ship is owed RIGHT NOW (the FIRST non-no-op commit of this process, so a fresh
      * instance killed early must not lose ALL history; or the [SHIP_COMMIT_THRESHOLD]-commit cadence),
      * arming the debounce [alarm] for [SHIP_MAX_LATENCY_MILLIS] otherwise. No git call, no network call -
-     * cheap enough to call SYNCHRONOUSLY on the write-pipeline monitor's own thread (`historyModule`'s
+     * cheap enough to call SYNCHRONOUSLY on the write-pipeline monitor's own thread (the prepared
      * per-save wiring does exactly that), so the ship OBLIGATION is decided deterministically BEFORE the
      * save returns success, rather than racing an async dispatch that a crash could pre-empt entirely.
      * The caller dispatches the actual [shipBestEffort] (the slow `bundle create` + network PUT) OFF that
@@ -357,7 +357,7 @@ class GitBundleDr(
      * [recordCommit] then, when due, [shipBestEffort] on the SAME thread - a single-threaded, SYNCHRONOUS
      * convenience for the boot reconcile ([reconcileBootCommit], which is already off any write-pipeline
      * monitor and WANTS the first ship to land before serve() proceeds) and for tests. The per-save
-     * `historyModule` wiring instead calls [onCommitAsync], which records synchronously (BLOCKING #2:
+     * prepared wiring instead calls [onCommitAsync], which records synchronously (BLOCKING #2:
      * guaranteed before the save returns) and dispatches the slow ship onto the owned [shipExecutor].
      */
     fun onCommit() {

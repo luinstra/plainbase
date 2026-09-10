@@ -1,7 +1,10 @@
 package com.plainbase.frameworks.lifecycle
 
 import app.cash.sqldelight.db.SqlDriver
+import com.plainbase.domain.root.RootAvailability
+import com.plainbase.domain.root.RootName
 import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.search.SearchDb
 import org.koin.core.KoinApplication
@@ -10,6 +13,9 @@ import org.koin.core.KoinApplication
 internal class ServerRunControl(
     val startServer: (KtorServer) -> Unit = { it.start(wait = true) },
     val onHookInstalled: (Thread) -> Unit = {},
+    val onBootAvailability: (RootAvailability) -> Unit = {},
+    val onRuntimeContext: (RouteContext) -> Unit = {},
+    val onWatcherRegistration: (RootName) -> Unit = {},
     val closeDriver: (SqlDriver) -> Unit = { it.close() },
     val closeSearch: (SearchDb) -> Unit = { it.close() },
     val closeObject: (ObjectContentStore) -> Unit = { it.close() },

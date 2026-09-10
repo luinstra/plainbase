@@ -1,5 +1,6 @@
 package com.plainbase
 
+import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.history.HistoryProvider
@@ -36,11 +37,10 @@ import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.koin.HistoryProviders
 import com.plainbase.frameworks.koin.RootStores
 import com.plainbase.frameworks.koin.checkpointModule
-import com.plainbase.frameworks.koin.contentModule
 import com.plainbase.frameworks.koin.createContentModule
+import com.plainbase.frameworks.koin.createHistoryModule
 import com.plainbase.frameworks.koin.createRepositoryModule
 import com.plainbase.frameworks.koin.createSearchModule
-import com.plainbase.frameworks.koin.historyModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.restModule
 import com.plainbase.frameworks.koin.securityModule
@@ -49,7 +49,13 @@ import com.plainbase.frameworks.lifecycle.CloseOnce
 import com.plainbase.frameworks.lifecycle.GracefulShutdown
 import com.plainbase.frameworks.lifecycle.ServerRunControl
 import com.plainbase.frameworks.objectstore.ObjectContentStore
+import com.plainbase.frameworks.runtime.DeferredObjectHistory
+import com.plainbase.frameworks.runtime.ObjectHistoryCallbacks
+import com.plainbase.frameworks.runtime.RootBootInputs
+import com.plainbase.frameworks.runtime.RootBootProbe
+import com.plainbase.frameworks.runtime.RootHistorySelection
 import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.spike.NativeSpike
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -141,13 +147,11 @@ private fun runOwnedServer(
     val app = koinApplication {
         modules(
             module { single { config } },
-            createContentModule(runOpeners),
             createRepositoryModule(runOpeners.openDriver) { driverClose?.close() },
             securityModule,
             indexModule,
             checkpointModule,
             createSearchModule(runOpeners.openSearch) { searchClose?.close() },
-            historyModule,
             restModule,
         )
     }
@@ -177,15 +181,18 @@ private fun runOwnedServer(
         //
         // Still BEFORE the lock/rebuild/reconcile block, because rebuild() and reconcileDirtyPages() trigger commits
         // and a "git missing" failure must fire FIRST with an actionable message, never as a doomed commit's stack trace.
-        val bootServices = consumeRootBootGate(config, koin, output)
-        val availability = bootServices.availability
-        val stores = bootServices.stores
-        val histories = bootServices.histories
+        val bootInputs = prepareRootBootInputs(config, runOpeners.openLocal)
+        consumeRootBootGate(config, bootInputs, output)
+        val availability = bootInputs.availability
+        control.onBootAvailability(availability)
+        val historySelection = bootInputs.history
         // Rev-3.4 DR nudge: an object boot that survives the gate check with git DISABLED (`git.enabled`
         // unset/false) has no commit-grained history, so name the exposure ONCE (backups are operator-owned).
         // Since C5, `git.enabled=true` in object mode wires a real GitCliHistoryProvider + bundle DR, so this
         // WARN no longer fires unconditionally on every object boot - only the git-disabled ones.
-        objectModeGitDisabledWarning(config, koin.get<HistoryProvider>())?.let { logger.warn { it } }
+        objectModeGitDisabledWarning(config, historySelection.byRoot.getValue(bootInputs.registry.primary.name))?.let {
+            logger.warn { it }
+        }
         // Hold the DATA_DIR advisory lock for the server's whole lifetime, acquired
         // BEFORE any rebuild/watcher registration. A second server on the same DATA_DIR - or an offline
         // `plainbase reindex` while this one runs - is refused, never silently racing search.db writes.
@@ -200,13 +207,25 @@ private fun runOwnedServer(
         // that also leaks the lock. Startup ORDER is unchanged: gateCheck (pre-lock) → lock → prepare() →
         // watcher → rebuild.
         try {
+            // First app-database open: the driver is resolved only after the DATA_DIR lock and before repository/epoch
+            // consumers are resolved.
+            koin.get<SqlDriver>()
+            koin.loadModules(
+                listOf(
+                    createContentModule(config, bootInputs, runOpeners.openObject),
+                    createHistoryModule(config, bootInputs.history),
+                ),
+            )
+            val bootEpoch = koin.get<ObservationEpoch>()
+            bootInputs.signals.arm(bootEpoch::broke)
+            if (config.storage.backend == StorageBackend.OBJECT) koin.get<ObjectContentStore>()
+            val stores = koin.get<RootStores>()
+            val historyProviders = koin.get<HistoryProviders>()
             // Multi-root C2 boot guard (ADR-0011 D1/D15): bindings under roots absent from the config
-            // WARN; a nonempty id_map ENTIRELY disjoint from the config refuses to serve. ORDERING
-            // CONSTRAINT: this repository get is the process's FIRST app-DB open in the post-lock detached-roots
-            // branch, which runs the migration - it must stay AFTER DataDirLock.tryAcquire (a concurrent second
-            // instance racing that first-open migration is exactly what the lock prevents). OBJECT-mode content wiring
-            // may already have opened both the app DB and object transport for the pre-lock root gate through its
-            // repository-bearing dependencies; that existing eagerness is retained on this path.
+            // WARN; a nonempty id_map ENTIRELY disjoint from the config refuses to serve. The driver
+            // and post-lock content/history modules are resolved before this guard so their shared
+            // instances are ready for the remainder of startup; all resource-bearing resolution stays here,
+            // after DataDirLock.tryAcquire.
             //
             // The guard runs BEFORE the object-mode hydrate/git-DR branch, and that ordering is CORRECT rather than
             // merely tolerated: this reads id_map (the app DB), while the restore/hydrate branch touches the bucket and
@@ -230,7 +249,7 @@ private fun runOwnedServer(
             // behind `config.git.enabled == true` so a git-DISABLED object boot never constructs `GitBundleDr`
             // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
             // hydrate-only C4 boot).
-            hydrateObjectMode(config, koin, output)
+            hydrateObjectMode(config, koin, bootInputs.history.objectHistory, output)
             val now = Clock.System.now()
             // Startup-time prune, INSIDE the lock so no other process races the DB: drop dead session/setup-token
             // rows that accumulate in the insert/update-only tables. Once at boot, never per-write (write amplification).
@@ -242,8 +261,7 @@ private fun runOwnedServer(
             koin.get<com.plainbase.frameworks.security.ProxyCsrf>()
             // A4a: on an empty / no-enabled-admin builtin DB, emit ONLY a NON-SECRET hint - NEVER a token on
             // the boot path (stdout/stderr are the scraped log under docker/systemd). The secret comes ONLY from the CLI.
-            // Reads `countEnabledAdmins` only AFTER the lock is held + validated. OBJECT-mode graph construction may have
-            // opened the app DB while evaluating the pre-lock root gate; this read remains post-lock.
+            // Reads `countEnabledAdmins` only AFTER the lock is held + validated.
             if (config.auth.mode == AuthMode.BUILTIN && koin.get<UserRepository>().countEnabledAdmins() == 0L) {
                 logger.warn { "Setup required: run `plainbase admin setup-token` to mint the first-admin bootstrap token" }
             }
@@ -252,7 +270,7 @@ private fun runOwnedServer(
             // rebuild. The startup rebuild reads (lastCommits) before any save commits, and `git -C workTree log`
             // walks UP to an ancestor `.git` when CONTENT_DIR has none - so a forced-on content root with no own
             // repo would otherwise abort serve (plain dir) or read the wrong ancestor repo. NoOp is a no-op.
-            prepareHistories(koin, histories, availability, output)
+            prepareHistories(config, bootInputs.registry, historyProviders, bootInputs.history, availability, output)
             val builder = koin.get<IndexBuilder>()
             // §B2 startup ordering, no unwatched window: the watchers register BEFORE the first rebuild.
             // Events arriving while the initial build is in flight coalesce into at most one follow-up
@@ -287,6 +305,7 @@ private fun runOwnedServer(
             val watchers = koin.get<RootRegistry>().roots
                 .filter { availability.current().isAvailable(it.name) }
                 .map { root ->
+                    control.onWatcherRegistration(root.name)
                     // Installing the watcher is what makes an epoch EARNABLE here, so it is what declares it (C2), and
                     // an object-backed main declares it too - the rebuild is what withholds EPOCH from a backend whose
                     // watch is a poller. A root with no watcher earns nothing, which is the honest floor: two scans with
@@ -303,7 +322,9 @@ private fun runOwnedServer(
                         onBreak = { cause -> epochs.broke(root.name, cause) },
                     )
                 }
-            val server = KtorServer(config, koin.get())
+            val routeContext = koin.get<com.plainbase.frameworks.ktor.RouteContext>()
+            control.onRuntimeContext(routeContext)
+            val server = KtorServer(config, routeContext)
             // Plainbase's hook and the normal-return `finally` both invoke this teardown. Ktor registers a separate
             // engine hook that stops its engine; the shared Plainbase resource closers converge if those paths race.
             //
@@ -375,14 +396,8 @@ private fun runOwnedServer(
                 .onFailure { logger.warn(it) { "closing DATA_DIR lock failed" } }
         }
     } finally {
-        // Config/root-gate refusals happen before the lock-region finally exists. Do not resolve anything merely to
-        // close it; only handles returned by an opener have a shared close operation.
-        if (lock == null) {
-            objectClose?.close()
-            searchClose?.close()
-            driverClose?.close()
-            contextClose.close()
-        }
+        // Config/root-gate refusals happen before the lock-region finally exists; close the owned context only.
+        contextClose.close()
     }
 }
 
@@ -419,12 +434,6 @@ private fun removeShutdownHook(hook: Thread) {
     }
 }
 
-private data class BootServices(
-    val availability: RootAvailability,
-    val stores: RootStores,
-    val histories: HistoryProviders,
-)
-
 private fun consumeConfigBootGate(config: PlainbaseConfig, output: CommandOutput) {
     val refusals = config.bootRefusals()
     refuseFirst(refusals, TOPOLOGY_REFUSAL_KINDS, output)
@@ -456,14 +465,11 @@ private fun refuseFirst(
     }
 }
 
-private fun consumeRootBootGate(config: PlainbaseConfig, koin: Koin, output: CommandOutput): BootServices {
-    val availability = koin.get<RootAvailability>()
-    val stores = koin.get<RootStores>()
-    val histories = koin.get<HistoryProviders>()
-    evaluateBootGate(config, koin.get<RootRegistry>(), stores, histories).verdicts.forEach { verdict ->
+private fun consumeRootBootGate(config: PlainbaseConfig, inputs: RootBootInputs, output: CommandOutput) {
+    evaluateBootGate(config, inputs.registry, inputs.probes).verdicts.forEach { verdict ->
         when (verdict) {
             is RootGateVerdict.Unavailable -> {
-                availability.markUnavailable(verdict.root, UnavailableCause.MISSING_AT_BOOT)
+                inputs.availability.markUnavailable(verdict.root, UnavailableCause.MISSING_AT_BOOT)
                 logger.warn {
                     "root '${verdict.root}' is not available at ${verdict.path}: it will serve 503 until the path is " +
                         "restored and the server restarted (its pages, aliases and checkpoints are left untouched)"
@@ -477,12 +483,12 @@ private fun consumeRootBootGate(config: PlainbaseConfig, koin: Koin, output: Com
             is RootGateVerdict.Ready -> Unit
         }
     }
-    return BootServices(availability, stores, histories)
 }
 
 private fun hydrateObjectMode(
     config: PlainbaseConfig,
     koin: Koin,
+    objectHistory: DeferredObjectHistory,
     output: CommandOutput,
 ) {
     if (config.storage.backend != StorageBackend.OBJECT) return
@@ -496,6 +502,13 @@ private fun hydrateObjectMode(
         when (config.git.enabled) {
             true -> {
                 val bundleDr = koin.get<GitBundleDr>()
+                objectHistory.arm(
+                    ObjectHistoryCallbacks(
+                        repoPath = objectStore.mirror::resolveRepoRelativePath,
+                        onCommit = bundleDr::onCommitAsync,
+                    ),
+                )
+                objectHistory.requireReady()
                 val restored = bundleDr.restore()
                 objectStore.hydrate(strict = restored.isRestored)
                 bundleDr.reconcileBootCommit(restored)
@@ -511,14 +524,19 @@ private fun hydrateObjectMode(
 }
 
 private fun prepareHistories(
-    koin: Koin,
+    config: PlainbaseConfig,
+    registry: RootRegistry,
     histories: HistoryProviders,
+    selection: RootHistorySelection,
     availability: RootAvailability,
     output: CommandOutput,
 ) {
     runCatching {
+        if (config.storage.backend == StorageBackend.OBJECT && config.git.enabled == true) {
+            selection.objectHistory.requireReady()
+        }
         val serving = availability.current()
-        koin.get<RootRegistry>().roots
+        registry.roots
             .filter { serving.isAvailable(it.name) }
             .forEach { histories[it.name].prepare() }
     }.onFailure { failure ->
@@ -605,14 +623,13 @@ data class BootGate(val refusals: List<BootRefusal>, val verdicts: List<RootGate
  *
  * The boot refusals NOT here are named, with reasons, in `BootRefusalLedgerTest`.
  */
-fun evaluateBootGate(
+internal fun evaluateBootGate(
     config: PlainbaseConfig,
     registry: RootRegistry,
-    stores: RootStores,
-    histories: HistoryProviders,
+    probes: Map<RootName, RootBootProbe>,
 ): BootGate {
     val refusals = config.bootRefusals().toMutableList()
-    val verdicts = rootGateVerdicts(registry, stores, histories)
+    val verdicts = rootGateVerdicts(registry, probes)
     verdicts.filterIsInstance<RootGateVerdict.Refused>().forEach {
         refusals += BootRefusal(BootRefusal.Kind.GIT_GATE, setOf(it.root), it.message)
     }
@@ -634,10 +651,9 @@ fun evaluateBootGate(
  * cannot brick production, but it can make a multi-root test pass while `serve` diverges, which is the same disease
  * one blast radius over.
  */
-fun rootGateVerdicts(
+internal fun rootGateVerdicts(
     registry: RootRegistry,
-    stores: RootStores,
-    histories: HistoryProviders,
+    probes: Map<RootName, RootBootProbe>,
 ): List<RootGateVerdict> = registry.roots.map { root ->
     // EVERY root, main included. main used to be exempt from the probe and refused the boot outright from the
     // topology matrix instead - two behaviors for one condition, decided by which root it happened to be. A server
@@ -646,11 +662,12 @@ fun rootGateVerdicts(
     // an extra does: 503 for its pages (never 404 - a 404 reads as deleted), its own WARN, and the same restart to
     // recover once the mount is back (`RootAvailability` is sticky by design; a vanished root's identity state is
     // not trustworthy afterwards).
-    if (!stores[root.name].available()) {
+    val probe = probes.getValue(root.name)
+    if (!probe.available()) {
         RootGateVerdict.Unavailable(root.name, root.localPath)
     } else {
         runCatching {
-            histories[root.name].gateCheck()
+            probe.gateCheck()
             RootGateVerdict.Ready(root.name)
         }.getOrElse { failure ->
             if (failure is Error) throw failure
@@ -665,8 +682,8 @@ fun rootGateVerdicts(
  * one would construct a second [RootAvailability] and a second set of stores, and the one the gate marked
  * would not be the one the server serves).
  *
- * The graph uses the shared [contentModule] recipe plus [historyModule]. `serve()` supplies run-owned opener
- * callbacks to that recipe, while this inspection graph uses the standalone defaults. It is ISOLATED
+ * The graph uses the shared explicit preparation plus module recipes. `serve()` supplies run-owned opener callbacks
+ * to those recipes, while this inspection graph uses standalone defaults. It is ISOLATED
  * (`koinApplication`, never `startKoin`), so the baseline and candidate graphs coexist and neither touches the
  * global context.
  *
@@ -681,9 +698,19 @@ fun bootGateFor(config: PlainbaseConfig): BootGate {
         "the boot gate runs LOCAL-only: an object-mode candidate carries a roots {} block and is refused at LOAD, " +
             "so it can never reach here (C5 D-C5-17.2)"
     }
-    val app = koinApplication { modules(module { single { config } }, contentModule, historyModule) }
+    val openers = ServerOpeners()
+    val inputs = prepareRootBootInputs(config, openers.openLocal)
+    val app = koinApplication {
+        modules(
+            module { single { config } },
+            createContentModule(config, inputs, openers.openObject),
+            createHistoryModule(config, inputs.history),
+        )
+    }
     return try {
-        evaluateBootGate(config, app.koin.get(), app.koin.get(), app.koin.get())
+        val epoch = app.koin.get<ObservationEpoch>()
+        inputs.signals.arm(epoch::broke)
+        evaluateBootGate(config, inputs.registry, inputs.probes)
     } finally {
         app.close()
     }

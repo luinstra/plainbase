@@ -6,6 +6,8 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.runtime.gitEnabled
+import com.plainbase.frameworks.runtime.selectHistoryProvider
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
