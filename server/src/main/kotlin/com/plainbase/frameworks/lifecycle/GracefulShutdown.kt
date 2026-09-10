@@ -13,12 +13,10 @@ import kotlin.concurrent.thread
 /**
  * The server's ONE teardown path, run exactly once however many callers fire it.
  *
- * `embeddedServer(...)` installs no JVM shutdown hook of its own (only Ktor's `EngineMain` does), so until
- * this existed a SIGTERM - how `docker stop`, systemd and Kubernetes ALL stop a process, i.e. the normal
- * production shutdown - killed the JVM while `serve()` was still parked in `start(wait = true)`: its cleanup
- * `finally` never ran, so watchers were never closed, an in-flight rebuild was never drained, and in OBJECT
- * mode the final DR bundle silently never shipped, on every restart. It left no log line either, which is
- * why nobody noticed.
+ * The embedded CIO engine can stop the server, but application-owned resources still need an application-owned
+ * shutdown hook: a SIGTERM - how `docker stop`, systemd and Kubernetes ALL stop a process, i.e. the normal
+ * production shutdown - must drain watchers, an in-flight rebuild, and (in OBJECT mode) the final DR bundle
+ * before the runtime halts. The hook owns that work rather than relying on the engine's transport hook.
  *
  * The naive fix - a hook that merely calls `server.stop()` so `start()` returns and the existing `finally`
  * runs - races the JVM: once the last hook returns the runtime HALTS, killing the main thread wherever it

@@ -33,8 +33,8 @@ import kotlin.test.assertTrue
  *     nothing then either.
  *
  * (The end-to-end emitted SEQUENCE - the actual stderr of a real boot - is asserted by
- * `scripts/ci/multi-root-smoke.sh` against the native binary. `serve()` calls `exitProcess`, so it is not
- * unit-testable in-process; that is a settled property of this codebase, not a gap this chunk introduced.)
+ * `scripts/ci/multi-root-smoke.sh` against the native binary. The runtime seam now makes the ownership and
+ * cleanup path unit-testable in-process; this native test keeps the real-git verdict ordering proof.)
  *
  * `@Tag("native")`: producing a real `Refused` verdict means shelling out to real `git`.
  */

@@ -187,11 +187,8 @@ class HistoryGateCheckTest : FunSpec({
         shouldNotThrowAny { NoOpHistoryProvider.gateCheck() }
     }
 
-    // W5 revision MINOR: `prepare()` runs in `serve()` INSIDE the lock's try/finally and INSIDE the
-    // actionable-error catch (mirroring gateCheck). A forced-on Git that cannot init its content-root repo
-    // (read-only dir, disk-full, a `git init` fault) must THROW from prepare() so `serve()` presents the
-    // operator-friendly `serve:` message and releases the lock — never a raw stack trace. This proves the
-    // catch has a real throwable to surface.
+    // `prepare()` runs in `serve()` inside the lock and actionable-error catch. A forced-on Git that cannot init its
+    // content-root repo must throw so `serve()` can present the operator-facing `serve:` message.
     test("prepare() throws an actionable git failure when the content-root repo cannot be initialized") {
         val root = Files.createTempDirectory("prepare-init-fail")
         val home = Files.createTempDirectory("prepare-init-fail-home")
@@ -218,10 +215,8 @@ class HistoryGateCheckTest : FunSpec({
         }
     }
 
-    test("DataDirLock releases on close so a forced-on prepare() failure never leaks it") {
-        // The lock-leak half of the MINOR: serve() closes the lock in the prepare()-failure catch before
-        // exitProcess (which skips finally). Proven structurally — a released lock is re-acquirable; a leaked
-        // one is not. tryAcquire after close must succeed.
+    test("DataDirLock is reacquirable after its holder closes") {
+        // Closing a held DataDirLock releases the OS lock; reacquisition proves the close path does not leak it.
         val dataDir = Files.createTempDirectory("prepare-lock-release")
         try {
             val first = com.plainbase.frameworks.filesystem.DataDirLock.tryAcquire(dataDir)

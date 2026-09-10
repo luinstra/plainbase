@@ -14,13 +14,11 @@ import org.koin.dsl.module
 import java.nio.file.Files
 
 /**
- * C5 VERIFY (Step 1 acceptance item): resolving `HistoryProvider` + calling `gateCheck()` for an
- * object+`git.enabled=true` boot must construct ZERO [ObjectContentStore]/[S3ObjectClient] - the
- * object-mode `repoPath` lambda resolves the store on CALL (commit time), never at wiring/gate time,
- * and `Application.kt`'s `serve()` only calls `koin.get<ObjectContentStore>().hydrate(...)` AFTER the
- * lock. The gate check itself must PASS (Cluster-1 fix: the `--version` probe never touches `-C
- * <missing-mirror>`) even though `DATA_DIR/mirror` does not exist yet at this point (this test never
- * creates it) - counter-proven, never reasoned from laziness alone (the R9 policy).
+ * History-only graph check: resolving `HistoryProvider` + calling `gateCheck()` for an
+ * object+`git.enabled=true` graph must construct ZERO [ObjectContentStore]/[S3ObjectClient]. The
+ * object-mode `repoPath` lambda resolves the store on CALL (commit time), never while this history
+ * graph is wired or checked. The gate check must PASS even though `DATA_DIR/mirror` does not exist
+ * yet; this test never creates it and proves the construction counters directly.
  */
 class ObjectBootNoTransportBeforeLockTest : FunSpec({
 

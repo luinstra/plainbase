@@ -11,17 +11,22 @@ import com.plainbase.frameworks.search.SearchDb
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
 import org.koin.dsl.onClose
+import java.nio.file.Path
 
 /**
- * Wires the embedded search engine (chunk S2): [SearchDb] over `DATA_DIR/search.db` (closed with
- * the Koin context), the [Fts5SearchProvider] behind the domain port, and the §B4 seam —
+ * Wires the embedded search engine (chunk S2): [SearchDb] over `DATA_DIR/search.db`, with its close callback
+ * supplied by the caller, the [Fts5SearchProvider] behind the domain port, and the §B4 seam —
  * [SearchIndexer.sync] registered as an [IndexBuilder.PublicationListener] (collected by
  * `indexModule`'s `getAll()`), so every published snapshot syncs the engine inside the serialized
  * rebuild. The indexer and builder share the same [IdMapRepository] callbacks for current retirement
- * eligibility. The qualifier keeps this definition distinct from S5's checkpoint listener.
+ * eligibility. The standalone [searchModule] supplies a direct `close` callback; serving supplies its run-owned
+ * closer. The qualifier keeps this definition distinct from S5's checkpoint listener.
  */
-val searchModule = module {
-    single { SearchDb(get<PlainbaseConfig>().searchDatabasePath) } onClose { it?.close() }
+internal fun createSearchModule(
+    openSearch: (Path) -> SearchDb,
+    closeSearch: (SearchDb) -> Unit,
+) = module {
+    single { openSearch(get<PlainbaseConfig>().searchDatabasePath) } onClose { it?.let(closeSearch) }
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
     single {
@@ -38,3 +43,5 @@ val searchModule = module {
         IndexBuilder.PublicationListener { snapshot, _ -> indexer.sync(snapshot) }
     }
 }
+
+val searchModule = createSearchModule({ path -> SearchDb(path) }) { it.close() }

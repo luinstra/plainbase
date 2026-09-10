@@ -24,7 +24,8 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStore
-import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
+import com.plainbase.frameworks.runtime.LocalStoreInputs
+import com.plainbase.frameworks.runtime.ServerOpeners
 import org.koin.dsl.module
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
@@ -44,7 +45,7 @@ internal val contentDirStoreConstructions = AtomicInteger()
  * `LocalBootNoObjectConstructionTest`). In object mode nothing resolves the contentDir store (the
  * `historyModule` `repoPath` lambda is lazy and backend-conditional), so CONTENT_DIR is never touched.
  */
-val contentModule = module {
+internal fun createContentModule(openers: ServerOpeners) = module {
     single { IgnoreRules() }
     single<RootRegistry> { RootRegistry.of(get<PlainbaseConfig>().roots.list) }
     single { RootAvailability(Clock.System) }
@@ -78,15 +79,17 @@ val contentModule = module {
         // DATA_DIR is excluded from the scan AND the watch (§B1): nested inside main's content root,
         // the app's own search.db/plainbase.db would otherwise be indexed (and served as /assets/...)
         // and its writes would re-trigger every rebuild.
-        LocalContentStore(
-            root = requireNotNull(primary.localPath),
-            ignoreRules = get(),
-            exclusions = listOf(config.dataDir),
-            rootName = primary.name,
-            onRootUnavailable = { get<RootAvailability>().markUnavailable(primary.name, UnavailableCause.VANISHED) },
-            // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
-            // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
-            onIdentityRebind = { get<ObservationEpoch>().broke(primary.name, BreakCause.IDENTITY_REBIND) },
+        openers.openLocal(
+            LocalStoreInputs(
+                root = requireNotNull(primary.localPath),
+                ignoreRules = get(),
+                exclusions = listOf(config.dataDir),
+                rootName = primary.name,
+                onRootUnavailable = { get<RootAvailability>().markUnavailable(primary.name, UnavailableCause.VANISHED) },
+                // A deploy that swaps the tree at this path REBINDS the probe (the root is healthy, and it keeps serving)
+                // - and it is a new universe. Everything the epoch witnessed, it witnessed against the old inodes.
+                onIdentityRebind = { get<ObservationEpoch>().broke(primary.name, BreakCause.IDENTITY_REBIND) },
+            ),
         )
     }
     // The per-root content trees. Construction for a configured root is ALWAYS allowed and is INERT for a missing
@@ -103,17 +106,19 @@ val contentModule = module {
         RootStores(
             mapOf(registry.primary.name to get<ContentStore>()) +
                 registry.extras.associate { root ->
-                    root.name to LocalContentStore(
-                        root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                        ignoreRules = ignoreRules,
-                        // Extras inherit the primary's DATA_DIR exclusion so a legally-nested data dir is never walked
-                        // as content.
-                        exclusions = listOf(config.dataDir),
-                        rootName = root.name,
-                        onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
-                        // Resolved INSIDE the callback, like `onRootUnavailable` above: it fires on a rebind, not on a
-                        // construction, so the boot gate's graph never has to hold an epoch it has no business holding.
-                        onIdentityRebind = { get<ObservationEpoch>().broke(root.name, BreakCause.IDENTITY_REBIND) },
+                    root.name to openers.openLocal(
+                        LocalStoreInputs(
+                            root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
+                            ignoreRules = ignoreRules,
+                            // Extras inherit the primary's DATA_DIR exclusion so a legally-nested data dir is never walked
+                            // as content.
+                            exclusions = listOf(config.dataDir),
+                            rootName = root.name,
+                            onRootUnavailable = { availability.markUnavailable(root.name, UnavailableCause.VANISHED) },
+                            // Resolved INSIDE the callback, like `onRootUnavailable` above: it fires on a rebind, not on a
+                            // construction, so the boot gate's graph never has to hold an epoch it has no business holding.
+                            onIdentityRebind = { get<ObservationEpoch>().broke(root.name, BreakCause.IDENTITY_REBIND) },
+                        ),
                     )
                 },
         )
@@ -124,20 +129,20 @@ val contentModule = module {
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
         val primary = get<RootRegistry>().primary.name
-        ObjectContentStoreFactory.build(
+        openers.openObject(
             config,
-            ignoreRules = get(),
+            get(),
             // Object mode is always a synthesized main, so every dirty row IS main's; the factory
             // wants bare TreePaths of the main mirror.
-            dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
-            // MINOR-1: indexed single-row EXISTS for the poll hot-path guard.
-            isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
+            { dirtyPages.all().map { it.path.path }.toSet() },
+            // Indexed single-row EXISTS for the poll hot-path guard.
+            { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
             // C3: the pagination boundary. Read FRESH before each LIST (never captured here), so a page created while
             // a LIST paginates is not in the generation's rows and can never be covered by its proof. The binding_epoch
             // is co-read HERE (revoke-before-stamp, C5), and FIRST: a bind landing between it and the row read advances
             // the epoch past this value, so the OBJECT_LIST proof stamped from this snapshot fails the two-token compare
             // rather than reaping a binding a restore re-created between this poll and the reap.
-            rowsAtStart = {
+            {
                 val bindingEpoch = retirements.bindingEpoch(primary)
                 val rows = idMap.bindings().filter { it.path.root == primary }.mapTo(mutableSetOf()) { BindingRef(it.path.path, it.id) }
                 RowsAtStart(rows, bindingEpoch)
@@ -154,6 +159,8 @@ val contentModule = module {
         }
     }
 }
+
+val contentModule = createContentModule(ServerOpeners())
 
 /**
  * The per-root [ContentStore] map, built from the registry - so a name it does not hold is a PROGRAMMING error, not

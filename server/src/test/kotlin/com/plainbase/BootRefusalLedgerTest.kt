@@ -11,11 +11,11 @@ import kotlin.io.path.readText
  * **The drift-proofing (C5 S1.7b), and the reason the shared boot gate is a STRUCTURAL fix rather than another
  * good intention.**
  *
- * A shared function does not stop someone adding a NINTH `exitProcess(1)` to `serve()` next quarter and never
- * telling the CLI. So the boot path's refusal sites are ledgered, one line each, with a written disposition:
- * either the shared gate PRODUCES it (and `plainbase root` gets it for free) or it is EXCLUDED for a reason the
- * code FORCES rather than a reason somebody chose. A tenth appears -> this goes RED -> somebody decides. That
- * decision is the whole point.
+ * A shared function does not stop someone adding an unledgered refusal to the owned runtime next quarter and never
+ * telling the CLI. So the seven owned refusal semantics and the loader's separate semantic are ledgered, one line
+ * each, with a written disposition: either the shared gate PRODUCES it (and `plainbase root` gets it for free) or
+ * it is EXCLUDED for a reason the code FORCES rather than a reason somebody chose. A new site appears -> this goes
+ * RED -> somebody decides. That decision is the whole point.
  *
  * **Assert a CEILING, not an equality** - but a ceiling that is TIGHT, or it is not a guard at all. The drift
  * that matters is somebody ADDING an unledgered refusal. An `==` would also go red when someone DELETES one,
@@ -24,15 +24,14 @@ import kotlin.io.path.readText
  * ceiling too; C5 only bumps its counts, but the next person in that file should fix it.)
  *
  * The tightness is the subtle half, and it went wrong once already: `ledger.size` is NOT the site count, because
- * one textual `exitProcess(1)` (the `refuse(kinds)` helper) is called from two consumption stages and so backs
- * two ledger entries. A ceiling of `ledger.size` therefore left a FREE SLOT - an unledgered exit fit
- * inside the slack and this test stayed green, which is precisely the drift it exists to catch. The ceiling is
- * the ledger MINUS the entries that share a site.
+ * the owned helper has six textual call sites for seven semantic entries: topology and bind share `refuseFirst`,
+ * while the wrapper has one independent `exitProcess(1)` for the loader's status. The two derived ceilings are
+ * therefore owned entries minus one shared site, and wrapper exits at most one.
  */
 class BootRefusalLedgerTest : FunSpec({
 
-    // Every `exitProcess(1)` on the boot path, with its CLI disposition. Counted IN THE FILE, not remembered - an
-    // exact-count guard is only ever as good as its count.
+    // Every boot refusal semantic, with its CLI disposition. Counted IN THE FILE, not remembered - a guard is only
+    // ever as good as its count.
     val ledger = mapOf(
         "loadForCommand" to "COVERED: the CLI runs the same loader (the same `build`) over the candidate it is about to write",
         "gate: topology matrix" to "COVERED: evaluateBootGate, via bootGateFor",
@@ -54,19 +53,28 @@ class BootRefusalLedgerTest : FunSpec({
             "diffs the filesystem across a run - and nothing `root` writes changes prepare()'s outcome anyway.",
     )
 
-    // `refuse(kinds)` is ONE textual exitProcess(1), called from the topology stage AND the bind stage - so those
-    // two ledger entries are backed by a single site. Nothing else in Application.kt shares one.
+    val ownedLedger = ledger - "loadForCommand"
+    val loaderLedger = ledger.filterKeys { it == "loadForCommand" }
+    // `refuseFirst` is ONE textual refuseServe call, called from the topology stage AND the bind stage - so those
+    // two owned entries are backed by a single site. Nothing else in Application.kt shares one.
     val entriesSharingASite = 1
 
-    test("every exitProcess(1) on the boot path is ledgered with a CLI disposition") {
+    test("owned refusal sites and the loader wrapper stay within their separate ledger ceilings") {
         val application = mainSourceRoot().resolve("Application.kt").readText()
-        val sites = Regex("""exitProcess\(1\)""").findAll(stripComments(application)).count()
+        val source = stripComments(application)
+        val allRefusalNames = Regex("""\brefuseServe\s*\(""").findAll(source).count()
+        val declarationNames = Regex("""private\s+fun\s+refuseServe\s*\(""").findAll(source).count()
+        val ownedSites = allRefusalNames - declarationNames
+        val loaderExitSites = Regex("""exitProcess\(1\)""").findAll(source).count()
         withClue(
-            "a NEW boot refusal appeared in Application.kt and nobody said whether `plainbase root` covers it. " +
+            "a NEW owned refusal appeared in Application.kt and nobody said whether `plainbase root` covers it. " +
                 "Either the shared gate produces it (add a COVERED line) or it cannot (add an EXCLUDED line with the " +
                 "reason the CODE forces). A silent exclusion is how the CLI writes a config that will not boot.",
         ) {
-            sites shouldBeLessThanOrEqual ledger.size - entriesSharingASite
+            ownedSites shouldBeLessThanOrEqual ownedLedger.size - entriesSharingASite
+        }
+        withClue("the loader must have one explicit status-1 process boundary, never a second owned exit") {
+            loaderExitSites shouldBeLessThanOrEqual loaderLedger.size
         }
     }
 

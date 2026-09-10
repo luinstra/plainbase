@@ -32,9 +32,15 @@ import com.plainbase.frameworks.sqldelight.SqlDelightTransactionRunner
 import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightUserRepository
 import org.koin.dsl.module
+import org.koin.dsl.onClose
+import java.nio.file.Path
 
-val repositoryModule = module {
-    single<SqlDriver> { DatabaseFactory.createDriver(get<PlainbaseConfig>().appDatabasePath) }
+internal fun createRepositoryModule(
+    openDriver: (Path) -> SqlDriver,
+    closeDriver: ((SqlDriver) -> Unit)? = null,
+) = module {
+    val driverDefinition = single<SqlDriver> { openDriver(get<PlainbaseConfig>().appDatabasePath) }
+    closeDriver?.let { close -> driverDefinition onClose { driver -> driver?.let(close) } }
     single { DatabaseFactory.createDatabase(get()) }
     single<IdMapRepository> { SqlDelightIdMapRepository(get()) }
     // The ONE deleter (C0): the proof-apply transaction plus the durable freshness token it checks against.
@@ -54,3 +60,5 @@ val repositoryModule = module {
     single<SetupTokenRepository> { SqlDelightSetupTokenRepository(get()) }
     single<TransactionRunner> { SqlDelightTransactionRunner(get()) }
 }
+
+val repositoryModule = createRepositoryModule(DatabaseFactory::createDriver)

@@ -1,0 +1,1030 @@
+package com.plainbase
+
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.classic.spi.ThrowableProxy
+import ch.qos.logback.core.AppenderBase
+import ch.qos.logback.core.read.ListAppender
+import com.plainbase.domain.content.TreePath
+import com.plainbase.domain.page.PageId
+import com.plainbase.domain.root.RootName
+import com.plainbase.domain.root.RootedPath
+import com.plainbase.frameworks.cli.CommandOutput
+import com.plainbase.frameworks.cli.WriteIntent
+import com.plainbase.frameworks.config.AuthConfig
+import com.plainbase.frameworks.config.GitConfig
+import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.lifecycle.ServerRunControl
+import com.plainbase.frameworks.objectstore.ObjectContentStore
+import com.plainbase.frameworks.objectstore.ObjectStoreException
+import com.plainbase.frameworks.runtime.ServerOpeners
+import com.plainbase.frameworks.sqldelight.DatabaseFactory
+import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
+import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import io.kotest.matchers.types.shouldNotBeSameInstanceAs
+import org.koin.core.context.GlobalContext
+import org.slf4j.LoggerFactory
+import java.net.ServerSocket
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.MessageDigest
+import java.sql.DriverManager
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
+
+/** In-process proof of the serving runtime seam: gates, ownership, cleanup, and primary-failure preservation. */
+class ServerRunTest : FunSpec({
+
+    test("config warnings are emitted before a bind refusal and refusal cleanup closes the isolated context") {
+        withLocalFixture { content, data ->
+            val nestedContent = Files.createDirectory(data.resolve("content"))
+            Files.writeString(nestedContent.resolve("readme.md"), "---\ntitle: Readme\n---\n\n# Readme\n")
+            val timeline = Collections.synchronizedList(mutableListOf<String>())
+            val output = RecordingOutput(timeline)
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = TimelineAppender(timeline).apply { start() }
+            root.addAppender(appender)
+            val contextCloses = AtomicInteger()
+            val opens = AtomicInteger()
+            val defaults = ServerOpeners()
+            try {
+                val config = PlainbaseConfig(
+                    contentDir = nestedContent,
+                    dataDir = data,
+                    host = "0.0.0.0",
+                    port = 0,
+                    auth = AuthConfig(),
+                    git = GitConfig(enabled = false),
+                )
+                val status = runServerBounded {
+                    runServer(
+                        config,
+                        output,
+                        openers = ServerOpeners(
+                            openDriver = { path ->
+                                opens.incrementAndGet()
+                                defaults.openDriver(path)
+                            },
+                            openLocal = { inputs ->
+                                opens.incrementAndGet()
+                                defaults.openLocal(inputs)
+                            },
+                            openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                                opens.incrementAndGet()
+                                defaults.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                            },
+                            openSearch = { path ->
+                                opens.incrementAndGet()
+                                defaults.openSearch(path)
+                            },
+                        ),
+                        control = ServerRunControl(closeContext = { app ->
+                            app.close()
+                            contextCloses.incrementAndGet()
+                            timeline += "context-close-complete"
+                        }),
+                    )
+                }
+
+                status shouldBe 1
+                output.errors.shouldContainExactly(
+                    "serve: binds 0.0.0.0 with auth.mode=off but no TLS/trusted-proxy and no insecure override. " +
+                        "Remedies: (1) front with a TLS proxy and set PLAINBASE_TRUSTED_PROXY CIDRs; " +
+                        "(2) bind loopback (PLAINBASE_HOST=127.0.0.1) behind the proxy; " +
+                        "(3) set PLAINBASE_INSECURE_HTTP=1 to knowingly serve plaintext.",
+                )
+                contextCloses.get() shouldBe 1
+                opens.get() shouldBe 0
+                val expectedWarning =
+                    "warn:roots.docs (${nestedContent.toRealPath()}) is INSIDE DATA_DIR (${data.toRealPath()}). This serves " +
+                        "correctly, but DATA_DIR is app-owned state whose contents are routinely wiped and rebuilt " +
+                        "(`search.db` and the object mirror are explicitly disposable) - a wipe here takes this root's " +
+                        "content with it. Move the root outside DATA_DIR."
+                timeline.count { it == expectedWarning } shouldBe 1
+                val warningIndex = timeline.indexOf(expectedWarning)
+                val errorIndex = timeline.indexOfFirst { it.startsWith("error:serve:") }
+                (warningIndex >= 0) shouldBe true
+                (errorIndex >= 0) shouldBe true
+                (warningIndex < errorIndex) shouldBe true
+                timeline.count { it == "context-close-complete" } shouldBe 1
+                timeline += "returned"
+                (timeline.indexOf("context-close-complete") < timeline.indexOf("returned")) shouldBe true
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("a local run returns naturally, observes the real hook thread, and closes each resource once") {
+        withLocalFixture { content, data ->
+            requireNoGlobalContext()
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val port = freePort()
+            var hook: Thread? = null
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                val startedAt = System.nanoTime()
+                val status = runServerBounded(timeoutMillis = NATURAL_RETURN_TEST_DEADLINE_MILLIS) {
+                    runServer(
+                        localConfig(content, data, port = port),
+                        RecordingOutput(events),
+                        control = ServerRunControl(
+                            startServer = {},
+                            onHookInstalled = { installed ->
+                                hook = installed
+                                events += "hook:${installed.name}"
+                            },
+                            closeDriver = { driver ->
+                                requireLockHeld(data)
+                                driver.close()
+                                events += "driver"
+                            },
+                            closeSearch = { search ->
+                                requireLockHeld(data)
+                                search.close()
+                                events += "search"
+                            },
+                            closeContext = { app ->
+                                requireLockHeld(data)
+                                app.close()
+                                events += "context"
+                            },
+                        ),
+                    )
+                }
+                val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+
+                status shouldBe 0
+                hook shouldNotBe null
+                events.count { it == "driver" } shouldBe 1
+                events.count { it == "search" } shouldBe 1
+                events.count { it == "context" } shouldBe 1
+                events += "stop-port-bound=${isPortBound(port)}"
+                events.last() shouldBe "stop-port-bound=false"
+                (elapsedMillis <= NATURAL_RETURN_TEST_DEADLINE_MILLIS) shouldBe true
+                appender.list.none {
+                    it.formattedMessage.contains("shutdown step '") &&
+                        it.formattedMessage.contains(" failed; continuing with the remaining steps")
+                } shouldBe true
+                requireLockAvailable(data)
+                requireNoGlobalContext()
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("two sequential local runs own distinct contexts, stores, databases, and search instances") {
+        val objectBefore = ObjectContentStore.constructions.get()
+        val defaultOpeners = ServerOpeners()
+        var firstDriver: Any? = null
+        var secondDriver: Any? = null
+        var firstSearch: Any? = null
+        var secondSearch: Any? = null
+        var firstStore: Any? = null
+        var secondStore: Any? = null
+        var firstContext: Any? = null
+        var secondContext: Any? = null
+
+        withLocalFixture { firstContent, firstData ->
+            requireNoGlobalContext()
+            runServerBounded {
+                runServer(
+                    localConfig(firstContent, firstData, port = freePort()),
+                    RecordingOutput(),
+                    openers = ServerOpeners(
+                        openDriver = { path ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openDriver(path).also { firstDriver = it }
+                        },
+                        openLocal = { inputs ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openLocal(inputs).also { firstStore = it }
+                        },
+                        openSearch = { path ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openSearch(path).also { firstSearch = it }
+                        },
+                    ),
+                    control = observingControl(firstData) { kind, value -> if (kind == "context") firstContext = value },
+                )
+            } shouldBe 0
+            requireLockAvailable(firstData)
+            requireNoGlobalContext()
+        }
+        GlobalContext.getOrNull() shouldBe null
+
+        withLocalFixture { secondContent, secondData ->
+            requireNoGlobalContext()
+            runServerBounded {
+                runServer(
+                    localConfig(secondContent, secondData, port = freePort()),
+                    RecordingOutput(),
+                    openers = ServerOpeners(
+                        openDriver = { path ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openDriver(path).also { secondDriver = it }
+                        },
+                        openLocal = { inputs ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openLocal(inputs).also { secondStore = it }
+                        },
+                        openSearch = { path ->
+                            requireNoGlobalContext()
+                            defaultOpeners.openSearch(path).also { secondSearch = it }
+                        },
+                    ),
+                    control = observingControl(secondData) { kind, value -> if (kind == "context") secondContext = value },
+                )
+            } shouldBe 0
+            requireLockAvailable(secondData)
+            requireNoGlobalContext()
+        }
+
+        firstDriver shouldNotBeSameInstanceAs secondDriver
+        firstSearch shouldNotBeSameInstanceAs secondSearch
+        firstStore shouldNotBeSameInstanceAs secondStore
+        firstContext shouldNotBeSameInstanceAs secondContext
+        GlobalContext.getOrNull() shouldBe null
+        ObjectContentStore.constructions.get() shouldBe objectBefore
+    }
+
+    test("the observed cleanup Thread converges with normal return and removes its hook") {
+        withLocalFixture { content, data ->
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val port = freePort()
+            val startEntered = CountDownLatch(1)
+            val allowReturn = CountDownLatch(1)
+            val observedHook = AtomicReference<Thread>()
+            val failure = AtomicReference<Throwable?>()
+            var runner: Thread? = null
+            var hookRunner: Thread? = null
+            var primary: Throwable? = null
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                val serverRunner = startFixtureWorker("plainbase-server-runner") {
+                    runCatching {
+                        runServer(
+                            localConfig(content, data, port = port),
+                            RecordingOutput(events),
+                            control = ServerRunControl(
+                                startServer = {
+                                    startEntered.countDown()
+                                    check(allowReturn.await(START_CONTROL_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                                        "start release timed out"
+                                    }
+                                },
+                                onHookInstalled = {
+                                    observedHook.set(it)
+                                    events += "hook"
+                                },
+                                closeDriver = { driver ->
+                                    requireLockHeld(data)
+                                    driver.close()
+                                    events += "driver"
+                                },
+                                closeSearch = { search ->
+                                    requireLockHeld(data)
+                                    search.close()
+                                    events += "search"
+                                },
+                                closeContext = { app ->
+                                    requireLockHeld(data)
+                                    app.close()
+                                    events += "context"
+                                },
+                            ),
+                        ).also { if (it != 0) error("unexpected status $it") }
+                    }.onFailure(failure::set)
+                }
+                runner = serverRunner
+                serverRunner.start()
+                check(startEntered.await(START_CONTROL_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                    "start control was not entered"
+                }
+                val hook = requireNotNull(observedHook.get())
+                val cleanupRunner = startFixtureWorker("plainbase-server-hook-runner") { hook.run() }
+                hookRunner = cleanupRunner
+                cleanupRunner.start()
+                cleanupRunner.join(HOOK_OPERATION_WAIT_MILLIS)
+                check(!cleanupRunner.isAlive) { "hook runner did not finish within ${HOOK_OPERATION_WAIT_MILLIS}ms" }
+                allowReturn.countDown()
+                serverRunner.join(RUN_COMPLETION_WAIT_MILLIS)
+                check(!serverRunner.isAlive) { "server runner did not finish within ${RUN_COMPLETION_WAIT_MILLIS}ms" }
+                failure.get() shouldBe null
+                events.count { it == "driver" } shouldBe 1
+                events.count { it == "search" } shouldBe 1
+                events.count { it == "context" } shouldBe 1
+                events += "stop-port-bound=${isPortBound(port)}"
+                events.last() shouldBe "stop-port-bound=false"
+                val messages = appender.list.map { it.formattedMessage }
+                messages.none { it.contains("failed; continuing with the remaining steps") } shouldBe true
+                messages.any { it.startsWith("shutdown complete in ") } shouldBe true
+                Runtime.getRuntime().removeShutdownHook(hook) shouldBe false
+                requireLockAvailable(data)
+            } catch (caught: Throwable) {
+                primary = caught
+            } finally {
+                allowReturn.countDown()
+                val cleanupFailure = runCatching {
+                    joinFixtureWorkers(
+                        listOfNotNull(hookRunner, runner),
+                        System.nanoTime() + IN_PROCESS_CALLER_CLEANUP_MILLIS * 1_000_000,
+                    )
+                }.exceptionOrNull()
+                if (cleanupFailure != null) {
+                    primary = primary?.also { it.addSuppressed(cleanupFailure) } ?: cleanupFailure
+                }
+                root.detachAppender(appender)
+            }
+            primary?.let { throw it }
+        }
+    }
+
+    test("a detached-root refusal closes acquired resources under the lock and then releases it") {
+        withLocalFixture { content, data ->
+            DatabaseFactory.createDriver(data.resolve("plainbase.db")).use { driver ->
+                SqlDelightIdMapRepository(DatabaseFactory.createDatabase(driver)).bind(
+                    RootedPath(RootName.require("ghost"), TreePath.require("lost.md")),
+                    PageId.require("01900000-0000-7000-8000-0000000000d1"),
+                    materialized = true,
+                )
+            }
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val output = RecordingOutput(events)
+            val searchOpens = AtomicInteger()
+            val objectOpens = AtomicInteger()
+            val searchCloses = AtomicInteger()
+            val objectCloses = AtomicInteger()
+            val defaults = ServerOpeners()
+            val expectedDiagnostic =
+                "serve: REFUSING TO SERVE: every page binding in this DATA_DIR belongs to root(s) absent from the " +
+                    "configuration (bound: ghost; configured: docs). This DATA_DIR likely belongs to a different " +
+                    "deployment, or the roots{} block was rewritten wholesale. Remedies, in order: (1) fix roots{} " +
+                    "so the bound name(s) above are declared again (root names are permanent identifiers), or point " +
+                    "DATA_DIR at the right directory; (2) if the removal is intentional and losing those roots' " +
+                    "permalinks and old-URL redirects is accepted: back up DATA_DIR first, then delete only the " +
+                    "detached rows, per root name, from the root-bearing tables - e.g. sqlite3 DATA_DIR/plainbase.db " +
+                    "\"DELETE FROM id_map WHERE root='<name>'\" (repeat for retired_binding, url_alias, identity_issue, " +
+                    "page_checkpoint, dirty_page, proposals, git_checkpoint, root_observation, and root_topology). " +
+                    "Do NOT delete plainbase.db itself: it also holds users, sessions, API tokens, roles, proposals, " +
+                    "and the audit log. NOTE: a detached root's PENDING/APPLYING proposals stay exactly as they are - " +
+                    "they are never applied, never terminally failed, and never deleted - and they revive if the root's " +
+                    "name returns to roots{}."
+            val status = runServerBounded {
+                runServer(
+                    localConfig(content, data),
+                    output,
+                    openers = ServerOpeners(
+                        openObject = { config, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                            objectOpens.incrementAndGet()
+                            defaults.openObject(config, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                        },
+                        openSearch = { path ->
+                            searchOpens.incrementAndGet()
+                            defaults.openSearch(path)
+                        },
+                    ),
+                    control = ServerRunControl(
+                        closeDriver = { driver ->
+                            requireLockHeld(data)
+                            driver.close()
+                            events += "driver"
+                        },
+                        closeObject = { store ->
+                            requireLockHeld(data)
+                            store.close()
+                            objectCloses.incrementAndGet()
+                        },
+                        closeSearch = { search ->
+                            requireLockHeld(data)
+                            search.close()
+                            searchCloses.incrementAndGet()
+                        },
+                        closeContext = { app ->
+                            requireLockHeld(data)
+                            app.close()
+                            events += "context"
+                        },
+                    ),
+                )
+            }
+
+            status shouldBe 1
+            output.errors.single() shouldBe expectedDiagnostic
+            events.filter { it == "driver" || it == "context" }.shouldContainExactly("driver", "context")
+            searchOpens.get() shouldBe 0
+            objectOpens.get() shouldBe 0
+            searchCloses.get() shouldBe 0
+            objectCloses.get() shouldBe 0
+            requireLockAvailable(data)
+        }
+    }
+
+    test("object hydrate refusal maps the closed endpoint to the stable boot diagnostic") {
+        withLocalFixture { content, data ->
+            val port = freePort()
+            val config = objectConfigFromEnv(content, data, endpointPort = port)
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val output = RecordingOutput(events)
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                val status = runServerBounded {
+                    runServer(
+                        config,
+                        output,
+                        control = ServerRunControl(
+                            closeDriver = { driver ->
+                                requireLockHeld(data)
+                                driver.close()
+                                events += "driver"
+                            },
+                            closeObject = { store ->
+                                requireLockHeld(data)
+                                store.close()
+                                events += "object"
+                            },
+                            closeContext = { app ->
+                                requireLockHeld(data)
+                                app.close()
+                                events += "context"
+                            },
+                        ),
+                    )
+                }
+                status shouldBe 1
+                output.errors.single() shouldContain "object storage endpoint is unreachable"
+                events.count { it == "driver" } shouldBe 1
+                events.count { it == "object" } shouldBe 1
+                events.count { it == "context" } shouldBe 1
+                appender.list.any { it.formattedMessage == "serve object hydrate or bundle restore failed" } shouldBe true
+                appender.list.any {
+                    it.throwableProxy?.className == ObjectStoreException::class.java.name &&
+                        it.throwableProxy?.message?.contains("object storage endpoint is unreachable") == true
+                } shouldBe true
+                requireLockAvailable(data)
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("prepare refusal preserves its diagnostic and closes the lock-owned resources") {
+        withLocalFixture { content, data ->
+            Files.writeString(data.resolve("git-home"), "not a directory")
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val driverCloses = AtomicInteger()
+            val contextCloses = AtomicInteger()
+            val searchOpens = AtomicInteger()
+            val objectOpens = AtomicInteger()
+            val searchCloses = AtomicInteger()
+            val objectCloses = AtomicInteger()
+            val defaults = ServerOpeners()
+            val output = RecordingOutput(events)
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                val status = runServerBounded {
+                    runServer(
+                        localConfig(content, data).copy(git = GitConfig(enabled = true)),
+                        output,
+                        openers = ServerOpeners(
+                            openObject = { config, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
+                                objectOpens.incrementAndGet()
+                                defaults.openObject(config, ignoreRules, dirtyPaths, isDirty, rowsAtStart)
+                            },
+                            openSearch = { path ->
+                                searchOpens.incrementAndGet()
+                                defaults.openSearch(path)
+                            },
+                        ),
+                        control = ServerRunControl(
+                            closeDriver = { driver ->
+                                requireLockHeld(data)
+                                driver.close()
+                                driverCloses.incrementAndGet()
+                                events += "driver"
+                            },
+                            closeObject = { store ->
+                                requireLockHeld(data)
+                                store.close()
+                                objectCloses.incrementAndGet()
+                            },
+                            closeSearch = { search ->
+                                requireLockHeld(data)
+                                search.close()
+                                searchCloses.incrementAndGet()
+                            },
+                            closeContext = { app ->
+                                requireLockHeld(data)
+                                app.close()
+                                contextCloses.incrementAndGet()
+                                events += "context"
+                            },
+                        ),
+                    )
+                }
+                status shouldBe 1
+                output.errors.single() shouldContain "git-home"
+                appender.list.any { it.formattedMessage == "serve history preparation failed" } shouldBe true
+                driverCloses.get() shouldBe 1
+                contextCloses.get() shouldBe 1
+                searchOpens.get() shouldBe 0
+                objectOpens.get() shouldBe 0
+                searchCloses.get() shouldBe 0
+                objectCloses.get() shouldBe 0
+                events += "returned"
+                (events.indexOf("driver") < events.indexOf("returned")) shouldBe true
+                (events.indexOf("context") < events.indexOf("returned")) shouldBe true
+                requireLockAvailable(data)
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("a migration refusal escapes as the original failure and does not become an entry-owned close") {
+        withLocalFixture { content, data ->
+            val database = data.resolve("plainbase.db")
+            DatabaseFactory.createDriver(database).use { }
+            DriverManager.getConnection("jdbc:sqlite:$database").use { connection ->
+                connection.createStatement().use { statement -> statement.execute("PRAGMA user_version = 999") }
+            }
+            val migrationFailure = AtomicReference<Throwable?>()
+            val driverCloses = AtomicInteger()
+                val failure = shouldThrow<IllegalStateException> {
+                    runServerBounded {
+                        runServer(
+                            localConfig(content, data, port = freePort()),
+                            RecordingOutput(),
+                            openers = ServerOpeners(
+                                openDriver = { path ->
+                                    try {
+                                        DatabaseFactory.createDriver(path)
+                                    } catch (thrown: Throwable) {
+                                        migrationFailure.set(thrown)
+                                        throw thrown
+                                    }
+                                },
+                            ),
+                            control = ServerRunControl(closeDriver = { driver ->
+                                driverCloses.incrementAndGet()
+                                driver.close()
+                            }),
+                        )
+                    }
+                }
+            requireNotNull(migrationFailure.get()) shouldBeSameInstanceAs failure
+            failure.message shouldContain "NEWER than this binary understands"
+            driverCloses.get() shouldBe 0
+            requireLockAvailable(data)
+        }
+    }
+
+    test("an OBJECT run preserves current pre-lock construction and refuses a held DATA_DIR lock without hydration") {
+        val base = Files.createTempDirectory("plainbase-server-run-object")
+        withFixtureScope(base) {
+            val data = Files.createDirectory(base.resolve("data"))
+            val content = base.resolve("unused-content")
+            val mirror = Files.createDirectory(data.resolve("mirror"))
+            Files.writeString(mirror.resolve("sentinel.md"), "must remain untouched")
+            val mirrorBefore = treeFingerprint(mirror)
+            val endpointPort = freePort()
+            val config = objectConfigFromEnv(content, data, endpointPort)
+            val before = ObjectContentStore.constructions.get()
+            val driverOpens = AtomicInteger()
+            val driverCloses = AtomicInteger()
+            val objectOpens = AtomicInteger()
+            val objectCloses = AtomicInteger()
+            val searchOpens = AtomicInteger()
+            val searchCloses = AtomicInteger()
+            val contextCloses = AtomicInteger()
+            val defaults = ServerOpeners()
+            val lock = requireNotNull(DataDirLock.tryAcquire(data))
+            try {
+                val status = runServerBounded {
+                    runServer(
+                        config,
+                        RecordingOutput(),
+                        openers = ServerOpeners(
+                            openDriver = { path ->
+                                driverOpens.incrementAndGet()
+                                defaults.openDriver(path)
+                            },
+                            openObject = { cfg, ignore, dirty, isDirty, rows ->
+                                objectOpens.incrementAndGet()
+                                defaults.openObject(cfg, ignore, dirty, isDirty, rows)
+                            },
+                            openSearch = { path ->
+                                searchOpens.incrementAndGet()
+                                defaults.openSearch(path)
+                            },
+                        ),
+                        control = ServerRunControl(
+                            closeDriver = { driver ->
+                                requireLockHeld(data)
+                                driverCloses.incrementAndGet()
+                                driver.close()
+                            },
+                            closeObject = { store ->
+                                requireLockHeld(data)
+                                objectCloses.incrementAndGet()
+                                store.close()
+                            },
+                            closeSearch = { search ->
+                                requireLockHeld(data)
+                                searchCloses.incrementAndGet()
+                                search.close()
+                            },
+                            closeContext = { app ->
+                                requireLockHeld(data)
+                                contextCloses.incrementAndGet()
+                                app.close()
+                            },
+                        ),
+                    )
+                }
+                status shouldBe 1
+                driverOpens.get() shouldBe 1
+                driverCloses.get() shouldBe 1
+                objectOpens.get() shouldBe 1
+                objectCloses.get() shouldBe 1
+                searchOpens.get() shouldBe 0
+                searchCloses.get() shouldBe 0
+                contextCloses.get() shouldBe 1
+                ObjectContentStore.constructions.get() shouldBe before + 1
+                Files.exists(data.resolve("plainbase.db")) shouldBe true
+                treeFingerprint(mirror) shouldBe mirrorBefore
+            } finally {
+                lock.close()
+            }
+            requireLockAvailable(data)
+        }
+    }
+
+    test("an opener exception crosses Koin without losing its original identity") {
+        withLocalFixture { content, data ->
+            val openerFailure = IllegalStateException("sentinel driver opener failure")
+            val actual = shouldThrow<IllegalStateException> {
+                runServerBounded {
+                    runServer(
+                        localConfig(content, data),
+                        RecordingOutput(),
+                        openers = ServerOpeners(openDriver = { throw openerFailure }),
+                    )
+                }
+            }
+            openerFailure shouldBeSameInstanceAs actual
+            requireLockAvailable(data)
+        }
+    }
+
+    test("a server-start failure remains primary while shared cleanup still runs") {
+        withLocalFixture { content, data ->
+            val startFailure = IllegalStateException("sentinel server start failure")
+            val closeFailure = IllegalStateException("sentinel search close failure")
+            val events = Collections.synchronizedList(mutableListOf<String>())
+            val searchCloseActions = AtomicInteger()
+            val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            val appender = ListAppender<ILoggingEvent>().apply { start() }
+            root.addAppender(appender)
+            try {
+                val actual = shouldThrow<IllegalStateException> {
+                    runServerBounded {
+                        runServer(
+                            localConfig(content, data),
+                            RecordingOutput(events),
+                            control = ServerRunControl(
+                                startServer = { throw startFailure },
+                                closeDriver = { driver ->
+                                    requireLockHeld(data)
+                                    events += "driver"
+                                    driver.close()
+                                },
+                                closeSearch = { search ->
+                                    requireLockHeld(data)
+                                    search.close()
+                                    searchCloseActions.incrementAndGet()
+                                    events += "search"
+                                    throw closeFailure
+                                },
+                                closeContext = { app ->
+                                    requireLockHeld(data)
+                                    events += "context"
+                                    app.close()
+                                },
+                            ),
+                        )
+                    }
+                }
+                startFailure shouldBeSameInstanceAs actual
+                events.count { it == "driver" } shouldBe 1
+                events.count { it == "search" } shouldBe 1
+                events.count { it == "context" } shouldBe 1
+                searchCloseActions.get() shouldBe 1
+                val loggedCloseFailure = appender.list
+                    .firstOrNull { it.formattedMessage == "closing search database failed" }
+                    ?.throwableProxy
+                    ?.let { it as? ThrowableProxy }
+                    ?.throwable
+                closeFailure shouldBeSameInstanceAs loggedCloseFailure
+                requireLockAvailable(data)
+            } finally {
+                root.detachAppender(appender)
+            }
+        }
+    }
+
+    test("a bounded run timeout stays primary when interruption lets its worker return") {
+        withLocalFixture { _, _ ->
+            val entered = CountDownLatch(1)
+            val interrupted = CountDownLatch(1)
+            val observedWorker = AtomicReference<Thread?>()
+            val timeout = shouldThrow<TimeoutException> {
+                runServerBounded(timeoutMillis = 100) {
+                    observedWorker.set(Thread.currentThread())
+                    entered.countDown()
+                    try {
+                        CountDownLatch(1).await()
+                        error("controlled bounded worker returned before interruption")
+                    } catch (_: InterruptedException) {
+                        interrupted.countDown()
+                        "late success"
+                    }
+                }
+            }
+
+            entered.await(1, TimeUnit.SECONDS) shouldBe true
+            interrupted.await(1, TimeUnit.SECONDS) shouldBe true
+            timeout.message shouldContain "100ms"
+            requireNotNull(observedWorker.get()).isAlive shouldBe false
+        }
+    }
+})
+
+private class RecordingOutput(
+    private val timeline: MutableList<String> = Collections.synchronizedList(mutableListOf()),
+) : CommandOutput {
+    val errors = Collections.synchronizedList(mutableListOf<String>())
+
+    override fun result(text: String, newline: Boolean) = Unit
+
+    override fun error(text: String) {
+        errors += text
+        timeline += "error:$text"
+    }
+
+    override fun intent(event: WriteIntent) = Unit
+}
+
+private class TimelineAppender(
+    private val timeline: MutableList<String>,
+) : AppenderBase<ILoggingEvent>() {
+    override fun append(event: ILoggingEvent) {
+        timeline += "warn:${event.formattedMessage}"
+    }
+}
+
+private const val START_CONTROL_WAIT_MILLIS = 10_000L
+private const val HOOK_OPERATION_WAIT_MILLIS = 15_000L
+private const val RUN_COMPLETION_WAIT_MILLIS = 15_000L
+private const val NATURAL_RETURN_TEST_DEADLINE_MILLIS = 10_000L
+private const val IN_PROCESS_RUN_DEADLINE_MILLIS = 30_000L
+private const val IN_PROCESS_CALLER_CLEANUP_MILLIS = 10_000L
+
+private fun localConfig(content: Path, data: Path, port: Int = freePort()): PlainbaseConfig = PlainbaseConfig(
+    contentDir = content,
+    dataDir = data,
+    host = "127.0.0.1",
+    port = port,
+    git = GitConfig(enabled = false),
+)
+
+private fun objectConfigFromEnv(
+    content: Path,
+    data: Path,
+    endpointPort: Int,
+    port: Int = freePort(),
+    gitEnabled: Boolean = false,
+): PlainbaseConfig =
+    PlainbaseConfig.fromEnv(
+        mapOf(
+            "CONTENT_DIR" to content.toString(),
+            "DATA_DIR" to data.toString(),
+            "PLAINBASE_STORAGE_BACKEND" to "object",
+            "PLAINBASE_S3_ENDPOINT" to "https://127.0.0.1:$endpointPort",
+            "PLAINBASE_S3_BUCKET" to "docs",
+            "PLAINBASE_S3_ACCESS_KEY_ID" to "key",
+            "PLAINBASE_S3_SECRET_ACCESS_KEY" to "secret",
+            "PLAINBASE_GIT_ENABLED" to gitEnabled.toString(),
+            "PLAINBASE_HOST" to "127.0.0.1",
+            "PLAINBASE_PORT" to port.toString(),
+        ),
+    )
+
+private class FixtureWorkers {
+    private val active = ConcurrentHashMap.newKeySet<Thread>()
+
+    fun register(worker: Thread) {
+        active += worker
+    }
+
+    fun unregister(worker: Thread) {
+        active -= worker
+    }
+
+    fun awaitQuiescence(deadline: Long): Boolean {
+        while (active.any { it.isAlive } && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+        return active.none { it.isAlive }
+    }
+
+    fun survivors(): String = active.filter { it.isAlive }.joinToString { "${it.name}(${it.state})" }
+}
+
+private val fixtureWorkers = ThreadLocal<FixtureWorkers?>()
+
+private fun startFixtureWorker(name: String, block: () -> Unit): Thread {
+    val workers = fixtureWorkers.get()
+    val worker = thread(start = false, name = name) {
+        try {
+            block()
+        } finally {
+            workers?.unregister(Thread.currentThread())
+        }
+    }
+    workers?.register(worker)
+    return worker
+}
+
+private fun <T> runServerBounded(
+    timeoutMillis: Long = IN_PROCESS_RUN_DEADLINE_MILLIS,
+    block: () -> T,
+): T {
+    val workers = fixtureWorkers.get()
+    val result = AtomicReference<Result<T>?>(null)
+    val worker = startFixtureWorker("plainbase-server-bounded") {
+        result.set(runCatching(block))
+    }
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    try {
+        worker.start()
+        joinUntil(worker, deadline)
+        val timedOut = worker.isAlive
+        if (timedOut) {
+            worker.interrupt()
+            joinUntil(worker, System.nanoTime() + IN_PROCESS_CALLER_CLEANUP_MILLIS * 1_000_000)
+        }
+        if (timedOut) {
+            val timeout = TimeoutException("bounded server run exceeded ${timeoutMillis}ms")
+            result.get()?.exceptionOrNull()?.let(timeout::addSuppressed)
+            if (worker.isAlive) {
+                timeout.addSuppressed(
+                    IllegalStateException("bounded server run left a surviving caller: ${worker.name}(${worker.state})"),
+                )
+            }
+            throw timeout
+        }
+        return requireNotNull(result.get()) { "bounded server run completed without a result" }.getOrThrow()
+    } finally {
+        if (!worker.isAlive) workers?.unregister(worker)
+    }
+}
+
+private fun joinFixtureWorkers(callers: List<Thread>, deadline: Long) {
+    callers.forEach { joinUntil(it, deadline) }
+    val survivors = callers.filter { it.isAlive }.joinToString { "${it.name}(${it.state})" }
+    check(survivors.isEmpty()) { "surviving in-process caller(s) before fixture cleanup: $survivors" }
+}
+
+private fun joinUntil(worker: Thread, deadline: Long) {
+    while (worker.isAlive && System.nanoTime() < deadline) {
+        val remaining = deadline - System.nanoTime()
+        worker.join(maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remaining)))
+    }
+}
+
+private fun withLocalFixture(block: (content: Path, data: Path) -> Unit) {
+    val base = Files.createTempDirectory("plainbase-server-run")
+    withFixtureScope(base) {
+        val content = Files.createDirectory(base.resolve("content"))
+        val data = Files.createDirectory(base.resolve("data"))
+        Files.writeString(content.resolve("readme.md"), "---\ntitle: Readme\n---\n\n# Readme\n")
+        block(content, data)
+    }
+}
+
+private fun withFixtureScope(base: Path, block: () -> Unit) {
+    val workers = FixtureWorkers()
+    val previous = fixtureWorkers.get()
+    fixtureWorkers.set(workers)
+    var primary: Throwable? = null
+    try {
+        block()
+    } catch (failure: Throwable) {
+        primary = failure
+    } finally {
+        if (previous == null) fixtureWorkers.remove() else fixtureWorkers.set(previous)
+        val quiesced = runCatching {
+            workers.awaitQuiescence(System.nanoTime() + IN_PROCESS_CALLER_CLEANUP_MILLIS * 1_000_000)
+        }.getOrDefault(false)
+        if (quiesced) {
+            base.toFile().deleteRecursively()
+        } else {
+            val cleanupFailure = IllegalStateException(
+                "fixture cleanup skipped while test callers remain: ${workers.survivors()}",
+            )
+            primary = primary?.also { it.addSuppressed(cleanupFailure) } ?: cleanupFailure
+        }
+    }
+    primary?.let { throw it }
+}
+
+private fun observingControl(data: Path, observer: (kind: String, value: Any) -> Unit): ServerRunControl =
+    ServerRunControl(
+        startServer = { requireNoGlobalContext() },
+        closeDriver = { driver ->
+            requireNoGlobalContext()
+            requireLockHeld(data)
+            driver.close()
+            observer("driver", driver)
+            requireNoGlobalContext()
+        },
+        closeSearch = { search ->
+            requireNoGlobalContext()
+            requireLockHeld(data)
+            search.close()
+            observer("search", search)
+            requireNoGlobalContext()
+        },
+        closeObject = { store ->
+            requireNoGlobalContext()
+            requireLockHeld(data)
+            store.close()
+            observer("object", store)
+            requireNoGlobalContext()
+        },
+        closeContext = { app ->
+            requireNoGlobalContext()
+            requireLockHeld(data)
+            app.close()
+            observer("context", app)
+            requireNoGlobalContext()
+        },
+    )
+
+private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+
+private fun isPortBound(port: Int): Boolean =
+    runCatching { ServerSocket(port).use { } }.isFailure
+
+private fun requireNoGlobalContext() {
+    GlobalContext.getOrNull() shouldBe null
+}
+
+private fun requireLockHeld(data: Path) {
+    val attempt = DataDirLock.tryAcquire(data)
+    if (attempt != null) {
+        attempt.close()
+        error("DATA_DIR lock was released before resource cleanup")
+    }
+}
+
+private fun requireLockAvailable(data: Path) {
+    val attempt = DataDirLock.tryAcquire(data) ?: error("DATA_DIR lock was not released")
+    attempt.close()
+}
+
+private fun treeFingerprint(root: Path): String? {
+    if (!Files.exists(root)) return null
+    val digest = MessageDigest.getInstance("SHA-256")
+    Files.walk(root).use { paths ->
+        paths.filter { it != root }.sorted().forEach { path ->
+            digest.update(root.relativize(path).toString().toByteArray(Charsets.UTF_8))
+            digest.update(byteArrayOf(if (Files.isDirectory(path)) 0.toByte() else 1.toByte()))
+            if (Files.isRegularFile(path)) digest.update(Files.readAllBytes(path))
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
