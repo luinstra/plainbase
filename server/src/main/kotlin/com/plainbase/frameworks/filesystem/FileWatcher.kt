@@ -6,6 +6,7 @@ import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.content.WatchCoverage
 import com.plainbase.domain.root.BreakCause
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.IOException
 import java.nio.file.ClosedWatchServiceException
@@ -195,22 +196,34 @@ class FileWatcher(
     }
 
     override fun close() {
-        closeRequested.store(true)
-        var primary: Throwable? = null
-        try {
-            closeWatchService(watchService) // wakes the worker's take() with ClosedWatchServiceException
-        } catch (failure: Throwable) {
-            primary = failure
+        CompletionWait.run {
+            val firstClose = closeRequested.compareAndSet(expectedValue = false, newValue = true)
+            var primary: Throwable? = null
+            if (firstClose) {
+                try {
+                    closeWatchService(watchService) // wakes the worker's take() with ClosedWatchServiceException
+                } catch (failure: Throwable) {
+                    primary = failure
+                }
+            }
+            worker?.let { currentWorker ->
+                try {
+                    awaitForever(
+                        await = { millis -> currentWorker.join(millis) },
+                        completed = { !currentWorker.isAlive },
+                    )
+                } catch (failure: Throwable) {
+                    if (primary == null) primary = failure else primary.addSuppressed(failure)
+                }
+            }
+            captureCurrentInterrupt()
+            primary?.let { throw it }
         }
-        try {
-            worker?.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS) // the port's close bound, which the shutdown budget counts
-        } catch (failure: Throwable) {
-            if (primary == null) primary = failure else primary.addSuppressed(failure)
-        }
-        primary?.let { throw it }
     }
 
     internal fun isClosedForTest(): Boolean = closeRequested.load() && worker?.isAlive != true
+
+    internal fun workerForTest(): Thread? = worker
 
     /**
      * Registers a NEW subtree (a directory created on sight). It can only ever LOSE coverage, never restore it:

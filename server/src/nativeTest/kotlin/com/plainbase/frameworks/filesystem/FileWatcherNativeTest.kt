@@ -7,11 +7,17 @@ import java.nio.file.ClosedWatchServiceException
 import java.nio.file.Files
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.WatchService
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -86,6 +92,123 @@ class FileWatcherNativeTest {
             val closed = closeRetainedWatchService(raw, testFailure)
             if (closed) root.toFile().deleteRecursively()
         }
+    }
+
+    @Test
+    fun `native watcher close joins a held real callback worker`() {
+        val root = Files.createTempDirectory("pb-native-watch-close")
+        val target = root.resolve("held.md")
+        val callbackEntered = CountDownLatch(1)
+        val callbackRelease = CountDownLatch(1)
+        val callbackDone = AtomicBoolean(false)
+        val closeFailure = AtomicReference<Throwable?>()
+        val seen = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+        var primary: Throwable? = null
+        var interrupted = false
+        fun addFailure(failure: Throwable?) {
+            if (failure == null || !seen.add(failure)) return
+            val current = primary
+            if (current == null) primary = failure else current.addSuppressed(failure)
+        }
+        fun joinOwned(thread: Thread, millis: Long): Boolean {
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis)
+            while (thread.isAlive) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0L) return false
+                try {
+                    thread.join(minOf(100L, TimeUnit.NANOSECONDS.toMillis(remaining).coerceAtLeast(1L)))
+                } catch (failure: InterruptedException) {
+                    interrupted = true
+                    Thread.interrupted()
+                    addFailure(failure)
+                    return false
+                }
+            }
+            return true
+        }
+        var watcher: FileWatcher? = null
+        var worker: Thread? = null
+        var closeThread: Thread? = null
+        var survivor = false
+        try {
+            val currentWatcher = LocalContentStore(root).watch(
+                onChange = { path ->
+                    if (path.value == "held.md") {
+                        callbackEntered.countDown()
+                        while (true) {
+                            try {
+                                if (callbackRelease.await(10, TimeUnit.MILLISECONDS)) break
+                            } catch (_: InterruptedException) {
+                                // The callback intentionally remains live until the test releases it.
+                            }
+                        }
+                        callbackDone.set(true)
+                    }
+                },
+            )
+            watcher = currentWatcher as FileWatcher
+            worker = requireNotNull(watcher.workerForTest())
+            Files.writeString(target, "# held\n")
+            assertTrue(callbackEntered.await(90, TimeUnit.SECONDS), "native callback never arrived")
+
+            val currentCloser = thread(name = "plainbase-native-watch-close") {
+                try {
+                    currentWatcher.close()
+                } catch (failure: Throwable) {
+                    closeFailure.compareAndSet(null, failure)
+                }
+            }
+            closeThread = currentCloser
+            assertFalse(joinOwned(currentCloser, 500), "close returned during the short observation")
+            assertTrue(currentCloser.isAlive, "close returned while the callback was held")
+            assertTrue(requireNotNull(worker).isAlive, "watch worker died before the callback was released")
+            assertFalse(callbackDone.get())
+
+            callbackRelease.countDown()
+            assertTrue(joinOwned(currentCloser, 10_000), "close thread did not terminate")
+            assertTrue(joinOwned(requireNotNull(worker), 10_000), "watch worker did not terminate")
+            assertFalse(currentCloser.isAlive)
+            assertFalse(requireNotNull(worker).isAlive)
+            assertTrue(callbackDone.get())
+        } catch (failure: Throwable) {
+            if (failure is InterruptedException) {
+                interrupted = true
+                Thread.interrupted()
+            }
+            addFailure(failure)
+        } finally {
+            callbackRelease.countDown()
+            val cleanupCloser = closeThread ?: watcher?.let { currentWatcher ->
+                thread(name = "plainbase-native-watch-cleanup") {
+                    try {
+                        currentWatcher.close()
+                    } catch (failure: Throwable) {
+                        closeFailure.compareAndSet(null, failure)
+                    }
+                }
+            }
+            closeThread = cleanupCloser
+            if (cleanupCloser != null && !joinOwned(cleanupCloser, 10_000)) survivor = true
+            if (cleanupCloser != null && !cleanupCloser.isAlive && watcher?.isClosedForTest() == false) {
+                val retryCloser = thread(name = "plainbase-native-watch-retry") {
+                    try {
+                        requireNotNull(watcher).close()
+                    } catch (failure: Throwable) {
+                        closeFailure.compareAndSet(null, failure)
+                    }
+                }
+                if (!joinOwned(retryCloser, 10_000)) survivor = true
+            }
+            worker?.let { if (!joinOwned(it, 10_000)) survivor = true }
+            if (worker?.isAlive == true || watcher?.isClosedForTest() == false) survivor = true
+            addFailure(closeFailure.get())
+            if (survivor) addFailure(IllegalStateException("native watcher fixture retained a surviving closer or worker"))
+            if (!survivor) {
+                runCatching { root.toFile().deleteRecursively() }.onFailure(::addFailure)
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+        primary?.let { throw it }
     }
 }
 

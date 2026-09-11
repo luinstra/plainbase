@@ -4,9 +4,7 @@ package com.plainbase.frameworks.lifecycle
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.concurrent.atomics.AtomicBoolean
-import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 
@@ -23,33 +21,31 @@ import kotlin.concurrent.thread
  * got to, quite possibly halfway through shipping that bundle. So the teardown runs INSIDE the hook, and
  * [run] is idempotent because the clean-exit `finally` still calls it too and both can fire.
  *
- * Bounded, because a hook that blocks forever is its own outage (the container runtime SIGKILLs at its own
- * grace period regardless): every [Step] is individually bounded and DECLARES that bound, and [run] waits on a
- * daemon worker for the sum of them ([budgetMillis]) - so the budget cannot be SHORTER than what it fronts. A
- * budget that is shorter does not bound the steps, it TRUNCATES them, and the step it truncates is the slow one:
- * a final DR bundle ship, which is the loss this class was written to prevent. Overrunning the derived budget
- * means a step blew its OWN internal timeout, which is the only condition on which abandoning it is right - and
- * the overrun NAMES it. A long-but-live step is WARNed about at [warnAfterMillis] and then WAITED for.
+ * Step bounds are forecasts used for diagnostics, not hard bounds or maximum close durations. They do not authorize
+ * returning while a resource worker is live; the external supervisor owns the process deadline.
  *
  * A step that throws is logged and the remaining steps still run: a wedged watcher must not cost us the DR
  * bundle. Order is the caller's, and it is load-bearing (see `serve()`).
  */
 internal class GracefulShutdown(
     private val steps: List<Step>,
-    /**
-     * The hard bound, DERIVED from what the steps themselves promise rather than guessed at. A fixed number here
-     * silently forked from the collaborators behind it (a 30s executor grace, a 10-minute bundle transfer) and
-     * cut them off mid-work.
-     */
+    /** The total forecast, derived from the steps' collaborator forecasts for diagnostics. */
     val budgetMillis: Long = steps.sumOf { it.boundMillis },
-    /** When to say a teardown is taking unusually long - advisory only; the wait continues to [budgetMillis]. */
+    /** When to say a teardown is taking unusually long; the wait continues until completion. */
     private val warnAfterMillis: Long = WARN_AFTER_MILLIS,
+    private val warningState: CleanupWarningState = CleanupWarningState(warnAfterMillis),
+    private val pendingConstruction: () -> Boolean = { false },
+    private val maintenanceForecastMillis: () -> Long? = { null },
+    /** Lets an owner freeze its acquired-entry forecasts at the first drain instead of at step-list creation. */
+    private val warningStateInitializer: (() -> Unit)? = null,
+    /** The owner already enters and completes phases when its steps execute. */
+    private val managesWarningPhases: Boolean = true,
 ) {
 
     /**
-     * One named teardown action, and [boundMillis] - the longest its collaborator can honestly take, which is
-     * the sum of ITS OWN internal timeouts (see the `serve()` call site). It is not a wish: nothing here can
-     * interrupt a step, so a bound that undersells its collaborator only lies to the budget above.
+     * One named teardown action, and [boundMillis] - the collaborator forecast used by diagnostics, which is the
+     * sum of ITS OWN internal timeout forecasts (see the `serve()` call site). It is diagnostic input only: nothing
+     * here can interrupt a step, so a forecast that undersells its collaborator only makes the diagnostic less useful.
      *
      * The default suits a step with no internal wait at all (a lock release, a transport close). Expected to be
      * quiet; a throw is contained, never propagated.
@@ -59,18 +55,28 @@ internal class GracefulShutdown(
     private val started = AtomicBoolean(false)
     private val finished = CountDownLatch(1)
 
-    /** The step in flight - read only to NAME the culprit in the budget-overrun warning. */
-    private val inFlight = AtomicReference<String?>(null)
+    @Volatile
+    private var worker: Thread? = null
+
+    internal fun workerForTest(): Thread? = worker
 
     /**
      * Tears the server down, once. A second caller (the SIGTERM hook racing the clean-exit `finally`, or the
-     * reverse) does NOT return early - it waits for the run that won, under the same budget, so "run() returned"
-     * means "the teardown finished, or it loudly overran". Safe from any thread.
+     * reverse) does NOT return early - it waits for the run that won, so "run() returned" means "the teardown
+     * finished", regardless of the diagnostic forecast. Safe from any thread.
      */
     fun run() {
         if (started.compareAndSet(false, true)) {
+            warningStateInitializer?.invoke() ?: run {
+                warningState.configure(steps.map { CleanupWarningState.Forecast(it.name, it.boundMillis) })
+                warningState.start(pendingConstruction(), maintenanceForecastMillis())
+            }
             logger.info { "shutting down: ${steps.joinToString(", ") { it.name }}" }
-            thread(name = WORKER_THREAD, isDaemon = true, block = ::runSteps)
+            thread(start = false, name = WORKER_THREAD, block = ::runSteps).also {
+                it.isDaemon = false
+                worker = it
+                it.start()
+            }
         }
         awaitFinished()
     }
@@ -82,61 +88,42 @@ internal class GracefulShutdown(
     fun installHook(): Thread =
         thread(start = false, name = HOOK_THREAD, block = ::run).also { Runtime.getRuntime().addShutdownHook(it) }
 
-    /** Always counts [finished] down, even on an Error, so a waiter can never be stranded past the budget for nothing. */
+    /** Always counts [finished] down, even on an Error, so concurrent callers can finish waiting. */
     private fun runSteps() {
-        val startedAt = System.nanoTime()
-        try {
-            for (step in steps) {
-                inFlight.store(step.name)
-                runCatching {
-                    step.close()
-                }.onFailure { failure ->
-                    // Throwable, NOT Exception, and this is the one place in the tree where that is right: the
-                    // JVM is already on its way out, so there is nothing left for a rethrow to protect - while an
-                    // Error escaping this loop would skip every step BEHIND it, which is the DR bundle ship and
-                    // the DATA_DIR lock release. Containment is the whole contract; it cannot have a hole in it.
-                    logger.warn(failure) { "shutdown step '${step.name}' failed; continuing with the remaining steps" }
+        CompletionWait.run {
+            try {
+                for (step in steps) {
+                    runCatching {
+                        if (managesWarningPhases) warningState.enterPhase(step.name, step.boundMillis)
+                        step.close()
+                    }.onFailure { failure ->
+                        logger.warn(failure) { "shutdown step '${step.name}' failed; continuing with the remaining steps" }
+                    }
+                    if (managesWarningPhases) warningState.completePhase(step.name)
+                    captureCurrentInterrupt()
                 }
+                warningState.poll()
+                warningState.complete()
+            } finally {
+                finished.countDown()
             }
-            inFlight.store(null)
-            // Logged BEFORE the countdown: the waiter is the shutdown hook, and the JVM halts the moment it
-            // returns - a line logged after it would race the halt and could be lost from the operator's log.
-            logger.info { "shutdown complete in ${(System.nanoTime() - startedAt) / NANOS_PER_MILLISECOND}ms" }
-        } finally {
-            finished.countDown()
         }
     }
 
     private fun awaitFinished() {
-        val warnAt = minOf(warnAfterMillis, budgetMillis)
-        try {
-            if (finished.await(warnAt, TimeUnit.MILLISECONDS)) return
-            if (warnAt < budgetMillis) {
-                // Advisory, never a deadline: the step may simply be a big DR bundle going up a slow link, and
-                // cutting it here is exactly the bug. It tells the operator what their runtime's grace period is
-                // now racing, while we keep waiting for the step's OWN bound.
-                logger.warn {
-                    "shutdown step '${inFlight.load()}' has been running for ${warnAt}ms and is still going; waiting up to " +
-                        "${budgetMillis}ms for it. If the runtime SIGKILLs first, raise its grace period (docker stop -t, " +
-                        "terminationGracePeriodSeconds) - a truncated shutdown can leave the final DR bundle unshipped."
-                }
-                if (finished.await(budgetMillis - warnAt, TimeUnit.MILLISECONDS)) return
-            }
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt() // restore it, never swallow (the ExecutorAlarm idiom)
-            logger.warn { "shutdown wait was interrupted while step '${inFlight.load()}' was in flight; exiting without waiting further" }
-            return
-        }
-        logger.warn {
-            "shutdown exceeded its ${budgetMillis}ms budget with step '${inFlight.load()}' still in flight; exiting " +
-                "without waiting further. The step has overrun its own declared bound, so it is wedged rather than slow."
+        CompletionWait.run {
+            awaitForever(
+                await = { finished.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                completed = { finished.count == 0L },
+                onTick = warningState::poll,
+            )
         }
     }
 
     companion object {
         private val logger = KotlinLogging.logger {}
 
-        /** A step with no internal wait of its own (a lock release, a transport close) - generous, and never reached. */
+        /** A forecast for a step with no internal wait of its own (a lock release, a transport close). */
         const val FAST_STEP_BOUND_MILLIS = 5_000L
 
         /**
@@ -147,16 +134,15 @@ internal class GracefulShutdown(
          * the tightest one has already killed the process. It used to be 25s, so a `docker stop` on defaults killed
          * the server 15 seconds before it would have said why.
          *
-         * Advisory ONLY (see [awaitFinished]): the budget the wait actually honors is the steps' own, summed, and it
-         * is far larger than any grace period - a final DR bundle ship is bounded by a 10-minute transfer timeout,
-         * because that is how long shipping a large history over a slow link can honestly take. Cutting the WAIT
-         * short would not make the teardown faster; it would only make us SIGKILL ourselves earlier than the runtime
-         * would have. Fitting the two together is the OPERATOR's lever (`docker stop -t`,
+         * Advisory ONLY (see [awaitFinished]): the worker waits for completion, while this summed forecast is far
+         * larger than any grace period - a final DR bundle ship carries a 10-minute transfer forecast because that
+         * is how long shipping a large history over a slow link can honestly take. Cutting the WAIT short would not
+         * make the teardown faster; it would only make us SIGKILL ourselves earlier than the runtime would have.
+         * Fitting the two together is the OPERATOR's lever (`docker stop -t`,
          * `terminationGracePeriodSeconds`), and `docs/operating-plainbase.md` gives them the arithmetic.
          */
-        const val WARN_AFTER_MILLIS = 8_000L
+        const val WARN_AFTER_MILLIS = CleanupWarningState.WARN_AFTER_MILLIS
         private const val WORKER_THREAD = "plainbase-shutdown"
-        private const val NANOS_PER_MILLISECOND = 1_000_000L
         private const val HOOK_THREAD = "plainbase-shutdown-hook"
     }
 }

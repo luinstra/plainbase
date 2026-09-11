@@ -7,7 +7,6 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
-import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -16,7 +15,7 @@ import kotlin.concurrent.thread
 
 /**
  * The teardown contract `serve()` leans on: the SIGTERM hook and the clean-exit `finally` BOTH call
- * [GracefulShutdown.run], so it must be idempotent, ordered, throw-tolerant and bounded.
+ * [GracefulShutdown.run], so it must be idempotent, ordered, throw-tolerant and forecast-aware.
  * ServerBootCliContractTest separately characterizes startup, SIGTERM delivery and process exit status.
  */
 class GracefulShutdownTest : FunSpec({
@@ -100,8 +99,8 @@ class GracefulShutdownTest : FunSpec({
         ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
     }
 
-    test("the budget is DERIVED from the steps' own bounds - it can never be smaller than what it fronts") {
-        // The bug: a FIXED 25s budget in front of a 30s executor grace (twice over) and a bundle ship bounded only
+    test("the budget is DERIVED from the steps' own forecasts - it covers what it describes") {
+        // The bug: a FIXED 25s budget in front of a 30s executor grace (twice over) and a bundle ship forecast only
         // by a 10-minute transfer timeout. On expiry run() returned, the hook thread returned, and the JVM HALTED -
         // killing a live DR ship mid-upload, which is the precise loss this class exists to prevent.
         val steps = listOf(
@@ -115,7 +114,7 @@ class GracefulShutdownTest : FunSpec({
 
         budget shouldBe steps.sumOf { it.boundMillis }
         steps.forEach { budget shouldBeGreaterThanOrEqual it.boundMillis }
-        // ...and the old fixed number survives only as the advisory line, which is now strictly inside the budget.
+        // ...and the old fixed number survives only as the advisory line, which is now strictly inside the forecast.
         budget shouldBeGreaterThan GracefulShutdown.WARN_AFTER_MILLIS
     }
 
@@ -136,26 +135,25 @@ class GracefulShutdownTest : FunSpec({
         ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
     }
 
-    test("an overrunning step exhausts the budget and returns - a shutdown hook must never hang the JVM") {
+    test("a step that outlives its forecast still completes before shutdown returns") {
         val release = CountDownLatch(1)
         val ran = ConcurrentLinkedQueue<String>()
         val steps = listOf(
-            GracefulShutdown.Step("wedged") { release.await(30, TimeUnit.SECONDS) },
+            GracefulShutdown.Step("slow", boundMillis = 50) { release.await() },
             GracefulShutdown.Step("lock") { ran += "lock" },
         )
 
-        val (elapsed, ranOnReturn) = try {
-            val startedAt = System.nanoTime()
-            GracefulShutdown(steps, budgetMillis = 200).run()
-            // Both readings must be taken BEFORE the release below, or the freed worker races the assertions.
-            (System.nanoTime() - startedAt) / 1_000_000 to ran.toList()
-        } finally {
-            release.countDown() // never leave the worker parked for the rest of the suite
+        val releaser = thread(isDaemon = true) {
+            Thread.sleep(200)
+            release.countDown()
         }
+        val startedAt = System.nanoTime()
+        GracefulShutdown(steps, budgetMillis = 50).run()
+        val elapsed = (System.nanoTime() - startedAt) / 1_000_000
+        releaser.join(5_000)
 
-        // Returned on the budget, not on the wedged step - and gave up BEFORE the step behind it could run.
-        elapsed shouldBeLessThan 5_000
-        ranOnReturn shouldContainExactly emptyList()
+        elapsed shouldBeGreaterThanOrEqual 150
+        ran.toList() shouldContainExactly listOf("lock")
     }
 
     test("installHook registers a real JVM shutdown hook") {

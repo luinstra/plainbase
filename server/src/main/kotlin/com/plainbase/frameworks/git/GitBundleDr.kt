@@ -4,6 +4,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.frameworks.filesystem.withDirectoryStream
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -69,7 +70,7 @@ class GitBundleDr(
      * Injectable so a test can drive dispatch on a same-thread executor deterministically.
      */
     private val shipExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "plainbase-bundle-dr-ship").apply { isDaemon = true }
+        Thread(runnable, "plainbase-bundle-dr-ship").apply { isDaemon = false }
     },
 ) : AutoCloseable {
 
@@ -505,76 +506,80 @@ class GitBundleDr(
         }
     }
 
-    /** The graceful-shutdown flush: stop accepting new ships, DRAIN the owned ship engine, then a final
-     *  best-effort ship through the SAME `locks.ship` (HOLE B: never races an in-flight cadence ship),
-     *  before the object-store transport closes. Never throws. */
+    /** The graceful-shutdown flush: stop accepting new ships, drain the owned ship engine, then make one
+     *  best-effort final ship through the SAME `locks.ship` before the object-store transport closes. */
+    @Suppress("TooGenericExceptionCaught")
     override fun close() {
-        synchronized(cadenceLock) { closed = true } // stop accepting: recordCommit/onAlarm no longer reserve or dispatch
-        (alarm as? AutoCloseable)?.close() // stop future debounce firings
-        drainShipExecutor() // R1: JOIN any in-flight/queued async ship worker BEFORE the flush and before the transport closes
-
-        // If the closing thread is itself interrupted (a shutdownNow propagated here, or a drain await was
-        // interrupted), a git probe would abort immediately and MIS-CLASSIFY the .git as UNREADABLE. Report the
-        // honest reason and skip rather than log a scary-but-wrong ownership/permissions hint. isInterrupted
-        // (non-clearing) preserves the flag for the shutting-down caller.
-        if (Thread.currentThread().isInterrupted) {
-            logger.warn {
-                "graceful-shutdown bundle ship skipped: the shutdown thread was interrupted before the flush; " +
-                    "the DR bundle stays as of the last successful ship"
+        CompletionWait.run {
+            var primary: Throwable? = null
+            synchronized(cadenceLock) { closed = true }
+            try {
+                (alarm as? AutoCloseable)?.close() // stop future debounce firings
+            } catch (failure: Throwable) {
+                primary = failure
             }
-            return
-        }
-        // MINOR (opus/agy): `bundle create --all` refuses to create an empty bundle on an unborn/no-commit
-        // repo ("fatal: Refusing to create empty bundle") - skip the flush entirely rather than logging a
-        // scary-but-harmless "graceful-shutdown bundle ship failed" WARN on every clean shutdown of a
-        // fresh install that has not committed anything yet. But an UNREADABLE .git (perms flipped mid-run) is
-        // NOT the intended unborn-empty case, so signal THAT skip so the operator sees a shutdown-side hint.
-        val state = gitState()
-        if (state != GitState.COMPLETE) {
-            if (state == GitState.UNREADABLE) {
-                logger.warn {
-                    "graceful-shutdown bundle ship skipped: the mirror .git is UNREADABLE (ownership/permissions?); " +
-                        "the DR bundle stays as of the last successful ship"
+            captureCurrentInterrupt()
+            try {
+                drainShipExecutor() // join every admitted ship before the final attempt and transport close
+            } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary.addSuppressed(failure)
+            }
+            captureCurrentInterrupt()
+
+            // MINOR (opus/agy): `bundle create --all` refuses to create an empty bundle on an unborn/no-commit
+            // repo ("fatal: Refusing to create empty bundle") - skip the flush entirely rather than logging a
+            // scary-but-harmless "graceful-shutdown bundle ship failed" WARN on every clean shutdown of a
+            // fresh install that has not committed anything yet. But an UNREADABLE .git (perms flipped mid-run) is
+            // NOT the intended unborn-empty case, so signal THAT skip so the operator sees a shutdown-side hint.
+            val state = runCatching { gitState() }.getOrElse { failure ->
+                if (primary == null) primary = failure else primary.addSuppressed(failure)
+                GitState.UNREADABLE
+            }
+            if (state != GitState.COMPLETE) {
+                if (state == GitState.UNREADABLE) {
+                    logger.warn {
+                        "graceful-shutdown bundle ship skipped: the mirror .git is UNREADABLE (ownership/permissions?); " +
+                            "the DR bundle stays as of the last successful ship"
+                    }
+                }
+            } else {
+                runCatching { ship() }.onFailure { failure ->
+                    if (failure is Error) throw failure
+                    logger.warn(failure) {
+                        "graceful-shutdown bundle ship failed (${causeOf(failure)}); the DR bundle stays as of the last successful ship"
+                    }
                 }
             }
-            return
-        }
-        runCatching {
-            ship()
-        }.onFailure { failure ->
-            if (failure is Error) throw failure
-            logger.warn(failure) {
-                "graceful-shutdown bundle ship failed (${causeOf(failure)}); the DR bundle stays as of the last successful ship"
-            }
+            captureCurrentInterrupt()
+            primary?.let { throw it }
         }
     }
 
-    /**
-     * Stop the owned [shipExecutor] and JOIN it (R1): shutdown() (no new tasks), a bounded await, then on a
-     * timeout ESCALATE to shutdownNow() (which interrupts the running ship - GitExecutor force-kills + CONFIRMS
-     * its child exited on interrupt, R3, so `locks.ship` is released cleanly) and a second bounded await. A
-     * still-running worker after that is logged LOUD, never silently left to race the flush.
-     */
-    private fun drainShipExecutor() {
+    /** Stop the owned [shipExecutor] and join it before the final flush. */
+    private fun CompletionWait.drainShipExecutor() {
         shipExecutor.shutdown()
-        if (awaitShipExecutor()) return
+        if (awaitShipExecutor(SHIP_SHUTDOWN_GRACE_SECONDS)) return
         logger.warn { "a bundle ship worker did not finish within ${SHIP_SHUTDOWN_GRACE_SECONDS}s of shutdown; interrupting it" }
         shipExecutor.shutdownNow()
-        if (!awaitShipExecutor()) {
-            logger.warn {
-                "a bundle ship worker is STILL running after interrupt; the graceful-shutdown flush may serialize behind it on locks.ship"
-            }
+        if (awaitShipExecutor(SHIP_SHUTDOWN_GRACE_SECONDS)) return
+        logger.warn {
+            "a bundle ship worker is still running after interrupt; waiting for actual termination before the final flush"
         }
+        awaitForever(
+            await = { millis -> shipExecutor.awaitTermination(millis, TimeUnit.MILLISECONDS) },
+            completed = shipExecutor::isTerminated,
+        )
     }
 
-    /** Bounded await; RESTORES the interrupt (never swallows it) so the shutting-down caller still observes it. */
-    private fun awaitShipExecutor(): Boolean =
-        try {
-            shipExecutor.awaitTermination(SHIP_SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            false
-        }
+    /** Each close forecast retains a real 30-second wait; close then waits for actual termination. */
+    private fun CompletionWait.awaitShipExecutor(graceSeconds: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(graceSeconds)
+        return awaitUntil(
+            deadlineNanos = deadline,
+            await = { nanos -> shipExecutor.awaitTermination(nanos, TimeUnit.NANOSECONDS) },
+            completed = shipExecutor::isTerminated,
+        )
+    }
 
     internal fun isClosedForTest(): Boolean =
         shipExecutor.isTerminated && (alarm as? ExecutorAlarm)?.isTerminatedForTest() != false
@@ -744,22 +749,20 @@ class GitBundleDr(
         private const val RECONCILE_MESSAGE = "reconcile: bucket state at boot"
 
         /**
-         * G1: the DR-sized per-invocation git timeout for the SIZE-DEPENDENT bundle ops (`bundle create --all`,
+         * G1: the DR-sized per-invocation git timeout forecast for the SIZE-DEPENDENT bundle ops (`bundle create --all`,
          * the restore `fetch`). 600s, aligned with the 10-minute HTTP bundle transfer bound, so a full-history
          * bundle that transfers fine over the network is not then failed by the default ~30s hot-path git timeout.
          */
         private const val BUNDLE_GIT_TIMEOUT_SECONDS = 600L
 
-        /** R1: bounded grace for [close] to drain the owned ship executor before the final flush; on a timeout
-         *  close escalates to shutdownNow() (interrupting the running ship) then waits once more, so worst-case
-         *  shutdown wait is 2x this - short enough never to hang a graceful close, long enough for a normal ship. */
+        /** R1: the initial grace forecast for [close] to drain the owned ship executor before the final flush;
+         *  on expiry close escalates to shutdownNow() and then waits for actual termination. */
         private const val SHIP_SHUTDOWN_GRACE_SECONDS = 30L
 
         /**
-         * What [close] can honestly take, in full: the two drain awaits above, then the final flush's own `ship()`
-         * - a size-dependent `bundle create` plus the bucket PUT, each bounded by its own transfer timeout. The
-         * graceful-shutdown budget is the SUM of its steps' bounds, so this number is the one that stops a slow
-         * final bundle from being killed at a smaller, guessed-at deadline (the bug this class exists to fix).
+         * The close forecast: the two initial drain grace periods above plus the final flush's own `ship()` - a
+         * size-dependent `bundle create` and bucket PUT, each with its transfer forecast. This is diagnostic input
+         * for the graceful-shutdown budget; close still awaits actual termination when a worker outlives it.
          */
         internal const val CLOSE_BOUND_MILLIS: Long =
             2 * SHIP_SHUTDOWN_GRACE_SECONDS * 1_000 +

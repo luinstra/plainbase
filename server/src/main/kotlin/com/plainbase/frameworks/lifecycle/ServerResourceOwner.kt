@@ -3,10 +3,13 @@ package com.plainbase.frameworks.lifecycle
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /** Owns resources acquired by one server graph and exposes their fixed teardown order. */
 @Suppress("TooGenericExceptionCaught")
-internal class ServerResourceOwner : AutoCloseable {
+internal class ServerResourceOwner(
+    internal val warningState: CleanupWarningState = CleanupWarningState(),
+) : AutoCloseable {
     @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private val state = java.lang.Object()
     private val serviceDrainLock = Any()
@@ -16,8 +19,33 @@ internal class ServerResourceOwner : AutoCloseable {
     private var activeConstructors = 0
     private var sealed = false
     private var serviceDrainStarted = false
+
+    @Volatile
     private var serviceDrainFinished = false
+
+    @Volatile
+    private var serviceAdmissionFinished = false
+
+    private var serviceWorker: Thread? = null
+    private val serviceCompleted = CountDownLatch(1)
+    private var overallCloseStarted = false
+
+    @Volatile
     private var overallCloseFinished = false
+
+    private var overallWorker: Thread? = null
+    private val overallCompleted = CountDownLatch(1)
+    private var configuredBounds: Map<ServerResourcePhase, Long> = emptyMap()
+    private val warningInitializationLock = Any()
+
+    @Volatile
+    private var warningRunStarted = false
+
+    @Volatile
+    private var warningPhases: Set<ServerResourcePhase> = emptySet()
+
+    @Volatile
+    private var warningConstruction = false
 
     /** Admits the whole synchronous provider before it resolves dependencies or performs effects. */
     fun <T> construct(name: String, block: () -> T): T {
@@ -65,77 +93,246 @@ internal class ServerResourceOwner : AutoCloseable {
     /** Runs the complete ordered service portion while leaving Koin and DATA_DIR ownership intact. */
     fun drainServices() {
         checkNotSelfDrain()
-        synchronized(serviceDrainLock) {
-            drainServicesLocked()
+        val current = Thread.currentThread()
+        val worker = synchronized(serviceDrainLock) {
+            if (serviceDrainFinished) return
+            if (!serviceDrainStarted) {
+                initializeWarningRun()
+                serviceDrainStarted = true
+                sealConstruction()
+                thread(start = false, name = SERVICE_WORKER) { runServiceDrain() }.also {
+                    it.isDaemon = false
+                    serviceWorker = it
+                    it.start()
+                }
+            }
+            serviceWorker
+        }
+        if (worker === current) return
+        CompletionWait.run {
+            awaitForever(
+                await = { serviceCompleted.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                completed = { serviceDrainFinished },
+                onTick = warningState::poll,
+            )
         }
     }
 
     /** Closes services first, then the Koin context and DATA_DIR lock. */
     override fun close() {
         checkNotSelfDrain()
-        synchronized(overallCloseLock) {
+        val current = Thread.currentThread()
+        val worker = synchronized(overallCloseLock) {
             if (overallCloseFinished) return
-            drainServices()
-            closeEntries(ServerResourcePhase.KOIN_CONTEXT)
-            closeEntries(ServerResourcePhase.DATA_DIR_LOCK)
-            overallCloseFinished = true
+            if (!overallCloseStarted) {
+                initializeWarningRun()
+                overallCloseStarted = true
+                thread(start = false, name = OVERALL_WORKER) { runOverallCleanup() }.also {
+                    it.isDaemon = false
+                    overallWorker = it
+                    it.start()
+                }
+            }
+            overallWorker
+        }
+        if (worker === current) return
+        CompletionWait.run {
+            awaitForever(
+                await = { overallCompleted.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                completed = { overallCloseFinished },
+                onTick = warningState::poll,
+            )
         }
     }
 
     /** Produces the only cleanup phase list used by [GracefulShutdown]. */
-    fun steps(bounds: Map<ServerResourcePhase, Long> = emptyMap()): List<GracefulShutdown.Step> =
-        ServerResourcePhase.entries.map { phase ->
-            GracefulShutdown.Step(phase.label, bounds[phase] ?: GracefulShutdown.FAST_STEP_BOUND_MILLIS) {
-                closePhase(phase)
-            }
+    fun steps(bounds: Map<ServerResourcePhase, Long> = emptyMap()): List<GracefulShutdown.Step> {
+        val phaseBounds = ServerResourcePhase.entries.associateWith { phase ->
+            bounds[phase] ?: GracefulShutdown.FAST_STEP_BOUND_MILLIS
         }
-
-    private fun closePhase(phase: ServerResourcePhase) {
-        checkNotSelfDrain()
-        synchronized(serviceDrainLock) {
-            if (phase.service) {
-                beginServiceDrain()
-                closeEntries(phase)
-                if (phase == ServerResourcePhase.APP_DATABASE) {
-                    serviceDrainFinished = true
-                }
-            } else {
-                drainServicesLocked()
-                closeEntries(phase)
+        synchronized(state) {
+            if (configuredBounds.isEmpty()) configuredBounds = phaseBounds
+        }
+        return ServerResourcePhase.entries.map { phase ->
+            val bound = phaseBounds.getValue(phase)
+            GracefulShutdown.Step(phase.label, bound) {
+                runOverallStep(phase, bound)
             }
         }
     }
 
-    private fun drainServicesLocked() {
-        if (serviceDrainFinished) return
-        beginServiceDrain()
-        SERVICE_PHASES.forEach { phase ->
+    internal fun hasPendingConstructors(): Boolean = synchronized(state) { activeConstructors != 0 }
+
+    internal fun serviceWorkerForTest(): Thread? = synchronized(serviceDrainLock) { serviceWorker }
+
+    internal fun overallWorkerForTest(): Thread? = synchronized(overallCloseLock) { overallWorker }
+
+    /** Starts the shared warning clock at the first actual drain. */
+    internal fun initializeWarningRun() {
+        synchronized(warningInitializationLock) {
+            if (warningRunStarted) return
+            val (initialPhases, pending) = synchronized(state) {
+                val acquired = entries.mapTo(linkedSetOf()) { it.phase }
+                val hasPending = activeConstructors != 0
+                sealed = true
+                acquired to hasPending
+            }
+            warningConstruction = pending
+            warningState.configure(
+                ServerResourcePhase.entries.map { phase ->
+                    CleanupWarningState.Forecast(
+                        phase.label,
+                        phaseBound(phase),
+                        active = phase in initialPhases,
+                    )
+                },
+            )
+            warningState.start(pendingConstruction = pending)
+            warningRunStarted = true
+        }
+    }
+
+    private fun runOverallStep(phase: ServerResourcePhase, boundMillis: Long) {
+        val current = Thread.currentThread()
+        val ownsOverall = synchronized(overallCloseLock) {
+            if (overallCloseFinished) return
+            if (!overallCloseStarted) {
+                initializeWarningRun()
+                overallCloseStarted = true
+                overallWorker = current
+            }
+            overallWorker === current
+        }
+        if (!ownsOverall) {
+            CompletionWait.run {
+                awaitForever(
+                    await = { overallCompleted.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                    completed = { overallCloseFinished },
+                    onTick = warningState::poll,
+                )
+            }
+            return
+        }
+        CompletionWait.run { closePhase(phase, boundMillis) }
+        if (phase == ServerResourcePhase.DATA_DIR_LOCK) finishOverallCleanup()
+    }
+
+    private fun runOverallCleanup() {
+        CompletionWait.run {
+            try {
+                ServerResourcePhase.entries.forEach { phase ->
+                    closePhase(phase, phaseBound(phase))
+                    captureCurrentInterrupt()
+                }
+            } finally {
+                finishOverallCleanup()
+            }
+        }
+    }
+
+    private fun runServiceDrain() {
+        CompletionWait.run {
+            try {
+                SERVICE_PHASES.forEach { phase ->
+                    closePhase(phase, phaseBound(phase))
+                    captureCurrentInterrupt()
+                }
+            } catch (failure: Throwable) {
+                logger.warn(failure) { "service drain worker failed; continuing to overall cleanup" }
+            } finally {
+                finishServiceDrain()
+            }
+        }
+    }
+
+    private fun CompletionWait.closePhase(phase: ServerResourcePhase, boundMillis: Long) {
+        if (phase.service) {
+            ensureServiceAdmission()
+            refreshWarningPhases()
+            enterWarningPhase(phase, boundMillis)
+            closeEntries(phase)
+            if (phase == SERVICE_PHASES.last()) finishServiceDrain()
+        } else {
+            awaitServiceDrain()
+            refreshWarningPhases()
+            enterWarningPhase(phase, boundMillis)
             closeEntries(phase)
         }
-        serviceDrainFinished = true
+        warningState.completePhase(phase.label)
     }
 
-    private fun beginServiceDrain() {
-        synchronized(state) {
-            if (serviceDrainStarted) return
-            sealed = true
-            serviceDrainStarted = true
+    private fun CompletionWait.ensureServiceAdmission() {
+        val current = Thread.currentThread()
+        val worker = synchronized(serviceDrainLock) {
+            if (!serviceDrainStarted) {
+                initializeWarningRun()
+                serviceDrainStarted = true
+                sealConstruction()
+                serviceWorker = current
+            }
+            serviceWorker
         }
-        awaitConstructors()
+        if (worker !== current) {
+            awaitServiceDrain()
+            return
+        }
+        if (!serviceAdmissionFinished) {
+            if (warningConstruction) {
+                warningState.enterPhase(CONSTRUCTION_PHASE, CleanupWarningState.CONSTRUCTION_WAIT_FORECAST_MILLIS)
+            }
+            awaitConstructors()
+            if (warningConstruction) warningState.completePhase(CONSTRUCTION_PHASE)
+            refreshWarningPhases()
+            serviceAdmissionFinished = true
+        }
     }
 
-    private fun awaitConstructors() {
-        var interrupted = false
+    private fun CompletionWait.awaitServiceDrain() {
+        if (serviceDrainFinished) return
+        if (serviceWorker === Thread.currentThread()) return
+        awaitForever(
+            await = { serviceCompleted.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+            completed = { serviceDrainFinished },
+            onTick = warningState::poll,
+        )
+    }
+
+    private fun finishServiceDrain() {
         synchronized(state) {
-            while (activeConstructors != 0) {
+            if (serviceDrainFinished) return
+            serviceDrainFinished = true
+        }
+        serviceCompleted.countDown()
+    }
+
+    private fun sealConstruction() {
+        synchronized(state) { sealed = true }
+    }
+
+    private fun phaseBound(phase: ServerResourcePhase): Long = synchronized(state) {
+        configuredBounds[phase] ?: GracefulShutdown.FAST_STEP_BOUND_MILLIS
+    }
+
+    private fun refreshWarningPhases() {
+        warningPhases = synchronized(state) { entries.mapTo(linkedSetOf()) { it.phase } }
+    }
+
+    private fun CompletionWait.awaitConstructors() {
+        while (true) {
+            synchronized(state) {
+                if (activeConstructors == 0) return
                 try {
-                    state.wait()
+                    state.wait(CONSTRUCTOR_WAIT_SLICE_MILLIS)
                 } catch (_: InterruptedException) {
-                    interrupted = true
+                    rememberInterrupt()
                 }
             }
+            warningState.poll()
         }
-        if (interrupted) Thread.currentThread().interrupt()
+    }
+
+    private fun enterWarningPhase(phase: ServerResourcePhase, boundMillis: Long) {
+        if (phase in warningPhases) warningState.enterPhase(phase.label, boundMillis)
     }
 
     private fun closeEntries(phase: ServerResourcePhase) {
@@ -164,6 +361,15 @@ internal class ServerResourceOwner : AutoCloseable {
         }
     }
 
+    private fun finishOverallCleanup() {
+        synchronized(overallCloseLock) {
+            if (overallCloseFinished) return
+            overallCloseFinished = true
+        }
+        overallCompleted.countDown()
+        warningState.complete()
+    }
+
     private class ConstructionTicket {
         val owned = mutableListOf<OwnedEntry>()
     }
@@ -180,33 +386,34 @@ internal class ServerResourceOwner : AutoCloseable {
         private var failure: Throwable? = null
 
         fun close(): Throwable? {
-            if (started.compareAndSet(false, true)) {
-                try {
-                    closeAction()
-                } catch (closeFailure: Throwable) {
-                    failure = closeFailure
-                } finally {
-                    completed.countDown()
+            return CompletionWait.run {
+                if (started.compareAndSet(false, true)) {
+                    try {
+                        closeAction()
+                    } catch (closeFailure: Throwable) {
+                        failure = closeFailure
+                    } finally {
+                        completed.countDown()
+                    }
+                    captureCurrentInterrupt()
+                    return@run failure
                 }
-                return failure
+                awaitForever(
+                    await = { completed.await(it, java.util.concurrent.TimeUnit.MILLISECONDS) },
+                    completed = { completed.count == 0L },
+                )
+                failure
             }
-            var interrupted = false
-            while (true) {
-                try {
-                    completed.await()
-                    break
-                } catch (_: InterruptedException) {
-                    interrupted = true
-                }
-            }
-            if (interrupted) Thread.currentThread().interrupt()
-            return failure
         }
     }
 
     companion object {
         private val logger = KotlinLogging.logger {}
         private val SERVICE_PHASES = ServerResourcePhase.entries.filter { it.service }
+        private const val SERVICE_WORKER = "plainbase-service-drain"
+        private const val OVERALL_WORKER = "plainbase-overall-cleanup"
+        private const val CONSTRUCTION_PHASE = "construction"
+        private const val CONSTRUCTOR_WAIT_SLICE_MILLIS = 100L
     }
 }
 

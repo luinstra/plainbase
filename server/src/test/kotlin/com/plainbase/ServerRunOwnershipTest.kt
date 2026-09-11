@@ -51,6 +51,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
@@ -1113,6 +1114,44 @@ class ServerRunOwnershipTest : FunSpec({
         }
     }
 
+    test("expired parent returns promptly and retains a live-worker fixture path") {
+        val base = Files.createTempDirectory("plainbase-ownership-expired-parent")
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val fixture = OwnershipFixtureRecord(base, parentDeadlineNanos = System.nanoTime() - 1L)
+        try {
+            val startedAt = System.nanoTime()
+            shouldThrow<IllegalStateException> {
+                fixture.run {
+                    started.countDown()
+                    while (true) {
+                        try {
+                            if (release.await(10, TimeUnit.MILLISECONDS)) break
+                        } catch (_: InterruptedException) {
+                            // The test releases this worker after the bounded path is observed.
+                        }
+                    }
+                }
+            }
+            ((System.nanoTime() - startedAt) / 1_000_000L < 500L) shouldBe true
+            started.await(1, TimeUnit.SECONDS) shouldBe true
+            val cleanup = fixture.cleanup()
+            requireNotNull(cleanup)
+            fixture.canDelete() shouldBe false
+            Files.exists(base) shouldBe true
+        } finally {
+            release.countDown()
+            fixture.joinRunForTest(1_000) shouldBe true
+            val cleanupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (!fixture.canDelete() && System.nanoTime() < cleanupDeadline) {
+                fixture.cleanup()
+                Thread.yield()
+            }
+            fixture.canDelete() shouldBe true
+            base.toFile().deleteRecursively()
+        }
+    }
+
     test("ownership fixture preserves a throwing fallback identity across outer cleanup") {
         val base = Files.createTempDirectory("plainbase-ownership-failure-identity")
         val original = IllegalStateException("original fallback failure")
@@ -1141,7 +1180,7 @@ class ServerRunOwnershipTest : FunSpec({
     }
 })
 
-private class OwnershipOutput : CommandOutput {
+internal class OwnershipOutput : CommandOutput {
     val errors = Collections.synchronizedList(mutableListOf<String>())
 
     override fun result(text: String, newline: Boolean) = Unit
@@ -1153,20 +1192,24 @@ private class OwnershipOutput : CommandOutput {
     override fun intent(event: WriteIntent) = Unit
 }
 
-private class RecordingAlarm(
+internal class RecordingAlarm(
     private val events: MutableList<String>? = null,
+    private val delegate: ExecutorAlarm = ExecutorAlarm(),
     private val beforeClose: () -> Unit = {},
 ) : RebuildScheduler.Alarm, AutoCloseable {
-    private val delegate = ExecutorAlarm()
     private val closed = AtomicBoolean()
     val closeCount = AtomicInteger()
     val closeReturned = AtomicInteger()
+    val closeEntered = CountDownLatch(1)
+    val closeStartedAtNanos = AtomicLong()
 
     override fun after(delayMillis: Long, action: () -> Unit) = delegate.after(delayMillis, action)
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         closeCount.incrementAndGet()
+        closeStartedAtNanos.compareAndSet(0L, System.nanoTime())
+        closeEntered.countDown()
         beforeClose()
         delegate.close()
         closeReturned.incrementAndGet()
@@ -1176,7 +1219,7 @@ private class RecordingAlarm(
     fun isClosedForTest(): Boolean = closed.get() && delegate.isTerminatedForTest()
 }
 
-private class OnceCloser<T>(
+internal class OnceCloser<T>(
     private val delegate: (T) -> Unit,
     private val complete: (T) -> Boolean = { true },
 ) {
@@ -1200,7 +1243,7 @@ private class OnceCloser<T>(
     fun completed(value: T): Boolean = returnedCount.get() == 1 && failure.get() == null && complete(value)
 }
 
-private class OwnedResourceCapture(
+internal class OwnedResourceCapture(
     private val defaults: ServerOpeners = ServerOpeners(),
     private val searchCloseDelegate: (SearchDb, List<Connection>) -> Unit = { value, _ -> value.close() },
 ) {
@@ -1328,7 +1371,7 @@ private class SqlFailureDriver(
     ): QueryResult<R> = delegate.executeQuery(identifier, sql, mapper, parameters, binders)
 }
 
-private fun localConfigForOwnership(content: Path, data: Path, port: Int = 0): PlainbaseConfig = PlainbaseConfig(
+internal fun localConfigForOwnership(content: Path, data: Path, port: Int = 0): PlainbaseConfig = PlainbaseConfig(
     contentDir = content,
     dataDir = data,
     host = "127.0.0.1",
@@ -1338,10 +1381,11 @@ private fun localConfigForOwnership(content: Path, data: Path, port: Int = 0): P
 
 private fun nextOwnershipPort(): Int = ServerSocket(0).use { it.localPort }
 
-private fun objectConfigForOwnership(
+internal fun objectConfigForOwnership(
     content: Path,
     data: Path,
     endpoint: String = "https://127.0.0.1:1",
+    gitEnabled: Boolean = true,
 ): PlainbaseConfig = PlainbaseConfig.fromEnv(
     mapOf(
         "CONTENT_DIR" to content.toString(),
@@ -1352,7 +1396,7 @@ private fun objectConfigForOwnership(
         "PLAINBASE_S3_ACCESS_KEY_ID" to "key",
         "PLAINBASE_S3_SECRET_ACCESS_KEY" to "secret",
         "PLAINBASE_INSECURE_HTTP" to if (endpoint.startsWith("http://")) "1" else "0",
-        "PLAINBASE_GIT_ENABLED" to "true",
+        "PLAINBASE_GIT_ENABLED" to gitEnabled.toString(),
         "PLAINBASE_HOST" to "127.0.0.1",
         "PLAINBASE_PORT" to "0",
     ),
@@ -1373,7 +1417,7 @@ private fun seedCompleteMirror(data: Path, restorePending: Boolean = false) {
     if (restorePending) Files.createFile(data.resolve("restore-pending"))
 }
 
-private fun <T> withEmptyListEndpoint(onRequest: () -> Unit = {}, block: (String) -> T): T {
+internal fun <T> withEmptyListEndpoint(onRequest: () -> Unit = {}, block: (String) -> T): T {
     val listXml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <ListBucketResult>
@@ -1400,11 +1444,16 @@ private fun <T> withEmptyListEndpoint(onRequest: () -> Unit = {}, block: (String
 
 private val currentOwnershipFixture = ThreadLocal<OwnershipFixtureRecord?>()
 
-private fun withOwnershipFixture(block: (content: Path, data: Path) -> Unit) {
+internal fun withOwnershipFixture(
+    runTimeoutMillis: Long = 45_000,
+    joinTimeoutMillis: Long = 10_000,
+    parentDeadlineNanos: Long? = null,
+    block: (content: Path, data: Path) -> Unit,
+) {
     val base = Files.createTempDirectory("plainbase-ownership")
     val content = Files.createDirectory(base.resolve("content"))
     val data = Files.createDirectory(base.resolve("data"))
-    val fixture = OwnershipFixtureRecord(base)
+    val fixture = OwnershipFixtureRecord(base, runTimeoutMillis, joinTimeoutMillis, parentDeadlineNanos)
     Files.writeString(content.resolve("readme.md"), "---\ntitle: Readme\n---\n\n# Readme\n")
     val failures = IdentitySafeFailureAccumulator()
     currentOwnershipFixture.set(fixture)
@@ -1425,20 +1474,23 @@ private fun withOwnershipFixture(block: (content: Path, data: Path) -> Unit) {
     failures.failure?.let { throw it }
 }
 
-private fun <T> boundedOwnershipRun(block: () -> T): T {
+internal fun <T> boundedOwnershipRun(block: () -> T): T {
     val fixture = checkNotNull(currentOwnershipFixture.get()) { "ownership run requires a fixture" }
     return fixture.run(block)
 }
 
-private fun registerOwnershipHandle(label: String, value: Any, close: () -> Unit, complete: () -> Boolean) {
+internal fun registerOwnershipHandle(label: String, value: Any, close: () -> Unit, complete: () -> Boolean) {
     checkNotNull(currentOwnershipFixture.get()) { "owned handle registered outside a fixture" }
         .track(label, value, close, complete)
 }
 
-private class OwnershipFixtureRecord(
+internal fun currentOwnershipFixtureForTest(): OwnershipFixtureRecord? = currentOwnershipFixture.get()
+
+internal class OwnershipFixtureRecord(
     val base: Path,
     private val runTimeoutMillis: Long = 45_000,
     private val joinTimeoutMillis: Long = 10_000,
+    private val parentDeadlineNanos: Long? = null,
 ) {
     private data class Handle(
         val label: String,
@@ -1486,7 +1538,7 @@ private class OwnershipFixtureRecord(
         var primary: Throwable? = null
         var interrupted = false
         try {
-            worker.join(runTimeoutMillis)
+            joinBoundedUntil(worker, deadlineAfter(runTimeoutMillis))
         } catch (failure: InterruptedException) {
             primary = failure
             interrupted = true
@@ -1495,7 +1547,7 @@ private class OwnershipFixtureRecord(
             primary = primary ?: IllegalStateException("ownership run watchdog expired")
             worker.interrupt()
             try {
-                worker.join(joinTimeoutMillis)
+                joinBoundedUntil(worker, deadlineAfter(joinTimeoutMillis))
             } catch (_: InterruptedException) {
                 interrupted = true
             }
@@ -1508,17 +1560,22 @@ private class OwnershipFixtureRecord(
 
     fun completedSuccessfully(): Boolean = runComplete.get() && runResult.get()?.isSuccess == true
 
+    internal fun joinRunForTest(maxMillis: Long): Boolean {
+        val worker = runThread.get() ?: return true
+        return joinBoundedUntil(worker, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(maxMillis))
+    }
+
     fun cleanup(): Throwable? {
         var interrupted = Thread.interrupted()
         val failures = IdentitySafeFailureAccumulator()
         startCleanupWorkerIfNeeded()
         val workers = synchronized(cleanupLock) { cleanupWorkers.toList() }
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(joinTimeoutMillis)
+        val deadline = deadlineAfter(joinTimeoutMillis)
         workers.forEach { worker ->
             val remaining = deadline - System.nanoTime()
             if (remaining > 0) {
                 try {
-                    worker.thread.join(maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remaining)))
+                    joinBoundedUntil(worker.thread, System.nanoTime() + remaining)
                 } catch (_: InterruptedException) {
                     interrupted = true
                 }
@@ -1584,7 +1641,7 @@ private class OwnershipFixtureRecord(
         if (run?.isAlive == true) {
             run.interrupt()
             try {
-                run.join(joinTimeoutMillis)
+                joinBoundedUntil(run, deadlineAfter(joinTimeoutMillis))
             } catch (failure: InterruptedException) {
                 failures.add(failure)
             }
@@ -1626,6 +1683,16 @@ private class OwnershipFixtureRecord(
 
     private fun safelyComplete(handle: Handle): Boolean = runCatching { handle.complete() }.getOrDefault(false)
 
+    internal fun remainingParentMillis(maxMillis: Long = Long.MAX_VALUE): Long {
+        val deadline = parentDeadlineNanos ?: return maxMillis
+        return minOf(maxMillis, TimeUnit.NANOSECONDS.toMillis((deadline - System.nanoTime()).coerceAtLeast(0L)))
+    }
+
+    private fun deadlineAfter(defaultMillis: Long): Long {
+        val local = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(defaultMillis)
+        return minOf(local, parentDeadlineNanos ?: Long.MAX_VALUE)
+    }
+
     private fun cleanupRank(label: String): Int = when (label.lowercase()) {
         "http", "occupied port" -> 0
         "watcher", "watchers" -> 1
@@ -1639,6 +1706,15 @@ private class OwnershipFixtureRecord(
         "lock" -> 9
         else -> 10
     }
+}
+
+private fun joinBoundedUntil(thread: Thread, deadlineNanos: Long): Boolean {
+    while (thread.isAlive) {
+        val remainingNanos = deadlineNanos - System.nanoTime()
+        if (remainingNanos <= 0L) return false
+        thread.join(minOf(100L, TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L)))
+    }
+    return true
 }
 
 private fun dataDirLockHeldForOwnership(data: Path): Boolean {

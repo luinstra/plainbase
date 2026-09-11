@@ -21,6 +21,7 @@ import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.filesystem.isBlank
 import com.plainbase.frameworks.filesystem.rootLivenessProbe
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.client.network.sockets.ConnectTimeoutException
 import kotlinx.coroutines.CancellationException
@@ -176,6 +177,9 @@ class ObjectContentStore(
      * which an absent mirror is an honest empty corpus rather than a lost one (seam c).
      */
     private val mirrorProbe = AtomicReference<((Path) -> Boolean)?>(null)
+
+    @Volatile
+    private var pollerThread: Thread? = null
 
     /**
      * A never-hydrated store with no mirror on disk scans to an empty tree (seam c): a fresh install previews
@@ -452,6 +456,7 @@ class ObjectContentStore(
     // gets is `OBJECT_LIST` under the C3 binding latch, minted from a complete LIST of the bucket itself, and the
     // rebuild is what withholds EPOCH from it (`IndexBuilder.confirmEpochs` confirms only for a LOCAL backend) rather
     // than this store having to pretend it is permanently broken.
+    @Suppress("TooGenericExceptionCaught")
     override fun watch(
         onChange: (TreePath) -> Unit,
         onFailure: (Throwable) -> Unit,
@@ -479,16 +484,35 @@ class ObjectContentStore(
         }
         thread.name = "plainbase-object-poll"
         thread.isDaemon = true
+        pollerThread = thread
         thread.start()
         // close() must fully STOP the poll before serve()/the CLI closes the shared transport, or a
         // GET/LIST in flight would use-after-close the ktor client. Signal the loop, interrupt a
-        // blocking network op, and JOIN (bounded) so no poll is running when the caller then close()s.
+        // blocking network op, and await termination so no poll is running when the caller then closes it.
         return AutoCloseable {
-            stop.countDown()
-            thread.interrupt()
-            thread.join(ContentStore.WATCH_CLOSE_BOUND_MILLIS)
+            CompletionWait.run {
+                var primary: Throwable? = null
+                try {
+                    stop.countDown()
+                } catch (failure: Throwable) {
+                    primary = failure
+                }
+                try {
+                    thread.interrupt()
+                } catch (failure: Throwable) {
+                    if (primary == null) primary = failure else primary.addSuppressed(failure)
+                }
+                awaitForever(
+                    await = { millis -> thread.join(millis) },
+                    completed = { !thread.isAlive },
+                )
+                captureCurrentInterrupt()
+                primary?.let { throw it }
+            }
         }
     }
+
+    internal fun pollerForTest(): Thread? = pollerThread
 
     /** Waits for the next poll interval; interruption is the same clean stop signal as the latch. */
     private fun awaitPollStop(stop: CountDownLatch): Boolean =

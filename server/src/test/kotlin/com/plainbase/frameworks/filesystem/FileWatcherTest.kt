@@ -3,10 +3,12 @@ package com.plainbase.frameworks.filesystem
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.plainbase.IdentitySafeFailureAccumulator
 import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import com.plainbase.frameworks.lifecycle.Stage0cParentDeadline
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
@@ -26,6 +28,10 @@ import java.nio.file.WatchService
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -240,6 +246,205 @@ class FileWatcherTest : FunSpec({
         } finally {
             if (!retain) root.toFile().deleteRecursively()
         }
+    }
+
+    test("W2: a service-close failure still joins the real callback worker and preserves the original failure") {
+        val parent = Stage0cParentDeadline(20_000)
+        val root = Files.createTempDirectory("plainbase-stage0c-w2-stop-error")
+        val target = TreePath.require("w2-callback.md")
+        val callbackEntered = CountDownLatch(1)
+        val callbackRelease = CountDownLatch(1)
+        val stopCalled = CountDownLatch(1)
+        val callbackDone = AtomicBoolean(false)
+        val closeFailure = AtomicReference<Throwable?>()
+        val stopFailure = IllegalStateException("W2 watch-service close failed")
+        var watcher: FileWatcher? = null
+        var closer: Thread? = null
+        var worker: Thread? = null
+        var retain = false
+        var cleanupInterrupted = false
+        val failures = IdentitySafeFailureAccumulator()
+        fun joinOwned(current: Thread, description: String, maxMillis: Long): Boolean = try {
+            parent.join(current, description, maxMillis)
+        } catch (interrupted: InterruptedException) {
+            cleanupInterrupted = true
+            Thread.interrupted()
+            failures.add(interrupted)
+            false
+        }
+        fun startCloser(name: String): Thread = thread(name = name) {
+            try {
+                requireNotNull(watcher).close()
+            } catch (failure: Throwable) {
+                closeFailure.compareAndSet(null, failure)
+            }
+        }
+        try {
+            writePage(root, "seed.md", "# Seed\n")
+            watcher = FileWatcher(
+                root = root,
+                ignoreRules = IgnoreRules(),
+                excluded = emptyList(),
+                onChange = { path ->
+                    if (path == target) {
+                        callbackEntered.countDown()
+                        while (true) {
+                            try {
+                                if (callbackRelease.await(10, TimeUnit.MILLISECONDS)) break
+                            } catch (_: InterruptedException) {
+                                // The callback intentionally remains in-flight until the test releases it.
+                            }
+                        }
+                        callbackDone.set(true)
+                    }
+                },
+                closeWatchService = { service ->
+                    service.close()
+                    stopCalled.countDown()
+                    throw stopFailure
+                },
+            )
+            worker = requireNotNull(watcher.workerForTest())
+            writePage(root, target.value, "# Callback\n")
+            parent.await(callbackEntered, "W2 callback entry", 90_000) shouldBe true
+            closer = startCloser("plainbase-stage0c-w2-watcher-close")
+            parent.await(stopCalled, "W2 service stop entry", 5_000) shouldBe true
+            worker.isAlive shouldBe true
+            closer.isAlive shouldBe true
+            Thread.sleep(250)
+            parent.check("W2 stop-error pending interval")
+            closeFailure.get() shouldBe null
+            callbackRelease.countDown()
+            parent.join(closer, "W2 stop-error cleanup", 10_000) shouldBe true
+            closer.isAlive shouldBe false
+            closeFailure.get() shouldBe stopFailure
+            callbackDone.get() shouldBe true
+            parent.join(worker, "W2 callback worker cleanup", 10_000) shouldBe true
+            worker.isAlive shouldBe false
+            watcher.isClosedForTest() shouldBe true
+        } catch (failure: Throwable) {
+            if (failure is InterruptedException) {
+                cleanupInterrupted = true
+                Thread.interrupted()
+            }
+            failures.add(failure)
+        } finally {
+            callbackRelease.countDown()
+            val cleanupCloser = closer ?: watcher?.let { startCloser("plainbase-stage0c-w2-stop-error-cleanup") }
+            closer = cleanupCloser
+            if (cleanupCloser != null && !joinOwned(cleanupCloser, "W2 stop-error failure cleanup", 10_000)) retain = true
+            if (cleanupCloser != null && !cleanupCloser.isAlive && watcher != null && !watcher.isClosedForTest()) {
+                val retryCloser = startCloser("plainbase-stage0c-w2-stop-error-retry")
+                if (!joinOwned(retryCloser, "W2 stop-error watcher cleanup", 10_000)) retain = true
+            }
+            worker?.let { if (!joinOwned(it, "W2 stop-error callback worker cleanup", 10_000)) retain = true }
+            worker?.let { if (it.isAlive) retain = true }
+            if (watcher != null && !watcher.isClosedForTest()) retain = true
+            closeFailure.get()?.let { if (it !== stopFailure) failures.add(it) }
+            if (retain) failures.add(IllegalStateException("W2 stop-error fixture retained a surviving watcher or worker"))
+            if (!retain) {
+                runCatching { root.toFile().deleteRecursively() }.onFailure(failures::add)
+            }
+            if (cleanupInterrupted) Thread.currentThread().interrupt()
+        }
+        failures.failure?.let { throw it }
+    }
+
+    test("W2: a callback held beyond the old 10s join keeps real close pending") {
+        val parent = Stage0cParentDeadline(20_000)
+        val root = Files.createTempDirectory("plainbase-stage0c-w2-bounded-join")
+        val target = TreePath.require("w2-bounded-callback.md")
+        val callbackEntered = CountDownLatch(1)
+        val callbackRelease = CountDownLatch(1)
+        val stopCalled = CountDownLatch(1)
+        val callbackDone = AtomicBoolean(false)
+        val closeStartedAtNanos = AtomicLong()
+        val closeFailure = AtomicReference<Throwable?>()
+        var watcher: FileWatcher? = null
+        var closer: Thread? = null
+        var worker: Thread? = null
+        var retain = false
+        var cleanupInterrupted = false
+        val failures = IdentitySafeFailureAccumulator()
+        fun joinOwned(current: Thread, description: String, maxMillis: Long): Boolean = try {
+            parent.join(current, description, maxMillis)
+        } catch (interrupted: InterruptedException) {
+            cleanupInterrupted = true
+            Thread.interrupted()
+            failures.add(interrupted)
+            false
+        }
+        fun startCloser(name: String): Thread = thread(name = name) {
+            try {
+                requireNotNull(watcher).close()
+            } catch (failure: Throwable) {
+                closeFailure.compareAndSet(null, failure)
+            }
+        }
+        try {
+            writePage(root, "seed.md", "# Seed\n")
+            watcher = FileWatcher(
+                root = root,
+                ignoreRules = IgnoreRules(),
+                excluded = emptyList(),
+                onChange = { path ->
+                    if (path == target) {
+                        callbackEntered.countDown()
+                        callbackRelease.await()
+                        callbackDone.set(true)
+                    }
+                },
+                closeWatchService = { service ->
+                    closeStartedAtNanos.set(System.nanoTime())
+                    service.close()
+                    stopCalled.countDown()
+                },
+            )
+            worker = requireNotNull(watcher.workerForTest())
+            writePage(root, target.value, "# Callback\n")
+            parent.await(callbackEntered, "W2 bounded callback entry", 90_000) shouldBe true
+            closer = startCloser("plainbase-stage0c-w2-bounded-close")
+            parent.await(stopCalled, "W2 bounded service stop entry", 5_000) shouldBe true
+            val closeStart = closeStartedAtNanos.get()
+            check(closeStart > 0L) { "W2 close entry was not recorded" }
+            parent.waitUntilElapsed(closeStart, 10_500, "W2 old bounded join discriminator")
+            closer.isAlive shouldBe true
+            worker.isAlive shouldBe true
+            callbackDone.get() shouldBe false
+            callbackRelease.countDown()
+            parent.join(closer, "W2 bounded cleanup", 10_000) shouldBe true
+            closer.isAlive shouldBe false
+            closeFailure.get() shouldBe null
+            callbackDone.get() shouldBe true
+            parent.join(worker, "W2 bounded callback worker cleanup", 10_000) shouldBe true
+            worker.isAlive shouldBe false
+            watcher.isClosedForTest() shouldBe true
+        } catch (failure: Throwable) {
+            if (failure is InterruptedException) {
+                cleanupInterrupted = true
+                Thread.interrupted()
+            }
+            failures.add(failure)
+        } finally {
+            callbackRelease.countDown()
+            val cleanupCloser = closer ?: watcher?.let { startCloser("plainbase-stage0c-w2-bounded-cleanup") }
+            closer = cleanupCloser
+            if (cleanupCloser != null && !joinOwned(cleanupCloser, "W2 bounded failure cleanup", 10_000)) retain = true
+            if (cleanupCloser != null && !cleanupCloser.isAlive && watcher != null && !watcher.isClosedForTest()) {
+                val retryCloser = startCloser("plainbase-stage0c-w2-bounded-retry")
+                if (!joinOwned(retryCloser, "W2 bounded watcher cleanup", 10_000)) retain = true
+            }
+            worker?.let { if (!joinOwned(it, "W2 bounded callback worker cleanup", 10_000)) retain = true }
+            worker?.let { if (it.isAlive) retain = true }
+            if (watcher != null && !watcher.isClosedForTest()) retain = true
+            failures.add(closeFailure.get())
+            if (retain) failures.add(IllegalStateException("W2 bounded fixture retained a surviving watcher or worker"))
+            if (!retain) {
+                runCatching { root.toFile().deleteRecursively() }.onFailure(failures::add)
+            }
+            if (cleanupInterrupted) Thread.currentThread().interrupt()
+        }
+        failures.failure?.let { throw it }
     }
 })
 

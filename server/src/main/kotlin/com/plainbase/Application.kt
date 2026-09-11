@@ -346,6 +346,10 @@ private fun runOwnedServer(
                         ServerResourcePhase.DISASTER_RECOVERY to GitBundleDr.CLOSE_BOUND_MILLIS,
                     ),
                 ),
+                warningState = resources.warningState,
+                pendingConstruction = resources::hasPendingConstructors,
+                warningStateInitializer = resources::initializeWarningRun,
+                managesWarningPhases = false,
             )
             try {
                 // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The

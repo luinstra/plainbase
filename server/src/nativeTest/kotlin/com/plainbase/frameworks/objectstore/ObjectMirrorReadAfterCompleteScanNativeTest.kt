@@ -368,7 +368,7 @@ private fun liveProjection(graph: NativeObjectGraph): Map<RootedPath, Pair<PageI
 private fun retiredProjection(graph: NativeObjectGraph): Set<Pair<RootedPath, PageId>> =
     graph.idMap.retiredBindings().mapTo(mutableSetOf()) { it.path to it.id }
 
-private class NativeObjectClient : ObjectStoreClient {
+internal class NativeObjectClient : ObjectStoreClient {
     private val objects = linkedMapOf<String, Pair<ByteArray, String>>()
     private var etagSequence = 0
 
