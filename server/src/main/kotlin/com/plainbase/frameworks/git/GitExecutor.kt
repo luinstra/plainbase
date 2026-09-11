@@ -357,6 +357,9 @@ class GitExecutor(
             "-c", "core.precomposeUnicode=false",
             "-c", "log.showSignature=false",
             "-c", "protocol.ext.allow=never",
+            "-c", "maintenance.autoDetach=false",
+            "-c", "gc.autoDetach=false",
+            "-c", "core.fsmonitor=",
         )
 
         // 40 hex (SHA-1) OR 64 hex (SHA-256, `git init --object-format=sha256`) — full-width object ids only.

@@ -23,6 +23,7 @@ import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.mcp.MCP_PATH
@@ -501,7 +502,7 @@ object NativeSpike {
             ),
         )
         val openers = ServerOpeners()
-        val bootInputs = prepareRootBootInputs(config, openers.openLocal)
+        val bootInputs = prepareRootBootInputs(config, openers.openLocal, GitMaintenanceTasks.inert())
         val resources = ServerResourceOwner()
         val app = resources.construct("Koin context") {
             koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it) { application -> application.close() } }

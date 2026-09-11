@@ -11,6 +11,7 @@ import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.GitRepoLocks
+import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
@@ -37,6 +38,7 @@ internal val contentDirStoreConstructions = AtomicInteger()
 internal fun prepareRootBootInputs(
     config: PlainbaseConfig,
     openLocal: (LocalStoreInputs) -> LocalContentStore,
+    maintenanceTasks: GitMaintenanceTasks = GitMaintenanceTasks.inert(),
 ): RootBootInputs {
     val registry = RootRegistry.of(config.roots.list)
     val ignoreRules = IgnoreRules()
@@ -73,6 +75,7 @@ internal fun prepareRootBootInputs(
         extraRepoPaths = extraRepoPaths,
         objectHistory = objectHistory,
         objectLocks = objectLocks,
+        maintenanceTasks = maintenanceTasks,
     )
     val primary = registry.primary
     val primaryProbe = FunctionalRootBootProbe(

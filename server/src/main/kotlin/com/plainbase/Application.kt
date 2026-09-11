@@ -44,6 +44,7 @@ import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
+import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import com.plainbase.frameworks.lifecycle.GracefulShutdown
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
@@ -139,6 +140,9 @@ private fun runOwnedServer(
 
     try {
         control.onContextAcquired(app)
+        val maintenanceTasks = resources.construct("git maintenance tasks") {
+            GitMaintenanceTasks().also(resources::ownMaintenance)
+        }
         app.modules(
             module { single { config } },
             createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
@@ -169,7 +173,7 @@ private fun runOwnedServer(
         //
         // Still BEFORE the lock/rebuild/reconcile block, because rebuild() and reconcileDirtyPages() trigger commits
         // and a "git missing" failure must fire FIRST with an actionable message, never as a doomed commit's stack trace.
-        val bootInputs = prepareRootBootInputs(config, runOpeners.openLocal)
+        val bootInputs = prepareRootBootInputs(config, runOpeners.openLocal, maintenanceTasks)
         consumeRootBootGate(config, bootInputs, output)
         val availability = bootInputs.availability
         control.onBootAvailability(availability)
@@ -683,7 +687,7 @@ fun bootGateFor(config: PlainbaseConfig): BootGate {
             "so it can never reach here (C5 D-C5-17.2)"
     }
     val openers = ServerOpeners()
-    val inputs = prepareRootBootInputs(config, openers.openLocal)
+    val inputs = prepareRootBootInputs(config, openers.openLocal, GitMaintenanceTasks.inert())
     val resources = ServerResourceOwner()
     val app = resources.construct("Koin context") {
         koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it) { application -> application.close() } }

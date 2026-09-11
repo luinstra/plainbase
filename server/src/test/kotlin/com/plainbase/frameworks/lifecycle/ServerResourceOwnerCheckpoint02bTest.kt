@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
+import com.plainbase.frameworks.git.GitExecutor
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -13,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /** Short 02b controls for cleanup-worker identity, constructor interruption, and owner warning integration. */
@@ -268,6 +270,89 @@ class ServerResourceOwnerCheckpoint02bTest : FunSpec({
             if (!serviceCaller.isAlive && overallCaller?.isAlive != true) owner.close()
         }
     }
+
+    test("maintenance forecast is read at t0 and refreshed after admission closes") {
+        val now = AtomicLong()
+        val owner = ServerResourceOwner(CleanupWarningState(nowNanos = now::get))
+        val watcherEntered = CountDownLatch(1)
+        val watcherRelease = CountDownLatch(1)
+        val maintenancePhaseEntered = CountDownLatch(1)
+        val maintenancePhaseRelease = CountDownLatch(1)
+        val firstJobEntered = CountDownLatch(1)
+        val jobsEntered = CountDownLatch(2)
+        val jobsRelease = CountDownLatch(1)
+        val workers = ConcurrentLinkedQueue<Thread>()
+        val workerFailure = AtomicReference<Throwable?>()
+        val tasks = GitMaintenanceTasks(
+            workerFactory = { name, block ->
+                Thread(block, name).also { worker ->
+                    worker.isDaemon = false
+                    worker.uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, failure ->
+                        workerFailure.compareAndSet(null, failure)
+                    }
+                    workers += worker
+                }
+            },
+            jobRunner = {
+                firstJobEntered.countDown()
+                jobsEntered.countDown()
+                check(jobsRelease.await(5, TimeUnit.SECONDS)) { "maintenance release timed out" }
+            },
+        )
+        owner.own(ServerResourcePhase.WATCHERS, Any()) {
+            watcherEntered.countDown()
+            check(watcherRelease.await(5, TimeUnit.SECONDS)) { "watcher release timed out" }
+        }
+        owner.own(ServerResourcePhase.MAINTENANCE, Any()) {
+            maintenancePhaseEntered.countDown()
+            check(maintenancePhaseRelease.await(5, TimeUnit.SECONDS)) { "maintenance phase release timed out" }
+        }
+        owner.ownMaintenance(tasks)
+        val executor = GitExecutor(java.nio.file.Path.of("unused-worktree"), java.nio.file.Path.of("unused-home"))
+        tasks.dispatch(executor) shouldBe true
+        firstJobEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+        val warningCapture = WarningCapture().also { it.attach() }
+        val closerFailure = AtomicReference<Throwable?>()
+        val closer = thread(isDaemon = true, name = "02b-maintenance-forecast-closer") {
+            runCatching { owner.close() }.onFailure(closerFailure::set)
+        }
+        try {
+            watcherEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            tasks.dispatch(executor) shouldBe true
+            now.set(5_000_000_000L)
+            owner.warningState.poll()
+            watcherRelease.countDown()
+            awaitMaintenanceAdmissionClosed(tasks)
+            maintenancePhaseEntered.await(5, TimeUnit.SECONDS) shouldBe true
+            jobsEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            now.set(125_000_000_000L)
+            owner.warningState.poll()
+            maintenancePhaseRelease.countDown()
+            jobsRelease.countDown()
+            joinMaintenanceWorkers(workers)
+            closer.join(5_000)
+            closer.isAlive shouldBe false
+            closerFailure.get() shouldBe null
+            workerFailure.get() shouldBe null
+        } finally {
+            watcherRelease.countDown()
+            maintenancePhaseRelease.countDown()
+            jobsRelease.countDown()
+            joinMaintenanceWorkers(workers)
+            restoreLeakedSlots(tasks)
+            closer.join(5_000)
+            closer.isAlive shouldBe false
+            warningCapture.detach()
+        }
+
+        val warnings = warningCapture.events()
+            .filter { it.level == Level.WARN }
+            .map(ILoggingEvent::getFormattedMessage)
+        warnings.joinToString("\n") shouldContain "initial aggregate forecast of 65000ms"
+        warnings.joinToString("\n") shouldContain "phase 'git maintenance' exceeded its 120000ms forecast"
+    }
 })
 
 private fun awaitThread(read: () -> Thread?): Thread {
@@ -285,6 +370,27 @@ private fun awaitWorkerWaiting(worker: Thread) {
         Thread.yield()
     }
     worker.state shouldBe Thread.State.TIMED_WAITING
+}
+
+private fun awaitMaintenanceAdmissionClosed(tasks: GitMaintenanceTasks) {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (System.nanoTime() < deadline && !tasks.admissionClosedForTest()) Thread.yield()
+    tasks.admissionClosedForTest() shouldBe true
+}
+
+private fun joinMaintenanceWorkers(workers: Collection<Thread>) {
+    workers.forEach { worker ->
+        worker.join(5_000)
+        if (worker.isAlive) worker.interrupt()
+        worker.join(1_000)
+        worker.isAlive shouldBe false
+    }
+}
+
+private fun restoreLeakedSlots(tasks: GitMaintenanceTasks) {
+    if (tasks.unfinishedJobsForTest() == 0) return
+    val release = tasks.javaClass.getDeclaredMethod("releaseJob").also { it.isAccessible = true }
+    while (tasks.unfinishedJobsForTest() != 0) release.invoke(tasks)
 }
 
 private class WarningCapture {

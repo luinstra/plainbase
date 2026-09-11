@@ -13,7 +13,7 @@ import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.GitRepoLocks
 import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.git.runAutoMaintenance
+import com.plainbase.frameworks.lifecycle.GitMaintenanceTasks
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -31,15 +31,16 @@ internal fun prepareRootHistorySelection(
     extraRepoPaths: Map<RootName, (TreePath) -> String>,
     objectHistory: DeferredObjectHistory,
     objectLocks: Lazy<GitRepoLocks>,
+    maintenanceTasks: GitMaintenanceTasks = GitMaintenanceTasks.inert(),
 ): RootHistorySelection {
     val byRoot = buildMap {
         val primary = registry.primary
         put(
             primary.name,
-            preparePrimaryHistoryProvider(config, primary, primaryRepoPath, objectHistory, objectLocks),
+            preparePrimaryHistoryProvider(config, primary, primaryRepoPath, objectHistory, objectLocks, maintenanceTasks),
         )
         registry.extras.forEach { root ->
-            put(root.name, extraHistoryProvider(config, root, extraRepoPaths))
+            put(root.name, extraHistoryProvider(config, root, extraRepoPaths, maintenanceTasks))
         }
     }
     return RootHistorySelection(byRoot, objectHistory, objectLocks)
@@ -51,14 +52,16 @@ private fun preparePrimaryHistoryProvider(
     repoPath: (TreePath) -> String,
     objectHistory: DeferredObjectHistory,
     objectLocks: Lazy<GitRepoLocks>,
+    maintenanceTasks: GitMaintenanceTasks,
 ): HistoryProvider = when (primary.history) {
     HistoryMode.OFF -> NoOpHistoryProvider
     HistoryMode.NATIVE -> claimedRootProvider(
         config = config,
         root = requireNotNull(primary.localPath) { "a native-history root must be local-backed" },
         repoPath = repoPath,
+        maintenanceTasks = maintenanceTasks,
     )
-    HistoryMode.AUTO -> autoHistoryProvider(config, repoPath, objectHistory, objectLocks)
+    HistoryMode.AUTO -> autoHistoryProvider(config, repoPath, objectHistory, objectLocks, maintenanceTasks)
 }
 
 private fun autoHistoryProvider(
@@ -66,6 +69,7 @@ private fun autoHistoryProvider(
     repoPath: (TreePath) -> String,
     objectHistory: DeferredObjectHistory,
     objectLocks: Lazy<GitRepoLocks>,
+    maintenanceTasks: GitMaintenanceTasks,
 ): HistoryProvider {
     if (config.storage.backend == StorageBackend.OBJECT && config.git.enabled == true) {
         val maintenanceExec = GitExecutor(workTree = config.dataDir.resolve("mirror"), home = config.dataDir.resolve("git-home"))
@@ -74,31 +78,43 @@ private fun autoHistoryProvider(
             contentRoot = config.mainContentRoot(),
             repoPath = repoPath,
             objectMaintenance = {
-                Thread { runCatching { runAutoMaintenance(maintenanceExec) } }.apply { isDaemon = true }.start()
+                maintenanceTasks.dispatch(maintenanceExec)
                 objectHistory.onCommit()
             },
             repoWriteMonitor = objectLocks.value.repoWrite,
         )
     }
-    return selectHistoryProvider(config, config.mainContentRoot(), repoPath)
+    return selectHistoryProvider(
+        config = config,
+        contentRoot = config.mainContentRoot(),
+        repoPath = repoPath,
+        maintenanceTasks = maintenanceTasks,
+    )
 }
 
 private fun extraHistoryProvider(
     config: PlainbaseConfig,
     root: Root,
     repoPaths: Map<RootName, (TreePath) -> String>,
+    maintenanceTasks: GitMaintenanceTasks,
 ): HistoryProvider =
     if (root.history == HistoryMode.NATIVE) {
         claimedRootProvider(
             config = config,
             root = requireNotNull(root.localPath) { "a native-history root must be local-backed" },
             repoPath = repoPaths.getValue(root.name),
+            maintenanceTasks = maintenanceTasks,
         )
     } else {
         NoOpHistoryProvider
     }
 
-private fun claimedRootProvider(config: PlainbaseConfig, root: Path, repoPath: (TreePath) -> String): HistoryProvider {
+private fun claimedRootProvider(
+    config: PlainbaseConfig,
+    root: Path,
+    repoPath: (TreePath) -> String,
+    maintenanceTasks: GitMaintenanceTasks,
+): HistoryProvider {
     val gitHome = config.dataDir.resolve("git-home")
     val exec = GitExecutor(workTree = root, home = gitHome)
     return GitCliHistoryProvider(
@@ -109,7 +125,7 @@ private fun claimedRootProvider(config: PlainbaseConfig, root: Path, repoPath: (
         defaultCommitter = CommitIdentity(config.git.authorName, config.git.authorEmail),
         clock = Clock.System,
         repoPath = repoPath,
-        maintenance = { Thread { runCatching { runAutoMaintenance(exec) } }.apply { isDaemon = true }.start() },
+        maintenance = { maintenanceTasks.dispatch(exec) },
         claimedRepo = true,
     )
 }
@@ -121,6 +137,7 @@ internal fun selectHistoryProvider(
     repoPath: (TreePath) -> String = { it.value },
     objectMaintenance: (() -> Unit)? = null,
     repoWriteMonitor: Any? = null,
+    maintenanceTasks: GitMaintenanceTasks = GitMaintenanceTasks.inert(),
 ): HistoryProvider {
     if (config.storage.backend == StorageBackend.OBJECT) {
         if (config.git.enabled != true) return NoOpHistoryProvider
@@ -150,7 +167,7 @@ internal fun selectHistoryProvider(
             defaultCommitter = CommitIdentity(config.git.authorName, config.git.authorEmail),
             clock = Clock.System,
             repoPath = repoPath,
-            maintenance = { Thread { runCatching { runAutoMaintenance(exec) } }.apply { isDaemon = true }.start() },
+            maintenance = { maintenanceTasks.dispatch(exec) },
         )
     } else {
         NoOpHistoryProvider

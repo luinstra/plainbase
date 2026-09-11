@@ -38,6 +38,8 @@ internal class ServerResourceOwner(
     private var configuredBounds: Map<ServerResourcePhase, Long> = emptyMap()
     private val warningInitializationLock = Any()
 
+    private var maintenanceTasks: GitMaintenanceTasks? = null
+
     @Volatile
     private var warningRunStarted = false
 
@@ -88,6 +90,16 @@ internal class ServerResourceOwner(
             ticket?.owned?.add(entry)
         }
         return instance
+    }
+
+    /** Registers the graph's maintenance registry and exposes its dynamic warning forecast. */
+    internal fun ownMaintenance(tasks: GitMaintenanceTasks): GitMaintenanceTasks {
+        val owned = own(ServerResourcePhase.MAINTENANCE, tasks, GitMaintenanceTasks::close)
+        synchronized(state) {
+            check(maintenanceTasks == null) { "Git maintenance tasks were registered more than once" }
+            maintenanceTasks = owned
+        }
+        return owned
     }
 
     /** Runs the complete ordered service portion while leaving Koin and DATA_DIR ownership intact. */
@@ -171,6 +183,7 @@ internal class ServerResourceOwner(
     internal fun initializeWarningRun() {
         synchronized(warningInitializationLock) {
             if (warningRunStarted) return
+            val maintenanceForecast = maintenanceTasks?.forecastMillis()
             val (initialPhases, pending) = synchronized(state) {
                 val acquired = entries.mapTo(linkedSetOf()) { it.phase }
                 val hasPending = activeConstructors != 0
@@ -182,7 +195,11 @@ internal class ServerResourceOwner(
                 ServerResourcePhase.entries.map { phase ->
                     CleanupWarningState.Forecast(
                         phase.label,
-                        phaseBound(phase),
+                        if (phase == ServerResourcePhase.MAINTENANCE) {
+                            maintenanceForecast ?: phaseBound(phase)
+                        } else {
+                            phaseBound(phase)
+                        },
                         active = phase in initialPhases,
                     )
                 },
@@ -248,8 +265,13 @@ internal class ServerResourceOwner(
     private fun CompletionWait.closePhase(phase: ServerResourcePhase, boundMillis: Long) {
         if (phase.service) {
             ensureServiceAdmission()
+            val phaseForecast = if (phase == ServerResourcePhase.MAINTENANCE) {
+                maintenanceTasks?.closeAdmissionAndForecastMillis() ?: boundMillis
+            } else {
+                boundMillis
+            }
             refreshWarningPhases()
-            enterWarningPhase(phase, boundMillis)
+            enterWarningPhase(phase, phaseForecast)
             closeEntries(phase)
             if (phase == SERVICE_PHASES.last()) finishServiceDrain()
         } else {
@@ -310,7 +332,11 @@ internal class ServerResourceOwner(
     }
 
     private fun phaseBound(phase: ServerResourcePhase): Long = synchronized(state) {
-        configuredBounds[phase] ?: GracefulShutdown.FAST_STEP_BOUND_MILLIS
+        if (phase == ServerResourcePhase.MAINTENANCE && maintenanceTasks != null) {
+            0L
+        } else {
+            configuredBounds[phase] ?: GracefulShutdown.FAST_STEP_BOUND_MILLIS
+        }
     }
 
     private fun refreshWarningPhases() {
