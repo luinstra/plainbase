@@ -35,6 +35,8 @@ internal class ExecutorAlarm(private val threadName: String = "plainbase-rebuild
         }
     }
 
+    internal fun isTerminatedForTest(): Boolean = executor.isTerminated
+
     /** Bounded await; RESTORES the interrupt (never swallows it) so a shutting-down caller still observes it. */
     private fun awaitTerminated(): Boolean =
         try {

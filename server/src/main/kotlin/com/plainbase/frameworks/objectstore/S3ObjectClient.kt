@@ -26,6 +26,7 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
@@ -33,6 +34,7 @@ import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
 /**
@@ -53,6 +55,8 @@ class S3ObjectClient(
     /** The throttle-backoff sleep, injectable so tests assert retry counts and delay windows without wall-clock waits. */
     private val sleeper: suspend (Long) -> Unit = { delay(it) },
 ) : ObjectStoreClient {
+
+    private val closed = AtomicBoolean()
 
     private val endpoint = Url(config.endpoint)
     private val signer = SigV4Signer(config.accessKeyId, config.secretAccessKey, config.region)
@@ -213,7 +217,14 @@ class S3ObjectClient(
         return String(readBody(response, "LIST", prefix, config.maxResponseBytes), Charsets.UTF_8)
     }
 
-    override fun close() = http.close()
+    override fun close() {
+        http.close()
+        closed.set(true)
+    }
+
+    internal fun isClosedForTest(): Boolean = closed.get()
+
+    internal fun transportActiveForTest(): Boolean = http.coroutineContext.isActive
 
     private suspend fun execute(
         method: HttpMethod,

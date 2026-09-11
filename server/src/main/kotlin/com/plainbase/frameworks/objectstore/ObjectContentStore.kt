@@ -277,6 +277,10 @@ class ObjectContentStore(
      *  CLI at command end and by `serve()` on shutdown - the mirror is plain files, nothing to close. */
     override fun close() = client.close()
 
+    internal fun isClosedForTest(): Boolean = (client as? S3ObjectClient)?.isClosedForTest() == true
+
+    internal fun transportIdleForTest(): Boolean = (client as? S3ObjectClient)?.transportActiveForTest()?.not() == true
+
     // ---- Mutators: bucket-first, Q8 mapping --------------------------------------------------
 
     override fun compareAndSwapWrite(path: TreePath, baseHash: String, bytes: ByteArray, hasher: (ByteArray) -> String): CasResult {

@@ -7,6 +7,7 @@ import com.plainbase.domain.content.TreePath
 import com.plainbase.domain.root.BreakCause
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
@@ -16,9 +17,12 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.nio.file.ClosedWatchServiceException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.StandardWatchEventKinds
+import java.nio.file.WatchService
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -184,7 +188,79 @@ class FileWatcherTest : FunSpec({
             }
         }
     }
+
+    test("should close the raw WatchService when real partial registration coverage callback fails") {
+        val root = Files.createTempDirectory("plainbase-watch-partial")
+        Files.createDirectory(root.resolve("partial"))
+        var retain = false
+        var raw: WatchService? = null
+        val failure = IllegalStateException("partial coverage callback failed")
+        val cleanup = IllegalStateException("watch service close failed")
+        var testFailure: Throwable? = null
+        try {
+            try {
+                val actual = shouldThrow<IllegalStateException> {
+                    FileWatcher(
+                        root = root,
+                        ignoreRules = IgnoreRules(),
+                        excluded = emptyList(),
+                        onChange = {},
+                        watchServiceFactory = {
+                            root.fileSystem.newWatchService().also { raw = it }
+                        },
+                        registerDirectory = { directory, service ->
+                            if (directory.fileName.toString() == "partial") throw IOException("registration failed")
+                            directory.register(
+                                service,
+                                StandardWatchEventKinds.ENTRY_CREATE,
+                                StandardWatchEventKinds.ENTRY_DELETE,
+                                StandardWatchEventKinds.ENTRY_MODIFY,
+                            )
+                        },
+                        onCoverage = { coverage ->
+                            coverage shouldBe com.plainbase.domain.content.WatchCoverage.PARTIAL
+                            throw failure
+                        },
+                        closeWatchService = { service ->
+                            service.close()
+                            throw cleanup
+                        },
+                    )
+                }
+
+                actual shouldBe failure
+                shouldThrow<ClosedWatchServiceException> { requireNotNull(raw).poll() }
+                actual.suppressed.single() shouldBe cleanup
+            } catch (caught: Throwable) {
+                testFailure = caught
+                throw caught
+            } finally {
+                if (!closeRetainedWatchService(raw, testFailure)) retain = true
+            }
+        } finally {
+            if (!retain) root.toFile().deleteRecursively()
+        }
+    }
 })
+
+private fun closeRetainedWatchService(service: WatchService?, primary: Throwable?): Boolean {
+    if (service == null || watchServiceClosed(service)) return true
+    try {
+        service.close()
+        check(watchServiceClosed(service)) { "retained WatchService remained open" }
+        return true
+    } catch (cleanup: Throwable) {
+        if (primary != null) primary.addSuppressed(cleanup) else throw cleanup
+        return watchServiceClosed(service)
+    }
+}
+
+private fun watchServiceClosed(service: WatchService): Boolean = try {
+    service.poll()
+    false
+} catch (_: ClosedWatchServiceException) {
+    true
+}
 
 /** Runs [block] with a list appender attached to the [FileWatcher] logger; returns the WARN messages. */
 private fun captureWarnings(block: () -> Unit): List<String> {

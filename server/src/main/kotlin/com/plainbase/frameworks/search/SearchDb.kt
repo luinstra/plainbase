@@ -77,8 +77,29 @@ class SearchDb internal constructor(
     }
 
     override fun close() {
-        repeat(READER_POOL_SIZE) { readers.take().close() }
-        synchronized(writer) { writer.close() }
+        var primary: Throwable? = null
+        repeat(READER_POOL_SIZE) {
+            val reader = readers.take()
+            try {
+                reader.close()
+            } catch (failure: Throwable) {
+                if (primary == null) {
+                    primary = failure
+                } else if (failure !== primary) {
+                    primary.addSuppressed(failure)
+                }
+            }
+        }
+        try {
+            synchronized(writer) { writer.close() }
+        } catch (failure: Throwable) {
+            if (primary == null) {
+                primary = failure
+            } else if (failure !== primary) {
+                primary.addSuppressed(failure)
+            }
+        }
+        primary?.let { throw it }
     }
 
     private fun open(): Connection {

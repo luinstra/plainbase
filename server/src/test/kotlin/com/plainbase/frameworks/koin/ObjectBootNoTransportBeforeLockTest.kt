@@ -5,13 +5,13 @@ import com.plainbase.frameworks.config.GitConfig
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.S3ObjectClient
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 
@@ -32,20 +32,22 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
             val config = objectGitEnabledConfig(dataDir)
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { config } },
-                    createContentModule(config, inputs, openers.openObject),
-                    repositoryModule,
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
                     securityModule,
-                    createHistoryModule(config, inputs.history),
-                )
-            }
+                    createHistoryModule(config, inputs.history, owner),
+                ),
+            )
             try {
                 val history = app.koin.get<HistoryProvider>()
                 history.gateCheck() // must not throw - DATA_DIR/mirror does not exist yet (pre-lock)
             } finally {
-                app.close()
+                owner.close()
             }
         }
 
@@ -73,19 +75,21 @@ class ObjectBootNoTransportBeforeLockTest : FunSpec({
                     )
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(objectEnvConfig, openers.openLocal)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { objectEnvConfig } },
-                    createContentModule(objectEnvConfig, inputs, openers.openObject),
-                    repositoryModule,
+                    createContentModule(objectEnvConfig, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
                     securityModule,
-                    createHistoryModule(objectEnvConfig, inputs.history),
-                )
-            }
+                    createHistoryModule(objectEnvConfig, inputs.history, owner),
+                ),
+            )
             try {
                 app.koin.get<HistoryProvider>().gateCheck()
             } finally {
-                app.close()
+                owner.close()
             }
         }
     }

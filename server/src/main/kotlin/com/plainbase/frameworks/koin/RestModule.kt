@@ -23,6 +23,7 @@ import com.plainbase.frameworks.ktor.IndexProposalBaseReader
 import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildRouteContext
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.dummyPasswordHash
 import com.plainbase.frameworks.security.loadOrCreateProxyCsrfKey
@@ -35,7 +36,11 @@ import kotlin.time.Clock
  * the [PolicyService] + the guarded facades + the [RouteContext] the routing layer receives. Constructor DSL
  * only — no reflection (native-image gate).
  */
-val restModule = module {
+internal fun createRestModule(
+    resourceOwner: ServerResourceOwner,
+    afterRouteContextBuilt: (RouteContext) -> Unit = {},
+    routeContextBuilder: (() -> RouteContext) -> RouteContext = { build -> build() },
+) = module {
     single { PageService(indexBuilder = get(), aliasRegistry = get(), citations = get()) }
     single { SearchService(provider = get(), indexBuilder = get(), availability = get()) }
     // The ONE owner of the id->root and root->status questions. EXACTLY two deps: both snapshots arrive as call
@@ -136,43 +141,54 @@ val restModule = module {
     // The A4b proxy-CSRF server key is SecureRandom-generated + persisted in app_meta on first boot (so issued tokens
     // survive a restart). The single is resolved INSIDE the DataDirLock region (serve() touches it before starting
     // KtorServer), so two processes never race a double-generate. The key bytes never log.
-    single { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
+    single {
+        val build = { ProxyCsrf(loadOrCreateProxyCsrfKey(get<PlainbaseDb>())) }
+        resourceOwner.construct("proxy CSRF key") { build() }
+    }
     single<RouteContext> {
-        val config = get<PlainbaseConfig>()
-        buildRouteContext(
-            policy = get(),
-            indexBuilder = get(),
-            pageService = get(),
-            searchService = get(),
-            aliasRegistry = get(),
-            writePipeline = get(),
-            registry = get(),
-            availability = get(),
-            convergence = get(),
-            limbo = get(),
-            resolver = get(),
-            absence = get(),
-            stores = get<RootStores>()::get,
-            histories = get<HistoryProviders>()::get,
-            idProvider = get(),
-            proposalService = get(),
-            proposalLabeler = get(),
-            tokens = get(),
-            auth = get(),
-            trustedProxyCidrs = config.auth.trustedProxyCidrs,
-            maxWriteBodyBytes = config.maxWriteBodyBytes,
-            maxAssetBytes = config.maxAssetBytes,
-            // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
-            mcpAllowedHosts = config.mcpHostAllowlist(),
-            mcpAllowedOrigins = config.mcpOriginAllowlist(),
-            builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
-            proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
-            proxySecret = config.auth.proxySecret,
-            proxyIdentityHeader = config.auth.proxyIdentityHeader,
-            secureCookie = config.secureCookie(),
-            proxyCsrf = get(),
-            // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
-            agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
-        )
+        resourceOwner.construct("route context") {
+            val config = get<PlainbaseConfig>()
+            val context = routeContextBuilder {
+                buildRouteContext(
+                    policy = get(),
+                    indexBuilder = get(),
+                    pageService = get(),
+                    searchService = get(),
+                    aliasRegistry = get(),
+                    writePipeline = get(),
+                    registry = get(),
+                    availability = get(),
+                    convergence = get(),
+                    limbo = get(),
+                    resolver = get(),
+                    absence = get(),
+                    stores = get<RootStores>()::get,
+                    histories = get<HistoryProviders>()::get,
+                    idProvider = get(),
+                    proposalService = get(),
+                    proposalLabeler = get(),
+                    tokens = get(),
+                    auth = get(),
+                    trustedProxyCidrs = config.auth.trustedProxyCidrs,
+                    maxWriteBodyBytes = config.maxWriteBodyBytes,
+                    maxAssetBytes = config.maxAssetBytes,
+                    // P3: the fail-closed MCP DNS-rebinding allowlists (default = the configured bind host + loopback).
+                    mcpAllowedHosts = config.mcpHostAllowlist(),
+                    mcpAllowedOrigins = config.mcpOriginAllowlist(),
+                    builtinAuthEnabled = config.auth.mode == AuthMode.BUILTIN,
+                    proxyAuthEnabled = config.auth.mode == AuthMode.PROXY,
+                    proxySecret = config.auth.proxySecret,
+                    proxyIdentityHeader = config.auth.proxyIdentityHeader,
+                    secureCookie = config.secureCookie(),
+                    proxyCsrf = get(),
+                    // P5: the validated agent direct-commit globs (empty ⇒ every agent write degrades to a proposal).
+                    agentDirectCommitGlobs = config.agentDirectCommitGlobs(),
+                )
+            }
+            afterRouteContextBuilt(context)
+            context
+        }
     }
 }
+
+internal fun restModule(resourceOwner: ServerResourceOwner) = createRestModule(resourceOwner)

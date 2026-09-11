@@ -6,6 +6,7 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.config.StorageConfig
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.S3ObjectClient
 import com.plainbase.frameworks.runtime.ServerOpeners
@@ -14,7 +15,6 @@ import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 
@@ -38,20 +38,22 @@ class LocalBootNoObjectConstructionTest : FunSpec({
         val config = PlainbaseConfig.fromEnv(emptyMap())
         val openers = ServerOpeners()
         val inputs = prepareRootBootInputs(config, openers.openLocal)
-        val app = koinApplication {
-            modules(
+        val owner = ServerResourceOwner()
+        val app = createOwnedTestKoinApplication(
+            owner,
+            listOf(
                 module { single { config } },
-                createContentModule(config, inputs, openers.openObject),
-                repositoryModule,
+                createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                repositoryModule(owner),
                 securityModule,
-                createHistoryModule(config, inputs.history),
-            )
-        }
+                createHistoryModule(config, inputs.history, owner),
+            ),
+        )
         try {
             app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
             app.koin.get<HistoryProvider>() // the graph-resolution site the R9 boot trap threatened
         } finally {
-            app.close()
+            owner.close()
         }
 
         ObjectContentStore.constructions.get() shouldBe objectBefore
@@ -74,21 +76,22 @@ class LocalBootNoObjectConstructionTest : FunSpec({
             )
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(objectConfig, openers.openLocal)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { objectConfig } },
-                    createContentModule(objectConfig, inputs, openers.openObject),
-                    repositoryModule,
+                    createContentModule(objectConfig, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
                     securityModule,
-                    createHistoryModule(objectConfig, inputs.history),
-                )
-            }
+                    createHistoryModule(objectConfig, inputs.history, owner),
+                ),
+            )
             try {
                 app.koin.get<ContentStore>().shouldBeInstanceOf<ObjectContentStore>()
                 app.koin.get<HistoryProvider>() // must not force get<LocalContentStore>() (the dead provider)
             } finally {
-                app.koin.get<ObjectContentStore>().close() // Koin does not auto-close singles: no leaked transport
-                app.close()
+                owner.close()
             }
         }
 

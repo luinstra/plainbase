@@ -6,6 +6,8 @@ import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import org.koin.core.qualifier.named
@@ -25,8 +27,18 @@ import java.nio.file.Path
 internal fun createSearchModule(
     openSearch: (Path) -> SearchDb,
     closeSearch: (SearchDb) -> Unit,
+    resourceOwner: ServerResourceOwner,
 ) = module {
-    single { openSearch(get<PlainbaseConfig>().searchDatabasePath) } onClose { it?.let(closeSearch) }
+    single {
+        val open = { openSearch(get<PlainbaseConfig>().searchDatabasePath) }
+        resourceOwner.construct("search database") {
+            open().also { search ->
+                resourceOwner.own(ServerResourcePhase.SEARCH_DATABASE, search, closeSearch)
+            }
+        }
+    } onClose {
+        resourceOwner.drainServices()
+    }
     single<SearchProvider> { Fts5SearchProvider(get()) }
     single { SectionSplitter() }
     single {
@@ -44,4 +56,5 @@ internal fun createSearchModule(
     }
 }
 
-val searchModule = createSearchModule({ path -> SearchDb(path) }) { it.close() }
+internal fun searchModule(resourceOwner: ServerResourceOwner) =
+    createSearchModule({ path -> SearchDb(path) }, { it.close() }, resourceOwner)

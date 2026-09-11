@@ -14,6 +14,7 @@ import com.plainbase.frameworks.config.RootsOrigin
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.assertions.throwables.shouldThrowAny
@@ -23,7 +24,6 @@ import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.koin.core.Koin
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 import java.nio.file.Path
@@ -132,18 +132,20 @@ private fun withKoin(content: Path, dataDir: Path, history: HistoryMode, block: 
     )
     val openers = ServerOpeners()
     val inputs = prepareRootBootInputs(configValue, openers.openLocal)
-    val app = koinApplication {
-        modules(
+    val owner = ServerResourceOwner()
+    val app = createOwnedTestKoinApplication(
+        owner,
+        listOf(
             module { single { configValue } },
-            createContentModule(configValue, inputs, openers.openObject),
-            repositoryModule,
+            createContentModule(configValue, inputs, openers.openObject, { it.close() }, owner),
+            repositoryModule(owner),
             securityModule,
-            createHistoryModule(configValue, inputs.history),
-        )
-    }
+            createHistoryModule(configValue, inputs.history, owner),
+        ),
+    )
     try {
         block(app.koin)
     } finally {
-        app.close()
+        owner.close()
     }
 }

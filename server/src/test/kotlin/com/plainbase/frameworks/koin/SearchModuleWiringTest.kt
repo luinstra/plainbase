@@ -1,6 +1,5 @@
 package com.plainbase.frameworks.koin
 
-import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.page.PageId
 import com.plainbase.domain.repository.IdMapRepository
 import com.plainbase.domain.repository.PageCheckpointRepository
@@ -16,6 +15,7 @@ import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.withTempTree
 import com.plainbase.domain.service.writePage
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.search.Fts5SearchProvider
@@ -26,7 +26,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.types.shouldBeSameInstanceAs
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 import java.nio.file.Path
@@ -50,16 +49,18 @@ class SearchModuleWiringTest : FunSpec({
                 val config = PlainbaseConfig.fromEnv(env)
                 val openers = ServerOpeners()
                 val inputs = prepareRootBootInputs(config, openers.openLocal)
-                val app = koinApplication {
-                    modules(
+                val owner = ServerResourceOwner()
+                val app = createOwnedTestKoinApplication(
+                    owner,
+                    listOf(
                         module { single { config } },
-                        createContentModule(config, inputs, openers.openObject),
-                        repositoryModule,
-                        createHistoryModule(config, inputs.history),
+                        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                        repositoryModule(owner),
+                        createHistoryModule(config, inputs.history, owner),
                         indexModule,
-                        searchModule,
-                    )
-                }
+                        searchModule(owner),
+                    ),
+                )
                 try {
                     inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                     val provider = app.koin.get<SearchProvider>()
@@ -70,7 +71,7 @@ class SearchModuleWiringTest : FunSpec({
                     val results = provider.search(SearchQuery("sprockets", 10, 0))
                     results.total shouldBe 1L
                 } finally {
-                    app.close() // also closes SearchDb (onClose)
+                    owner.close()
                 }
             }
         }
@@ -86,17 +87,19 @@ class SearchModuleWiringTest : FunSpec({
                 val config = PlainbaseConfig.fromEnv(env)
                 val openers = ServerOpeners()
                 val inputs = prepareRootBootInputs(config, openers.openLocal)
-                val app = koinApplication {
-                    modules(
+                val owner = ServerResourceOwner()
+                val app = createOwnedTestKoinApplication(
+                    owner,
+                    listOf(
                         module { single { config } },
-                        createContentModule(config, inputs, openers.openObject),
-                        repositoryModule,
-                        createHistoryModule(config, inputs.history),
+                        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                        repositoryModule(owner),
+                        createHistoryModule(config, inputs.history, owner),
                         checkpointModule,
                         indexModule,
-                        searchModule,
-                    )
-                }
+                        searchModule(owner),
+                    ),
+                )
                 try {
                     inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                     app.koin.getAll<IndexBuilder.PublicationListener>() shouldHaveSize 2
@@ -130,7 +133,7 @@ class SearchModuleWiringTest : FunSpec({
                     checkpoints.load() shouldBe checkpointsBefore
                     shouldThrow<IllegalStateException> { indexer.syncPage(victim) }
                 } finally {
-                    app.close()
+                    owner.close()
                 }
             }
         }
@@ -150,19 +153,22 @@ class SearchModuleWiringTest : FunSpec({
             )
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
-            var driver: SqlDriver? = null
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { config } },
-                    createContentModule(config, inputs, openers.openObject),
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
                     createRepositoryModule(
-                        openDriver = { path -> openers.openDriver(path).also { driver = it } },
+                        openDriver = openers.openDriver,
+                        closeDriver = { it.close() },
+                        resourceOwner = owner,
                     ),
-                    createHistoryModule(config, inputs.history),
+                    createHistoryModule(config, inputs.history, owner),
                     indexModule,
-                    searchModule,
-                )
-            }
+                    searchModule(owner),
+                ),
+            )
             try {
                 inputs.signals.arm(app.koin.get<ObservationEpoch>()::broke)
                 val builder = app.koin.get<IndexBuilder>()
@@ -183,11 +189,7 @@ class SearchModuleWiringTest : FunSpec({
                 app.koin.get<RootAvailability>() shouldBeSameInstanceAs inputs.availability
                 inputs.availability.current().isAvailable(RootName.PRIMARY) shouldBe true
             } finally {
-                try {
-                    app.close()
-                } finally {
-                    driver?.close()
-                }
+                owner.close()
             }
         } finally {
             if (Files.exists(retained)) retained.toFile().deleteRecursively()

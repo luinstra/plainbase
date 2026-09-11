@@ -16,13 +16,15 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
 import com.plainbase.frameworks.koin.createHistoryModule
+import com.plainbase.frameworks.koin.createRepositoryModule
+import com.plainbase.frameworks.koin.createRestModule
+import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
-import com.plainbase.frameworks.koin.repositoryModule
-import com.plainbase.frameworks.koin.restModule
-import com.plainbase.frameworks.koin.searchModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.plainbaseModule
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.mcp.MCP_PATH
 import com.plainbase.frameworks.mcp.McpTools
 import com.plainbase.frameworks.objectstore.SigV4Signer
@@ -500,21 +502,23 @@ object NativeSpike {
         )
         val openers = ServerOpeners()
         val bootInputs = prepareRootBootInputs(config, openers.openLocal)
-        val app = koinApplication {
-            modules(
+        val resources = ServerResourceOwner()
+        val app = resources.construct("Koin context") {
+            koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it) { application -> application.close() } }
+        }
+        try {
+            app.modules(
                 module { single { config } },
-                createContentModule(config, bootInputs, openers.openObject),
-                repositoryModule,
+                createContentModule(config, bootInputs, openers.openObject, { it.close() }, resources),
+                createRepositoryModule(openers.openDriver, { it.close() }, resources),
                 securityModule,
                 indexModule,
                 checkpointModule,
-                searchModule,
-                createHistoryModule(config, bootInputs.history),
-                restModule,
+                createSearchModule(openers.openSearch, { it.close() }, resources),
+                createHistoryModule(config, bootInputs.history, resources),
+                createRestModule(resources),
             )
-        }
-        val koin = app.koin
-        try {
+            val koin = app.koin
             bootInputs.signals.arm(koin.get<ObservationEpoch>()::broke)
             val builder = koin.get<IndexBuilder>()
             builder.rebuild()
@@ -560,7 +564,7 @@ object NativeSpike {
                 server.stop(gracePeriodMillis = 100, timeoutMillis = 1000)
             }
         } finally {
-            app.close()
+            resources.close()
             Files.walk(contentDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
             Files.walk(dataDir).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }

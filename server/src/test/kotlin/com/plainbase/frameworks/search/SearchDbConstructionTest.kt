@@ -13,10 +13,10 @@ import java.sql.Statement
 class SearchDbConstructionTest : FunSpec({
 
     test("should preserve a CREATE TABLE failure and close the acquired writer exactly once") {
-        withTempDatabasePath { path ->
+        withTempDatabasePath { path, connections ->
             val failure = IllegalStateException("create search_meta failed")
             val writerCloseFailure = IllegalStateException("writer close failed")
-            val writer = recordingConnection(
+            val writer = connections.recordingConnection(
                 path,
                 statementFailure = { sql ->
                     if (sql.startsWith("CREATE TABLE search_meta")) throw failure
@@ -28,16 +28,17 @@ class SearchDbConstructionTest : FunSpec({
 
             actual shouldBeSameInstanceAs failure
             writer.closeCount shouldBe 1
+            writer.isClosed shouldBe true
             actual.suppressed.single() shouldBeSameInstanceAs writerCloseFailure
         }
     }
 
     test("outer cleanup preserves its primary close failure and closes later readers") {
-        withTempDatabasePath { path ->
+        withTempDatabasePath { path, connections ->
             val failure = IllegalStateException("reader PRAGMA failed")
-            val writer = recordingConnection(path, closeFailure = failure)
-            val firstReader = recordingConnection(path)
-            val failedReader = recordingConnection(
+            val writer = connections.recordingConnection(path, closeFailure = failure)
+            val firstReader = connections.recordingConnection(path)
+            val failedReader = connections.recordingConnection(
                 path,
                 statementFailure = { sql ->
                     if (sql.startsWith("PRAGMA journal_mode=WAL")) throw failure
@@ -53,17 +54,20 @@ class SearchDbConstructionTest : FunSpec({
             }
 
             actual shouldBeSameInstanceAs failure
-            connections.forEach { it.closeCount shouldBe 1 }
+            connections.forEach {
+                it.closeCount shouldBe 1
+                it.isClosed shouldBe true
+            }
             actual.suppressed.none { it === failure } shouldBe true
         }
     }
 
     test("failed reader cleanup preserves its primary when its real close throws the same instance") {
-        withTempDatabasePath { path ->
+        withTempDatabasePath { path, connections ->
             val failure = IllegalStateException("reader PRAGMA failed")
-            val writer = recordingConnection(path)
-            val firstReader = recordingConnection(path)
-            val failedReader = recordingConnection(
+            val writer = connections.recordingConnection(path)
+            val firstReader = connections.recordingConnection(path)
+            val failedReader = connections.recordingConnection(
                 path,
                 statementFailure = { sql ->
                     if (sql.startsWith("PRAGMA journal_mode=WAL")) throw failure
@@ -80,16 +84,19 @@ class SearchDbConstructionTest : FunSpec({
             }
 
             actual shouldBeSameInstanceAs failure
-            connections.forEach { it.closeCount shouldBe 1 }
+            connections.forEach {
+                it.closeCount shouldBe 1
+                it.isClosed shouldBe true
+            }
             actual.suppressed.none { it === failure } shouldBe true
         }
     }
 
     test("should close a real connection when PRAGMA setup fails immediately after acquisition") {
-        withTempDatabasePath { path ->
+        withTempDatabasePath { path, connections ->
             val failure = IllegalStateException("journal mode failed")
             val closeFailure = IllegalStateException("connection close failed")
-            val connection = recordingConnection(
+            val connection = connections.recordingConnection(
                 path,
                 statementFailure = { sql ->
                     if (sql.startsWith("PRAGMA journal_mode=WAL")) throw failure
@@ -101,21 +108,81 @@ class SearchDbConstructionTest : FunSpec({
 
             actual shouldBeSameInstanceAs failure
             connection.closeCount shouldBe 1
+            connection.isClosed shouldBe true
             actual.suppressed.single() shouldBeSameInstanceAs closeFailure
+        }
+    }
+
+    test("should close every fully constructed connection when one reader close fails") {
+        withTempDatabasePath { path, connections ->
+            val closeFailure = IllegalStateException("first reader close failed")
+            val secondCloseFailure = IllegalStateException("second reader close failed")
+            val writerCloseFailure = IllegalStateException("writer close failed")
+            val writer = connections.recordingConnection(path, closeFailure = writerCloseFailure)
+            val readers = List(SearchDb.READER_POOL_SIZE) { index ->
+                connections.recordingConnection(
+                    path,
+                    closeFailure = when (index) {
+                        0 -> closeFailure
+                        1 -> secondCloseFailure
+                        else -> null
+                    },
+                )
+            }
+            val connections = listOf(writer) + readers
+            var index = 0
+            val search = SearchDb(path) { connections[index++] }
+
+            val actual = thrown { search.close() }
+
+            actual shouldBeSameInstanceAs closeFailure
+            connections.map { it.isClosed } shouldBe List(connections.size) { true }
+            connections.forEach {
+                it.closeCount shouldBe 1
+            }
+            actual.suppressed.toList() shouldBe listOf(secondCloseFailure, writerCloseFailure)
         }
     }
 })
 
-private fun recordingConnection(
-    path: Path,
-    statementFailure: ((String) -> Unit)? = null,
-    closeFailure: Throwable? = null,
-): ConstructionRecordingConnection =
-    ConstructionRecordingConnection(
+private class ConnectionRegistry {
+    private val connections = mutableListOf<ConstructionRecordingConnection>()
+
+    fun recordingConnection(
+        path: Path,
+        statementFailure: ((String) -> Unit)? = null,
+        closeFailure: Throwable? = null,
+    ): ConstructionRecordingConnection = ConstructionRecordingConnection(
         DriverManager.getConnection("jdbc:sqlite:$path"),
         statementFailure,
         closeFailure,
-    )
+    ).also(connections::add)
+
+    fun closeRetained(primary: Throwable?): Throwable? {
+        var cleanupFailure: Throwable? = null
+        connections.filter { !it.isClosed }.forEach { connection ->
+            try {
+                connection.close()
+                check(connection.isClosed) { "retained search.db connection remained open" }
+            } catch (cleanup: Throwable) {
+                if (primary != null) {
+                    if (cleanup !== primary) primary.addSuppressed(cleanup)
+                } else if (cleanupFailure == null) {
+                    cleanupFailure = cleanup
+                } else if (cleanup !== cleanupFailure) {
+                    requireNotNull(cleanupFailure).addSuppressed(cleanup)
+                }
+            }
+        }
+        if (connections.any { !it.isClosed }) {
+            val survivor = IllegalStateException("search.db connection remained open after fallback cleanup")
+            if (primary != null) primary.addSuppressed(survivor) else cleanupFailure = survivor
+        }
+        return cleanupFailure
+    }
+
+    fun allClosed(): Boolean = connections.all { it.isClosed }
+}
 
 private class ConstructionRecordingConnection(
     private val delegate: Connection,
@@ -152,11 +219,25 @@ private fun thrown(block: () -> Unit): Throwable =
         failure
     }
 
-private fun withTempDatabasePath(block: (Path) -> Unit) {
+private fun withTempDatabasePath(block: (Path, ConnectionRegistry) -> Unit) {
     val directory = Files.createTempDirectory("plainbase-searchdb-construction")
+    val connections = ConnectionRegistry()
+    var primary: Throwable? = null
     try {
-        block(directory.resolve("search.db"))
+        block(directory.resolve("search.db"), connections)
+    } catch (failure: Throwable) {
+        primary = failure
     } finally {
-        directory.toFile().deleteRecursively()
+        val cleanupFailure = connections.closeRetained(primary)
+        if (cleanupFailure != null) {
+            if (primary != null) primary.addSuppressed(cleanupFailure) else primary = cleanupFailure
+        }
+        if (connections.allClosed()) {
+            directory.toFile().deleteRecursively()
+        } else {
+            val survivor = IllegalStateException("retaining search.db fixture because a connection is open")
+            if (primary != null) primary.addSuppressed(survivor) else primary = survivor
+        }
     }
+    primary?.let { throw it }
 }

@@ -226,6 +226,8 @@ class ServerRunTest : FunSpec({
         var secondStore: Any? = null
         var firstContext: Any? = null
         var secondContext: Any? = null
+        val firstCleanupFacts = Collections.synchronizedList(mutableListOf<Pair<String, Any>>())
+        val secondCleanupFacts = Collections.synchronizedList(mutableListOf<Pair<String, Any>>())
 
         withLocalFixture { firstContent, firstData ->
             requireNoGlobalContext()
@@ -247,9 +249,16 @@ class ServerRunTest : FunSpec({
                             defaultOpeners.openSearch(path).also { firstSearch = it }
                         },
                     ),
-                    control = observingControl(firstData) { kind, value -> if (kind == "context") firstContext = value },
+                    control = observingControl(firstData) { kind, value ->
+                        firstCleanupFacts += kind to value
+                        if (kind == "context") firstContext = value
+                    },
                 )
             } shouldBe 0
+            firstCleanupFacts.count { it.first.endsWith(".lockHeld") } shouldBe 3
+            firstCleanupFacts.filter { it.first.endsWith(".lockHeld") }.all { it.second == true } shouldBe true
+            firstCleanupFacts.count { it.first.contains("globalContext") } shouldBe 7
+            firstCleanupFacts.filter { it.first.contains("globalContext") }.all { it.second == true } shouldBe true
             requireLockAvailable(firstData)
             requireNoGlobalContext()
         }
@@ -275,9 +284,16 @@ class ServerRunTest : FunSpec({
                             defaultOpeners.openSearch(path).also { secondSearch = it }
                         },
                     ),
-                    control = observingControl(secondData) { kind, value -> if (kind == "context") secondContext = value },
+                    control = observingControl(secondData) { kind, value ->
+                        secondCleanupFacts += kind to value
+                        if (kind == "context") secondContext = value
+                    },
                 )
             } shouldBe 0
+            secondCleanupFacts.count { it.first.endsWith(".lockHeld") } shouldBe 3
+            secondCleanupFacts.filter { it.first.endsWith(".lockHeld") }.all { it.second == true } shouldBe true
+            secondCleanupFacts.count { it.first.contains("globalContext") } shouldBe 7
+            secondCleanupFacts.filter { it.first.contains("globalContext") }.all { it.second == true } shouldBe true
             requireLockAvailable(secondData)
             requireNoGlobalContext()
         }
@@ -469,6 +485,7 @@ class ServerRunTest : FunSpec({
             val port = freePort()
             val config = objectConfigFromEnv(content, data, endpointPort = port)
             val events = Collections.synchronizedList(mutableListOf<String>())
+            val closeLockFacts = Collections.synchronizedList(mutableListOf<Pair<String, Boolean>>())
             val output = RecordingOutput(events)
             val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
             val appender = ListAppender<ILoggingEvent>().apply { start() }
@@ -480,19 +497,28 @@ class ServerRunTest : FunSpec({
                         output,
                         control = ServerRunControl(
                             closeDriver = { driver ->
-                                requireLockHeld(data)
-                                driver.close()
-                                events += "driver"
+                                closeLockFacts += "driver" to dataDirLockHeld(data)
+                                try {
+                                    driver.close()
+                                } finally {
+                                    events += "driver"
+                                }
                             },
                             closeObject = { store ->
-                                requireLockHeld(data)
-                                store.close()
-                                events += "object"
+                                closeLockFacts += "object" to dataDirLockHeld(data)
+                                try {
+                                    store.close()
+                                } finally {
+                                    events += "object"
+                                }
                             },
                             closeContext = { app ->
-                                requireLockHeld(data)
-                                app.close()
-                                events += "context"
+                                closeLockFacts += "context" to dataDirLockHeld(data)
+                                try {
+                                    app.close()
+                                } finally {
+                                    events += "context"
+                                }
                             },
                         ),
                     )
@@ -502,6 +528,8 @@ class ServerRunTest : FunSpec({
                 events.count { it == "driver" } shouldBe 1
                 events.count { it == "object" } shouldBe 1
                 events.count { it == "context" } shouldBe 1
+                closeLockFacts.map { it.first }.shouldContainExactly("object", "driver", "context")
+                closeLockFacts.all { it.second } shouldBe true
                 appender.list.any { it.formattedMessage == "serve object hydrate or bundle restore failed" } shouldBe true
                 appender.list.any {
                     it.throwableProxy?.className == ObjectStoreException::class.java.name &&
@@ -526,6 +554,7 @@ class ServerRunTest : FunSpec({
             val objectCloses = AtomicInteger()
             val defaults = ServerOpeners()
             val output = RecordingOutput(events)
+            val closeLockFacts = Collections.synchronizedList(mutableListOf<Pair<String, Boolean>>())
             val root = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
             val appender = ListAppender<ILoggingEvent>().apply { start() }
             root.addAppender(appender)
@@ -546,26 +575,40 @@ class ServerRunTest : FunSpec({
                         ),
                         control = ServerRunControl(
                             closeDriver = { driver ->
-                                requireLockHeld(data)
-                                driver.close()
+                                closeLockFacts += "driver" to dataDirLockHeld(data)
+                                try {
+                                    driver.close()
+                                } finally {
+                                    events += "driver"
+                                }
                                 driverCloses.incrementAndGet()
-                                events += "driver"
                             },
                             closeObject = { store ->
-                                requireLockHeld(data)
-                                store.close()
+                                closeLockFacts += "object" to dataDirLockHeld(data)
+                                try {
+                                    store.close()
+                                } finally {
+                                    events += "object"
+                                }
                                 objectCloses.incrementAndGet()
                             },
                             closeSearch = { search ->
-                                requireLockHeld(data)
-                                search.close()
+                                closeLockFacts += "search" to dataDirLockHeld(data)
+                                try {
+                                    search.close()
+                                } finally {
+                                    events += "search"
+                                }
                                 searchCloses.incrementAndGet()
                             },
                             closeContext = { app ->
-                                requireLockHeld(data)
-                                app.close()
+                                closeLockFacts += "context" to dataDirLockHeld(data)
+                                try {
+                                    app.close()
+                                } finally {
+                                    events += "context"
+                                }
                                 contextCloses.incrementAndGet()
-                                events += "context"
                             },
                         ),
                     )
@@ -575,6 +618,8 @@ class ServerRunTest : FunSpec({
                 appender.list.any { it.formattedMessage == "serve history preparation failed" } shouldBe true
                 driverCloses.get() shouldBe 1
                 contextCloses.get() shouldBe 1
+                closeLockFacts.map { it.first }.shouldContainExactly("driver", "context")
+                closeLockFacts.all { it.second } shouldBe true
                 searchOpens.get() shouldBe 0
                 objectOpens.get() shouldBe 0
                 searchCloses.get() shouldBe 0
@@ -1239,34 +1284,46 @@ private fun withFixtureScope(base: Path, block: () -> Unit) {
 
 private fun observingControl(data: Path, observer: (kind: String, value: Any) -> Unit): ServerRunControl =
     ServerRunControl(
-        startServer = { requireNoGlobalContext() },
+        startServer = { observer("start.globalContext", GlobalContext.getOrNull() == null) },
         closeDriver = { driver ->
-            requireNoGlobalContext()
-            requireLockHeld(data)
-            driver.close()
-            observer("driver", driver)
-            requireNoGlobalContext()
+            observer("driver.lockHeld", dataDirLockHeld(data))
+            observer("driver.globalContext.before", GlobalContext.getOrNull() == null)
+            try {
+                driver.close()
+            } finally {
+                observer("driver", driver)
+                observer("driver.globalContext.after", GlobalContext.getOrNull() == null)
+            }
         },
         closeSearch = { search ->
-            requireNoGlobalContext()
-            requireLockHeld(data)
-            search.close()
-            observer("search", search)
-            requireNoGlobalContext()
+            observer("search.lockHeld", dataDirLockHeld(data))
+            observer("search.globalContext.before", GlobalContext.getOrNull() == null)
+            try {
+                search.close()
+            } finally {
+                observer("search", search)
+                observer("search.globalContext.after", GlobalContext.getOrNull() == null)
+            }
         },
         closeObject = { store ->
-            requireNoGlobalContext()
-            requireLockHeld(data)
-            store.close()
-            observer("object", store)
-            requireNoGlobalContext()
+            observer("object.lockHeld", dataDirLockHeld(data))
+            observer("object.globalContext.before", GlobalContext.getOrNull() == null)
+            try {
+                store.close()
+            } finally {
+                observer("object", store)
+                observer("object.globalContext.after", GlobalContext.getOrNull() == null)
+            }
         },
         closeContext = { app ->
-            requireNoGlobalContext()
-            requireLockHeld(data)
-            app.close()
-            observer("context", app)
-            requireNoGlobalContext()
+            observer("context.lockHeld", dataDirLockHeld(data))
+            observer("context.globalContext.before", GlobalContext.getOrNull() == null)
+            try {
+                app.close()
+            } finally {
+                observer("context", app)
+                observer("context.globalContext.after", GlobalContext.getOrNull() == null)
+            }
         },
     )
 

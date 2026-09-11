@@ -7,27 +7,46 @@ import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.git.GitExecutor
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.RootHistorySelection
 import org.koin.dsl.module
+import org.koin.dsl.onClose
 import kotlin.time.Clock
 
 /** Registers the already-selected history collaborators and Koin-owned write/DR adapters. */
-internal fun createHistoryModule(config: PlainbaseConfig, selection: RootHistorySelection) = module {
+internal fun createHistoryModule(
+    config: PlainbaseConfig,
+    selection: RootHistorySelection,
+    resourceOwner: ServerResourceOwner,
+    onDrAcquired: (GitBundleDr) -> Unit = {},
+    closeDr: (GitBundleDr) -> Unit = { it.close() },
+) = module {
     single { selection.objectLocks.value }
     single<GitBundleDr> {
-        GitBundleDr(
-            exec = GitExecutor(workTree = config.dataDir.resolve("mirror"), home = config.dataDir.resolve("git-home")),
-            objectStore = get<ObjectContentStore>(),
-            mirrorRoot = config.dataDir.resolve("mirror"),
-            tmpDir = config.dataDir.resolve("tmp"),
-            sentinelPath = config.dataDir.resolve("restore-pending"),
-            identity = CommitIdentity(config.git.authorName, config.git.authorEmail),
-            clock = Clock.System,
-            repoPath = selection.objectHistory::repoPath,
-            gitHome = config.dataDir.resolve("git-home"),
-            locks = selection.objectLocks.value,
-        )
+        val build = {
+            GitBundleDr(
+                exec = GitExecutor(workTree = config.dataDir.resolve("mirror"), home = config.dataDir.resolve("git-home")),
+                objectStore = get<ObjectContentStore>(),
+                mirrorRoot = config.dataDir.resolve("mirror"),
+                tmpDir = config.dataDir.resolve("tmp"),
+                sentinelPath = config.dataDir.resolve("restore-pending"),
+                identity = CommitIdentity(config.git.authorName, config.git.authorEmail),
+                clock = Clock.System,
+                repoPath = selection.objectHistory::repoPath,
+                gitHome = config.dataDir.resolve("git-home"),
+                locks = selection.objectLocks.value,
+            )
+        }
+        resourceOwner.construct("git bundle DR") {
+            build().also { dr ->
+                resourceOwner.own(ServerResourcePhase.DISASTER_RECOVERY, dr, closeDr)
+                onDrAcquired(dr)
+            }
+        }
+    } onClose {
+        resourceOwner.drainServices()
     }
     single<HistoryProvider> {
         get<HistoryProviders>().primary

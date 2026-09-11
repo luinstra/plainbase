@@ -21,9 +21,13 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.RootBootInputs
+import org.koin.core.scope.Scope
 import org.koin.dsl.module
+import org.koin.dsl.onClose
 
 /**
  * Wires the content tree adapter. Constructor DSL only - no reflection (native-image gate).
@@ -44,6 +48,8 @@ internal fun createContentModule(
         (TreePath) -> Boolean,
         () -> RowsAtStart,
     ) -> ObjectContentStore,
+    closeObject: (ObjectContentStore) -> Unit,
+    resourceOwner: ServerResourceOwner,
 ) = module {
     single { inputs.ignoreRules }
     single<RootRegistry> { inputs.registry }
@@ -95,12 +101,12 @@ internal fun createContentModule(
         }
         RootStores(stores)
     }
-    single<ObjectContentStore> {
+    fun Scope.buildObject(): ObjectContentStore {
         val dirtyPages = get<DirtyPageRepository>()
         val idMap = get<IdMapRepository>()
         val retirements = get<RetirementRepository>()
         val primary = inputs.registry.primary.name
-        openObject(
+        return openObject(
             config,
             inputs.ignoreRules,
             // Object mode is always a synthesized main, so every dirty row IS main's; the factory
@@ -119,6 +125,16 @@ internal fun createContentModule(
                 RowsAtStart(rows, bindingEpoch)
             },
         )
+    }
+    single<ObjectContentStore> {
+        val scope = this
+        resourceOwner.construct("object store") {
+            scope.buildObject().also { store ->
+                resourceOwner.own(ServerResourcePhase.OBJECT_TRANSPORT, store, closeObject)
+            }
+        }
+    } onClose { store ->
+        resourceOwner.drainServices()
     }
     // Backend selection aliases the selected concrete adapter; the other backend remains unconstructed.
     single<ContentStore> {

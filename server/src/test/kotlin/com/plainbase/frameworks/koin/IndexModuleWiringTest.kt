@@ -3,12 +3,12 @@ package com.plainbase.frameworks.koin
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.types.shouldBeInstanceOf
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 
 /**
@@ -27,21 +27,23 @@ class IndexModuleWiringTest : FunSpec({
         val config = PlainbaseConfig.fromEnv(emptyMap())
         val openers = ServerOpeners()
         val inputs = prepareRootBootInputs(config, openers.openLocal)
-        val app = koinApplication {
-            modules(
+        val owner = ServerResourceOwner()
+        val app = createOwnedTestKoinApplication(
+            owner,
+            listOf(
                 module { single { config } },
-                createContentModule(config, inputs, openers.openObject),
-                repositoryModule,
+                createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                repositoryModule(owner),
                 securityModule,
-                createHistoryModule(config, inputs.history),
+                createHistoryModule(config, inputs.history, owner),
                 indexModule,
                 module { single<SqlDriver> { DatabaseFactory.createInMemoryDriver() } },
-            )
-        }
+            ),
+        )
         try {
             app.koin.get<IndexBuilder>().shouldBeInstanceOf<IndexBuilder>()
         } finally {
-            app.close()
+            owner.close()
         }
     }
 })

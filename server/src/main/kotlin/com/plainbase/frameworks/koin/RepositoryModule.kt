@@ -16,6 +16,8 @@ import com.plainbase.domain.repository.TransactionRunner
 import com.plainbase.domain.repository.UrlAliasRepository
 import com.plainbase.domain.repository.UserRepository
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightAuditRepository
@@ -37,10 +39,20 @@ import java.nio.file.Path
 
 internal fun createRepositoryModule(
     openDriver: (Path) -> SqlDriver,
-    closeDriver: ((SqlDriver) -> Unit)? = null,
+    closeDriver: (SqlDriver) -> Unit,
+    resourceOwner: ServerResourceOwner,
 ) = module {
-    val driverDefinition = single<SqlDriver> { openDriver(get<PlainbaseConfig>().appDatabasePath) }
-    closeDriver?.let { close -> driverDefinition onClose { driver -> driver?.let(close) } }
+    val driverDefinition = single<SqlDriver> {
+        val open = { openDriver(get<PlainbaseConfig>().appDatabasePath) }
+        resourceOwner.construct("app database") {
+            open().also { driver ->
+                resourceOwner.own(ServerResourcePhase.APP_DATABASE, driver, closeDriver)
+            }
+        }
+    }
+    driverDefinition onClose { driver ->
+        resourceOwner.drainServices()
+    }
     single { DatabaseFactory.createDatabase(get()) }
     single<IdMapRepository> { SqlDelightIdMapRepository(get()) }
     // The ONE deleter (C0): the proof-apply transaction plus the durable freshness token it checks against.
@@ -61,4 +73,5 @@ internal fun createRepositoryModule(
     single<TransactionRunner> { SqlDelightTransactionRunner(get()) }
 }
 
-val repositoryModule = createRepositoryModule(DatabaseFactory::createDriver)
+internal fun repositoryModule(resourceOwner: ServerResourceOwner) =
+    createRepositoryModule(DatabaseFactory::createDriver, { it.close() }, resourceOwner)

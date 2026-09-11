@@ -26,6 +26,7 @@ import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.GitBundleDr
 import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitRepoLocks
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
@@ -46,7 +47,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.koin.core.error.InstanceCreationException
 import org.koin.core.module.Module
-import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import java.nio.file.Files
 
@@ -71,14 +71,13 @@ class ContentModuleWiringTest : FunSpec({
 
     test("the production module set resolves ContentStore to LocalContentStore in LOCAL mode") {
         val config = PlainbaseConfig.fromEnv(emptyMap())
-        val app = koinApplication {
-            modules(*preparedModules(config))
-        }
+        val owner = ServerResourceOwner()
+        val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
         try {
             app.koin.get<ContentStore>().shouldBeInstanceOf<LocalContentStore>()
             app.koin.get<HistoryProvider>() // resolves cleanly - the pre-C4 baseline this guard protects
         } finally {
-            app.close()
+            owner.close()
         }
     }
 
@@ -87,19 +86,21 @@ class ContentModuleWiringTest : FunSpec({
             val config = PlainbaseConfig.fromEnv(emptyMap()).copy(dataDir = dataDir)
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { config } },
-                    createContentModule(config, inputs, openers.openObject),
-                    createHistoryModule(config, inputs.history),
-                )
-            }
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                    createHistoryModule(config, inputs.history, owner),
+                ),
+            )
             try {
                 app.koin.get<RootAvailability>() shouldBeSameInstanceAs inputs.availability
                 app.koin.get<LocalContentStore>() shouldBeSameInstanceAs inputs.localStores.getValue(RootName.PRIMARY)
                 app.koin.get<HistoryProviders>().primary shouldBeSameInstanceAs inputs.history.byRoot.getValue(RootName.PRIMARY)
             } finally {
-                app.close()
+                owner.close()
             }
         }
     }
@@ -108,11 +109,10 @@ class ContentModuleWiringTest : FunSpec({
         "storage.backend=object resolves ContentStore to the hybrid; HistoryProvider resolves WITHOUT " +
             "constructing the dead contentDir LocalContentStore (the R9 boot trap this test guards)",
     ) {
-        withTempDataDir { dataDir ->
-            val config = objectConfig(dataDir)
-            val app = koinApplication {
-                modules(*preparedModules(config))
-            }
+            withTempDataDir { dataDir ->
+                val config = objectConfig(dataDir)
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
             try {
                 app.koin.get<ContentStore>().shouldBeInstanceOf<ObjectContentStore>()
                 // The prepared `repoPath` lambda must be lazy + backend-conditional: resolving
@@ -121,10 +121,7 @@ class ContentModuleWiringTest : FunSpec({
                 val history = app.koin.get<HistoryProvider>()
                 history.enabled shouldBe false // NoOp: git.enabled defaults to null in object mode (C4)
             } finally {
-                // Koin does not auto-close AutoCloseable singles: close the resolved ObjectContentStore so
-                // its ktor CIO S3ObjectClient transport does not leak.
-                app.koin.get<ObjectContentStore>().close()
-                app.close()
+                owner.close()
             }
         }
     }
@@ -133,18 +130,17 @@ class ContentModuleWiringTest : FunSpec({
         "object mode + explicit git.enabled=true resolves a real GitCliHistoryProvider over the mirror " +
             "whose gateCheck() PASSES when git is present (C5 BOUND decision 1 - replaces the C4 refusal)",
     ) {
-        withTempDataDir { dataDir ->
-            val config = objectConfig(dataDir, gitEnabled = true)
-            val app = koinApplication {
-                modules(*preparedModules(config))
-            }
+            withTempDataDir { dataDir ->
+                val config = objectConfig(dataDir, gitEnabled = true)
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
             try {
                 val history = app.koin.get<HistoryProvider>()
                 history.shouldBeInstanceOf<GitCliHistoryProvider>()
                 history.enabled shouldBe true
                 history.gateCheck() // does not throw - the object-mode git binary/version probe passes pre-lock
             } finally {
-                app.close()
+                owner.close()
             }
         }
     }
@@ -154,53 +150,29 @@ class ContentModuleWiringTest : FunSpec({
             val config = objectConfig(dataDir, gitEnabled = true)
             val openers = ServerOpeners()
             val inputs = prepareRootBootInputs(config, openers.openLocal)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { config } },
-                    createContentModule(config, inputs, openers.openObject),
-                    repositoryModule,
+                    createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+                    repositoryModule(owner),
                     securityModule,
-                    createHistoryModule(config, inputs.history),
-                )
-            }
-            var objectStore: ObjectContentStore? = null
-            var driver: SqlDriver? = null
-            var bundleDr: GitBundleDr? = null
-            var bodyFailure: Throwable? = null
-            var cleanupFailure: Throwable? = null
+                    createHistoryModule(config, inputs.history, owner),
+                ),
+            )
             try {
-                bodyFailure = runCatching {
-                    val acquiredStore = app.koin.get<ObjectContentStore>()
-                    objectStore = acquiredStore
-                    val acquiredDriver = app.koin.get<SqlDriver>()
-                    driver = acquiredDriver
-                    val provider = app.koin.get<HistoryProvider>().shouldBeInstanceOf<GitCliHistoryProvider>()
-                    val acquiredBundleDr = app.koin.get<GitBundleDr>()
-                    bundleDr = acquiredBundleDr
-                    val registeredLocks = app.koin.get<GitRepoLocks>()
-                    provider.repoWriteMonitor shouldBeSameInstanceAs inputs.history.objectLocks.value.repoWrite
-                    acquiredBundleDr.locks shouldBeSameInstanceAs inputs.history.objectLocks.value
-                    registeredLocks shouldBeSameInstanceAs inputs.history.objectLocks.value
-                }.exceptionOrNull()
+                app.koin.get<ObjectContentStore>()
+                app.koin.get<SqlDriver>()
+                val provider = app.koin.get<HistoryProvider>().shouldBeInstanceOf<GitCliHistoryProvider>()
+                val acquiredBundleDr = app.koin.get<GitBundleDr>()
+                val registeredLocks = app.koin.get<GitRepoLocks>()
+                provider.repoWriteMonitor shouldBeSameInstanceAs inputs.history.objectLocks.value.repoWrite
+                acquiredBundleDr.locks shouldBeSameInstanceAs inputs.history.objectLocks.value
+                registeredLocks shouldBeSameInstanceAs inputs.history.objectLocks.value
             } finally {
-                fun closeIndependently(close: () -> Unit) {
-                    try {
-                        close()
-                    } catch (failure: Throwable) {
-                        cleanupFailure = cleanupFailure?.also { it.addSuppressed(failure) } ?: failure
-                    }
-                }
-                bundleDr?.let { closeIndependently(it::close) }
-                objectStore?.let { closeIndependently(it::close) }
-                driver?.let { closeIndependently(it::close) }
-                closeIndependently(app::close)
+                owner.close()
             }
-            val finalCleanupFailure = cleanupFailure
-            bodyFailure?.let { failure ->
-                finalCleanupFailure?.let(failure::addSuppressed)
-                throw failure
-            }
-            finalCleanupFailure?.let { throw it }
         }
     }
 
@@ -222,17 +194,19 @@ class ContentModuleWiringTest : FunSpec({
             )
             val fullInputs = prepareRootBootInputs(config, ServerOpeners().openLocal)
             val omittedInputs = fullInputs.copy(localStores = fullInputs.localStores - extra)
-            val app = koinApplication {
-                modules(
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(
+                owner,
+                listOf(
                     module { single { config } },
-                    createContentModule(config, omittedInputs, ServerOpeners().openObject),
-                )
-            }
+                    createContentModule(config, omittedInputs, ServerOpeners().openObject, { it.close() }, owner),
+                ),
+            )
             try {
                 val failure = shouldThrow<InstanceCreationException> { app.koin.get<RootStores>()[extra] }
                 failure.cause?.message shouldContain "root 'extra'"
             } finally {
-                app.close()
+                owner.close()
             }
         }
     }
@@ -240,9 +214,8 @@ class ContentModuleWiringTest : FunSpec({
     test("object mode resolves the lazy DR bundle and the no-op write-history adapter through production wiring") {
         withTempDataDir { dataDir ->
             val config = objectConfig(dataDir)
-            val app = koinApplication {
-                modules(*preparedModules(config))
-            }
+            val owner = ServerResourceOwner()
+            val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
             val store = app.koin.get<ObjectContentStore>()
             val bundleDr = app.koin.get<GitBundleDr>()
             try {
@@ -251,9 +224,7 @@ class ContentModuleWiringTest : FunSpec({
                 val hook = app.koin.get<WriteHistoryHook>()
                 hook.commit(RootName.PRIMARY, TreePath.require("wiring.md"), "content".toByteArray(), null, null) shouldBe null
             } finally {
-                bundleDr.close()
-                store.close()
-                app.close()
+                owner.close()
             }
         }
     }
@@ -278,9 +249,8 @@ class ContentModuleWiringTest : FunSpec({
         try {
             withTempDataDir { dataDir ->
                 val config = objectConfig(dataDir, endpoint = "http://127.0.0.1:$port")
-                val app = koinApplication {
-                    modules(*preparedModules(config))
-                }
+                val owner = ServerResourceOwner()
+                val app = createOwnedTestKoinApplication(owner, preparedModules(config, owner).toList())
                 val store = app.koin.get<ObjectContentStore>()
                 try {
                     val id = PageId.require("0197a3f2-8c4d-7e91-b3a2-4f8e9d1c6b5a")
@@ -299,8 +269,7 @@ class ContentModuleWiringTest : FunSpec({
                     manifest.rowsAtStart shouldBe setOf(BindingRef(path, id))
                     manifest.bindingEpoch shouldBe expectedEpoch
                 } finally {
-                    store.close()
-                    app.close()
+                    owner.close()
                 }
             }
         } finally {
@@ -329,14 +298,18 @@ private fun objectConfig(
         git = GitConfig(enabled = gitEnabled),
     )
 
-private fun preparedModules(config: PlainbaseConfig, openers: ServerOpeners = ServerOpeners()): Array<Module> {
+private fun preparedModules(
+    config: PlainbaseConfig,
+    owner: ServerResourceOwner,
+    openers: ServerOpeners = ServerOpeners(),
+): Array<Module> {
     val inputs = prepareRootBootInputs(config, openers.openLocal)
     return arrayOf(
         module { single { config } },
-        createContentModule(config, inputs, openers.openObject),
-        repositoryModule,
+        createContentModule(config, inputs, openers.openObject, { it.close() }, owner),
+        repositoryModule(owner),
         securityModule,
-        createHistoryModule(config, inputs.history),
+        createHistoryModule(config, inputs.history, owner),
     )
 }
 

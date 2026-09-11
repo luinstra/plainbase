@@ -576,6 +576,9 @@ class GitBundleDr(
             false
         }
 
+    internal fun isClosedForTest(): Boolean =
+        shipExecutor.isTerminated && (alarm as? ExecutorAlarm)?.isTerminatedForTest() != false
+
     // ---- internals ----------------------------------------------------------------------------
 
     private fun writeSentinel() {

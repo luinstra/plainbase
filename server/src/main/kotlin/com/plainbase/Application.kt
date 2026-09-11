@@ -20,7 +20,6 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.UnavailableCause
 import com.plainbase.domain.service.IndexBuilder
 import com.plainbase.domain.service.ProposalService
-import com.plainbase.domain.service.RebuildScheduler
 import com.plainbase.domain.service.WritePipeline
 import com.plainbase.frameworks.cli.AdminCommand
 import com.plainbase.frameworks.cli.AdoptCommand
@@ -40,13 +39,14 @@ import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
 import com.plainbase.frameworks.koin.createHistoryModule
 import com.plainbase.frameworks.koin.createRepositoryModule
+import com.plainbase.frameworks.koin.createRestModule
 import com.plainbase.frameworks.koin.createSearchModule
 import com.plainbase.frameworks.koin.indexModule
-import com.plainbase.frameworks.koin.restModule
 import com.plainbase.frameworks.koin.securityModule
 import com.plainbase.frameworks.ktor.KtorServer
-import com.plainbase.frameworks.lifecycle.CloseOnce
 import com.plainbase.frameworks.lifecycle.GracefulShutdown
+import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.lifecycle.ServerRunControl
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.DeferredObjectHistory
@@ -121,46 +121,34 @@ private fun runOwnedServer(
     openers: ServerOpeners,
     control: ServerRunControl,
 ): Unit {
-    var driverClose: CloseOnce? = null
-    var searchClose: CloseOnce? = null
-    var objectClose: CloseOnce? = null
+    val resources = ServerResourceOwner()
 
     val runOpeners = ServerOpeners(
-        openDriver = { path ->
-            val driver = openTyped { openers.openDriver(path) }
-            driverClose = CloseOnce("app database") { control.closeDriver(driver) }
-            driver
-        },
+        openDriver = { path -> openTyped { openers.openDriver(path) } },
         openLocal = { inputs -> openTyped { openers.openLocal(inputs) } },
         openObject = { objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart ->
-            val store = openTyped { openers.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart) }
-            objectClose = CloseOnce("object store") { control.closeObject(store) }
-            store
+            openTyped { openers.openObject(objectConfig, ignoreRules, dirtyPaths, isDirty, rowsAtStart) }
         },
-        openSearch = { path ->
-            val search = openTyped { openers.openSearch(path) }
-            searchClose = CloseOnce("search database") { control.closeSearch(search) }
-            search
-        },
+        openSearch = { path -> openTyped { openers.openSearch(path) } },
     )
 
-    val app = koinApplication {
-        modules(
-            module { single { config } },
-            createRepositoryModule(runOpeners.openDriver) { driverClose?.close() },
-            securityModule,
-            indexModule,
-            checkpointModule,
-            createSearchModule(runOpeners.openSearch) { searchClose?.close() },
-            restModule,
-        )
+    val app = resources.construct("Koin context") {
+        koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it, control.closeContext) }
     }
-    val koin = app.koin
-    val contextClose = CloseOnce("Koin context") { control.closeContext(app) }
-    var lock: DataDirLock? = null
     var hook: Thread? = null
 
     try {
+        control.onContextAcquired(app)
+        app.modules(
+            module { single { config } },
+            createRepositoryModule(runOpeners.openDriver, control.closeDriver, resources),
+            securityModule,
+            indexModule,
+            checkpointModule,
+            createSearchModule(runOpeners.openSearch, control.closeSearch, resources),
+            createRestModule(resources, control.afterRouteContextBuilt, control.buildRouteContext),
+        )
+        val koin = app.koin
         // THE BOOT GATE, consumed in STAGES (C5 S1.7). The gate itself - `evaluateBootGate` - is the ONE function
         // `plainbase root` also runs, over the candidate roots.conf it is about to write, so a refusal added to
         // boot lands in the CLI for free and neither can drift from the other.
@@ -196,24 +184,25 @@ private fun runOwnedServer(
         // Hold the DATA_DIR advisory lock for the server's whole lifetime, acquired
         // BEFORE any rebuild/watcher registration. A second server on the same DATA_DIR - or an offline
         // `plainbase reindex` while this one runs - is refused, never silently racing search.db writes.
-        lock = DataDirLock.tryAcquire(config.dataDir)
-        if (lock == null) {
+        val ownedLock = resources.construct("DATA_DIR lock") {
+            DataDirLock.tryAcquire(config.dataDir)?.also { resources.own(ServerResourcePhase.DATA_DIR_LOCK, it) { lock -> lock.close() } }
+        }
+        if (ownedLock == null) {
             refuseServe(output, "another Plainbase process is holding ${config.dataDir} - stop it before starting a second instance")
         }
-        val ownedLock = requireNotNull(lock)
         // Everything past the lock runs INSIDE the try/finally so the lock ALWAYS releases - including a
         // prepare() failure (a forced-on Git hitting a read-only/disk-full content dir, or a `git init` fault),
         // which must surface as the same actionable `serve:` message as gateCheck(), never a raw stack trace
         // that also leaks the lock. Startup ORDER is unchanged: gateCheck (pre-lock) → lock → prepare() →
         // watcher → rebuild.
-        try {
+        run {
             // First app-database open: the driver is resolved only after the DATA_DIR lock and before repository/epoch
             // consumers are resolved.
             koin.get<SqlDriver>()
             koin.loadModules(
                 listOf(
-                    createContentModule(config, bootInputs, runOpeners.openObject),
-                    createHistoryModule(config, bootInputs.history),
+                    createContentModule(config, bootInputs, runOpeners.openObject, control.closeObject, resources),
+                    createHistoryModule(config, bootInputs.history, resources, control.onDrAcquired, control.closeDr),
                 ),
             )
             val bootEpoch = koin.get<ObservationEpoch>()
@@ -249,7 +238,7 @@ private fun runOwnedServer(
             // behind `config.git.enabled == true` so a git-DISABLED object boot never constructs `GitBundleDr`
             // (the R9 lazy-wiring discipline: git-disabled object mode must stay byte-identical to the
             // hydrate-only C4 boot).
-            hydrateObjectMode(config, koin, bootInputs.history.objectHistory, output)
+            hydrateObjectMode(config, koin, bootInputs.history.objectHistory, output, control)
             val now = Clock.System.now()
             // Startup-time prune, INSIDE the lock so no other process races the DB: drop dead session/setup-token
             // rows that accumulate in the insert/update-only tables. Once at boot, never per-write (write amplification).
@@ -275,7 +264,11 @@ private fun runOwnedServer(
             // §B2 startup ordering, no unwatched window: the watchers register BEFORE the first rebuild.
             // Events arriving while the initial build is in flight coalesce into at most one follow-up
             // rebuild via the scheduler's single-flight dirty flag.
-            val scheduler = RebuildScheduler(rebuild = { builder.rebuild() }, alarm = ExecutorAlarm())
+            val scheduler = resources.construct("rebuild scheduler") {
+                control.createScheduler(builder).also {
+                    resources.own(ServerResourcePhase.SCHEDULER, it) { scheduler -> scheduler.close() }
+                }
+            }
             // ONE watcher per AVAILABLE root, all feeding the ONE debounced scheduler. The scheduler stays root-BLIND
             // and needs no change: a rebuild is a whole-corpus pass, so a vanished root's queued events are harmless
             // (the next pass's probe skips it), and the root on each closure is carried for LOGGING only. A root that
@@ -312,19 +305,27 @@ private fun runOwnedServer(
                     // an `rm` between them and two scans with an unmounted submount between them are the same pair of
                     // scans, and only a watcher can tell them apart.
                     epochs.observing(root.name)
-                    stores[root.name].watch(
-                        onChange = { scheduler.schedule() },
-                        onFailure = { failure ->
-                            logger.error(failure) { "the watcher for root '${root.name}' died; marking it unavailable" }
-                            availability.markUnavailable(root.name, UnavailableCause.WATCHER_FAILED)
-                        },
-                        onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
-                        onBreak = { cause -> epochs.broke(root.name, cause) },
-                    )
+                    resources.construct("watcher for ${root.name}") {
+                        stores[root.name].watch(
+                            onChange = { scheduler.schedule() },
+                            onFailure = { failure ->
+                                logger.error(failure) { "the watcher for root '${root.name}' died; marking it unavailable" }
+                                availability.markUnavailable(root.name, UnavailableCause.WATCHER_FAILED)
+                            },
+                            onCoverage = { coverage -> convergence.record(root.name, whole = coverage == WatchCoverage.WHOLE) },
+                            onBreak = { cause -> epochs.broke(root.name, cause) },
+                        ).also { watcher -> resources.own(ServerResourcePhase.WATCHERS, watcher, control.closeWatcher) }
+                            .also { watcher -> control.onWatcherAcquired(root.name, watcher) }
+                    }
                 }
             val routeContext = koin.get<com.plainbase.frameworks.ktor.RouteContext>()
             control.onRuntimeContext(routeContext)
-            val server = KtorServer(config, routeContext)
+            val server = resources.construct("HTTP server") {
+                control.createHttpServer(config, routeContext).also { server ->
+                    resources.own(ServerResourcePhase.HTTP, server, control.closeHttp)
+                    control.onHttpAcquired(server)
+                }
+            }
             // Plainbase's hook and the normal-return `finally` both invoke this teardown. Ktor registers a separate
             // engine hook that stops its engine; the shared Plainbase resource closers converge if those paths race.
             //
@@ -337,36 +338,19 @@ private fun runOwnedServer(
             // guessed - because the teardown budget is their sum. A budget under it would not bound these steps, it
             // would cut the slowest of them short, and the slowest is the final DR bundle ship.
             val activeShutdown = GracefulShutdown(
-                buildList {
-                    add(GracefulShutdown.Step("http server", KtorServer.STOP_BOUND_MILLIS) { server.stop() })
-                    add(
-                        GracefulShutdown.Step("watchers", watchers.size * ContentStore.WATCH_CLOSE_BOUND_MILLIS) {
-                            // Per-root failure stays per-root: one root's wedged close must not abandon the others.
-                            watchers.forEach { watcher ->
-                                runCatching { watcher.close() }
-                                    .onFailure { logger.warn(it) { "closing a root watcher failed; closing the rest" } }
-                            }
-                        },
-                    )
-                    add(GracefulShutdown.Step("rebuild scheduler", ExecutorAlarm.CLOSE_BOUND_MILLIS) { scheduler.close() })
-                    if (config.storage.backend == StorageBackend.OBJECT) {
-                        // Same `git.enabled` guard as the boot-side wiring, so a git-disabled object boot never
-                        // constructs GitBundleDr here either (the R9 lazy-wiring discipline).
-                        if (config.git.enabled == true) {
-                            add(GracefulShutdown.Step("git bundle DR", GitBundleDr.CLOSE_BOUND_MILLIS) { koin.get<GitBundleDr>().close() })
-                        }
-                        add(GracefulShutdown.Step("object store transport") { objectClose?.close() })
-                    }
-                    add(GracefulShutdown.Step("search database") { searchClose?.close() })
-                    add(GracefulShutdown.Step("app database") { driverClose?.close() })
-                    add(GracefulShutdown.Step("Koin context") { contextClose.close() })
-                    add(GracefulShutdown.Step("DATA_DIR lock") { ownedLock.close() })
-                },
+                resources.steps(
+                    mapOf(
+                        ServerResourcePhase.HTTP to KtorServer.STOP_BOUND_MILLIS,
+                        ServerResourcePhase.WATCHERS to watchers.size * ContentStore.WATCH_CLOSE_BOUND_MILLIS,
+                        ServerResourcePhase.SCHEDULER to ExecutorAlarm.CLOSE_BOUND_MILLIS,
+                        ServerResourcePhase.DISASTER_RECOVERY to GitBundleDr.CLOSE_BOUND_MILLIS,
+                    ),
+                ),
             )
             try {
                 // Full scan at startup builds the snapshot (§C4); the rescan route rebuilds on demand. The
                 // rebuild also self-heals the index for any page left dirty by a prior interrupted save.
-                builder.rebuild()
+                control.initialRebuild(builder)
                 // PB-WRITE-1 fix H: write-ahead recovery of a prior interrupted save, after the index is whole
                 // and before serving - drift-skips a page whose on-disk bytes changed since the crash.
                 koin.get<WritePipeline>().reconcileDirtyPages()
@@ -385,19 +369,9 @@ private fun runOwnedServer(
                 activeShutdown.run() // the clean-exit path; a no-op wait if the hook already ran it
                 hook?.let(::removeShutdownHook)
             }
-        } finally {
-            // GracefulShutdown normally ran these steps. This fallback also covers failures before its worker was built,
-            // and every operation is either shared or the existing idempotent lock close.
-            objectClose?.close()
-            searchClose?.close()
-            driverClose?.close()
-            contextClose.close()
-            runCatching { ownedLock.close() }
-                .onFailure { logger.warn(it) { "closing DATA_DIR lock failed" } }
         }
     } finally {
-        // Config/root-gate refusals happen before the lock-region finally exists; close the owned context only.
-        contextClose.close()
+        resources.close()
     }
 }
 
@@ -490,6 +464,7 @@ private fun hydrateObjectMode(
     koin: Koin,
     objectHistory: DeferredObjectHistory,
     output: CommandOutput,
+    control: ServerRunControl,
 ) {
     if (config.storage.backend != StorageBackend.OBJECT) return
 
@@ -502,16 +477,21 @@ private fun hydrateObjectMode(
         when (config.git.enabled) {
             true -> {
                 val bundleDr = koin.get<GitBundleDr>()
-                objectHistory.arm(
+                control.armObjectHistory(
+                    objectHistory,
                     ObjectHistoryCallbacks(
                         repoPath = objectStore.mirror::resolveRepoRelativePath,
                         onCommit = bundleDr::onCommitAsync,
                     ),
                 )
+                control.afterDrArm(bundleDr)
                 objectHistory.requireReady()
-                val restored = bundleDr.restore()
-                objectStore.hydrate(strict = restored.isRestored)
-                bundleDr.reconcileBootCommit(restored)
+                val restored = control.restoreBundle(bundleDr)
+                control.afterDrRestore(bundleDr)
+                control.hydrateObject(objectStore, restored.isRestored)
+                control.afterObjectHydrate(objectStore)
+                control.reconcileBundle(bundleDr, restored)
+                control.afterDrReconcile(bundleDr)
             }
 
             false, null -> objectStore.hydrate()
@@ -700,19 +680,21 @@ fun bootGateFor(config: PlainbaseConfig): BootGate {
     }
     val openers = ServerOpeners()
     val inputs = prepareRootBootInputs(config, openers.openLocal)
-    val app = koinApplication {
-        modules(
-            module { single { config } },
-            createContentModule(config, inputs, openers.openObject),
-            createHistoryModule(config, inputs.history),
-        )
+    val resources = ServerResourceOwner()
+    val app = resources.construct("Koin context") {
+        koinApplication().also { resources.own(ServerResourcePhase.KOIN_CONTEXT, it) { application -> application.close() } }
     }
     return try {
+        app.modules(
+            module { single { config } },
+            createContentModule(config, inputs, openers.openObject, { it.close() }, resources),
+            createHistoryModule(config, inputs.history, resources),
+        )
         val epoch = app.koin.get<ObservationEpoch>()
         inputs.signals.arm(epoch::broke)
         evaluateBootGate(config, inputs.registry, inputs.probes)
     } finally {
-        app.close()
+        resources.close()
     }
 }
 
