@@ -6,14 +6,21 @@ import java.util.concurrent.TimeUnit
 /** Runs required completion waits through interrupts and restores the caller's flag once at the boundary. */
 internal class CompletionWait private constructor(
     private var interrupted: Boolean,
+    private val onInterrupt: () -> Unit,
 ) {
+
+    private fun rememberObservedInterrupt() {
+        interrupted = true
+        onInterrupt()
+    }
+
     fun captureCurrentInterrupt() {
-        if (Thread.interrupted()) interrupted = true
+        if (Thread.interrupted()) rememberObservedInterrupt()
     }
 
     /** Remembers an interrupt already consumed by a blocking API such as Object.wait. */
     fun rememberInterrupt() {
-        interrupted = true
+        rememberObservedInterrupt()
     }
 
     fun awaitForever(
@@ -25,7 +32,7 @@ internal class CompletionWait private constructor(
             try {
                 await(WAIT_SLICE_MILLIS)
             } catch (_: InterruptedException) {
-                interrupted = true
+                rememberObservedInterrupt()
             }
             onTick()
         }
@@ -36,14 +43,16 @@ internal class CompletionWait private constructor(
         await: (Long) -> Unit,
         completed: () -> Boolean,
         onTick: () -> Unit = {},
+        waitSliceMillis: Long = WAIT_SLICE_MILLIS,
     ): Boolean {
+        require(waitSliceMillis > 0L) { "waitSliceMillis must be positive" }
         while (!completed()) {
             val remainingNanos = deadlineNanos - System.nanoTime()
             if (remainingNanos <= 0L) return false
             try {
-                await(minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(WAIT_SLICE_MILLIS)))
+                await(minOf(remainingNanos, TimeUnit.MILLISECONDS.toNanos(waitSliceMillis)))
             } catch (_: InterruptedException) {
-                interrupted = true
+                rememberObservedInterrupt()
             }
             onTick()
         }
@@ -57,8 +66,13 @@ internal class CompletionWait private constructor(
     companion object {
         private const val WAIT_SLICE_MILLIS = 100L
 
-        inline fun <T> run(block: CompletionWait.() -> T): T {
-            val wait = CompletionWait(Thread.interrupted())
+    inline fun <T> run(
+            noinline onInterrupt: () -> Unit = {},
+            block: CompletionWait.() -> T,
+        ): T {
+            val initiallyInterrupted = Thread.interrupted()
+            val wait = CompletionWait(initiallyInterrupted, onInterrupt)
+            if (initiallyInterrupted) onInterrupt()
             return try {
                 wait.block()
             } finally {
