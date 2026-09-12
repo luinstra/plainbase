@@ -133,7 +133,7 @@ internal fun createContentModule(
                 resourceOwner.own(ServerResourcePhase.OBJECT_TRANSPORT, store, closeObject)
             }
         }
-    } onClose { store ->
+    } onClose {
         resourceOwner.drainServices()
     }
     // Backend selection aliases the selected concrete adapter; the other backend remains unconstructed.

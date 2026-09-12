@@ -50,7 +50,7 @@ internal fun createRepositoryModule(
             }
         }
     }
-    driverDefinition onClose { driver ->
+    driverDefinition onClose {
         resourceOwner.drainServices()
     }
     single { DatabaseFactory.createDatabase(get()) }

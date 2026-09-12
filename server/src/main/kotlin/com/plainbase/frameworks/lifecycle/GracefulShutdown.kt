@@ -29,8 +29,6 @@ import kotlin.concurrent.thread
  */
 internal class GracefulShutdown(
     private val steps: List<Step>,
-    /** The total forecast, derived from the steps' collaborator forecasts for diagnostics. */
-    val budgetMillis: Long = steps.sumOf { it.boundMillis },
     /** When to say a teardown is taking unusually long; the wait continues until completion. */
     private val warnAfterMillis: Long = WARN_AFTER_MILLIS,
     private val warningState: CleanupWarningState = CleanupWarningState(warnAfterMillis),

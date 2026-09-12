@@ -66,7 +66,7 @@ internal class CompletionWait private constructor(
     companion object {
         private const val WAIT_SLICE_MILLIS = 100L
 
-    inline fun <T> run(
+        inline fun <T> run(
             noinline onInterrupt: () -> Unit = {},
             block: CompletionWait.() -> T,
         ): T {
@@ -99,7 +99,6 @@ internal class CleanupWarningState(
     private data class DueWarning(val deadlineNanos: Long, val message: String)
 
     private val lock = Any()
-    private val logger = KotlinLogging.logger {}
     private var configured = emptyList<Forecast>()
     private var started = false
     private var completed = false
@@ -213,6 +212,7 @@ internal class CleanupWarningState(
     private fun millisDeadline(from: Long, millis: Long): Long = saturatingAdd(from, millisToNanos(millis))
 
     companion object {
+        private val logger = KotlinLogging.logger {}
         private const val NANOS_PER_MILLISECOND = 1_000_000L
         const val CONSTRUCTION_WAIT_FORECAST_MILLIS = 5_000L
         const val WARN_AFTER_MILLIS = 8_000L

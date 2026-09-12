@@ -1,11 +1,7 @@
 package com.plainbase.frameworks.lifecycle
 
-import com.plainbase.frameworks.git.GitBundleDr
-import com.plainbase.frameworks.ktor.KtorServer
-import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactly
-import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -99,25 +95,6 @@ class GracefulShutdownTest : FunSpec({
         ran.toList() shouldContainExactly listOf("git bundle DR", "lock")
     }
 
-    test("the budget is DERIVED from the steps' own forecasts - it covers what it describes") {
-        // The bug: a FIXED 25s budget in front of a 30s executor grace (twice over) and a bundle ship forecast only
-        // by a 10-minute transfer timeout. On expiry run() returned, the hook thread returned, and the JVM HALTED -
-        // killing a live DR ship mid-upload, which is the precise loss this class exists to prevent.
-        val steps = listOf(
-            GracefulShutdown.Step("http server", KtorServer.STOP_BOUND_MILLIS) {},
-            GracefulShutdown.Step("rebuild scheduler", ExecutorAlarm.CLOSE_BOUND_MILLIS) {},
-            GracefulShutdown.Step("git bundle DR", GitBundleDr.CLOSE_BOUND_MILLIS) {},
-            GracefulShutdown.Step("DATA_DIR lock") {},
-        )
-
-        val budget = GracefulShutdown(steps).budgetMillis
-
-        budget shouldBe steps.sumOf { it.boundMillis }
-        steps.forEach { budget shouldBeGreaterThanOrEqual it.boundMillis }
-        // ...and the old fixed number survives only as the advisory line, which is now strictly inside the forecast.
-        budget shouldBeGreaterThan GracefulShutdown.WARN_AFTER_MILLIS
-    }
-
     test("a slow-but-LIVE step is WARNED about, never cut - its successors still run") {
         // The bug's behavioral half: the warn threshold used to BE the deadline, so a slow (not wedged) step lost
         // the steps behind it - the DR bundle ship, and the lock release after it.
@@ -148,7 +125,7 @@ class GracefulShutdownTest : FunSpec({
             release.countDown()
         }
         val startedAt = System.nanoTime()
-        GracefulShutdown(steps, budgetMillis = 50).run()
+        GracefulShutdown(steps).run()
         val elapsed = (System.nanoTime() - startedAt) / 1_000_000
         releaser.join(5_000)
 
