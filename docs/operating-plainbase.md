@@ -603,16 +603,19 @@ calls, close content watchers, drain rebuild/maintenance work, make the final ob
 enabled, close transports and databases, then release the `DATA_DIR` lock. Dependent closes must not release
 that lock while an admitted write is still completing.
 
-There is a small signal window before the runtime hook has been installed. A signal in that window has no
-Plainbase shutdown acknowledgement; the supervisor must rely on its process policy and may need to retry or
-restart. After the hook is active, the shutdown-rejection response (`503`) is additive: it prevents new work
-from entering the closing system while existing admitted work follows the ordered drain.
+Before the runtime hook has been installed, startup may still be doing boot preparation, hydrate/restore/reconcile
+work, synchronous DR-bundle shipping, or the initial rebuild; see [Object-storage backend](#object-storage-backend-storagebackendobject)
+for the slow-upload log cue. A signal in that window has no Plainbase shutdown acknowledgement; the supervisor
+must rely on its process policy and may need to retry or restart. After the hook is active, the shutdown-rejection
+response (`503`) is additive: it prevents new work from entering the closing system while existing admitted work
+follows the ordered drain. The `shutting down: ...` and `shutdown complete in ...` stderr lines are the start and
+completion cues; completion is the positive acknowledgement, and missing logs alone do not prove SIGKILL.
 
 The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. Those
 values are inputs to the HTTP phase, not a five-second total shutdown bound. The later final-call drain,
 watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transport close, ordinary I/O and
 lock acquisition can each take longer. Completion waits can also remain pending indefinitely when a collaborator
-or a shared writer never completes. The 8-second `WARN` is an operator diagnostic from `CompletionWait`; it is
+or a shared writer never completes. The 8-second `WARN` is a shutdown diagnostic; it is
 not a supervisor deadline and does not force Plainbase to return.
 
 ### Derive the supervisor grace from the workload
@@ -644,15 +647,18 @@ once inside the operation that incurs them. With one chosen 500 ms margin, `G_ex
 rounded once to a 2-second example supervisor setting. This is one ordinary local observation, not a product
 default, capacity guarantee, or maximum; do not add the 500 ms margin again outside `G`. Remote OBJECT capacity
 inputs remain provisional because endpoint, bundle-size, contention, cadence, ship, final-Git, and upload capacity
-were not measured here.
+were not measured here. See the [historical shutdown and Git measurements](reports/server-shutdown-and-git-measurements.md)
+for the source, runtime, method, values, and local raw-evidence custody.
 
 The supervisor setting should use the derived value with the stated margin and rounding. Docker's Linux default is **10 seconds**;
 Kubernetes' default `terminationGracePeriodSeconds` is **30 seconds** and includes `preStop`; both are often
 too short. Docker Compose's `stop_grace_period` and `stop_signal` apply to the standalone Compose file actually
 started. The repository's root `docker-compose.yml` (local development) and
 `deploy/proxy/docker-compose.proxy.yml` (deploy/proxy) are separate stacks, not merged overlays; configure and
-measure the one you run. Compose `init: true` can forward signals and reap child processes, but it is a
-process-hygiene aid, not a Plainbase correctness requirement.
+measure the one you run. Compose `init: true` and Docker's `--init` option can forward signals and reap child
+processes, but they are process-hygiene aids, not Plainbase correctness requirements. A custom image or Kubernetes
+deployment should use a PID 1 that forwards signals and reaps children; Kubernetes has no universal Docker-style
+init flag, and this guidance is neither a grace-period guarantee nor a new correctness prerequisite.
 
 For Kubernetes, set `terminationGracePeriodSeconds` from the measured workload and account for any `preStop`
 time inside that same window. For systemd, set `TimeoutStopSec` from the same calculation: it covers the
@@ -824,16 +830,18 @@ sized the hydrate pipeline (64 concurrent fetches; chunks close at a 64 MiB decl
 256 keys, whichever comes first, and the fetch loop closes a chunk early once ACTUALLY received bytes
 reach the same budget).
 
-### Git-write stall bound
+### Git command deadlines and completion
 
-Every git invocation Plainbase makes funnels through one executor with a bounded wait: **a 30 s
-timeout, plus bounded per-stream (stdin/stdout/stderr) drain grace** after a force-kill. There is
-no single exact total to quote, because one save issues roughly a dozen such invocations in
-sequence (capturing HEAD, seeding a temp index, hashing the blob, updating it, writing the tree,
-creating the commit, updating the ref, and a couple more) - so a wedged repo (a stuck filesystem, a
-hung `git` hook shimmed in from outside Plainbase's pinned config, etc.) can stall a single save
-for **a small multiple of the per-invocation bound**, not one fixed number of seconds. There's no
-circuit breaker today - a trip-after-N-failures breaker is a v0.1.x candidate.
+Ordinary Git commands Plainbase makes use the executor's **30 s command deadline** by default. DR bundle creation
+and restore fetch explicitly use a **600 s** per-invocation override because they are size-dependent operations.
+Deadline expiry records failure and initiates termination; byte caps and bounded observation slices do not impose
+a helper-completion deadline. The process and its helpers can remain pending indefinitely, retaining the writer
+and its locks and blocking subsequent saves. A supervisor owns the external whole-tree termination boundary.
+There is no single exact total to quote because one save issues roughly a dozen invocations in sequence (capturing
+HEAD, seeding a temp index, hashing the blob, updating it, writing the tree, creating the commit, updating the
+ref, and a couple more). A wedged repository can therefore keep a save pending until its collaborators finish or
+the supervisor terminates the process. The historical Git invocation rows and their source/runtime limits are
+summarized in the [shutdown and Git measurements report](reports/server-shutdown-and-git-measurements.md).
 
 ## Operational logs and one-shot command output
 
