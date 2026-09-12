@@ -398,7 +398,8 @@ hasn't reached the bucket yet. Losing `DATA_DIR` is then recoverable past
 just content: the next boot fetches the bundle, restores `.git` from it, and reconciles any drift
 between the bundle's tip and the bucket's current state into one commit
 (`reconcile: bucket state at boot`). That reconcile's refreshed bundle is shipped SYNCHRONOUSLY on the boot
-thread (an up-to-10-minute streaming PUT) BEFORE the server starts serving, so on a large-history restore
+thread (bundle creation followed by a streaming PUT with a 10-minute request timeout) BEFORE the server starts serving,
+so on a large-history restore
 the boot can pause for that upload; the log line "shipping the refreshed DR bundle synchronously before
 serving (a slow upload here is not a hang)" marks exactly that window - do not mistake it for a hang.
 
@@ -411,27 +412,29 @@ only the commit granularity and that window's human attribution are. The gracefu
 window can get.
 
 The graceful-shutdown flush is attempted in the ordered shutdown path: Plainbase drains any in-flight cadence
-ship and then attempts one final bundle before closing the object-store transport. A full `bundle create` +
-streaming PUT can take up to the same ~10-minute diagnostic budget as any other ship, so if your orchestrator's
-termination grace period (for example Kubernetes `terminationGracePeriodSeconds` or a Docker `stop` timeout)
-expires first, the process can be killed mid-flush and that final window's commits fall into the same
-reconcile-on-next-boot class above (content is still safe in the bucket). The process does not promise to return
-before that supervisor boundary; size the supervisor from measured workload terms and retain forced termination as
-the final boundary.
+ship and then attempts one final bundle before closing the object-store transport. Final shipping runs `bundle create`
+and the streaming PUT sequentially, with a 600-second Git command deadline and a 600-second HTTP request timeout.
+Their configured allowances total 20 minutes; the DR close forecast also includes two 30-second drain periods, for
+21 minutes. This forecast is not a completion bound: admitted work and Git completion may outlive it, and lock waits,
+file hashing and the other shutdown terms still need workload-specific allowance. If your orchestrator's termination
+grace period (for example Kubernetes `terminationGracePeriodSeconds` or a Docker `stop` timeout) expires first, the
+process can be killed mid-flush and that final window's commits fall into the same reconcile-on-next-boot class above
+(content is still safe in the bucket). The process does not promise to return before that supervisor boundary; size
+the supervisor from measured workload terms and retain forced termination as the final boundary.
 
 **The bundle-growth plateau.** Every ship is a FULL `bundle create --all` (never incremental) followed by
-a bundle PUT; every restore is a bundle GET followed by a whole-bundle `fetch`. All FOUR of these
-size-dependent bundle legs now share a DR-sized ~10-minute bound: the two NETWORK transfers stream to/from a
+a bundle PUT; every restore is a bundle GET followed by a whole-bundle `fetch`. Each of these FOUR
+size-dependent bundle legs has its own deadline/request timeout: the two NETWORK transfers stream to/from a
 file (never heap-buffered, so no OOM on a small replacement host) at `BUNDLE_TRANSFER_TIMEOUT_MILLIS`, and
-the two GIT calls (`bundle create`, the restore `fetch`) run under a matching `BUNDLE_GIT_TIMEOUT_SECONDS`
+the two GIT calls (`bundle create`, the restore `fetch`) run under their own `BUNDLE_GIT_TIMEOUT_SECONDS`
 per-invocation override rather than the default ~30s hot-path git timeout. That is fine at the roughly-1k-page
 contract this design targets, but the bundle only grows (history is never pruned), so past *some*
-corpus/history size one of those four legs eventually starts exceeding the ~10-minute bound and every ship or
-restore fails there. A ship failure alone is silent in the sense that content keeps serving fine - the only
-signal is the escalating WARN-then-ERROR log (`SHIP_FAILURE_ESCALATION_THRESHOLD` consecutive failures)
-telling you the DR bundle has gone stale and stayed stale. There is no separate metric or alert for this:
-watch that log line if your corpus/history is approaching a size where a full `bundle create`/`fetch` or its
-network transfer could plausibly run past ten minutes.
+corpus/history size one of those four legs eventually starts exceeding its own 10-minute deadline/request timeout
+and every ship or restore fails there. Deadline expiry does not promise prompt Git completion. A ship failure alone
+is silent in the sense that content keeps serving fine - the only signal is the escalating WARN-then-ERROR log
+(`SHIP_FAILURE_ESCALATION_THRESHOLD` consecutive failures) telling you the DR bundle has gone stale and stayed stale.
+There is no separate metric or alert for this: watch that log line if your corpus/history is approaching a size where
+a full `bundle create`/`fetch` or its network transfer could plausibly run past ten minutes.
 
 A corrupt or partially-restored local `.git` (a process killed mid-restore, a manually-deleted `.git`
 subpath) self-heals the same way ADR-0004 treats every other piece of `DATA_DIR`: git fails loud in a way
@@ -613,12 +616,13 @@ response (`503`) is additive: it prevents new work from entering the closing sys
 follows the ordered drain. The `shutting down: ...` and `shutdown complete in ...` stderr lines are the start and
 completion cues; completion is the positive acknowledgement, and missing logs alone do not prove SIGKILL.
 
-The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. Those
-values are inputs to the HTTP phase, not a five-second total shutdown bound. The later final-call drain,
-watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transport close, ordinary I/O and
-lock acquisition can each take longer. Completion waits can also remain pending indefinitely when a collaborator
-or a shared writer never completes. The 8-second `WARN` is a shutdown diagnostic; it is
-not a supervisor deadline and does not force Plainbase to return.
+The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. The configured
+5-second CIO wait is followed by a configured 5-second application-disposal wait, so the sequential configured-wait
+forecast is 10 seconds; actual completion can outlast it. These values are inputs to the HTTP phase, not a completion
+bound. The later final-call drain, watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transport
+close, ordinary I/O and lock acquisition can each take longer. Completion waits can also remain pending indefinitely
+when a collaborator or a shared writer never completes. The 8-second `WARN` is a shutdown diagnostic; it is not a
+supervisor deadline and does not force Plainbase to return.
 
 The completion duration runs from the first owner drain through completed resource cleanup; it excludes signal
 delivery and subsequent process exit.
@@ -837,8 +841,9 @@ reach the same budget).
 
 ### Git command deadlines and completion
 
-Ordinary Git commands Plainbase makes use the executor's **30 s command deadline** by default. DR bundle creation
-and restore fetch explicitly use a **600 s** per-invocation override because they are size-dependent operations.
+Ordinary Git commands that Plainbase makes use of, including foreground maintenance and GC, use the executor's **30 s
+command deadline** by default. Only DR bundle creation and restore fetch explicitly use a **600 s** per-invocation
+override because they are size-dependent operations.
 Deadline expiry records failure and initiates termination; byte caps and bounded observation slices do not impose
 a helper-completion deadline. The process and its helpers can remain pending indefinitely, retaining the writer
 and its locks and blocking subsequent saves. A supervisor owns the external whole-tree termination boundary.

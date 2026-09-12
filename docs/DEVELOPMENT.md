@@ -25,10 +25,13 @@ The Linux-only PID1 regression gates are separate from ordinary test discovery:
 ./gradlew :server:gitZombieForcedTimeoutPid1
 ```
 
+CI runs the JVM and native positive tasks; the forced-timeout task verifies watchdog escalation and cleanup for checkpoint acceptance.
+
 They require Linux permissions/capabilities to create the privileged PID, mount, and network namespaces used by
 the launcher. Separately, they require noninteractive `sudo -n` and trusted executable `sudo`; `unshare` and
 `setpriv` are from util-linux, while `timeout` and `id` are from coreutils, all in `/usr/bin` or `/bin`. No
-separate `kill` helper is a prerequisite. The JVM gate uses Java 21; the native gate uses the
+separate `kill` helper is a prerequisite. The fixtures also require executable `/bin/sh` and `sleep` with
+fractional-second support on `PATH`. The JVM gate uses Java 21; the native gate uses the
 pinned GraalVM toolchain below. CI gives its JVM and native PID1 steps a five-minute ceiling. Run reports and retained
 evidence are under `server/build/reports/g3z/jvm/<run-id>/`, `server/build/reports/g3z/native/<run-id>/`, or
 `server/build/reports/g3z/forced/<run-id>/`,
