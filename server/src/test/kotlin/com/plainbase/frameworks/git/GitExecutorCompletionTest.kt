@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 
-/** Checkpoint 03b decision, ownership, and modeled-liveness controls for [GitExecutor]. */
+/** Decision, ownership, and modeled-liveness controls for [GitExecutor]. */
 class GitExecutorCompletionTest : FunSpec({
 
     test("modeled OS identity retains same-PID handles and blocks completion on a later live identity") {
@@ -511,7 +511,7 @@ class GitExecutorCompletionTest : FunSpec({
                 caller.isAlive.shouldBeFalse()
                 failure.get() shouldBe null
                 requireNotNull(result.get()).exitCode shouldBe -1
-                requireNotNull(result.get()).stderr shouldContain "interrupted and was force-killed"
+                requireNotNull(result.get()).stderr shouldContain "interrupted while completing the invocation"
                 interruptRestored.get().shouldBeTrue()
             } finally {
                 released.set(true)
@@ -613,6 +613,64 @@ class GitExecutorCompletionTest : FunSpec({
                 fixture.assertRecordedProcessesStopped()
             } finally {
                 runCatching { Files.writeString(fixture.home.resolve("start"), "start\n") }
+                if (caller.isAlive) {
+                    caller.interrupt()
+                    caller.join(10_000)
+                }
+            }
+        }
+    }
+
+    test("a nonzero git helper failure retains drained stderr and completed work") {
+        val completedHelpers = ConcurrentLinkedQueue<Thread>()
+        val observer = object : GitInvocationCompletionObserver {
+            override fun processComplete(observation: GitProcessObservation): Boolean = !observation.handle.isAlive
+
+            override fun helperComplete(helper: Thread): Boolean {
+                val complete = !helper.isAlive
+                if (complete) completedHelpers += helper
+                return complete
+            }
+        }
+        withOwnedFakeGit(
+            "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\n" +
+                "while [ ! -f \"${'$'}HOME/release-parent\" ]; do sleep 0.01; done\n" +
+                "printf 'distinctive helper failure\\n' >&2\nexit 23\n",
+        ) { fixture ->
+            val parentRelease = fixture.home.resolve("release-parent")
+            fixture.releaseOnCleanup { Files.writeString(parentRelease, "release\n") }
+            val result = AtomicReference<GitResult?>()
+            val failure = AtomicReference<Throwable?>()
+            val caller = thread(start = false, isDaemon = true, name = "retained-stderr-caller") {
+                runCatching {
+                    result.set(
+                        GitExecutor(
+                            fixture.root,
+                            fixture.home,
+                            timeoutSeconds = 2,
+                            gitBinary = fixture.binary,
+                            completionObserver = observer,
+                        ).run(listOf("hash-object", "--stdin"), stdin = ByteArray(4 * 1024 * 1024) { 'x'.code.toByte() }),
+                    )
+                }.onFailure(failure::set)
+            }
+            fixture.trackWorker(caller)
+            caller.start()
+            val parent = fixture.recordPid("parent.pid")
+            parent.isAlive.shouldBeTrue()
+            Files.writeString(parentRelease, "release\n")
+            try {
+                caller.join(10_000)
+                caller.isAlive.shouldBeFalse()
+                failure.get() shouldBe null
+                val completed = requireNotNull(result.get())
+                completed.exitCode shouldBe -1
+                completed.stderr shouldContain "helper failed"
+                completed.stderr shouldContain "distinctive helper failure"
+                parent.isAlive.shouldBeFalse()
+                completedHelpers.toSet().size shouldBe 3
+                completedHelpers.toSet().all { !it.isAlive }.shouldBeTrue()
+            } finally {
                 if (caller.isAlive) {
                     caller.interrupt()
                     caller.join(10_000)
@@ -870,7 +928,7 @@ class GitExecutorCompletionTest : FunSpec({
             caller.join(10_000)
             caller.isAlive.shouldBeFalse()
             requireNotNull(result.get()).exitCode shouldBe -1
-            requireNotNull(result.get()).stderr shouldContain "interrupted and was force-killed"
+            requireNotNull(result.get()).stderr shouldContain "interrupted while completing the invocation"
             interruptRestored.get().shouldBeTrue()
         }
     }
@@ -986,7 +1044,7 @@ private fun runInterruptionBeforeHelperSetupFailureCase() {
             helperCreations.get() shouldBe 2
             failure.get() shouldBe null
             requireNotNull(result.get()).exitCode shouldBe -1
-            requireNotNull(result.get()).stderr shouldContain "interrupted and was force-killed"
+            requireNotNull(result.get()).stderr shouldContain "interrupted while completing the invocation"
             interruptRestored.get().shouldBeTrue()
             fixture.assertRecordedProcessesStopped()
         } finally {
@@ -1680,7 +1738,7 @@ private class GitPendingWarningAppender(
     override fun append(event: ILoggingEvent) {
         if (event.level == Level.WARN &&
             event.threadName == expectedThreadName &&
-            event.formattedMessage.contains("git run completion pending")
+            event.formattedMessage.contains("git status completion pending")
         ) {
             events += event
             onPendingWarning()

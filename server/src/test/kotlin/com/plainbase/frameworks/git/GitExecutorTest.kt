@@ -40,6 +40,14 @@ class GitExecutorTest : FunSpec({
         }
     }
 
+    test("operation diagnostics use only safe Git categories") {
+        gitOperationCategory(listOf("hash-object", "--stdin")) shouldBe "hash-object"
+        gitOperationCategory(listOf("-c", "core.useReplaceRefs=false", "rev-parse", "HEAD")) shouldBe "rev-parse"
+        gitOperationCategory(listOf("-c", "fetch.fsckObjects=true", "fetch", "origin")) shouldBe "fetch"
+        gitOperationCategory(listOf("hostile", "--message=secret payload")) shouldBe "run"
+        gitOperationCategory(listOf("-c", "hostile.config=secret", "gc", "--prune=now")) shouldBe "run"
+    }
+
     test("the environment is hermetic: pinned HOME + nulled config + no-prompt (ambient HOME cannot leak)") {
         withFakeGit("#!/bin/sh\nenv\n") { root, home, git ->
             val lines = GitExecutor(workTree = root, home = home, gitBinary = git).run(listOf("write-tree"))
@@ -227,7 +235,7 @@ class GitExecutorTest : FunSpec({
                 val interruptedResult = result.get()
                 interruptedResult shouldNotBe null
                 interruptedResult!!.exitCode shouldBe -1
-                interruptedResult.stderr shouldContain "interrupted and was force-killed"
+                interruptedResult.stderr shouldContain "interrupted while completing the invocation"
                 interruptRestored.get() shouldBe true
                 parentHandle.isAlive shouldBe false
                 childHandle.isAlive shouldBe false

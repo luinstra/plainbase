@@ -185,7 +185,7 @@ class GitBundleDrActualCompletionTest : FunSpec({
                 Files.readAllBytes(bundlePath).contentEquals(bundleBytes).shouldBeTrue()
                 fixture.hybrid.fake.putCount shouldBe 0
                 warningAppender.pendingWarnings().single().formattedMessage.let { message ->
-                    message shouldContain "git run completion pending"
+                    message shouldContain "git bundle completion pending"
                     message shouldContain "cause=INTERRUPTION"
                     message shouldContain SELECTED_HELPER_NAME
                 }
@@ -235,7 +235,7 @@ private class GitCompletionWarningAppender(
         events += event
         if (event.level == Level.WARN &&
             event.threadName == expectedThreadName &&
-            event.formattedMessage.contains("git run completion pending")
+            event.formattedMessage.contains("git bundle completion pending")
         ) {
             onPendingWarning()
         }
@@ -244,7 +244,7 @@ private class GitCompletionWarningAppender(
     fun pendingWarnings(): List<ILoggingEvent> = events.filter { event ->
         event.level == Level.WARN &&
             event.threadName == expectedThreadName &&
-            event.formattedMessage.contains("git run completion pending")
+            event.formattedMessage.contains("git bundle completion pending")
     }
 }
 

@@ -129,6 +129,48 @@ internal enum class GitAbnormalCause {
     HELPER_FAILURE,
 }
 
+private val SAFE_GIT_OPERATION_CATEGORIES = setOf(
+    "bundle",
+    "commit-tree",
+    "diff",
+    "fetch",
+    "gc",
+    "hash-object",
+    "init",
+    "log",
+    "ls-tree",
+    "maintenance",
+    "merge-base",
+    "read-tree",
+    "reset",
+    "rev-parse",
+    "status",
+    "symbolic-ref",
+    "update-index",
+    "update-ref",
+    "write-tree",
+)
+
+private val KNOWN_LEADING_GIT_CONFIGS = setOf(
+    listOf("-c", "core.useReplaceRefs=false"),
+    listOf("-c", "fetch.fsckObjects=true"),
+)
+
+/** Returns a fixed diagnostic category without echoing untrusted Git arguments. */
+internal fun gitOperationCategory(args: List<String>): String {
+    val commandIndex =
+        if (
+            KNOWN_LEADING_GIT_CONFIGS.any { prefix ->
+                args.size >= prefix.size && args.subList(0, prefix.size) == prefix
+            }
+        ) {
+            2
+        } else {
+            0
+        }
+    return args.getOrNull(commandIndex)?.takeIf { it in SAFE_GIT_OPERATION_CATEGORIES } ?: "run"
+}
+
 /** Atomically preserves the first abnormal invocation cause; later cleanup fallout is secondary. */
 internal class GitAbnormalCauseLatch {
     private data class FirstCause(val cause: GitAbnormalCause, val failure: Throwable?)
@@ -269,7 +311,7 @@ class GitExecutor(
             stdin,
             includeWorkTree = true,
             timeoutSeconds = timeoutSecondsOverride ?: this.timeoutSeconds,
-            operation = "run",
+            operation = gitOperationCategory(args),
         )
 
     /** Probes `git --version` without `-C`; it uses the same invocation owner as [run]. */
@@ -659,14 +701,20 @@ class GitExecutor(
             val stdout = stdoutBuffer.toByteArray()
             val cause = causes.cause()
             if (cause != null) {
-                val stderr = when (cause) {
+                val diagnostic = when (cause) {
                     GitAbnormalCause.TIMEOUT -> "git $operation timed out and was force-killed"
-                    GitAbnormalCause.INTERRUPTION -> "git $operation interrupted and was force-killed"
+                    GitAbnormalCause.INTERRUPTION -> "git $operation interrupted while completing the invocation"
                     GitAbnormalCause.OUTPUT_OVERFLOW ->
                         "git $operation output exceeded the in-memory read cap " +
                             "(${maxStdoutBytes / (1024 * 1024)} MiB stdout / ${maxStderrBytes / (1024 * 1024)} MiB stderr) " +
                             "and was force-killed — repo history/diff too large for an in-memory read"
                     GitAbnormalCause.HELPER_FAILURE -> "git $operation helper failed while completing the invocation"
+                }
+                val stderr = if (cause == GitAbnormalCause.HELPER_FAILURE) {
+                    val captured = stderrBuffer.toString(Charsets.UTF_8)
+                    if (captured.isEmpty()) diagnostic else "$diagnostic\n$captured"
+                } else {
+                    diagnostic
                 }
                 causes.failure()?.let { failure -> logger.error(failure) { stderr } } ?: logger.error { stderr }
                 return GitResult(exitCode = -1, stdout = stdout, stderr = stderr)
