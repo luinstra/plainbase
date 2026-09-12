@@ -42,6 +42,7 @@ jobs:
           path: |
             server/build/reports/g3z/jvm/
             server/build/g3z/jvm-preparation/
+            server/build/g3z/jvm-work/
 
       - name: Clean G3z JVM evidence
         if: always() && steps.upload_g3z_jvm_evidence.outcome == 'success'
@@ -239,6 +240,7 @@ jobs:
           path: |
             server/build/reports/g3z/native/
             server/build/g3z/native/
+            server/build/g3z/native-work/
 
       - name: Clean G3z native evidence
         if: always() && steps.upload_g3z_native_evidence.outcome == 'success'

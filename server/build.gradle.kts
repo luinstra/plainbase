@@ -1075,7 +1075,13 @@ data class G3zJUnitXmlCounts(
 
 fun g3zReadJUnitXml(path: File): G3zJUnitXmlCounts {
     require(path.isFile) { "missing G3z XML: ${path.absolutePath}" }
-    val document = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(path)
+    val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+        setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true)
+        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, "")
+        setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+    }
+    val document = factory.newDocumentBuilder().parse(path)
     val suite = document.documentElement
     require(suite.tagName == "testsuite") { "G3z XML root is not testsuite: ${path.absolutePath}" }
     fun count(attribute: String): Long = suite.getAttribute(attribute).toLongOrNull()
