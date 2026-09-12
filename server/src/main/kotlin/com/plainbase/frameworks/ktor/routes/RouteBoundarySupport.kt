@@ -23,7 +23,6 @@ import io.ktor.server.response.respondText
 import io.ktor.util.AttributeKey
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readRemaining
-import kotlinx.coroutines.CancellationException
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 
@@ -36,9 +35,15 @@ import kotlinx.io.readByteArray
 internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? {
     attributes.getOrNull(RECEIVE_BODY_ENTRY_OBSERVER)?.invoke(this)
     val channel: ByteReadChannel = receiveChannel()
+    val declaredLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    return readBodyCapped(channel, limit, declaredLength)
+}
+
+internal class ShortRequestBodyException(message: String) : RuntimeException(message)
+
+internal suspend fun readBodyCapped(channel: ByteReadChannel, limit: Long, declaredLength: Long?): ByteArray? {
     val out = Buffer()
     var count = 0L
-    val declaredLength = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
     while (!channel.isClosedForRead) {
         // Read at most one chunk PAST the limit so an over-cap body aborts before the whole thing is
         // buffered; Content-Length is not trusted for the cap because it can lie.
@@ -53,7 +58,7 @@ internal suspend fun ApplicationCall.receiveBodyCapped(limit: Long): ByteArray? 
     // A shorter body is a canceled/truncated request, not an empty document. The streamed count remains authoritative
     // for the cap; the declared length is used only to reject a premature HTTP message end before any delegate runs.
     if (declaredLength != null && count < declaredLength) {
-        val failure = CancellationException("request body ended before Content-Length ($count/$declaredLength bytes)")
+        val failure = ShortRequestBodyException("request body ended before Content-Length ($count/$declaredLength bytes)")
         channel.cancel(failure)
         throw failure
     }

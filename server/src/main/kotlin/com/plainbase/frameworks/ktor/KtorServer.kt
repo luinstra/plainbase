@@ -7,6 +7,7 @@ import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
 import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.routes.ExtractedPrincipal
 import com.plainbase.frameworks.ktor.routes.RECEIVE_BODY_ENTRY_OBSERVER
+import com.plainbase.frameworks.ktor.routes.ShortRequestBodyException
 import com.plainbase.frameworks.ktor.routes.adminRoute
 import com.plainbase.frameworks.ktor.routes.adminTokenRoutes
 import com.plainbase.frameworks.ktor.routes.adminUserRoutes
@@ -367,6 +368,14 @@ fun Application.plainbaseModule(ctx: RouteContext, secureCookie: Boolean = false
         exception<URLDecodeException> { call, cause ->
             logger.debug(cause) { "rejected undecodable query string ${call.request.local.uri}" }
             call.respondError(HttpStatusCode.BadRequest, ErrorCodes.INVALID_QUERY, malformedQueryMessage(call.request.rawQueryParameters))
+        }
+        exception<ShortRequestBodyException> { call, cause ->
+            logger.debug(cause) { "rejected short request body ${call.request.local.uri}" }
+            call.respondError(
+                HttpStatusCode.BadRequest,
+                ErrorCodes.INVALID_REQUEST_BODY,
+                "Request body is shorter than declared Content-Length",
+            )
         }
         // Uncaught failures still answer in the frozen envelope; the code is an append to the
         // §A4 vocabulary (codes are append-only). Details go to the log, never the wire.

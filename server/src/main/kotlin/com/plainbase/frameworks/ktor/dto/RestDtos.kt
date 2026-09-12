@@ -99,6 +99,9 @@ object ErrorCodes {
     /** 413: a request body exceeding the configured PB-WRITE-1 max body size (the body carries the authoritative max_bytes). */
     const val BODY_TOO_LARGE: String = "body_too_large"
 
+    /** 400: the request body ended before its declared Content-Length. */
+    const val INVALID_REQUEST_BODY: String = "invalid_request_body"
+
     /** 415: a PUT without the accepted text/markdown media type. */
     const val UNSUPPORTED_MEDIA_TYPE: String = "unsupported_media_type"
 
