@@ -261,6 +261,7 @@ private fun readLinuxProcessStat(pid: Long): LinuxProcessStat? {
  *
  * A successful start creates one invocation-local owner. It retains the direct process, every descendant observed while
  * its ancestry is available, and every helper, and it does not release the caller until all retained work is complete.
+ * An unobserved descendant retaining a pipe may keep a helper pending until the external supervisor terminates the process tree.
  * The original monotonic deadline bounds normal completion; timeout, interruption, overflow, or helper failure enters
  * required termination/confirmation and joins, which may outlive that command budget while the obligation is retained.
  */
@@ -384,6 +385,8 @@ class GitExecutor(
         private val helpers = mutableListOf<Thread>()
         private val parentReaped = AtomicBoolean(false)
         private val pendingLogged = AtomicBoolean(false)
+        private val stdoutBuffer = ByteArrayOutputStream()
+        private val stderrBuffer = ByteArrayOutputStream()
 
         init {
             retainProcess(process.toHandle(), "parent")
@@ -725,9 +728,6 @@ class GitExecutor(
                 stderr = stderrBuffer.toString(Charsets.UTF_8),
             )
         }
-
-        private val stdoutBuffer = ByteArrayOutputStream()
-        private val stderrBuffer = ByteArrayOutputStream()
     }
 
     companion object {

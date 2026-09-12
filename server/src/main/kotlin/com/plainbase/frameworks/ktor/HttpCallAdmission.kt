@@ -93,7 +93,7 @@ internal class HttpCallAdmission {
     }
 
     companion object {
-        /** Unique per-server source attribute: no route or plugin can accidentally replace this identity. */
+        /** Shared key for the original Job stored on each call. */
         val ORIGINAL_CALL_JOB_KEY: AttributeKey<Job> = AttributeKey("plainbase.original-cio-call-job")
     }
 }

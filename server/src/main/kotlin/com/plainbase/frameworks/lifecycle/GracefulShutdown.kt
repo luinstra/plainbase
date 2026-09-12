@@ -63,7 +63,9 @@ internal class GracefulShutdown(
      */
     fun run() {
         if (started.compareAndSet(false, true)) {
-            warningStateInitializer?.invoke() ?: run {
+            if (warningStateInitializer != null) {
+                warningStateInitializer.invoke()
+            } else {
                 warningState.configure(steps.map { CleanupWarningState.Forecast(it.name, it.boundMillis) })
                 warningState.start(pendingConstruction = false)
             }
