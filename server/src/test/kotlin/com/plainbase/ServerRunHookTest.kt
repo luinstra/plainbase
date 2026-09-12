@@ -311,7 +311,7 @@ private fun runLocalMeasurement(watchdog: ParentWatchdog) {
         val signalStarted = System.nanoTime()
         child.sendSigterm()
         awaitHeldMarker(shutdownEntered, child, watchdog, "shutdown entry")
-        measurement["signal_to_shutdown_entry_ms"] = elapsedMillis(signalStarted).toString()
+        measurement["signal_to_shutdown_entry_observed_ms"] = elapsedMillis(signalStarted).toString()
         child.awaitExit(SHUTDOWN_DEADLINE_MILLIS)
         awaitHeldMarker(helperCompleted, child, watchdog, "fixture helper completion")
         val helperCompletion = readKeyValue(helperCompleted)

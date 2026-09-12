@@ -52,6 +52,7 @@ object G3zJvmLauncher {
 private fun summaryReport(summary: TestExecutionSummary): String = buildString {
     appendLine("method=com.plainbase.frameworks.git.GitExecutorZombieNativeTest.reparentedZombieCompletesInvocation")
     appendLine("runtime=${System.getProperty("org.graalvm.nativeimage.imagecode") ?: "jvm"}")
+    appendLine("xml=synthesized-from-launcher-summary")
     appendLine("testsFound=${summary.testsFoundCount}")
     appendLine("testsStarted=${summary.testsStartedCount}")
     appendLine("testsSucceeded=${summary.testsSucceededCount}")
