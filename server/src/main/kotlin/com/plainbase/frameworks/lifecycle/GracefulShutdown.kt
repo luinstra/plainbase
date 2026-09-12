@@ -32,8 +32,6 @@ internal class GracefulShutdown(
     /** When to say a teardown is taking unusually long; the wait continues until completion. */
     private val warnAfterMillis: Long = WARN_AFTER_MILLIS,
     private val warningState: CleanupWarningState = CleanupWarningState(warnAfterMillis),
-    private val pendingConstruction: () -> Boolean = { false },
-    private val maintenanceForecastMillis: () -> Long? = { null },
     /** Lets an owner freeze its acquired-entry forecasts at the first drain instead of at step-list creation. */
     private val warningStateInitializer: (() -> Unit)? = null,
     /** The owner already enters and completes phases when its steps execute. */
@@ -67,7 +65,7 @@ internal class GracefulShutdown(
         if (started.compareAndSet(false, true)) {
             warningStateInitializer?.invoke() ?: run {
                 warningState.configure(steps.map { CleanupWarningState.Forecast(it.name, it.boundMillis) })
-                warningState.start(pendingConstruction(), maintenanceForecastMillis())
+                warningState.start(pendingConstruction = false)
             }
             logger.info { "shutting down: ${steps.joinToString(", ") { it.name }}" }
             thread(start = false, name = WORKER_THREAD, block = ::runSteps).also {

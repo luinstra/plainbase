@@ -351,7 +351,6 @@ private fun runOwnedServer(
                     ),
                 ),
                 warningState = resources.warningState,
-                pendingConstruction = resources::hasPendingConstructors,
                 warningStateInitializer = resources::initializeWarningRun,
                 managesWarningPhases = false,
             )
