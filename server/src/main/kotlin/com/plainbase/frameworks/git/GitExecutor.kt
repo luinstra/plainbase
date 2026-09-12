@@ -105,6 +105,23 @@ internal class GitProcessObservation(
     var firstStartTicks: Long? = null
 }
 
+/**
+ * Retains original handles by the runtime's process identity, not by numeric PID. No Linux stat read is needed to
+ * retain an observed handle; supplementary identity evidence remains conservative in the completion observer.
+ */
+internal class GitProcessRetention {
+    private val observations = linkedMapOf<ProcessHandle, GitProcessObservation>()
+
+    fun retain(handle: ProcessHandle, role: String): GitProcessObservation? {
+        val observation = GitProcessObservation(handle, role)
+        return if (observations.putIfAbsent(handle, observation) == null) observation else null
+    }
+
+    fun snapshot(): List<GitProcessObservation> = observations.values.toList()
+
+    fun allComplete(isComplete: (GitProcessObservation) -> Boolean): Boolean = snapshot().all(isComplete)
+}
+
 internal enum class GitAbnormalCause {
     TIMEOUT,
     INTERRUPTION,
@@ -321,10 +338,9 @@ class GitExecutor(
         private val operation: String,
         private val causes: GitAbnormalCauseLatch,
     ) {
-        private val observations = linkedMapOf<Long, GitProcessObservation>()
+        private val observations = GitProcessRetention()
         private val helpers = mutableListOf<Thread>()
         private val parentReaped = AtomicBoolean(false)
-        private val cleanupStarted = AtomicBoolean(false)
         private val pendingLogged = AtomicBoolean(false)
 
         init {
@@ -350,7 +366,7 @@ class GitExecutor(
             }
 
             finishAbnormalWork(wait)
-            finishAbnormalWork(wait)
+            wait.captureCurrentInterrupt()
             return result()
         }
 
@@ -538,7 +554,7 @@ class GitExecutor(
 
         private fun invocationComplete(): Boolean {
             if (!parentReaped.get()) return false
-            val processesComplete = observationSnapshot().all { observation ->
+            val processesComplete = observations.allComplete { observation ->
                 if (observation.role == "parent") true else processComplete(observation)
             }
             return processesComplete && helperSnapshot().all(::helperComplete)
@@ -547,7 +563,6 @@ class GitExecutor(
         private fun observeAndTerminateIfNeeded() {
             observeDescendants()
             if (causes.cause() != null) {
-                cleanupStarted.set(true)
                 terminateKnownProcesses()
                 if (pendingLogged.compareAndSet(false, true)) logPendingWork()
             }
@@ -578,14 +593,14 @@ class GitExecutor(
         }
 
         private fun retainProcess(handle: ProcessHandle, role: String) {
-            val observation = GitProcessObservation(handle, role)
-            if (observations.putIfAbsent(handle.pid(), observation) == null) {
+            observations.retain(handle, role)?.let { observation ->
                 observationListener?.processRetained(observation)
             }
         }
 
+        // Termination deliberately uses each retained original handle; no PID-only replacement can acquire authority.
         private fun terminateKnownProcesses() {
-            val candidates = observations.values.filter { observation ->
+            val candidates = observations.snapshot().filter { observation ->
                 observation.role != "parent" || !parentReaped.get()
             }.toList()
             for (observation in candidates) {
@@ -631,7 +646,7 @@ class GitExecutor(
             }
         }
 
-        private fun observationSnapshot(): List<GitProcessObservation> = observations.values.toList()
+        private fun observationSnapshot(): List<GitProcessObservation> = observations.snapshot()
 
         private fun helperSnapshot(): List<Thread> = helpers.toList()
 
@@ -678,6 +693,8 @@ class GitExecutor(
         const val PROCESS_OBSERVATION_CADENCE_MILLIS = 25L
         private const val DRAIN_CHUNK_BYTES = 64 * 1024
 
+        // Security pins disable repository-controlled hooks/config and keep every argv entry outside a shell.
+        // Foreground pins keep maintenance owned by this invocation; fsmonitor is disabled for complete observation.
         private val PINNED_CONFIG = listOf(
             "-c", "core.autocrlf=false",
             "-c", "core.eol=lf",

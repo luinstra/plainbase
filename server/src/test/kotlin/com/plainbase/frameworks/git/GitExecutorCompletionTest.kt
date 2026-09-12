@@ -10,6 +10,9 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeSameInstanceAs
+import io.mockk.every
+import io.mockk.mockk
 import org.opentest4j.TestAbortedException
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -27,6 +30,33 @@ import kotlin.concurrent.thread
 
 /** Checkpoint 03b decision, ownership, and modeled-liveness controls for [GitExecutor]. */
 class GitExecutorCompletionTest : FunSpec({
+
+    test("modeled OS identity retains same-PID handles and blocks completion on a later live identity") {
+        // Modeled PID reuse only: distinct ProcessHandle doubles share a PID; no operating-system PID is reused here.
+        val first = mockk<ProcessHandle>()
+        val later = mockk<ProcessHandle>()
+        every { first.pid() } returns 4242L
+        every { later.pid() } returns 4242L
+        every { first.isAlive } returns false
+        every { later.isAlive } returns true
+
+        val retention = GitProcessRetention()
+        val firstObservation = requireNotNull(retention.retain(first, "descendant"))
+        firstObservation.firstStartTicks = 11L
+        retention.retain(first, "descendant") shouldBe null
+        val laterObservation = requireNotNull(retention.retain(later, "descendant"))
+        retention.retain(later, "descendant") shouldBe null
+
+        val snapshot = retention.snapshot()
+        snapshot.size shouldBe 2
+        snapshot[0] shouldBeSameInstanceAs firstObservation
+        snapshot[1] shouldBeSameInstanceAs laterObservation
+        snapshot[0].firstStartTicks shouldBe 11L
+
+        retention.allComplete { observation -> !observation.handle.isAlive }.shouldBeFalse()
+        every { later.isAlive } returns false
+        retention.allComplete { observation -> !observation.handle.isAlive }.shouldBeTrue()
+    }
 
     test("the Linux stat parser uses the final command close and validates identity fields") {
         val stat = parseLinuxProcessStat(procStat(pid = 321, command = "name with ) spaces", state = 'Z', threads = 1, ticks = 88))
