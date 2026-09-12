@@ -1,11 +1,17 @@
 package com.plainbase.frameworks.git
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.AppenderBase
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import org.opentest4j.TestAbortedException
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
@@ -13,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
@@ -123,6 +130,26 @@ class GitExecutorCompletionTest : FunSpec({
         second.isAlive.shouldBeFalse()
     }
 
+    test("an interrupted invocation wins before a later helper setup failure") {
+        runInterruptionBeforeHelperSetupFailureCase()
+    }
+
+    test("stdout overflow wins before a later interruption") {
+        runOverflowBeforeInterruptionCase(OutputStreamKind.STDOUT)
+    }
+
+    test("stderr overflow wins before a later interruption") {
+        runOverflowBeforeInterruptionCase(OutputStreamKind.STDERR)
+    }
+
+    test("helper setup failure wins before a later interruption") {
+        runHelperSetupFailureBeforeInterruptionCase()
+    }
+
+    test("timeout wins before a later interruption") {
+        runTimeoutBeforeInterruptionCase()
+    }
+
     test("controlled fake Git parent exits before its child and returns zero") {
         runControlledParentExitCase(0)
     }
@@ -134,6 +161,9 @@ class GitExecutorCompletionTest : FunSpec({
     test("controlled fake Git parent exit keeps the original deadline for a held child") {
         val observedPids = ConcurrentLinkedQueue<Long>()
         val completedHelpers = ConcurrentLinkedQueue<Thread>()
+        val helperHold = CountDownLatch(1)
+        val helperHoldEntered = CountDownLatch(1)
+        val pendingWarningAtNanos = AtomicLong(0L)
         val observer = object : GitInvocationCompletionObserver {
             override fun processComplete(observation: GitProcessObservation): Boolean {
                 if (observation.role == "descendant") observedPids += observation.handle.pid()
@@ -142,7 +172,19 @@ class GitExecutorCompletionTest : FunSpec({
 
             override fun helperComplete(helper: Thread): Boolean {
                 val complete = !helper.isAlive
-                if (complete) completedHelpers += helper
+                if (complete) {
+                    completedHelpers += helper
+                    if (pendingWarningAtNanos.get() != 0L &&
+                        helper.name == "git-stdout-drain" &&
+                        helperHoldEntered.count == 1L
+                    ) {
+                        helperHoldEntered.countDown()
+                        return false
+                    }
+                    if (helper.name == "git-stdout-drain" && helperHoldEntered.count == 0L && helperHold.count != 0L) {
+                        return false
+                    }
+                }
                 return complete
             }
         }
@@ -158,9 +200,21 @@ class GitExecutorCompletionTest : FunSpec({
             val childRelease = fixture.home.resolve("release-child")
             fixture.releaseOnCleanup { Files.writeString(parentRelease, "release\n") }
             fixture.releaseOnCleanup { Files.writeString(childRelease, "release\n") }
+            fixture.releaseOnCleanup { helperHold.countDown() }
             val result = AtomicReference<GitResult?>()
             val failure = AtomicReference<Throwable?>()
+            val interruptRestored = AtomicBoolean(false)
+            val warningAppender = GitPendingWarningAppender("original-deadline-caller") {
+                pendingWarningAtNanos.compareAndSet(0L, System.nanoTime())
+            }.apply { start() }
+            val rootLogger = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+            rootLogger.addAppender(warningAppender)
+            val callerEntryAtNanos = AtomicLong(0L)
+            val readyAtNanos = AtomicLong(0L)
+            val parentExitedAtNanos = AtomicLong(0L)
+            val releaseAtNanos = AtomicLong(0L)
             val caller = thread(start = false, isDaemon = true, name = "original-deadline-caller") {
+                callerEntryAtNanos.set(System.nanoTime())
                 runCatching {
                     result.set(
                         GitExecutor(
@@ -172,25 +226,82 @@ class GitExecutorCompletionTest : FunSpec({
                         ).run(listOf("status")),
                     )
                 }.onFailure(failure::set)
+                interruptRestored.set(Thread.currentThread().isInterrupted)
             }
             fixture.trackWorker(caller)
-            caller.start()
-            val parent = fixture.recordPid("parent.pid")
-            val child = fixture.recordPid("child.pid")
             try {
+                caller.start()
+                val parent = fixture.recordPid("parent.pid")
+                val child = fixture.recordPid("child.pid")
                 waitFor { Files.exists(fixture.home.resolve("ancestry-ready")) }
                 waitFor { observedPids.contains(child.pid()) }
+                readyAtNanos.set(System.nanoTime())
+                val successfulStartUpperBoundNanos = readyAtNanos.get()
+                val earliestOriginalDeadlineNanos =
+                    callerEntryAtNanos.get() + TimeUnit.SECONDS.toNanos(1)
+                val latestOriginalDeadlineNanos =
+                    successfulStartUpperBoundNanos + TimeUnit.SECONDS.toNanos(1)
+                if (readyAtNanos.get() >= callerEntryAtNanos.get() + TimeUnit.MILLISECONDS.toNanos(500L)) {
+                    throw TestAbortedException(
+                        "deadline control missed early readiness: startLower=${callerEntryAtNanos.get()} " +
+                            "startUpper=$successfulStartUpperBoundNanos ready=${readyAtNanos.get()}",
+                    )
+                }
+                awaitAt(callerEntryAtNanos.get() + TimeUnit.MILLISECONDS.toNanos(PARENT_EXIT_BEFORE_DEADLINE_MILLIS))
                 Files.writeString(parentRelease, "release\n")
                 waitFor { !parent.isAlive }
+                parentExitedAtNanos.set(System.nanoTime())
+                if (parentExitedAtNanos.get() >= earliestOriginalDeadlineNanos - TimeUnit.MILLISECONDS.toNanos(500L)) {
+                    throw TestAbortedException(
+                        "deadline control missed early parent exit: startLower=${callerEntryAtNanos.get()} " +
+                            "startUpper=$successfulStartUpperBoundNanos ready=${readyAtNanos.get()} " +
+                            "parentExit=${parentExitedAtNanos.get()} originalEarliest=$earliestOriginalDeadlineNanos",
+                    )
+                }
                 parent.isAlive.shouldBeFalse()
                 child.isAlive.shouldBeTrue()
                 caller.isAlive.shouldBeTrue()
-
-                caller.join(10_000)
-                caller.isAlive.shouldBeFalse()
+                val resetBudgetEarliestNanos = earliestOriginalDeadlineNanos + TimeUnit.SECONDS.toNanos(4)
+                val releaseTargetNanos = maxOf(
+                    latestOriginalDeadlineNanos + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS),
+                    readyAtNanos.get() + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS),
+                )
+                if (releaseTargetNanos >= resetBudgetEarliestNanos - TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS)) {
+                    throw TestAbortedException(
+                        "deadline reset window is not separated: startLower=${callerEntryAtNanos.get()} " +
+                            "startUpper=$successfulStartUpperBoundNanos ready=${readyAtNanos.get()} " +
+                            "parentExit=${parentExitedAtNanos.get()} originalLatest=$latestOriginalDeadlineNanos " +
+                            "resetEarliest=$resetBudgetEarliestNanos target=$releaseTargetNanos",
+                    )
+                }
+                awaitAt(releaseTargetNanos)
+                val releaseNanos = System.nanoTime()
+                releaseAtNanos.set(releaseNanos)
+                if (releaseNanos <= latestOriginalDeadlineNanos + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS) ||
+                    releaseNanos >= resetBudgetEarliestNanos - TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS)
+                ) {
+                    throw TestAbortedException(
+                        "deadline reset window missed: startLower=${callerEntryAtNanos.get()} " +
+                            "startUpper=$successfulStartUpperBoundNanos ready=${readyAtNanos.get()} " +
+                            "parentExit=${parentExitedAtNanos.get()} release=$releaseNanos " +
+                            "originalLatest=$latestOriginalDeadlineNanos resetEarliest=$resetBudgetEarliestNanos",
+                    )
+                }
+                val timeoutObservedBeforeRelease =
+                    pendingWarningAtNanos.get() != 0L && !child.isAlive && helperHoldEntered.count == 0L
+                Files.writeString(childRelease, "release\n")
+                if (timeoutObservedBeforeRelease) {
+                    waitFor { helperHoldEntered.count == 0L }
+                }
+                timeoutObservedBeforeRelease.shouldBeTrue()
+                caller.isAlive.shouldBeTrue()
+                caller.interrupt()
+                helperHold.countDown()
+                awaitWithin(caller, "original deadline caller")
                 failure.get() shouldBe null
                 requireNotNull(result.get()).exitCode shouldBe -1
                 requireNotNull(result.get()).stderr shouldContain "timed out"
+                interruptRestored.get().shouldBeTrue()
                 parent.isAlive.shouldBeFalse()
                 child.isAlive.shouldBeFalse()
                 completedHelpers.toSet().size shouldBe 2
@@ -199,10 +310,13 @@ class GitExecutorCompletionTest : FunSpec({
             } finally {
                 runCatching { Files.writeString(parentRelease, "release\n") }
                 runCatching { Files.writeString(childRelease, "release\n") }
+                helperHold.countDown()
                 if (caller.isAlive) {
                     caller.interrupt()
-                    caller.join(10_000)
+                    runCatching { awaitWithin(caller, "original deadline caller cleanup") }
                 }
+                rootLogger.detachAppender(warningAppender)
+                warningAppender.stop()
             }
         }
     }
@@ -226,17 +340,22 @@ class GitExecutorCompletionTest : FunSpec({
             "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\n" +
                 "(echo ready > \"${'$'}HOME/child-ready\"; " +
                 "while [ ! -f \"${'$'}HOME/fork\" ]; do sleep 0.01; done; " +
-                "(while [ ! -f \"${'$'}HOME/release-grandchild\" ]; do sleep 0.01; done) & " +
-                "echo ${'$'}! > \"${'$'}HOME/grandchild.pid\"; wait) &\n" +
+                "(while [ ! -f \"${'$'}HOME/release-grandchild\" ]; do sleep 0.01; done) </dev/null >/dev/null 2>/dev/null & " +
+                "echo ${'$'}! > \"${'$'}HOME/grandchild.pid\"; " +
+                "echo grandchild-ready > \"${'$'}HOME/grandchild-ready\"; " +
+                "while [ ! -f \"${'$'}HOME/release-child\" ]; do sleep 0.01; done; " +
+                "exit 0) </dev/null >/dev/null 2>/dev/null &\n" +
                 "echo ${'$'}! > \"${'$'}HOME/child.pid\"\n" +
                 "while [ ! -f \"${'$'}HOME/release-parent\" ]; do sleep 0.01; done\n" +
                 "exit 0\n",
         ) { fixture ->
             val parentRelease = fixture.home.resolve("release-parent")
             val fork = fixture.home.resolve("fork")
+            val childRelease = fixture.home.resolve("release-child")
             val grandchildRelease = fixture.home.resolve("release-grandchild")
             fixture.releaseOnCleanup { Files.writeString(parentRelease, "release\n") }
             fixture.releaseOnCleanup { Files.writeString(fork, "fork\n") }
+            fixture.releaseOnCleanup { Files.writeString(childRelease, "release\n") }
             fixture.releaseOnCleanup { Files.writeString(grandchildRelease, "release\n") }
             val result = AtomicReference<GitResult?>()
             val failure = AtomicReference<Throwable?>()
@@ -270,11 +389,15 @@ class GitExecutorCompletionTest : FunSpec({
                 val grandchild = fixture.recordPid("grandchild.pid")
                 waitFor { observedPids.contains(grandchild.pid()) }
                 grandchild.isAlive.shouldBeTrue()
+                Files.writeString(childRelease, "release\n")
+                waitFor { !child.isAlive }
+                child.isAlive.shouldBeFalse()
+                grandchild.isAlive.shouldBeTrue()
                 caller.isAlive.shouldBeTrue()
+                result.get() shouldBe null
 
                 Files.writeString(grandchildRelease, "release\n")
-                caller.join(10_000)
-                caller.isAlive.shouldBeFalse()
+                awaitWithin(caller, "late fork caller")
                 failure.get() shouldBe null
                 requireNotNull(result.get()).exitCode shouldBe 0
                 parent.isAlive.shouldBeFalse()
@@ -286,10 +409,11 @@ class GitExecutorCompletionTest : FunSpec({
             } finally {
                 runCatching { Files.writeString(parentRelease, "release\n") }
                 runCatching { Files.writeString(fork, "fork\n") }
+                runCatching { Files.writeString(childRelease, "release\n") }
                 runCatching { Files.writeString(grandchildRelease, "release\n") }
                 if (caller.isAlive) {
                     caller.interrupt()
-                    caller.join(10_000)
+                    runCatching { awaitWithin(caller, "late fork caller cleanup") }
                 }
             }
         }
@@ -774,6 +898,431 @@ class GitExecutorCompletionTest : FunSpec({
     }
 })
 
+private enum class OutputStreamKind(val helperName: String) {
+    STDOUT("git-stdout-drain"),
+    STDERR("git-stderr-drain"),
+}
+
+private fun runInterruptionBeforeHelperSetupFailureCase() {
+    val setupFailure = IllegalStateException("ordered stderr helper setup failure")
+    val stderrFactoryReached = CountDownLatch(1)
+    val helperCreations = AtomicInteger()
+    withOwnedFakeGit(
+        "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\nsleep 60\n",
+    ) { fixture ->
+        val observer = object : GitInvocationCompletionObserver {
+            override fun processComplete(observation: GitProcessObservation): Boolean {
+                fixture.recordProcess(observation.handle)
+                return !observation.handle.isAlive
+            }
+
+            override fun helperComplete(helper: Thread): Boolean = !helper.isAlive
+        }
+        val helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+            helperCreations.incrementAndGet()
+            if (name == "git-stderr-drain") {
+                stderrFactoryReached.countDown()
+                throw setupFailure
+            }
+            Thread(block, name).apply {
+                isDaemon = true
+                fixture.trackWorker(this)
+            }
+        }
+        val result = AtomicReference<GitResult?>()
+        val failure = AtomicReference<Throwable?>()
+        val interruptRestored = AtomicBoolean(false)
+        val caller = thread(start = false, isDaemon = true, name = "ordered-interruption-setup-caller") {
+            Thread.currentThread().interrupt()
+            runCatching {
+                result.set(
+                    GitExecutor(
+                        fixture.root,
+                        fixture.home,
+                        timeoutSeconds = 30,
+                        gitBinary = fixture.binary,
+                        completionObserver = observer,
+                        helperFactory = helperFactory,
+                    ).run(listOf("status")),
+                )
+            }.onFailure(failure::set)
+            interruptRestored.set(Thread.currentThread().isInterrupted)
+        }
+        fixture.trackWorker(caller)
+        caller.start()
+        try {
+            stderrFactoryReached.await(10, TimeUnit.SECONDS).shouldBeTrue()
+            awaitWithin(caller, "ordered interruption/setup caller")
+            helperCreations.get() shouldBe 2
+            failure.get() shouldBe null
+            requireNotNull(result.get()).exitCode shouldBe -1
+            requireNotNull(result.get()).stderr shouldContain "interrupted and was force-killed"
+            interruptRestored.get().shouldBeTrue()
+            fixture.assertRecordedProcessesStopped()
+        } finally {
+            if (caller.isAlive) {
+                caller.interrupt()
+                runCatching { awaitWithin(caller, "ordered interruption/setup caller cleanup") }
+            }
+        }
+    }
+}
+
+private fun runOverflowBeforeInterruptionCase(kind: OutputStreamKind) {
+    val selectedBlockReturned = CountDownLatch(1)
+    val selectedHelperRelease = CountDownLatch(1)
+    val selectedHelper = AtomicReference<Thread?>()
+    val overflowReturnedAtNanos = AtomicLong(0L)
+    val interruptSentAtNanos = AtomicLong(0L)
+    val parentReleaseName = "release-parent"
+    val overflowCommand = when (kind) {
+        OutputStreamKind.STDOUT -> "head -c ${OUTPUT_CAP_BYTES + 1} /dev/zero"
+        OutputStreamKind.STDERR -> "head -c ${OUTPUT_CAP_BYTES + 1} /dev/zero >&2"
+    }
+    withOwnedFakeGit(
+        "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\n" +
+            "while [ ! -f \"${'$'}HOME/start\" ]; do sleep 0.01; done\n" +
+            "$overflowCommand\n" +
+            "while [ ! -f \"${'$'}HOME/$parentReleaseName\" ]; do sleep 0.01; done\n" +
+            "exit 0\n",
+    ) { fixture ->
+        val observer = object : GitInvocationCompletionObserver {
+            override fun processComplete(observation: GitProcessObservation): Boolean {
+                fixture.recordProcess(observation.handle)
+                return !observation.handle.isAlive
+            }
+
+            override fun helperComplete(helper: Thread): Boolean = !helper.isAlive
+        }
+        val helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+            val helper = Thread(
+                {
+                    try {
+                        block()
+                    } finally {
+                        if (name == kind.helperName) {
+                            overflowReturnedAtNanos.compareAndSet(0L, System.nanoTime())
+                            selectedBlockReturned.countDown()
+                            selectedHelperRelease.await(10, TimeUnit.SECONDS)
+                        }
+                    }
+                },
+                name,
+            ).apply { isDaemon = true }
+            fixture.trackWorker(helper)
+            if (name == kind.helperName) selectedHelper.set(helper)
+            helper
+        }
+        fixture.releaseOnCleanup { Files.writeString(fixture.home.resolve("start"), "start\n") }
+        fixture.releaseOnCleanup { Files.writeString(fixture.home.resolve(parentReleaseName), "release\n") }
+        fixture.releaseOnCleanup { selectedHelperRelease.countDown() }
+        val result = AtomicReference<GitResult?>()
+        val failure = AtomicReference<Throwable?>()
+        val interruptRestored = AtomicBoolean(false)
+        val caller = thread(start = false, isDaemon = true, name = "ordered-${kind.name.lowercase()}-overflow-caller") {
+            runCatching {
+                result.set(
+                    GitExecutor(
+                        fixture.root,
+                        fixture.home,
+                        timeoutSeconds = 30,
+                        gitBinary = fixture.binary,
+                        maxStdoutBytes = OUTPUT_CAP_BYTES,
+                        maxStderrBytes = OUTPUT_CAP_BYTES,
+                        completionObserver = observer,
+                        helperFactory = helperFactory,
+                    ).run(listOf("log")),
+                )
+            }.onFailure(failure::set)
+            interruptRestored.set(Thread.currentThread().isInterrupted)
+        }
+        fixture.trackWorker(caller)
+        caller.start()
+        fixture.recordPid("parent.pid")
+        try {
+            Files.writeString(fixture.home.resolve("start"), "start\n")
+            selectedBlockReturned.await(10, TimeUnit.SECONDS).shouldBeTrue()
+            selectedHelper.get().shouldNotBe(null)
+            caller.isAlive.shouldBeTrue()
+            result.get() shouldBe null
+            interruptSentAtNanos.set(System.nanoTime())
+            (overflowReturnedAtNanos.get() < interruptSentAtNanos.get()).shouldBeTrue()
+            caller.interrupt()
+            selectedHelperRelease.countDown()
+            awaitWithin(caller, "ordered overflow caller ${kind.name.lowercase()}")
+            failure.get() shouldBe null
+            requireNotNull(result.get()).exitCode shouldBe -1
+            requireNotNull(result.get()).stderr shouldContain "exceeded the in-memory read cap"
+            interruptRestored.get().shouldBeTrue()
+            requireNotNull(selectedHelper.get()).isAlive.shouldBeFalse()
+            fixture.assertRecordedProcessesStopped()
+        } finally {
+            selectedHelperRelease.countDown()
+            runCatching { Files.writeString(fixture.home.resolve("start"), "start\n") }
+            runCatching { Files.writeString(fixture.home.resolve(parentReleaseName), "release\n") }
+            if (caller.isAlive) {
+                caller.interrupt()
+                runCatching { awaitWithin(caller, "ordered overflow caller cleanup") }
+            }
+        }
+    }
+}
+
+private fun runHelperSetupFailureBeforeInterruptionCase() {
+    val setupFailure = IllegalStateException("ordered stderr setup failure")
+    val stderrFactoryReached = CountDownLatch(1)
+    val stdinFactoryReached = CountDownLatch(1)
+    val stdinGateEntered = CountDownLatch(1)
+    val stdinRelease = CountDownLatch(1)
+    val helperCreations = AtomicInteger()
+    withOwnedFakeGit(
+        "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\n" +
+            "while [ ! -f \"${'$'}HOME/release-parent\" ]; do sleep 0.01; done\n" +
+            "exit 0\n",
+    ) { fixture ->
+        val observer = object : GitInvocationCompletionObserver {
+            override fun processComplete(observation: GitProcessObservation): Boolean {
+                fixture.recordProcess(observation.handle)
+                return !observation.handle.isAlive
+            }
+
+            override fun helperComplete(helper: Thread): Boolean = !helper.isAlive
+        }
+        val helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+            helperCreations.incrementAndGet()
+            when (name) {
+                "git-stderr-drain" -> {
+                    stderrFactoryReached.countDown()
+                    throw setupFailure
+                }
+
+                "git-stdin-writer" -> {
+                    stdinFactoryReached.countDown()
+                    Thread(
+                        {
+                            try {
+                                block()
+                            } finally {
+                                stdinGateEntered.countDown()
+                                stdinRelease.await(10, TimeUnit.SECONDS)
+                            }
+                        },
+                        name,
+                    ).apply { isDaemon = true }.also(fixture::trackWorker)
+                }
+
+                else -> Thread(block, name).apply { isDaemon = true }.also(fixture::trackWorker)
+            }
+        }
+        fixture.releaseOnCleanup { Files.writeString(fixture.home.resolve("release-parent"), "release\n") }
+        fixture.releaseOnCleanup { stdinRelease.countDown() }
+        val result = AtomicReference<GitResult?>()
+        val failure = AtomicReference<Throwable?>()
+        val interruptRestored = AtomicBoolean(false)
+        val caller = thread(start = false, isDaemon = true, name = "ordered-setup-interruption-caller") {
+            runCatching {
+                result.set(
+                    GitExecutor(
+                        fixture.root,
+                        fixture.home,
+                        timeoutSeconds = 30,
+                        gitBinary = fixture.binary,
+                        completionObserver = observer,
+                        helperFactory = helperFactory,
+                    ).run(listOf("status"), stdin = ByteArray(4 * 1024 * 1024) { 'x'.code.toByte() }),
+                )
+            }.onFailure(failure::set)
+            interruptRestored.set(Thread.currentThread().isInterrupted)
+        }
+        fixture.trackWorker(caller)
+        caller.start()
+        try {
+            stderrFactoryReached.await(10, TimeUnit.SECONDS).shouldBeTrue()
+            stdinFactoryReached.await(10, TimeUnit.SECONDS).shouldBeTrue()
+            stdinGateEntered.await(10, TimeUnit.SECONDS).shouldBeTrue()
+            caller.isAlive.shouldBeTrue()
+            result.get() shouldBe null
+            caller.interrupt()
+            stdinRelease.countDown()
+            awaitWithin(caller, "ordered helper setup caller")
+            helperCreations.get() shouldBe 3
+            failure.get() shouldBe null
+            requireNotNull(result.get()).exitCode shouldBe -1
+            requireNotNull(result.get()).stderr shouldContain "helper failed"
+            interruptRestored.get().shouldBeTrue()
+            fixture.assertRecordedProcessesStopped()
+        } finally {
+            stdinRelease.countDown()
+            runCatching { Files.writeString(fixture.home.resolve("release-parent"), "release\n") }
+            if (caller.isAlive) {
+                caller.interrupt()
+                runCatching { awaitWithin(caller, "ordered helper setup caller cleanup") }
+            }
+        }
+    }
+}
+
+private fun runTimeoutBeforeInterruptionCase() {
+    val observedPids = ConcurrentLinkedQueue<Long>()
+    val completedHelpers = ConcurrentLinkedQueue<Thread>()
+    val helperHoldEntered = CountDownLatch(1)
+    val helperRelease = CountDownLatch(1)
+    val pendingWarningAtNanos = AtomicLong(0L)
+    val observer = object : GitInvocationCompletionObserver {
+        override fun processComplete(observation: GitProcessObservation): Boolean {
+            if (observation.role == "descendant") observedPids += observation.handle.pid()
+            return !observation.handle.isAlive
+        }
+
+        override fun helperComplete(helper: Thread): Boolean {
+            val complete = !helper.isAlive
+            if (complete) {
+                completedHelpers += helper
+                if (pendingWarningAtNanos.get() != 0L &&
+                    helper.name == "git-stdout-drain" &&
+                    helperHoldEntered.count == 1L
+                ) {
+                    helperHoldEntered.countDown()
+                    return false
+                }
+                if (helper.name == "git-stdout-drain" && helperHoldEntered.count == 0L && helperRelease.count != 0L) {
+                    return false
+                }
+            }
+            return complete
+        }
+    }
+    val callerName = "timeout-before-interruption-caller"
+    val warningAppender = GitPendingWarningAppender(callerName) {
+        pendingWarningAtNanos.compareAndSet(0L, System.nanoTime())
+    }.apply { start() }
+    val rootLogger = LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME) as Logger
+    rootLogger.addAppender(warningAppender)
+    try {
+        withOwnedFakeGit(
+            "#!/bin/sh\necho ${'$'}${'$'} > \"${'$'}HOME/parent.pid\"\n" +
+                "(while [ ! -f \"${'$'}HOME/release-child\" ]; do sleep 0.01; done) &\n" +
+                "echo ${'$'}! > \"${'$'}HOME/child.pid\"\n" +
+                "echo ready > \"${'$'}HOME/ancestry-ready\"\n" +
+                "while [ ! -f \"${'$'}HOME/release-parent\" ]; do sleep 0.01; done\n" +
+                "exit 0\n",
+        ) { fixture ->
+            fixture.releaseOnCleanup { Files.writeString(fixture.home.resolve("release-parent"), "release\n") }
+            fixture.releaseOnCleanup { Files.writeString(fixture.home.resolve("release-child"), "release\n") }
+            fixture.releaseOnCleanup { helperRelease.countDown() }
+            val result = AtomicReference<GitResult?>()
+            val failure = AtomicReference<Throwable?>()
+            val interruptRestored = AtomicBoolean(false)
+            val startedAtNanos = AtomicLong(0L)
+            val readyAtNanos = AtomicLong(0L)
+            val parentExitedAtNanos = AtomicLong(0L)
+            val caller = thread(start = false, isDaemon = true, name = callerName) {
+                startedAtNanos.set(System.nanoTime())
+                runCatching {
+                    result.set(
+                        GitExecutor(
+                            fixture.root,
+                            fixture.home,
+                            timeoutSeconds = 1,
+                            gitBinary = fixture.binary,
+                            completionObserver = observer,
+                        ).run(listOf("status")),
+                    )
+                }.onFailure(failure::set)
+                interruptRestored.set(Thread.currentThread().isInterrupted)
+            }
+            fixture.trackWorker(caller)
+            caller.start()
+            val parent = fixture.recordPid("parent.pid")
+            val child = fixture.recordPid("child.pid")
+            try {
+                awaitTimeoutDistinguishingWindow(fixture, observedPids, caller, parent, child, startedAtNanos, readyAtNanos)
+                val timeoutObservedBeforeRelease =
+                    pendingWarningAtNanos.get() != 0L && !child.isAlive && helperHoldEntered.count == 0L
+                Files.writeString(fixture.home.resolve("release-child"), "release\n")
+                if (timeoutObservedBeforeRelease) {
+                    waitFor { helperHoldEntered.count == 0L }
+                }
+                timeoutObservedBeforeRelease.shouldBeTrue()
+                caller.isAlive.shouldBeTrue()
+                result.get() shouldBe null
+                caller.interrupt()
+                helperRelease.countDown()
+                awaitWithin(caller, "timeout-before-interruption caller")
+                failure.get() shouldBe null
+                requireNotNull(result.get()).exitCode shouldBe -1
+                requireNotNull(result.get()).stderr shouldContain "timed out"
+                interruptRestored.get().shouldBeTrue()
+                pendingWarningAtNanos.get() shouldNotBe 0L
+                parent.isAlive.shouldBeFalse()
+                child.isAlive.shouldBeFalse()
+                completedHelpers.toSet().size shouldBe 2
+                completedHelpers.toSet().all { !it.isAlive }.shouldBeTrue()
+                fixture.assertRecordedProcessesStopped()
+            } finally {
+                helperRelease.countDown()
+                runCatching { Files.writeString(fixture.home.resolve("release-parent"), "release\n") }
+                runCatching { Files.writeString(fixture.home.resolve("release-child"), "release\n") }
+                if (caller.isAlive) {
+                    caller.interrupt()
+                    runCatching { awaitWithin(caller, "timeout-before-interruption caller cleanup") }
+                }
+            }
+        }
+    } finally {
+        rootLogger.detachAppender(warningAppender)
+        warningAppender.stop()
+    }
+}
+
+private fun awaitTimeoutDistinguishingWindow(
+    fixture: OwnedFakeGitFixture,
+    observedPids: ConcurrentLinkedQueue<Long>,
+    caller: Thread,
+    parent: ProcessHandle,
+    child: ProcessHandle,
+    startedAtNanos: AtomicLong,
+    readyAtNanos: AtomicLong,
+) {
+    waitFor { Files.exists(fixture.home.resolve("ancestry-ready")) }
+    waitFor { observedPids.contains(child.pid()) }
+    readyAtNanos.set(System.nanoTime())
+    if (System.nanoTime() >= startedAtNanos.get() + TimeUnit.MILLISECONDS.toNanos(1_000L - DISTINGUISHING_MARGIN_MILLIS)) {
+        throw TestAbortedException("timeout control missed the before-parent-exit original-budget window")
+    }
+    Files.writeString(fixture.home.resolve("release-parent"), "release\n")
+    waitFor { !parent.isAlive }
+    val parentExitedAtNanos = System.nanoTime()
+    parent.isAlive.shouldBeFalse()
+    child.isAlive.shouldBeTrue()
+    caller.isAlive.shouldBeTrue()
+
+    val originalDeadlineNanos = startedAtNanos.get() + TimeUnit.SECONDS.toNanos(1)
+    val resetDeadlineNanos = parentExitedAtNanos + TimeUnit.SECONDS.toNanos(4)
+    val releaseTargetNanos = maxOf(
+        originalDeadlineNanos + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS),
+        readyAtNanos.get() + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS),
+    )
+    if (releaseTargetNanos >= resetDeadlineNanos - TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS)) {
+        throw TestAbortedException(
+            "timeout/reset window is not separated: start=${startedAtNanos.get()} ready=${readyAtNanos.get()} " +
+                "parentExit=$parentExitedAtNanos original=$originalDeadlineNanos reset=$resetDeadlineNanos " +
+                "target=$releaseTargetNanos",
+        )
+    }
+    awaitAt(releaseTargetNanos)
+    val releaseAtNanos = System.nanoTime()
+    if (releaseAtNanos <= originalDeadlineNanos + TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS) ||
+        releaseAtNanos >= resetDeadlineNanos - TimeUnit.MILLISECONDS.toNanos(DISTINGUISHING_MARGIN_MILLIS)
+    ) {
+        throw TestAbortedException(
+            "timeout/reset window missed: start=${startedAtNanos.get()} ready=${readyAtNanos.get()} " +
+                "parentExit=$parentExitedAtNanos release=$releaseAtNanos original=$originalDeadlineNanos " +
+                "reset=$resetDeadlineNanos",
+        )
+    }
+}
+
 private fun procStat(pid: Long, command: String, state: Char, threads: Long, ticks: Long): String {
     val fields = buildList {
         repeat(20) { index ->
@@ -815,8 +1364,14 @@ private class OwnedFakeGitFixture(
 
     fun recordHandle(pid: Long): ProcessHandle {
         val handle = ProcessHandle.of(pid).orElseThrow { IllegalStateException("recorded PID $pid was unavailable") }
-        synchronized(handles) { handles += handle }
+        recordProcess(handle)
         return handle
+    }
+
+    fun recordProcess(handle: ProcessHandle) {
+        synchronized(handles) {
+            if (handles.none { it.pid() == handle.pid() }) handles += handle
+        }
     }
 
     fun awaitPid(fileName: String): Long {
@@ -1066,3 +1621,45 @@ private fun waitFor(timeoutMillis: Long = 10_000L, condition: () -> Boolean) {
     while (!condition() && System.nanoTime() < deadline) Thread.sleep(10)
     condition().shouldBeTrue()
 }
+
+private fun awaitWithin(worker: Thread, description: String, timeoutMillis: Long = 10_000L) {
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+    while (worker.isAlive) {
+        val remaining = deadline - System.nanoTime()
+        if (remaining <= 0L) error("timed out waiting for $description")
+        worker.join(minOf(25L, maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remaining))))
+    }
+    worker.isAlive.shouldBeFalse()
+}
+
+private fun awaitAt(targetNanos: Long) {
+    val outerDeadline = targetNanos + TimeUnit.SECONDS.toNanos(10)
+    while (System.nanoTime() < targetNanos) {
+        if (System.nanoTime() >= outerDeadline) error("timed out waiting for monotonic target $targetNanos")
+        val remaining = targetNanos - System.nanoTime()
+        Thread.sleep(minOf(10L, maxOf(1L, TimeUnit.NANOSECONDS.toMillis(remaining))))
+    }
+}
+
+private class GitPendingWarningAppender(
+    private val expectedThreadName: String,
+    private val onPendingWarning: () -> Unit,
+) : AppenderBase<ILoggingEvent>() {
+    private val events = ConcurrentLinkedQueue<ILoggingEvent>()
+
+    override fun append(event: ILoggingEvent) {
+        if (event.level == Level.WARN &&
+            event.threadName == expectedThreadName &&
+            event.formattedMessage.contains("git run completion pending")
+        ) {
+            events += event
+            onPendingWarning()
+        }
+    }
+
+    fun pendingWarnings(): List<ILoggingEvent> = events.toList()
+}
+
+private const val OUTPUT_CAP_BYTES = 64L * 1024L
+private const val PARENT_EXIT_BEFORE_DEADLINE_MILLIS = 100L
+private const val DISTINGUISHING_MARGIN_MILLIS = 500L
