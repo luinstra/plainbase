@@ -382,7 +382,9 @@ A configured root that is missing at boot, or whose directory vanishes while the
 - root-dependent API, agent, asset, and write surfaces answer **503 `root_unavailable`** with a `Retry-After`,
   **never a 404**. Browser navigation is the deliberate exception: it serves the SPA shell with **200** so
   the client can render its outage UI. A 404 tells an agent the page is gone and it should drop its citations;
-  the truth is that a disk is unmounted and the content is coming back. Nothing is written on a 503;
+  the truth is that a disk is unmounted and the content is coming back. Nothing is written when root rejection
+  happens before the operation is entered; shutdown admission is a separate 503, `server_shutting_down`, with no
+  `Retry-After` promise (see [the agent error table](connect-your-agent.md#4-roots-what-a-page-lives-under-and-what-its-errors-mean));
 - **root loss grants no new retirement or purge authority.** Live/unretired pages and their `id_map`, `url_alias`,
   `page_checkpoint` and `dirty_page` rows are retained; last-good page sections are carried where available. A
   previously committed retired-and-unbound identity may still be cleaned from derived search during recovery;

@@ -193,7 +193,9 @@ A configured root that is missing at boot, or whose directory vanishes while the
 | `404 page_not_found` | the page is GONE. Drop your citations to it. |
 | `503 root_unavailable` (+ `Retry-After`) | a disk is unmounted. The page still exists. **KEEP your citations** and retry after the operator has restored the root. |
 
-Nothing is ever written on a 503, so a retry is safe. A root that is not serving also never reports
+Nothing is ever written when root rejection happens before the operation is entered, so retrying that response is safe.
+Shutdown admission is a separate 503, `server_shutting_down`; see the [agent error table](connect-your-agent.md#4-roots-what-a-page-lives-under-and-what-its-errors-mean).
+It carries no `Retry-After` promise. A root that is not serving also never reports
 its pages as deleted, never reports a conflict against them, and never quietly succeeds a write into
 them.
 
@@ -595,7 +597,7 @@ There is no on-demand forced-hydrate admin action today. Restore recipes reflect
   restart or wait for the poll (same surfacing rule - not `rescan`). Versioned-S3 deployments only; R2
   has no versioning (see [Per-backend backup guidance](#backups) above).
 
-## Stopping Plainbase: SIGTERM and the shutdown budget
+## Stopping Plainbase: SIGTERM and supervisor grace
 
 `docker stop`, systemd and Kubernetes normally deliver **SIGTERM**. Plainbase also routes SIGINT through the
 same shutdown path. The path is ordered: close HTTP admission and stop the CIO engine, drain the final admitted
@@ -617,6 +619,9 @@ watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transpo
 lock acquisition can each take longer. Completion waits can also remain pending indefinitely when a collaborator
 or a shared writer never completes. The 8-second `WARN` is a shutdown diagnostic; it is
 not a supervisor deadline and does not force Plainbase to return.
+
+The completion duration runs from the first owner drain through completed resource cleanup; it excludes signal
+delivery and subsequent process exit.
 
 ### Derive the supervisor grace from the workload
 
