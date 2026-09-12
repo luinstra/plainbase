@@ -33,17 +33,18 @@ jobs:
         run: ./gradlew :server:gitZombieJvmPid1 --console=plain
 
       - name: Upload G3z JVM evidence
+        id: upload_g3z_jvm_evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: g3z-jvm-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             server/build/reports/g3z/jvm/
             server/build/g3z/jvm-preparation/
 
       - name: Clean G3z JVM evidence
-        if: always()
+        if: always() && steps.upload_g3z_jvm_evidence.outcome == 'success'
         run: |
           complete=1
           found=0
@@ -229,17 +230,18 @@ jobs:
         run: ./gradlew :server:gitZombieNativePid1 --console=plain
 
       - name: Upload G3z native evidence
+        id: upload_g3z_native_evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: g3z-native-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             server/build/reports/g3z/native/
             server/build/g3z/native/
 
       - name: Clean G3z native evidence
-        if: always()
+        if: always() && steps.upload_g3z_native_evidence.outcome == 'success'
         run: |
           complete=1
           found=0

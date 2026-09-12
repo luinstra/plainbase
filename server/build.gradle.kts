@@ -1241,9 +1241,9 @@ fun g3zRequireForcedTimeoutEvidence(report: File, evidence: File, run: G3zNamesp
     require(started["pid"]?.toLongOrNull()?.let { it > 0L } == true && started["pid1"] == "true") {
         "G3z forced-timeout control did not start as namespace PID1: $started"
     }
-    evidence.resolve("forced-term-observed.txt").takeIf(File::isFile)?.let {
-        require(it.readText().trim() == "true") { "G3z forced-timeout TERM receipt is malformed" }
-    }
+    val termReceipt = evidence.resolve("forced-term-observed.txt")
+    require(termReceipt.isFile) { "G3z forced-timeout TERM receipt is missing" }
+    require(termReceipt.readText().trim() == "true") { "G3z forced-timeout TERM receipt is malformed" }
     require(report.resolve("process-identities.tsv").isFile && report.resolve("process-identities.tsv").readLines().isNotEmpty()) {
         "G3z forced-timeout control retained no host process identities"
     }
