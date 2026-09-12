@@ -339,9 +339,8 @@ private fun runOwnedServer(
             // the DR flush, so an in-flight rebuild's commits still make the final bundle; the transport closes
             // after the ship that needs it; the DATA_DIR lock releases last, once nothing is writing under it.
             //
-            // Each step declares the bound its collaborator actually honors - taken FROM that collaborator, never
-            // guessed - because the teardown budget is their sum. A budget under it would not bound these steps, it
-            // would cut the slowest of them short, and the slowest is the final DR bundle ship.
+            // Collaborator forecasts feed shutdown diagnostics; they do not cap completion waits.
+            // The supervisor owns forced termination, while cleanup retains dependencies until preceding work completes.
             val activeShutdown = GracefulShutdown(
                 resources.steps(
                     mapOf(

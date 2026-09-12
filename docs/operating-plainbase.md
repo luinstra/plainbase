@@ -408,14 +408,14 @@ only the commit granularity and that window's human attribution are. The gracefu
 20-commit/300-second cadence, and the first-commit-ships-immediately rule all bound how wide that
 window can get.
 
-The graceful-shutdown flush is best-effort within the shutdown budget: on stop, Plainbase drains any
-in-flight cadence ship and then ships one final bundle before closing the object-store transport. A
-full `bundle create` + streaming PUT can take up to the same ~10-minute bound as any other ship, so if
-your orchestrator's termination grace period (e.g. Kubernetes `terminationGracePeriodSeconds`, a Docker
-`stop` timeout) is shorter than the flush needs, the container is killed mid-flush and that final window's
-commits fall into the same reconcile-on-next-boot class above (content is still safe in the bucket). Give
-the process enough grace to flush if you want the tightest DR window on a large history; the next boot
-reconciles cleanly either way.
+The graceful-shutdown flush is attempted in the ordered shutdown path: Plainbase drains any in-flight cadence
+ship and then attempts one final bundle before closing the object-store transport. A full `bundle create` +
+streaming PUT can take up to the same ~10-minute diagnostic budget as any other ship, so if your orchestrator's
+termination grace period (for example Kubernetes `terminationGracePeriodSeconds` or a Docker `stop` timeout)
+expires first, the process can be killed mid-flush and that final window's commits fall into the same
+reconcile-on-next-boot class above (content is still safe in the bucket). The process does not promise to return
+before that supervisor boundary; size the supervisor from measured workload terms and retain forced termination as
+the final boundary.
 
 **The bundle-growth plateau.** Every ship is a FULL `bundle create --all` (never incremental) followed by
 a bundle PUT; every restore is a bundle GET followed by a whole-bundle `fetch`. All FOUR of these
@@ -597,59 +597,74 @@ There is no on-demand forced-hydrate admin action today. Restore recipes reflect
 
 ## Stopping Plainbase: SIGTERM and the shutdown budget
 
-`docker stop`, systemd and Kubernetes all stop the process with **SIGTERM**, and Plainbase shuts down
-gracefully on it. In order, it stops the HTTP server (in-flight requests get a 3-second grace to finish
-rather than being severed mid-write), closes the content watchers, drains any in-flight rebuild, and - in
-object mode with `git.enabled=true` - **ships the final DR bundle** before closing the object-store
-transport and releasing the `DATA_DIR` lock. SIGINT (Ctrl-C) takes the same path.
+`docker stop`, systemd and Kubernetes normally deliver **SIGTERM**. Plainbase also routes SIGINT through the
+same shutdown path. The path is ordered: close HTTP admission and stop the CIO engine, drain the final admitted
+calls, close content watchers, drain rebuild/maintenance work, make the final object-mode DR attempt when
+enabled, close transports and databases, then release the `DATA_DIR` lock. Dependent closes must not release
+that lock while an admitted write is still completing.
 
-You can see it in the log: a `shutting down: ...` line naming the steps, then `shutdown complete in Nms`.
-**If you do not see those two lines, the process did not shut down gracefully** - it was SIGKILLed, either
-directly (`kill -9`, a `docker kill`) or by your orchestrator's grace period expiring.
+There is a small signal window before the runtime hook has been installed. A signal in that window has no
+Plainbase shutdown acknowledgement; the supervisor must rely on its process policy and may need to retry or
+restart. After the hook is active, the shutdown-rejection response (`503`) is additive: it prevents new work
+from entering the closing system while existing admitted work follows the ordered drain.
 
-### The budget is DERIVED, and it is bigger than your grace period
+The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. Those
+values are inputs to the HTTP phase, not a five-second total shutdown bound. The later final-call drain,
+watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transport close, ordinary I/O and
+lock acquisition can each take longer. Completion waits can also remain pending indefinitely when a collaborator
+or a shared writer never completes. The 8-second `WARN` is an operator diagnostic from `CompletionWait`; it is
+not a supervisor deadline and does not force Plainbase to return.
 
-There is no fixed teardown deadline. Plainbase waits for the **sum of what its steps can honestly take**, each
-step declaring the bound its own collaborator honors. A fixed number in front of those collaborators would not
-bound them, it would *truncate* them - and the step it truncates first is the slowest one, the final DR bundle
-ship, which is the loss the graceful shutdown exists to prevent.
+### Derive the supervisor grace from the workload
 
-So the budget is not a promise that shutdown is quick. It is a promise that nothing is cut short. On the happy
-path a teardown is **sub-second**; the numbers below are worst cases, reached only when a step is genuinely
-stuck:
+Use the measured, representative completed operation for each admitted term and keep diagnostic forecasts
+separate from capacity assumptions. The planning form is:
 
-| Step | Worst case | Where it comes from |
-|---|---|---|
-| HTTP server | 8s | 3s drain grace + 5s hard stop |
-| Content watchers | 10s **per root** | one watcher close each |
-| Rebuild scheduler | 60s | two 30s executor drain awaits |
-| Git bundle DR (object mode + `git.enabled`) | ~21min | 60s ship drain + a 10min `git bundle create` + a 10min upload |
-| Object-store transport | 5s | |
-| `DATA_DIR` lock | 5s | |
+`G = H + W + R + M + C + S + Q + B + U + D + margin`
 
-A local single-root install is therefore bounded at **~83 seconds**; an object-mode install shipping DR bundles
-is bounded in the **tens of minutes**, because that is how long a large history can honestly take to go up a
-slow link.
+Here `H` is the final HTTP-call drain, `W` watcher close, `R` rebuild drain, `M` Git maintenance, `C` cadence
+drain, `S` ship drain, `Q` the final Git-state probe, `B` bundle creation, `U` pre-request hashing plus the final
+streaming PUT and `D` dependency/context/lock close. Account for a shared-lock wait once inside the operation
+that incurs it; do not add overlapping lifetimes or add a measured whole-owner drain a second time. Record zero
+explicitly only for an absent term under the stated workload. Count roots, pages, bytes, admitted jobs and the
+actual runtime/storage endpoint in the measurement record. A deliberately held writer is a correctness test, not
+a production-latency estimate. Any term whose completion is inherently unbounded cannot support a graceful
+guarantee; the supervisor timeout remains a forced-termination boundary.
 
-**Set your grace period against the deployment you actually run, not against the defaults.** `docker stop`
-defaults to **10 seconds** and Kubernetes' `terminationGracePeriodSeconds` to **30** - both are *tighter* than
-even the local worst case, so on defaults a stuck teardown is SIGKILLed partway through:
+One measured LOCAL example used one root, 32 deterministic valid-ID Markdown pages of 4,096 bytes each (131,072
+initial content bytes), one same-size authenticated PUT completed before SIGTERM, and Git disabled with no OBJECT
+backend. Its initial rebuild was 139 ms, the PUT was 18 ms, and the owner's completed shutdown log was 1,026 ms;
+that log is the measured `H + W + R + D` owner aggregate. The parent's 1,046 ms signal-to-exit interval is the
+outer signal-through-post-exit-checks observation used for supervisor sizing. The 20 ms residual is derived from
+those two observations, not a separately measured phase. Watcher, rebuild, and final-call activity were not
+separately sampled, so they remain within the owner aggregate and watcher/scheduler close is not falsely zero.
+For this Git-disabled LOCAL/OBJECT-absent workload
+`M = C = S = Q = B = U = 0`; `Q` is the final Git-state probe and `U` is object prehash/upload. Lock waits belong
+once inside the operation that incurs them. With one chosen 500 ms margin, `G_example = 1,046 + 500 = 1,546 ms`,
+rounded once to a 2-second example supervisor setting. This is one ordinary local observation, not a product
+default, capacity guarantee, or maximum; do not add the 500 ms margin again outside `G`. Remote OBJECT capacity
+inputs remain provisional because endpoint, bundle-size, contention, cadence, ship, final-Git, and upload capacity
+were not measured here.
 
-- **Local mode:** `docker stop -t 120`, or `terminationGracePeriodSeconds: 120`.
-- **Object mode with DR bundles:** give it minutes, not seconds - `terminationGracePeriodSeconds: 1500` covers
-  the full bundle bound. Size it against how long *your* history takes to ship (watch the `bundle ship` log
-  lines); the table's number is the ceiling, not the expectation.
+The supervisor setting should use the derived value with the stated margin and rounding. Docker's Linux default is **10 seconds**;
+Kubernetes' default `terminationGracePeriodSeconds` is **30 seconds** and includes `preStop`; both are often
+too short. Docker Compose's `stop_grace_period` and `stop_signal` apply to the standalone Compose file actually
+started. The repository's root `docker-compose.yml` (local development) and
+`deploy/proxy/docker-compose.proxy.yml` (deploy/proxy) are separate stacks, not merged overlays; configure and
+measure the one you run. Compose `init: true` can forward signals and reap child processes, but it is a
+process-hygiene aid, not a Plainbase correctness requirement.
 
-If a teardown is still running after **8 seconds**, Plainbase logs a WARN naming the step it is waiting on. That
-threshold sits deliberately *under* `docker stop`'s 10-second default so the warning reaches you **before** the
-tightest common grace period kills the process - it is the line that tells you which knob to turn. If a step
-overruns its own declared bound, the process logs a WARN naming it and exits anyway: at that point the step is
-wedged rather than slow, and a shutdown that hangs is an outage of its own.
+For Kubernetes, set `terminationGracePeriodSeconds` from the measured workload and account for any `preStop`
+time inside that same window. For systemd, set `TimeoutStopSec` from the same calculation: it covers the
+stop operation and service wait, after which systemd forcibly terminates the service tree. `KillMode=mixed`
+keeps the main process graceful while ensuring the remaining cgroup is not left behind; there is no checked-in
+systemd unit, so these are deployment settings rather than Plainbase defaults.
 
-**Restarts are not a data-loss event either way.** Content lives in the content tree (or the bucket); everything
-the teardown does is about *tightening* the recovery window, never about the durability of a write that already
-returned 200. Nothing is lost if the flush is cut - the next boot reconciles - but the DR window stays wider
-than it needs to be (see [Backups](#backups)).
+If a supervisor expires its grace, SIGKILL can interrupt a page write or leave a backup bundle truncated. A
+write that already returned successfully has its own durability result, but an in-flight write or final backup
+does not. On the shared write path, a stalled Git maintenance or save writer can block subsequent saves; an
+independent read path can continue and observe different state. Inspect the next boot/reconciliation and the
+shutdown log rather than treating forced termination as a clean completion.
 
 ## Operator signals (object mode)
 
