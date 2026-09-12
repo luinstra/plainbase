@@ -136,6 +136,15 @@ internal interface GitInvocationCompletionObserver {
     fun helperComplete(helper: Thread): Boolean
 }
 
+/** Internal observation tap for tests; it reports the real owner and completion decisions without replacing them. */
+internal interface GitInvocationObservationListener {
+    fun processRetained(observation: GitProcessObservation)
+
+    fun processCompletionObserved(observation: GitProcessObservation, complete: Boolean)
+
+    fun helperCompletionObserved(helper: Thread, complete: Boolean)
+}
+
 private object RealGitInvocationCompletionObserver : GitInvocationCompletionObserver {
     override fun processComplete(observation: GitProcessObservation): Boolean {
         val handle = observation.handle
@@ -214,18 +223,21 @@ class GitExecutor(
         gitBinary: String = "git",
         maxStdoutBytes: Long = DEFAULT_MAX_STDOUT_BYTES,
         maxStderrBytes: Long = DEFAULT_MAX_STDERR_BYTES,
-        completionObserver: GitInvocationCompletionObserver,
+        completionObserver: GitInvocationCompletionObserver = RealGitInvocationCompletionObserver,
         helperFactory: (String, () -> Unit) -> Thread = { name, block ->
             Thread(block, name).apply { isDaemon = true }
         },
+        observationListener: GitInvocationObservationListener? = null,
     ) : this(workTree, home, timeoutSeconds, gitBinary, maxStdoutBytes, maxStderrBytes) {
         this.completionObserver = completionObserver
         this.helperFactory = helperFactory
+        this.observationListener = observationListener
     }
 
     private var helperFactory: (String, () -> Unit) -> Thread = { name, block ->
         Thread(block, name).apply { isDaemon = true }
     }
+    private var observationListener: GitInvocationObservationListener? = null
 
     /** Runs `git [args]` with pinned config, isolated env, separate bounded output, and the invocation owner. */
     fun run(
@@ -495,12 +507,18 @@ class GitExecutor(
 
         private fun pendingHelper(): Thread? =
             helperSnapshot().firstOrNull { helper ->
-                runCatching { !completionObserver.helperComplete(helper) }
-                    .getOrElse { failure ->
-                        helperFailed(failure)
-                        false
-                    }
+                !helperComplete(helper)
             }
+
+        private fun helperComplete(helper: Thread): Boolean {
+            val complete = runCatching { completionObserver.helperComplete(helper) }
+                .getOrElse { failure ->
+                    helperFailed(failure)
+                    false
+                }
+            observationListener?.helperCompletionObserved(helper, complete)
+            return complete
+        }
 
         private fun joinNanos(helper: Thread, nanos: Long) {
             val millis = TimeUnit.NANOSECONDS.toMillis(nanos)
@@ -523,13 +541,7 @@ class GitExecutor(
             val processesComplete = observationSnapshot().all { observation ->
                 if (observation.role == "parent") true else processComplete(observation)
             }
-            return processesComplete && helperSnapshot().all { helper ->
-                runCatching { completionObserver.helperComplete(helper) }
-                    .getOrElse { failure ->
-                        helperFailed(failure)
-                        false
-                    }
-            }
+            return processesComplete && helperSnapshot().all(::helperComplete)
         }
 
         private fun observeAndTerminateIfNeeded() {
@@ -555,15 +567,21 @@ class GitExecutor(
             }
         }
 
-        private fun processComplete(observation: GitProcessObservation): Boolean =
-            runCatching { completionObserver.processComplete(observation) }
+        private fun processComplete(observation: GitProcessObservation): Boolean {
+            val complete = runCatching { completionObserver.processComplete(observation) }
                 .getOrElse { failure ->
                     helperFailed(failure)
                     false
                 }
+            observationListener?.processCompletionObserved(observation, complete)
+            return complete
+        }
 
         private fun retainProcess(handle: ProcessHandle, role: String) {
-            observations.putIfAbsent(handle.pid(), GitProcessObservation(handle, role))
+            val observation = GitProcessObservation(handle, role)
+            if (observations.putIfAbsent(handle.pid(), observation) == null) {
+                observationListener?.processRetained(observation)
+            }
         }
 
         private fun terminateKnownProcesses() {
@@ -604,7 +622,7 @@ class GitExecutor(
                 .joinToString(",") { observation -> "${observation.role}#${observation.handle.pid()}" }
                 .ifEmpty { "none" }
             val pendingHelpers = helperSnapshot()
-                .filterNot { helper -> runCatching { completionObserver.helperComplete(helper) }.getOrDefault(true) }
+                .filterNot(::helperComplete)
                 .joinToString(",") { helper -> helper.name }
                 .ifEmpty { "none" }
             logger.warn {

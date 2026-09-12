@@ -28,6 +28,38 @@ jobs:
       - name: Build (backend + embedded frontend) and run tests
         run: ./gradlew build --console=plain
 
+      - name: GitExecutor G3z JVM PID1 regression
+        timeout-minutes: 5
+        run: ./gradlew :server:gitZombieJvmPid1 --console=plain
+
+      - name: Upload G3z JVM evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g3z-jvm-evidence
+          if-no-files-found: warn
+          path: |
+            server/build/reports/g3z/jvm/
+            server/build/g3z/jvm-preparation/
+
+      - name: Clean G3z JVM evidence
+        if: always()
+        run: |
+          complete=1
+          found=0
+          for report in server/build/reports/g3z/jvm/*; do
+            [ -d "$report" ] || continue
+            found=1
+            if [ ! -f "$report/cleanup-completed.txt" ] || ! grep -qx 'true' "$report/cleanup-completed.txt"; then
+              complete=0
+            fi
+          done
+          if [ "$found" = "1" ] && [ "$complete" = "1" ]; then
+            rm -rf server/build/reports/g3z/jvm server/build/g3z/jvm-preparation server/build/g3z/jvm-work
+          else
+            echo 'Retaining G3z JVM paths because completion was not confirmed.'
+          fi
+
       - name: Generate Kover XML report
         run: ./gradlew koverXmlReport --console=plain
 
@@ -191,6 +223,38 @@ jobs:
 
       - name: Run test suite as native image
         run: ./gradlew :server:nativeTest --console=plain
+
+      - name: GitExecutor G3z native PID1 regression
+        timeout-minutes: 5
+        run: ./gradlew :server:gitZombieNativePid1 --console=plain
+
+      - name: Upload G3z native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: g3z-native-evidence
+          if-no-files-found: warn
+          path: |
+            server/build/reports/g3z/native/
+            server/build/g3z/native/
+
+      - name: Clean G3z native evidence
+        if: always()
+        run: |
+          complete=1
+          found=0
+          for report in server/build/reports/g3z/native/*; do
+            [ -d "$report" ] || continue
+            found=1
+            if [ ! -f "$report/cleanup-completed.txt" ] || ! grep -qx 'true' "$report/cleanup-completed.txt"; then
+              complete=0
+            fi
+          done
+          if [ "$found" = "1" ] && [ "$complete" = "1" ]; then
+            rm -rf server/build/reports/g3z/native server/build/g3z/native server/build/g3z/native-work
+          else
+            echo 'Retaining G3z native paths because completion was not confirmed.'
+          fi
 
       - name: Run full-stack dependency spike against the native binary (9/9 hard gate)
         run: ./server/build/native/nativeCompile/plainbase spike
