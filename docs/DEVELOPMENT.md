@@ -110,8 +110,10 @@ gate a *release* that ships (or touches) the object-storage backend.
    [operating-plainbase.md](operating-plainbase.md#object-mode-dr-drills-operator-recipes)). Rehearse
    each for real and REFRESH its dated "Rehearsed for real" record in the ops doc (date, provider,
    what was observed) - the record reflects the most recent rehearsal, not a one-time checkbox.
-4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build`, the native
-   gate (`nativeCompile` -> `nativeTest` -> spike 9/9).
+4. **Existing floors** (already CI-automated, listed for completeness): `./gradlew build` and the native
+   artifact floor (`nativeCompile` -> `nativeTest` -> spike 9/9). CI additionally runs the two Linux-only
+   positive PID1 tasks, `gitZombieJvmPid1` and `gitZombieNativePid1`; `gitZombieForcedTimeoutPid1` remains
+   checkpoint-only.
 
 ## The native dependency spike
 

@@ -71,8 +71,8 @@ jobs:
           echo "Tag $TAG -> version=$version"
 
   # ---- Per-platform native build+gate+upload jobs (item 2) ---------------------------------------
-  # Three DISCRETE per-OS jobs, with a gate sequence IDENTICAL to ci.yml's
-  # native-gate (114-177): nativeCompile -> nativeTest -> spike (9/9, HARD). NO `continue-on-error`
+  # Three DISCRETE per-OS jobs use nativeCompile -> nativeTest -> spike (9/9, HARD); CI's native-gate
+  # additionally runs the Linux-only gitZombieNativePid1 positive gate. NO `continue-on-error`
   # anywhere here -- a real spike failure must fail its OWN job hard; fail-isolation lives in the
   # assembly job's `needs`/`if` (item 4), never on these gate steps (callout 5).
 

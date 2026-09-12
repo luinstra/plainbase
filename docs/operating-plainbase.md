@@ -248,6 +248,8 @@ misconfigure in a proxy or health check:
 | Agent page lookup | `/api/v1/pages/by-path` | 400 `invalid_path`, because a page path is required. A path whose first segment is not a registered root, or a bare registered root, is 404 `page_not_found`, never a lookup under `docs`; `/api/v1/pages/by-path/docs/guides/deploy-guide` is the rooted form. |
 | Permalink | `/p/<id>` or `/p/<root>/<id>` | 302 when the page is found, 200 for a live path-collision loser, 300 for an ambiguous bare id, 404 for an unknown id, 400 for a malformed shape, 410 for a retired id, and 503 when a live page's root is unavailable. |
 
+Once shutdown admission closes, the global `503 server_shutting_down` response can supersede the route-specific answers in this table.
+
 The app route table owns these paths and their query strings. A reverse proxy must forward them unchanged,
 must not rewrite `/assets/<bundle>` to the SPA shell, and must not add a second `/docs` prefix. The reference
 Caddyfile forwards the application without a path rewrite.
@@ -616,13 +618,20 @@ response (`503`) is additive: it prevents new work from entering the closing sys
 follows the ordered drain. The `shutting down: ...` and `shutdown complete in ...` stderr lines are the start and
 completion cues; completion is the positive acknowledgement, and missing logs alone do not prove SIGKILL.
 
-The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. The configured
-5-second CIO wait is followed by a configured 5-second application-disposal wait, so the sequential configured-wait
-forecast is 10 seconds; actual completion can outlast it. These values are inputs to the HTTP phase, not a completion
-bound. The later final-call drain, watcher and scheduler joins, Git maintenance, DR bundle creation/upload, transport
-close, ordinary I/O and lock acquisition can each take longer. Completion waits can also remain pending indefinitely
-when a collaborator or a shared writer never completes. The 8-second `WARN` is a shutdown diagnostic; it is not a
-supervisor deadline and does not force Plainbase to return.
+The CIO engine is configured with a **3-second graceful-stop interval and a 5-second engine timeout**. CIO's five-second
+allowance includes its three-second grace: if work remains, CIO cancels it and waits up to the remaining two seconds.
+Application disposal has a separate configured five-second wait, giving a ten-second configured-wait forecast, not a
+completion bound. Actual completion can outlast it. The later final-call drain, watcher and scheduler joins, Git
+maintenance, DR bundle creation/upload, transport close, ordinary I/O and lock acquisition can each take longer.
+Completion waits can also remain pending indefinitely when a collaborator or a shared writer never completes. The
+8-second `WARN` is a shutdown diagnostic; it is not a supervisor deadline and does not force Plainbase to return.
+
+A `shutdown wait: phase '…' exceeded its …ms forecast` warning identifies an incomplete phase. Current diagnostic inputs
+are 10s per watcher, 60s for the rebuild scheduler, 60s per unfinished Git-maintenance job, and 5s for each
+transport/database/context/lock phase; HTTP uses 10s and DR uses 21min as described above. Pending construction adds a
+5s estimate. The initial aggregate is frozen at the first owner drain; each phase uses its own entry snapshot, so later
+maintenance work can change that phase's forecast without changing the initial aggregate. These are warning inputs,
+not worst-case durations or supervisor settings.
 
 The completion duration runs from the first owner drain through completed resource cleanup; it excludes signal
 delivery and subsequent process exit.
