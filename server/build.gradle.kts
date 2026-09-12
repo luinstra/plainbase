@@ -969,7 +969,7 @@ fun g3zSha256(file: File): String {
 }
 
 fun g3zElfArchitecture(file: File): String {
-    val bytes = Files.readAllBytes(file.toPath())
+    val bytes = file.inputStream().use { it.readNBytes(20) }
     require(
         bytes.size >= 20 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
             bytes[2] == 'L'.code.toByte() && bytes[3] == 'F'.code.toByte(),
