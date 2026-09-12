@@ -51,6 +51,8 @@ import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.booleans.shouldBeFalse
+import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -244,6 +246,53 @@ class ServerRunTest : FunSpec({
             } finally {
                 root.detachAppender(appender)
             }
+        }
+    }
+
+    test("HTTP stop worker bounds launch diagnostics before starting the real worker") {
+        withLocalFixture { content, data ->
+            val firstLaunchFailure = IllegalStateException("launch failure 0")
+            val additionalLaunchFailures = List(4) { index -> IllegalStateException("launch failure ${index + 1}") }
+            val finalWorkerFailure = IllegalStateException("final worker failure")
+            val launchAttempts = AtomicInteger()
+            val actualWorker = AtomicReference<Thread>()
+            val observedFailure = AtomicReference<Throwable>()
+
+            runServerBounded {
+                runServer(
+                    localConfig(content, data),
+                    RecordingOutput(),
+                    control = ServerRunControl(
+                        onHttpAcquired = { server ->
+                            server.configureStopWorkerForTest(
+                                factory = { task ->
+                                    when (val attempt = launchAttempts.incrementAndGet()) {
+                                        1 -> throw firstLaunchFailure
+                                        in 2..5 -> throw additionalLaunchFailures[attempt - 2]
+                                        else -> Thread(task, "plainbase-http-stop-cap")
+                                    }
+                                },
+                                starter = { worker ->
+                                    actualWorker.set(worker)
+                                    worker.start()
+                                },
+                            )
+                            server.failAfterEngineStopForTest(finalWorkerFailure)
+                        },
+                        startServer = { server -> server.start(wait = false) },
+                        closeHttp = { server ->
+                            runCatching { server.stop() }.onFailure(observedFailure::set)
+                        },
+                    ),
+                ) shouldBe 0
+            }
+
+            launchAttempts.get() shouldBe 6
+            val retainedFailure = requireNotNull(observedFailure.get())
+            retainedFailure shouldBeSameInstanceAs firstLaunchFailure
+            retainedFailure.suppressed.toList() shouldContainExactly additionalLaunchFailures.take(3) + finalWorkerFailure
+            retainedFailure.suppressed.none { it === additionalLaunchFailures[3] }.shouldBeTrue()
+            requireNotNull(actualWorker.get()).isAlive.shouldBeFalse()
         }
     }
 

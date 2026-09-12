@@ -153,13 +153,20 @@ class KtorServer(
 
     private fun launchAndAwaitStop(wait: CompletionWait) {
         var launchPrimary: Throwable? = null
+        var retainedLaunchFailureCount = 0
 
         fun retainLaunchFailure(failure: Throwable) {
             if (launchPrimary == null) {
                 launchPrimary = failure
+                retainedLaunchFailureCount = 1
                 logger.warn(failure) { "HTTP stop worker launch failed; retaining shutdown ownership for retry" }
-            } else if (failure !== launchPrimary && requireNotNull(launchPrimary).suppressed.none { it === failure }) {
+            } else if (
+                failure !== launchPrimary &&
+                requireNotNull(launchPrimary).suppressed.none { it === failure } &&
+                retainedLaunchFailureCount < MAX_RETAINED_LAUNCH_FAILURES
+            ) {
                 requireNotNull(launchPrimary).addSuppressed(failure)
+                retainedLaunchFailureCount++
             }
         }
 
@@ -301,6 +308,7 @@ class KtorServer(
         private const val STOP_GRACE_MILLIS = 3_000L
         private const val STOP_TIMEOUT_MILLIS = 5_000L
         private const val LAUNCH_RETRY_MILLIS = 100L
+        private const val MAX_RETAINED_LAUNCH_FAILURES = 4
         private const val STOP_WORKER_NAME = "plainbase-http-stop"
 
         /** CIO's configured engine-stop attempt; request completion is owned by the later application drain. */
