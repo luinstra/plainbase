@@ -180,21 +180,37 @@ fun main(args: Array<String>) {
             arguments.hook?.let { writeMarker(it, "thread=${installed.name}\n") }
         },
         createHttpServer = { config, context ->
-            val heldContext = arguments.saveRelease?.let {
-                val delegate = context.mutate
-                val held = object : MutatingFacade by delegate {
-                    override fun save(principal: Principal, request: SaveRequest): SaveResult {
-                        writeMarker(requireNotNull(arguments.saveEntered), "entered=true\n")
-                        waitForFile(it)
-                        return try {
-                            delegate.save(principal, request)
-                        } finally {
-                            writeMarker(requireNotNull(arguments.saveReturned), "returned=true\n")
+            val heldContext = when {
+                arguments.saveRelease != null -> {
+                    val delegate = context.mutate
+                    val held = object : MutatingFacade by delegate {
+                        override fun save(principal: Principal, request: SaveRequest): SaveResult {
+                            writeMarker(requireNotNull(arguments.saveEntered), "entered=true\n")
+                            waitForFile(requireNotNull(arguments.saveRelease))
+                            return try {
+                                delegate.save(principal, request)
+                            } finally {
+                                writeMarker(requireNotNull(arguments.saveReturned), "returned=true\n")
+                            }
                         }
                     }
+                    context.withMutating(held)
                 }
-                context.withMutating(held)
-            } ?: context
+
+                arguments.cancellableBody -> {
+                    val delegate = context.mutate
+                    val observed = object : MutatingFacade by delegate {
+                        override fun save(principal: Principal, request: SaveRequest): SaveResult {
+                            val result = delegate.save(principal, request)
+                            writeMarker(requireNotNull(arguments.saveReturned), "handler_completed=true\n")
+                            return result
+                        }
+                    }
+                    context.withMutating(observed)
+                }
+
+                else -> context
+            }
             arguments.token?.let { tokenPath ->
                 val token = context.tokens.mint("checkpoint05", AgentMode.COMMIT).plaintext
                 writeMarker(tokenPath, token)
@@ -224,11 +240,27 @@ fun main(args: Array<String>) {
                                 buildString {
                                     appendLine("attribute_installed=${call.attributeInstalled}")
                                     appendLine("attribute_identity_same=${call.attributeJob === call.originalJob}")
+                                    appendLine("admission_job_identity=${System.identityHashCode(call.originalJob)}")
                                     appendLine("original_job_complete_at_capture=${call.originalJob.isCompleted}")
                                 },
                             )
-                            call.originalJob.invokeOnCompletion {
-                                writeMarker(requireNotNull(arguments.callCompleted), "completed=true\n")
+                            call.originalJob.invokeOnCompletion { cause ->
+                                writeMarker(
+                                    requireNotNull(arguments.callCompleted),
+                                    "completed=true\n" +
+                                        "cause=${cause?.javaClass?.name ?: "none"}\n" +
+                                        "cause_message=${cause?.message?.replace("\n", " ") ?: "none"}\n",
+                                )
+                            }
+                        }
+                        arguments.receiveObservation?.let { observationPath ->
+                            server.captureNextReceiveForTest { call ->
+                                val attributeJob = call.attributes.getOrNull(HttpCallAdmission.ORIGINAL_CALL_JOB_KEY)
+                                writeMarker(
+                                    observationPath,
+                                    "call_identity=${System.identityHashCode(call)}\n" +
+                                        "receive_job_identity=${attributeJob?.let(System::identityHashCode) ?: "none"}\n",
+                                )
                             }
                         }
                         writeMarker(requireNotNull(arguments.admissionArmed), "armed=true\n")
@@ -402,6 +434,8 @@ private class Arguments(args: Array<String>) {
     val helperFailure: Path? get() = optional("--helper-failure")
     val initialRebuild: Path? get() = optional("--initial-rebuild")
     val watcherObservation: Path? get() = optional("--watcher-observation")
+    val receiveObservation: Path? get() = optional("--receive-observation")
+    val cancellableBody: Boolean get() = values["--cancellable-body"] == "true"
 
     init {
         Files.createDirectories(requireNotNull(report.parent))

@@ -4,12 +4,15 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotBeBlank
 import io.kotest.matchers.string.shouldNotContain
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -43,6 +46,10 @@ class ServerRunHookTest : FunSpec({
 
     test("SIGTERM drains an authenticated held PUT before dependent close and lock release") {
         withParentWatchdog { watchdog -> runHeldScenario(HeldMode.SIGTERM, watchdog) }
+    }
+
+    test("SIGTERM permits an authenticated incomplete PUT to finish within configured engine grace") {
+        withParentWatchdog { watchdog -> runCancellableBodyScenario(watchdog) }
     }
 
     test("ordinary LOCAL workload records one real save and whole-owner drain") {
@@ -123,6 +130,39 @@ private class HeldScenario(
     fun rememberInterrupt() {
         interrupted = true
         Thread.interrupted()
+    }
+}
+
+private class CancellableBodyScenario(
+    val watchdog: ParentWatchdog,
+    val base: Path,
+    val page: Path,
+    val expected: Path,
+    val report: Path,
+    val token: Path,
+    val armAdmission: Path,
+    val admissionArmed: Path,
+    val admissionObservation: Path,
+    val receiveObservation: Path,
+    val callCompleted: Path,
+    val handlerCompleted: Path,
+    val hook: Path,
+    val command: List<String>,
+    val environment: Map<String, String>,
+    val port: Int,
+    val body: ByteArray,
+) {
+    val timing = linkedMapOf<String, Long>()
+    val startedAt = System.nanoTime()
+    var child: HookRunningChild? = null
+    var client: HttpClient? = null
+    var clientClose: ClientCloseObservation? = null
+    var socket: Socket? = null
+    var suffixWriteFailure: Throwable? = null
+    var primary: Throwable? = null
+
+    fun mark(name: String) {
+        timing[name] = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
     }
 }
 
@@ -470,6 +510,321 @@ private fun runHeldScenario(mode: HeldMode, watchdog: ParentWatchdog) {
         finishHeldScenario(scenario)
     }
     scenario.primary?.let { throw it }
+}
+
+private fun runCancellableBodyScenario(watchdog: ParentWatchdog) {
+    val scenario = createCancellableBodyScenario(watchdog)
+    try {
+        executeCancellableBodyScenario(scenario)
+    } catch (failure: Throwable) {
+        scenario.primary = failure
+    } finally {
+        finishCancellableBodyScenario(scenario)
+    }
+    scenario.primary?.let { throw it }
+}
+
+private fun createCancellableBodyScenario(watchdog: ParentWatchdog): CancellableBodyScenario {
+    val base = Files.createTempDirectory("plainbase-server-cancellable-body")
+    val content = Files.createDirectory(base.resolve("content"))
+    val data = Files.createDirectory(base.resolve("data"))
+    val page = Files.createDirectories(content.resolve("docs")).resolve("cancellable.md")
+    val expected = base.resolve("expected.md")
+    val report = base.resolve("receipts.txt")
+    val token = base.resolve("token.fixture")
+    val armAdmission = base.resolve("arm-admission")
+    val admissionArmed = base.resolve("admission-armed")
+    val admissionObservation = base.resolve("admission.observation")
+    val receiveObservation = base.resolve("receive.observation")
+    val callCompleted = base.resolve("call.completed")
+    val handlerCompleted = base.resolve("handler.completed")
+    val hook = base.resolve("hook.installed")
+    val pageId = "0199aaaa-bbbb-7ccc-8ddd-0000000000d1"
+    val original = "---\nid: $pageId\ntitle: Cancellable\n---\n\n# Cancellable\n\noriginal.\n"
+        .toByteArray(StandardCharsets.UTF_8)
+    val body = "---\nid: $pageId\ntitle: Cancellable\n---\n\n# Cancellable\n\nupdated after SIGTERM.\n"
+        .toByteArray(StandardCharsets.UTF_8)
+    Files.write(page, original)
+    Files.write(expected, body)
+    val port = ServerSocket(0).use { it.localPort }
+    val command = cancellableChildCommand(
+        content = content,
+        data = data,
+        report = report,
+        port = port,
+        token = token,
+        armAdmission = armAdmission,
+        admissionArmed = admissionArmed,
+        admissionObservation = admissionObservation,
+        receiveObservation = receiveObservation,
+        callCompleted = callCompleted,
+        handlerCompleted = handlerCompleted,
+        hook = hook,
+    )
+    return CancellableBodyScenario(
+        watchdog = watchdog,
+        base = base,
+        page = page,
+        expected = expected,
+        report = report,
+        token = token,
+        armAdmission = armAdmission,
+        admissionArmed = admissionArmed,
+        admissionObservation = admissionObservation,
+        receiveObservation = receiveObservation,
+        callCompleted = callCompleted,
+        handlerCompleted = handlerCompleted,
+        hook = hook,
+        command = command,
+        environment = isolatedEnvironment(base, data, content),
+        port = port,
+        body = body,
+    )
+}
+
+private fun executeCancellableBodyScenario(scenario: CancellableBodyScenario) {
+    val runningChild = launchHookChild(scenario.command, scenario.environment, scenario.watchdog)
+    scenario.child = runningChild
+    awaitHeldMarker(scenario.token, runningChild, scenario.watchdog, "cancellable token")
+    scenario.mark("token_ready")
+    val health = runningChild.awaitHealth(scenario.port)
+    health.statusCode shouldBe 200
+    health.body shouldContain "\"status\":\"ok\""
+    scenario.mark("health_ready")
+    awaitHeldMarker(scenario.hook, runningChild, scenario.watchdog, "cancellable real shutdown hook")
+
+    val client = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1)
+        .connectTimeout(Duration.ofSeconds(2))
+        .build()
+    scenario.client = client
+    val pageId = "0199aaaa-bbbb-7ccc-8ddd-0000000000d1"
+    val uri = URI("http://127.0.0.1:${scenario.port}/api/v1/pages/$pageId")
+    val token = Files.readString(scenario.token)
+    val get = client.send(
+        HttpRequest.newBuilder(uri)
+            .timeout(Duration.ofSeconds(5))
+            .header("Authorization", "Bearer $token")
+            .GET()
+            .build(),
+        HttpResponse.BodyHandlers.ofString(),
+    )
+    get.statusCode() shouldBe 200
+    val etag = get.headers().firstValue("ETag").orElseThrow()
+
+    writeParentMarker(scenario.armAdmission)
+    awaitHeldMarker(scenario.admissionArmed, runningChild, scenario.watchdog, "cancellable admission arm")
+    scenario.mark("admission_armed")
+    val socket = Socket()
+    scenario.socket = socket
+    socket.soTimeout = 5_000
+    socket.connect(InetSocketAddress("127.0.0.1", scenario.port), 2_000)
+    val prefixSize = writeIncompleteCancellablePut(socket, pageId, token, etag, scenario.body)
+    awaitHeldMarker(scenario.receiveObservation, runningChild, scenario.watchdog, "cancellable receive entry")
+    val admission = readKeyValue(scenario.admissionObservation)
+    val receive = readKeyValue(scenario.receiveObservation)
+    admission["attribute_installed"] shouldBe "true"
+    admission["attribute_identity_same"] shouldBe "true"
+    admission["admission_job_identity"].orEmpty().shouldNotBeBlank()
+    receive["call_identity"].orEmpty().shouldNotBeBlank()
+    receive["receive_job_identity"] shouldBe admission["admission_job_identity"]
+    scenario.mark("receive_ready")
+
+    val signalDispatchStartedAt = System.nanoTime()
+    runningChild.sendSigterm()
+    val signalDispatchReturnedAt = System.nanoTime()
+    scenario.mark("sigterm_sent")
+    Thread.sleep(1_700)
+    var suffixFlushedAt: Long? = null
+    try {
+        socket.getOutputStream().write(scenario.body, prefixSize, scenario.body.size - prefixSize)
+        socket.getOutputStream().flush()
+        suffixFlushedAt = System.nanoTime()
+    } catch (failure: Throwable) {
+        scenario.suffixWriteFailure = failure
+    }
+    scenario.mark("suffix_attempted")
+    suffixFlushedAt?.let { flushedAt ->
+        val dispatchToFlushMillis = TimeUnit.NANOSECONDS.toMillis(flushedAt - signalDispatchStartedAt)
+        val returnToFlushMillis = TimeUnit.NANOSECONDS.toMillis(flushedAt - signalDispatchReturnedAt)
+        scenario.timing["suffix_delay"] = dispatchToFlushMillis
+        scenario.timing["suffix_return_to_flush"] = returnToFlushMillis
+        check(returnToFlushMillis > 1_000L && dispatchToFlushMillis < 3_000L) {
+            "cancellable suffix was not flushed in the 1-3s window: " +
+                "dispatch_to_flush=${dispatchToFlushMillis}ms, return_to_flush=${returnToFlushMillis}ms"
+        }
+    }
+
+    val handlerObserved = awaitOptionalMarker(scenario.handlerCompleted, runningChild, scenario.watchdog)
+    val completionObserved = awaitOptionalMarker(scenario.callCompleted, runningChild, scenario.watchdog)
+    runningChild.awaitExit(SHUTDOWN_DEADLINE_MILLIS)
+    scenario.mark("child_exit")
+    val completion = if (completionObserved) readKeyValue(scenario.callCompleted) else emptyMap()
+    val handler = if (handlerObserved) readKeyValue(scenario.handlerCompleted) else emptyMap()
+    val durable = Files.readAllBytes(scenario.page).contentEquals(scenario.body)
+    val normalCompletion = completion["completed"] == "true" && completion["cause"] == "none"
+    val handlerFinished = handler["handler_completed"] == "true"
+    check(scenario.suffixWriteFailure == null && handlerFinished && normalCompletion && durable) {
+        "cancellable PUT did not complete normally: " +
+            "suffix_failure=${scenario.suffixWriteFailure?.javaClass?.name ?: "none"}, " +
+            "handler_finished=$handlerFinished, completion_cause=${completion["cause"] ?: "missing"}, durable=$durable"
+    }
+    assertCloseReceipts(scenario.report)
+}
+
+private fun finishCancellableBodyScenario(scenario: CancellableBodyScenario) {
+    var restoreInterrupt = Thread.interrupted()
+    try {
+        runCatching { scenario.socket?.close() }
+            .exceptionOrNull()?.let { scenario.primary = retainFailure(scenario.primary, it) }
+        scenario.client?.let { client ->
+            val attempt = runCatching {
+                closeHttpClient(client, System.nanoTime() + TimeUnit.SECONDS.toNanos(10)) {
+                    restoreInterrupt = true
+                    Thread.interrupted()
+                }
+            }.getOrElse { failure ->
+                scenario.primary = retainFailure(scenario.primary, failure)
+                null
+            }
+            scenario.clientClose = attempt
+            attempt?.failure?.let { scenario.primary = retainFailure(scenario.primary, it) }
+            if (attempt?.interrupted == true) restoreInterrupt = true
+        }
+        scenario.child?.let { child ->
+            val closeFailure = runCatching { child.close() }.exceptionOrNull()
+            if (closeFailure != null) scenario.primary = retainFailure(scenario.primary, closeFailure)
+            if (child.cleanupInterrupted()) restoreInterrupt = true
+        }
+        val observed = scenario.child?.snapshot()
+        val evidenceFailure = runCatching {
+            writeHeldEvidence(
+                prefix = "server-run-hook-cancellable",
+                observed = observed,
+                report = scenario.report,
+                base = scenario.base,
+                page = scenario.page,
+                token = scenario.token,
+                timing = scenario.timing,
+                heldProbe = null,
+                availableProbe = null,
+                failure = scenario.primary,
+            )
+        }.exceptionOrNull()
+        if (evidenceFailure != null) scenario.primary = retainFailure(scenario.primary, evidenceFailure)
+        val watchdogClose = scenario.watchdog.close()
+        if (watchdogClose.interrupted) restoreInterrupt = true
+        watchdogClose.failure?.let { scenario.primary = retainFailure(scenario.primary, it) }
+        val childQuiescent = scenario.child?.isQuiescent() ?: true
+        val clientQuiescent = scenario.client == null || scenario.clientClose?.isQuiescent == true
+        val socketQuiescent = scenario.socket == null || scenario.socket?.isClosed == true
+        if (childQuiescent && clientQuiescent && socketQuiescent && watchdogClose.terminated) {
+            val cleanupFailure = runCatching {
+                deleteTree(scenario.base, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HELD_CLEANUP_MILLIS))
+                check(!Files.exists(scenario.base)) { "cancellable fixture cleanup left files" }
+            }.exceptionOrNull()
+            if (cleanupFailure != null) scenario.primary = retainFailure(scenario.primary, cleanupFailure)
+        } else {
+            scenario.primary = retainFailure(
+                scenario.primary,
+                IllegalStateException(
+                    "cancellable fixture retained because a child/client/socket helper was not quiescent: " + scenario.base,
+                ),
+            )
+        }
+    } finally {
+        if (restoreInterrupt) Thread.currentThread().interrupt()
+    }
+}
+
+private fun cancellableChildCommand(
+    content: Path,
+    data: Path,
+    report: Path,
+    port: Int,
+    token: Path,
+    armAdmission: Path,
+    admissionArmed: Path,
+    admissionObservation: Path,
+    receiveObservation: Path,
+    callCompleted: Path,
+    handlerCompleted: Path,
+    hook: Path,
+): List<String> {
+    val java = Path.of(System.getProperty("java.home"), "bin", "java")
+    val mainRuntime = requireNotNull(System.getProperty("plainbase.test.mainRuntimeClasspath")) {
+        "plainbase.test.mainRuntimeClasspath is required"
+    }
+    val nativeTestClasses = findNativeTestClasses()
+    require(Files.isDirectory(nativeTestClasses)) { "nativeTest code-source output is missing: $nativeTestClasses" }
+    val classpath = mainRuntime + File.pathSeparator + nativeTestClasses
+    return listOf(
+        java.toString(),
+        "--enable-native-access=ALL-UNNAMED",
+        "-Dio.ktor.server.engine.ShutdownHook=true",
+        "-cp",
+        classpath,
+        "com.plainbase.ServerLifecycleLauncherKt",
+        "--content",
+        content.toString(),
+        "--data",
+        data.toString(),
+        "--report",
+        report.toString(),
+        "--port",
+        port.toString(),
+        "--token",
+        token.toString(),
+        "--cancellable-body",
+        "true",
+        "--arm-admission",
+        armAdmission.toString(),
+        "--admission-armed",
+        admissionArmed.toString(),
+        "--admission-observation",
+        admissionObservation.toString(),
+        "--receive-observation",
+        receiveObservation.toString(),
+        "--call-completed",
+        callCompleted.toString(),
+        "--save-returned",
+        handlerCompleted.toString(),
+        "--hook",
+        hook.toString(),
+    )
+}
+
+private fun writeIncompleteCancellablePut(
+    socket: Socket,
+    pageId: String,
+    token: String,
+    etag: String,
+    body: ByteArray,
+): Int {
+    val prefixSize = body.size - 1
+    val headers = (
+        "PUT /api/v1/pages/$pageId HTTP/1.1\r\n" +
+            "Host: 127.0.0.1\r\n" +
+            "Authorization: Bearer $token\r\n" +
+            "If-Match: $etag\r\n" +
+            "Content-Type: text/markdown\r\n" +
+            "Content-Length: ${body.size}\r\n" +
+            "Connection: close\r\n\r\n"
+        ).toByteArray(StandardCharsets.US_ASCII)
+    socket.getOutputStream().write(headers)
+    socket.getOutputStream().write(body, 0, prefixSize)
+    socket.getOutputStream().flush()
+    return prefixSize
+}
+
+private fun awaitOptionalMarker(path: Path, child: HookRunningChild, watchdog: ParentWatchdog): Boolean {
+    val deadline = watchdog.operationDeadline(5_000L)
+    while (!Files.exists(path)) {
+        watchdog.check()
+        if (!child.isAliveForTest() || System.nanoTime() >= deadline) return false
+        Thread.sleep(25L)
+    }
+    return true
 }
 
 private fun createHeldScenario(mode: HeldMode, watchdog: ParentWatchdog): HeldScenario {

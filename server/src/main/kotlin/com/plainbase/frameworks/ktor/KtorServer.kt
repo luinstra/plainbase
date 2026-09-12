@@ -130,6 +130,9 @@ class KtorServer(
             }
         }
         plainbaseModule(routeContext, secureCookie = config.secureCookie())
+    }.apply {
+        engineConfig.shutdownGracePeriod = STOP_GRACE_MILLIS
+        engineConfig.shutdownTimeout = STOP_TIMEOUT_MILLIS
     }
 
     fun start(wait: Boolean) {
@@ -312,8 +315,8 @@ class KtorServer(
         private const val MAX_RETAINED_LAUNCH_FAILURES = 4
         private const val STOP_WORKER_NAME = "plainbase-http-stop"
 
-        /** CIO's configured engine-stop attempt; request completion is owned by the later application drain. */
-        const val STOP_BOUND_MILLIS: Long = STOP_TIMEOUT_MILLIS
+        /** Configured CIO wait plus application disposal wait; diagnostic only, not a wall-clock bound. */
+        const val STOP_BOUND_MILLIS: Long = STOP_TIMEOUT_MILLIS + STOP_TIMEOUT_MILLIS
     }
 }
 
