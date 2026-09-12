@@ -702,7 +702,7 @@ class GitExecutor(
             val cause = causes.cause()
             if (cause != null) {
                 val diagnostic = when (cause) {
-                    GitAbnormalCause.TIMEOUT -> "git $operation timed out and was force-killed"
+                    GitAbnormalCause.TIMEOUT -> "git $operation timed out while completing the invocation"
                     GitAbnormalCause.INTERRUPTION -> "git $operation interrupted while completing the invocation"
                     GitAbnormalCause.OUTPUT_OVERFLOW ->
                         "git $operation output exceeded the in-memory read cap " +
