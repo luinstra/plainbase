@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
@@ -216,6 +217,118 @@ class GitBundleDrActualCompletionTest : FunSpec({
         } finally {
             rootLogger.detachAppender(warningAppender)
             warningAppender.stop()
+        }
+    }
+
+    test("G4: final ship Error retains a distinct alarm failure without self-suppression") {
+        listOf(false, true).forEach { sameSentinel ->
+            val finalFailure = AssertionError("g4 final ship failure")
+            val priorFailure = if (sameSentinel) finalFailure else AssertionError("g4 alarm close failure")
+            val alarmCloseCalls = AtomicInteger()
+            val uploadEntries = AtomicInteger()
+            val bundlePresentAtUpload = AtomicBoolean(false)
+            val executorTerminatedAtUpload = AtomicBoolean(false)
+            val shipExecutorTerminatedAtUpload = AtomicBoolean(false)
+            val dataDir = AtomicReference<Path>()
+
+            withActualG4Fixture { fixture ->
+                dataDir.set(fixture.dataDir)
+                val locks = GitRepoLocks()
+                val seedExecutor = GitExecutor(workTree = fixture.hybrid.mirrorRoot, home = fixture.gitHome)
+                val seedProvider = GitCliHistoryProvider(
+                    exec = seedExecutor,
+                    workTree = fixture.hybrid.mirrorRoot,
+                    gitHome = fixture.gitHome,
+                    defaultAuthor = testIdentity(),
+                    defaultCommitter = testIdentity(),
+                    clock = fixedClock(),
+                    repoPath = { path -> fixture.hybrid.mirror.resolveRepoRelativePath(path) },
+                    maintenance = {},
+                    repoWriteMonitor = locks.repoWrite,
+                )
+                fixture.invoke("g4-final-ship-seed") {
+                    seedProvider.commit(TreePath.require("g4-final-ship.md"), "g4 final ship\n".toByteArray())
+                }
+
+                val observedProcesses = ConcurrentHashMap<Long, ProcessHandle>()
+                val observer = object : GitInvocationCompletionObserver {
+                    override fun processComplete(observation: GitProcessObservation): Boolean {
+                        observedProcesses[observation.handle.pid()] = observation.handle
+                        fixture.registerProcess(observation.handle)
+                        return runCatching { !observation.handle.isAlive }.getOrDefault(false)
+                    }
+
+                    override fun helperComplete(helper: Thread): Boolean = !helper.isAlive
+                }
+                val helperFactory: (String, () -> Unit) -> Thread = { name, block ->
+                    Thread(block, name).apply {
+                        isDaemon = true
+                        fixture.registerWorker(this)
+                        fixture.registerHelper(this)
+                    }
+                }
+                val observedExecutor = GitExecutor(
+                    workTree = fixture.hybrid.mirrorRoot,
+                    home = fixture.gitHome,
+                    completionObserver = observer,
+                    helperFactory = helperFactory,
+                )
+                val bundlePath = fixture.tmpDir.resolve("history.bundle")
+                fixture.hybrid.fake.onNetworkOp = {
+                    if (uploadEntries.incrementAndGet() == 1) {
+                        bundlePresentAtUpload.set(
+                            Files.isRegularFile(bundlePath) && runCatching { Files.size(bundlePath) > 0 }.getOrDefault(false),
+                        )
+                        executorTerminatedAtUpload.set(
+                            observedProcesses.isNotEmpty() &&
+                                observedProcesses.values.all { handle -> runCatching { !handle.isAlive }.getOrDefault(false) } &&
+                                fixture.registeredHelpers.all { helper -> !helper.isAlive },
+                        )
+                        shipExecutorTerminatedAtUpload.set(fixture.shipExecutor.isTerminated)
+                        throw finalFailure
+                    }
+                }
+                val alarm = object : RebuildScheduler.Alarm, AutoCloseable {
+                    override fun after(delayMillis: Long, action: () -> Unit) = Unit
+
+                    override fun close() {
+                        alarmCloseCalls.incrementAndGet()
+                        throw priorFailure
+                    }
+                }
+                val bundleDr = GitBundleDr(
+                    exec = observedExecutor,
+                    objectStore = fixture.hybrid.store,
+                    mirrorRoot = fixture.hybrid.mirrorRoot,
+                    tmpDir = fixture.tmpDir,
+                    sentinelPath = fixture.sentinelPath,
+                    identity = testIdentity(),
+                    clock = fixedClock(),
+                    repoPath = { path -> fixture.hybrid.mirror.resolveRepoRelativePath(path) },
+                    gitHome = fixture.gitHome,
+                    locks = locks,
+                    alarm = alarm,
+                    shipExecutor = fixture.shipExecutor,
+                )
+
+                val thrown = fixture.invoke("g4-final-close") { runCatching { bundleDr.close() }.exceptionOrNull() }
+                val actualFailure = requireNotNull(thrown)
+                (actualFailure === finalFailure).shouldBeTrue()
+                alarmCloseCalls.get() shouldBe 1
+                uploadEntries.get() shouldBe 1
+                bundlePresentAtUpload.get().shouldBeTrue()
+                executorTerminatedAtUpload.get().shouldBeTrue()
+                shipExecutorTerminatedAtUpload.get().shouldBeTrue()
+                if (sameSentinel) {
+                    actualFailure.suppressed.none { suppressed -> suppressed === finalFailure }.shouldBeTrue()
+                } else {
+                    actualFailure.suppressed.count { suppressed -> suppressed === priorFailure } shouldBe 1
+                }
+                Files.notExists(bundlePath).shouldBeTrue()
+                fixture.hybrid.fake.currentBytes(".plainbase/history.bundle").shouldBeNull()
+            }
+
+            Files.notExists(requireNotNull(dataDir.get())).shouldBeTrue()
         }
     }
 })

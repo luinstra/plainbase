@@ -544,7 +544,10 @@ class GitBundleDr(
                 }
             } else {
                 runCatching { ship() }.onFailure { failure ->
-                    if (failure is Error) throw failure
+                    if (failure is Error) {
+                        primary?.takeUnless { it === failure }?.let(failure::addSuppressed)
+                        throw failure
+                    }
                     logger.warn(failure) {
                         "graceful-shutdown bundle ship failed (${causeOf(failure)}); the DR bundle stays as of the last successful ship"
                     }
