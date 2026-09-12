@@ -600,7 +600,6 @@ internal data class G3zExecutionResult(
     val monitorStopped: Boolean,
     val drainsStopped: Boolean,
     val interrupted: Boolean,
-    val cleanupKillReceipts: List<String>,
 )
 
 internal data class G3zHostProcessIdentity(
@@ -612,8 +611,10 @@ internal data class G3zHostProcessIdentity(
 internal data class G3zCleanupResult(
     val failure: Throwable?,
     val interrupted: Boolean,
-    val killReceipts: List<String>,
 )
+
+private val g3zWatchdogWindowSeconds = 120L + 10L
+private val g3zConfirmationAllowanceSeconds = 15L
 
 fun g3zHostStartTicks(handle: ProcessHandle): Long? = runCatching {
     val raw = Files.readString(File("/proc/${handle.pid()}/stat").toPath())
@@ -625,13 +626,9 @@ fun g3zHostStartTicks(handle: ProcessHandle): Long? = runCatching {
 
 internal fun g3zCleanupRecordedProcesses(
     identities: List<G3zHostProcessIdentity>,
-    sudo: File,
-    timeout: File,
-    kill: File,
 ): G3zCleanupResult {
     var failure: Throwable? = null
     var interrupted = false
-    val killReceipts = mutableListOf<String>()
     fun record(candidate: Throwable) {
         if (candidate is InterruptedException) {
             interrupted = true
@@ -639,94 +636,8 @@ internal fun g3zCleanupRecordedProcesses(
         }
         if (failure == null) failure = candidate else failure?.addSuppressed(candidate)
     }
-    fun scopedKill(identity: G3zHostProcessIdentity) {
-        val killer = try {
-            ProcessBuilder(
-                sudo.absolutePath,
-                "-n",
-                timeout.absolutePath,
-                "--signal=TERM",
-                "--kill-after=1s",
-                "5s",
-                kill.absolutePath,
-                "-KILL",
-                identity.pid.toString(),
-            )
-                .redirectErrorStream(true)
-                .start()
-        } catch (error: Throwable) {
-            record(error)
-            killReceipts += "${identity.pid}\tstart-failed"
-            return
-        }
-        val exited = try {
-            killer.waitFor(5L, TimeUnit.SECONDS)
-        } catch (error: InterruptedException) {
-            record(error)
-            false
-        }
-        if (!exited) {
-            killReceipts += "${identity.pid}\ttimeout"
-            record(IllegalStateException("scoped G3z cleanup kill did not exit for PID ${identity.pid}"))
-            runCatching { killer.destroyForcibly() }.onFailure(::record)
-            runCatching { killer.waitFor(1L, TimeUnit.SECONDS) }
-                .onFailure(::record)
-            return
-        }
-        val output = runCatching { killer.inputStream.bufferedReader().use { it.readText() } }
-            .getOrElse { error ->
-                record(error)
-                ""
-            }
-        val exit = runCatching { killer.exitValue() }.getOrNull()
-        killReceipts += "${identity.pid}\t${exit ?: "unavailable"}\t${output.trim().replace(Regex("[\\r\\n]+"), " ")}"
-        if (exit != 0) {
-            record(
-                IllegalStateException(
-                    "scoped G3z cleanup kill failed for PID ${identity.pid}: exit=$exit output=${output.trim()}",
-                ),
-            )
-        }
-    }
-    fun identityStillOriginal(identity: G3zHostProcessIdentity): Boolean {
-        val currentTicks = g3zHostStartTicks(identity.handle)
-        if (currentTicks == null) {
-            return when (runCatching { identity.handle.isAlive }.getOrNull()) {
-                false -> false
-                null -> {
-                    record(IllegalStateException("unknown liveness for recorded G3z PID ${identity.pid}"))
-                    false
-                }
-
-                true -> {
-                    record(IllegalStateException("missing stat for live recorded G3z PID ${identity.pid}"))
-                    false
-                }
-            }
-        }
-        if (currentTicks != identity.startTicks) {
-            if (runCatching { identity.handle.isAlive }.getOrNull() == false) return false
-            record(
-                IllegalStateException(
-                    "refusing G3z cleanup after PID identity changed: pid=${identity.pid} " +
-                        "expected=${identity.startTicks} actual=$currentTicks",
-                ),
-            )
-            return false
-        }
-        return true
-    }
-    identities.asReversed().forEach { identity ->
-        val alive = runCatching { identity.handle.isAlive }.getOrNull()
-        when (alive) {
-            null -> record(IllegalStateException("unknown liveness for recorded G3z PID ${identity.pid}"))
-            false -> Unit
-            true -> {
-                if (identityStillOriginal(identity)) scopedKill(identity)
-            }
-        }
-    }
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+    // The namespace wrapper owns termination; this pass only confirms recorded identities and never signals a PID.
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(g3zConfirmationAllowanceSeconds)
     identities.forEach { identity ->
         while (System.nanoTime() < deadline) {
             val alive = runCatching { identity.handle.isAlive }.getOrNull()
@@ -756,7 +667,7 @@ internal fun g3zCleanupRecordedProcesses(
             record(IllegalStateException("G3z recorded PID remained alive after bounded cleanup: ${identity.pid}"))
         }
     }
-    return G3zCleanupResult(failure, interrupted, killReceipts)
+    return G3zCleanupResult(failure, interrupted)
 }
 
 internal fun g3zExecute(
@@ -765,9 +676,6 @@ internal fun g3zExecute(
     stdout: File,
     stderr: File,
     environment: Map<String, String>,
-    sudo: File,
-    timeout: File,
-    kill: File,
 ): G3zExecutionResult {
     stdout.parentFile.mkdirs()
     stderr.parentFile.mkdirs()
@@ -784,7 +692,8 @@ internal fun g3zExecute(
     val interruptedSeen = AtomicBoolean(Thread.interrupted())
     var monitor: Thread? = null
     val drains = mutableListOf<G3zDrain>()
-    var cleanupKillReceipts: List<String> = emptyList()
+    val watchdogDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(g3zWatchdogWindowSeconds)
+    var exit: Int? = null
     fun record(reference: AtomicReference<Throwable?>, candidate: Throwable) {
         reference.updateAndGet { existing ->
             if (existing == null) {
@@ -797,6 +706,24 @@ internal fun g3zExecute(
         if (candidate is InterruptedException) {
             interruptedSeen.set(true)
             Thread.interrupted()
+        }
+    }
+    fun awaitOwnedProcessUntilWatchdog() {
+        while (true) {
+            if (!runCatching { process.isAlive }.getOrDefault(true)) {
+                exit = runCatching { process.exitValue() }.getOrNull()
+                return
+            }
+            val remainingNanos = watchdogDeadlineNanos - System.nanoTime()
+            if (remainingNanos <= 0L) {
+                record(executionFailure, IllegalStateException("G3z owned wrapper exceeded its original watchdog window"))
+                return
+            }
+            try {
+                process.waitFor(remainingNanos, TimeUnit.NANOSECONDS)
+            } catch (interrupted: InterruptedException) {
+                record(executionFailure, interrupted)
+            }
         }
     }
     fun captureIdentities() {
@@ -838,7 +765,6 @@ internal fun g3zExecute(
         }
     }
     val monitorStop = AtomicBoolean(false)
-    var exit: Int? = null
     try {
         if (interruptedSeen.get()) record(executionFailure, InterruptedException("G3z execution entered interrupted"))
         captureIdentities()
@@ -879,10 +805,13 @@ internal fun g3zExecute(
             exit = process.waitFor()
         } catch (error: Throwable) {
             record(executionFailure, error)
+            // An interrupted/error return still owns the wrapper until its original 120s + 10s watchdog ends.
+            awaitOwnedProcessUntilWatchdog()
         }
     } catch (error: Throwable) {
         record(executionFailure, error)
     } finally {
+        if (runCatching { process.isAlive }.getOrDefault(true)) awaitOwnedProcessUntilWatchdog()
         monitorStop.set(true)
         monitor?.interrupt()
         monitor?.let {
@@ -894,8 +823,7 @@ internal fun g3zExecute(
             if (it.isAlive) record(executionFailure, IllegalStateException("G3z identity monitor did not stop"))
         }
         captureIdentities()
-        val cleanup = g3zCleanupRecordedProcesses(identities.values.sortedBy { it.pid }, sudo, timeout, kill)
-        cleanupKillReceipts = cleanup.killReceipts
+        val cleanup = g3zCleanupRecordedProcesses(identities.values.sortedBy { it.pid })
         cleanup.failure?.let { record(executionFailure, it) }
         if (cleanup.interrupted) interruptedSeen.set(true)
         drains.forEach { drain ->
@@ -931,7 +859,6 @@ internal fun g3zExecute(
         monitorStopped = monitor?.isAlive != true,
         drainsStopped = drains.all { !it.thread.isAlive },
         interrupted = interruptedSeen.get(),
-        cleanupKillReceipts = cleanupKillReceipts,
     )
 }
 
@@ -941,8 +868,8 @@ fun g3zRunNamespace(launch: G3zNamespaceLaunch): G3zNamespaceRun {
     launch.workingDirectory.mkdirs()
     launch.home.mkdirs()
     launch.tmp.mkdirs()
+    // sudo is retained only to create the isolated namespace; cleanup never authorizes a bare host-PID signal.
     val sudo = g3zTrustedTool("sudo")
-    val kill = g3zTrustedTool("kill")
     val timeout = g3zTrustedTool("timeout")
     val unshare = g3zTrustedTool("unshare")
     val setpriv = g3zTrustedTool("setpriv")
@@ -996,17 +923,11 @@ fun g3zRunNamespace(launch: G3zNamespaceLaunch): G3zNamespaceRun {
                 "TMP" to launch.tmp.absolutePath,
                 "TEMP" to launch.tmp.absolutePath,
             ),
-            sudo = sudo,
-            timeout = timeout,
-            kill = kill,
         )
         execution.exitCode?.let { launch.report.resolve("exit.txt").writeText("$it\n") }
             ?: launch.report.resolve("exit-unavailable.txt").writeText("process did not expose an exit status\n")
         execution.identities.forEach { identity ->
             launch.report.resolve("process-identities.tsv").appendText("${identity.pid}\t${identity.startTicks}\n")
-        }
-        execution.cleanupKillReceipts.takeIf { it.isNotEmpty() }?.let { receipts ->
-            launch.report.resolve("cleanup-kill-exits.tsv").writeText(receipts.joinToString("\n", postfix = "\n"))
         }
         fun recordFailure(candidate: Throwable) {
             if (failure == null) failure = candidate else failure?.addSuppressed(candidate)
@@ -1372,7 +1293,7 @@ fun g3zRequireNativeEvidence(evidence: File, nativeOutput: File, expectedUid: St
     g3zRequireExactJUnitXml(xmlFiles.single(), g3zMethodClass, "$g3zMethodName()")
     val summary = g3zReadNativeSummary(evidence.resolve("stdout.log"))
     require(
-            summary.testsFound == 1L &&
+        summary.testsFound == 1L &&
             summary.testsStarted == 1L &&
             summary.testsSucceeded == 1L &&
             summary.testsAborted == 0L &&
