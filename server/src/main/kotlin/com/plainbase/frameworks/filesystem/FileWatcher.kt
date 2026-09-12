@@ -165,9 +165,9 @@ class FileWatcher(
     /** The coverage this watcher last REPORTED - so only TRANSITIONS are published (see [reportCoverage]). */
     private val partial = AtomicBoolean(false)
     private val closeRequested = AtomicBoolean(false)
-    private var worker: Thread? = null
+    private val worker: Thread = startWorker()
 
-    init {
+    private fun startWorker(): Thread {
         try {
             excludedDirs.forEach { dir ->
                 logger.warn {
@@ -184,8 +184,9 @@ class FileWatcher(
             // recovery pass. That is a latency argument against a correctness one, and it loses: the worker starts on
             // the very next line, and a PARTIAL that arrives a microsecond early costs nothing.)
             reportCoverage(registerTree(this.root))
-            worker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
+            val startedWorker = thread(name = "plainbase-file-watcher", isDaemon = true) { processEvents() }
             logger.info { "watching ${this.root} (${keys.size} directories)" }
+            return startedWorker
         } catch (failure: Throwable) {
             runCatching { closeWatchService(watchService) }.onFailure { cleanup ->
                 if (cleanup !== failure) failure.addSuppressed(cleanup)
@@ -201,29 +202,27 @@ class FileWatcher(
             var primary: Throwable? = null
             if (firstClose) {
                 try {
-                    closeWatchService(watchService) // wakes the worker's take() with ClosedWatchServiceException
+                    closeWatchService(watchService) // wakes the worker's timed poll with ClosedWatchServiceException
                 } catch (failure: Throwable) {
                     primary = failure
                 }
             }
-            worker?.let { currentWorker ->
-                try {
-                    awaitForever(
-                        await = { millis -> currentWorker.join(millis) },
-                        completed = { !currentWorker.isAlive },
-                    )
-                } catch (failure: Throwable) {
-                    if (primary == null) primary = failure else primary.addSuppressed(failure)
-                }
+            try {
+                awaitForever(
+                    await = { millis -> worker.join(millis) },
+                    completed = { !worker.isAlive },
+                )
+            } catch (failure: Throwable) {
+                if (primary == null) primary = failure else primary.addSuppressed(failure)
             }
             captureCurrentInterrupt()
             primary?.let { throw it }
         }
     }
 
-    internal fun isClosedForTest(): Boolean = closeRequested.load() && worker?.isAlive != true
+    internal fun isClosedForTest(): Boolean = closeRequested.load() && !worker.isAlive
 
-    internal fun workerForTest(): Thread? = worker
+    internal fun workerForTest(): Thread = worker
 
     /**
      * Registers a NEW subtree (a directory created on sight). It can only ever LOSE coverage, never restore it:
@@ -358,10 +357,9 @@ class FileWatcher(
         // The retry deadline is the WORKER's own, a plain local: nothing else reads it, and hanging the cadence on
         // a shared field would be a race to invent for no reason.
         var nextRetry = System.nanoTime() + coverageRetryInterval.inWholeNanoseconds
-        while (true) {
+        while (!closeRequested.load()) {
             val key = runCatching {
-                // NOT take(): a poll TIMEOUT is the root's heartbeat (see the class doc), and it is also what
-                // keeps a watcher whose last key died from blocking forever with nothing left to wake it.
+                // A timed poll is the root heartbeat and bounds idle liveness checks.
                 watchService.poll(livenessInterval.inWholeMilliseconds, TimeUnit.MILLISECONDS)
             }.getOrElse { failure ->
                 when (failure) {
@@ -369,6 +367,7 @@ class FileWatcher(
                     else -> throw failure
                 }
             }
+            if (closeRequested.load()) return
             // Coverage runs on its OWN, COARSE cadence - deliberately NOT hung on the liveness tick, which fires
             // every few seconds: the scheduler would coalesce the passes, but each pass it does run is O(corpus),
             // and a big corpus would rebuild itself into the ground for as long as one subtree stays unwatched.
