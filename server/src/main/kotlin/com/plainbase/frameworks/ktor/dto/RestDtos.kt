@@ -33,6 +33,9 @@ val RestJson: Json = Json {
 
 /** The frozen error-code vocabulary (§A4, append-only). */
 object ErrorCodes {
+    /** 503: admission is closed while the server drains its admitted call jobs. */
+    const val SERVER_SHUTTING_DOWN: String = "server_shutting_down"
+
     /** 404: a canonical-shape-valid id (any version) absent from the index, or an unknown by-path. */
     const val PAGE_NOT_FOUND: String = "page_not_found"
 

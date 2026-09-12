@@ -1,8 +1,12 @@
 package com.plainbase.frameworks.ktor
 
 import com.plainbase.frameworks.config.PlainbaseConfig
+import com.plainbase.frameworks.ktor.dto.ErrorBody
 import com.plainbase.frameworks.ktor.dto.ErrorCodes
+import com.plainbase.frameworks.ktor.dto.ErrorEnvelope
+import com.plainbase.frameworks.ktor.dto.RestJson
 import com.plainbase.frameworks.ktor.routes.ExtractedPrincipal
+import com.plainbase.frameworks.ktor.routes.RECEIVE_BODY_ENTRY_OBSERVER
 import com.plainbase.frameworks.ktor.routes.adminRoute
 import com.plainbase.frameworks.ktor.routes.adminTokenRoutes
 import com.plainbase.frameworks.ktor.routes.adminUserRoutes
@@ -29,39 +33,101 @@ import com.plainbase.frameworks.ktor.routes.sessionRoutes
 import com.plainbase.frameworks.ktor.routes.setupRoutes
 import com.plainbase.frameworks.ktor.routes.spaShellRoutes
 import com.plainbase.frameworks.ktor.routes.treeRoute
+import com.plainbase.frameworks.lifecycle.CompletionWait
 import com.plainbase.frameworks.mcp.plainbaseMcp
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLDecodeException
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationCallPipeline
+import io.ktor.server.application.ApplicationStopPreparing
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.header
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.sessions.Sessions
 import io.ktor.server.sessions.cookie
 import io.ktor.server.sse.SSE
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Ktor on the CIO engine — the only engine Plainbase will ever use
  * (pure-Kotlin coroutines, native-image friendly; Netty is banned, §3).
  */
+@Suppress("TooGenericExceptionCaught")
 class KtorServer(
     config: PlainbaseConfig,
     routeContext: RouteContext,
 ) {
 
+    private val admission = HttpCallAdmission()
+    private val stopStarted = AtomicBoolean(false)
+    private val stopCompleted = CountDownLatch(1)
+    private val stopWorkerCompleted = CountDownLatch(1)
+    private val stopWorker = AtomicReference<Thread?>(null)
+    private val stopWorkerFailure = AtomicReference<Throwable?>(null)
+    private val nextReceiveObservation = AtomicReference<((ApplicationCall) -> Unit)?>(null)
+    private val nextStructuredChild = AtomicReference<((CoroutineScope) -> Unit)?>(null)
+
+    @Volatile
+    private var stopWorkerFactory: (Runnable) -> Thread = { task -> Thread(task, STOP_WORKER_NAME) }
+
+    @Volatile
+    private var stopWorkerStarter: (Thread) -> Unit = { worker -> worker.start() }
+
+    @Volatile
+    private var stopFailure: Throwable? = null
+
+    @Volatile
+    private var beforeEngineStopOperation: () -> Unit = {}
+
+    @Volatile
+    private var engineStopOperation: () -> Unit = ::stopEngine
+
     // Held rather than discarded, so shutdown can STOP it: on SIGTERM the teardown must drain in-flight
     // requests instead of severing them mid-write. Built here as a `val` (the engine binds at start(), not
     // at construction), which also publishes it safely to the shutdown-hook thread with no mutable state.
     private val engine = embeddedServer(CIO, host = config.host, port = config.port) {
+        monitor.subscribe(ApplicationStopPreparing) {
+            admission.closeAdmission()
+        }
+        // Setup is before plugins, authentication and routing. Closed admission therefore has no collaborator or
+        // business-code path to resolve, including on an already-accepted keep-alive connection.
+        intercept(ApplicationCallPipeline.Setup) {
+            if (!admission.tryAdmit(context)) {
+                context.response.header(HttpHeaders.Connection, "close")
+                context.respondText(
+                    RestJson.encodeToString(
+                        ErrorEnvelope.serializer(),
+                        ErrorEnvelope(ErrorBody(ErrorCodes.SERVER_SHUTTING_DOWN, "Server is shutting down")),
+                    ),
+                    ContentType.Application.Json,
+                    HttpStatusCode.ServiceUnavailable,
+                )
+                finish()
+            } else {
+                nextReceiveObservation.getAndSet(null)?.let { observer ->
+                    context.attributes.put(RECEIVE_BODY_ENTRY_OBSERVER, observer)
+                }
+                nextStructuredChild.getAndSet(null)?.invoke(context)
+            }
+        }
         plainbaseModule(routeContext, secureCookie = config.secureCookie())
     }
 
@@ -69,20 +135,175 @@ class KtorServer(
         engine.start(wait = wait)
     }
 
-    /**
-     * The bounded graceful stop: refuse new connections, let in-flight requests finish within
-     * [STOP_GRACE_MILLIS], then hard-stop at [STOP_TIMEOUT_MILLIS] - a shutdown step must never be the thing
-     * that hangs. Also what unblocks a `start(wait = true)`, so the caller's own cleanup can proceed.
-     */
+    /** Stops the engine on one owned worker, then drains the admitted call barrier. */
     fun stop() {
+        val launchOwner = stopStarted.compareAndSet(false, true)
+        CompletionWait.run {
+            if (launchOwner) {
+                admission.closeAdmission()
+                launchAndAwaitStop(this)
+            }
+            awaitForever(
+                await = { stopCompleted.await(it, TimeUnit.MILLISECONDS) },
+                completed = { stopCompleted.count == 0L },
+            )
+        }
+        stopFailure?.let { throw it }
+    }
+
+    private fun launchAndAwaitStop(wait: CompletionWait) {
+        var launchPrimary: Throwable? = null
+
+        fun retainLaunchFailure(failure: Throwable) {
+            if (launchPrimary == null) {
+                launchPrimary = failure
+                logger.warn(failure) { "HTTP stop worker launch failed; retaining shutdown ownership for retry" }
+            } else if (failure !== launchPrimary && requireNotNull(launchPrimary).suppressed.none { it === failure }) {
+                requireNotNull(launchPrimary).addSuppressed(failure)
+            }
+        }
+
+        var worker: Thread? = null
+        while (worker == null) {
+            val candidate = try {
+                stopWorkerFactory(Runnable(::runStop))
+            } catch (failure: Throwable) {
+                retainLaunchFailure(failure)
+                awaitLaunchRetry(wait)
+                continue
+            }
+            stopWorker.set(candidate)
+            try {
+                candidate.isDaemon = false
+                stopWorkerStarter(candidate)
+                if (candidate.state == Thread.State.NEW) {
+                    throw IllegalStateException("HTTP stop worker launcher returned without starting its worker")
+                }
+                worker = candidate
+            } catch (failure: Throwable) {
+                if (candidate.state == Thread.State.NEW) {
+                    stopWorker.compareAndSet(candidate, null)
+                    retainLaunchFailure(failure)
+                    awaitLaunchRetry(wait)
+                } else {
+                    retainLaunchFailure(failure)
+                    worker = candidate
+                }
+            }
+        }
+
+        val startedWorker = requireNotNull(worker)
+        wait.awaitForever(
+            await = { stopWorkerCompleted.await(it, TimeUnit.MILLISECONDS) },
+            completed = { stopWorkerCompleted.count == 0L },
+        )
+        wait.awaitForever(
+            await = { startedWorker.join(it) },
+            completed = { !startedWorker.isAlive },
+        )
+        stopFailure = combineFailures(launchPrimary, stopWorkerFailure.get())
+        stopCompleted.countDown()
+    }
+
+    private fun awaitLaunchRetry(wait: CompletionWait) {
+        wait.awaitUntil(
+            deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(LAUNCH_RETRY_MILLIS),
+            await = { remainingNanos -> TimeUnit.NANOSECONDS.sleep(remainingNanos) },
+            completed = { false },
+        )
+    }
+
+    private fun combineFailures(primary: Throwable?, secondary: Throwable?): Throwable? {
+        if (primary == null) return secondary
+        if (secondary != null && secondary !== primary && primary.suppressed.none { it === secondary }) {
+            primary.addSuppressed(secondary)
+        }
+        return primary
+    }
+
+    private fun runStop() {
+        var primary: Throwable? = null
+        fun retain(failure: Throwable) {
+            primary = combineFailures(primary, failure)
+        }
+        try {
+            admission.closeAdmission()
+            try {
+                beforeEngineStopOperation()
+            } catch (failure: Throwable) {
+                retain(failure)
+            }
+            try {
+                engineStopOperation()
+            } catch (failure: Throwable) {
+                retain(failure)
+            }
+            try {
+                admission.awaitFinalCalls()
+            } catch (failure: Throwable) {
+                retain(failure)
+            }
+        } catch (failure: Throwable) {
+            retain(failure)
+        } finally {
+            stopWorkerFailure.set(primary)
+            stopWorkerCompleted.countDown()
+        }
+    }
+
+    internal fun closeAdmission() = admission.closeAdmission()
+
+    internal fun captureNextAdmissionForTest(observer: (HttpCallAdmission.CallJobObservation) -> Unit) {
+        admission.captureNextObservationForTest(observer)
+    }
+
+    internal fun captureNextReceiveForTest(observer: (ApplicationCall) -> Unit) {
+        check(nextReceiveObservation.compareAndSet(null, observer)) { "a receive observation is already armed" }
+    }
+
+    internal fun launchNextStructuredChildForTest(factory: (CoroutineScope) -> Unit) {
+        check(nextStructuredChild.compareAndSet(null, factory)) { "a structured-child observation is already armed" }
+    }
+
+    /** The normal path is a no-op; H1 uses this narrow gap to race a new request against closed admission. */
+    internal fun beforeEngineStopForTest(operation: () -> Unit) {
+        beforeEngineStopOperation = operation
+    }
+
+    /** Injects a failure after real engine cancellation, independently from [beforeEngineStopForTest]. */
+    internal fun failAfterEngineStopForTest(failure: Throwable) {
+        engineStopOperation = {
+            stopEngine()
+            throw failure
+        }
+    }
+
+    internal fun configureStopWorkerForTest(
+        factory: (Runnable) -> Thread = { task -> Thread(task, STOP_WORKER_NAME) },
+        starter: (Thread) -> Unit = { worker -> worker.start() },
+    ) {
+        check(!stopStarted.get()) { "stop worker configuration must precede stop" }
+        stopWorkerFactory = factory
+        stopWorkerStarter = starter
+    }
+
+    internal fun stopWorkerForTest(): Thread? = stopWorker.get()
+
+    internal fun admittedCallsForTest(): Int = admission.admittedCountForTest()
+
+    internal fun admissionOpenForTest(): Boolean = admission.isAcceptingForTest()
+
+    private fun stopEngine() {
         engine.stop(gracePeriodMillis = STOP_GRACE_MILLIS, timeoutMillis = STOP_TIMEOUT_MILLIS)
     }
 
     internal companion object {
         private const val STOP_GRACE_MILLIS = 3_000L
         private const val STOP_TIMEOUT_MILLIS = 5_000L
+        private const val LAUNCH_RETRY_MILLIS = 100L
+        private const val STOP_WORKER_NAME = "plainbase-http-stop"
 
-        /** CIO's observed stop forecast; request completion is owned by the later application drain. */
+        /** CIO's configured engine-stop attempt; request completion is owned by the later application drain. */
         const val STOP_BOUND_MILLIS: Long = STOP_TIMEOUT_MILLIS
     }
 }

@@ -26,6 +26,9 @@ internal class ServerResourceOwner(
     @Volatile
     private var serviceAdmissionFinished = false
 
+    private var serviceAdmissionClose: (() -> Unit)? = null
+    private var serviceAdmissionCloseInvoked = false
+
     private var serviceWorker: Thread? = null
     private val serviceCompleted = CountDownLatch(1)
     private var overallCloseStarted = false
@@ -179,6 +182,20 @@ internal class ServerResourceOwner(
 
     internal fun overallWorkerForTest(): Thread? = synchronized(overallCloseLock) { overallWorker }
 
+    /** Registers the acquired HTTP gate; its nonblocking close runs before constructor draining begins. */
+    internal fun registerServiceAdmissionClose(close: () -> Unit) {
+        val invokeImmediately = synchronized(state) {
+            if (serviceAdmissionCloseInvoked) {
+                true
+            } else {
+                check(serviceAdmissionClose == null) { "service admission close was registered more than once" }
+                serviceAdmissionClose = close
+                false
+            }
+        }
+        if (invokeImmediately) close()
+    }
+
     /** Starts the shared warning clock at the first actual drain. */
     internal fun initializeWarningRun() {
         synchronized(warningInitializationLock) {
@@ -298,6 +315,11 @@ internal class ServerResourceOwner(
             awaitServiceDrain()
             return
         }
+        try {
+            closeServiceAdmission()
+        } catch (failure: Throwable) {
+            logger.warn(failure) { "closing service admission failed; continuing cleanup" }
+        }
         if (!serviceAdmissionFinished) {
             if (warningConstruction) {
                 warningState.enterPhase(CONSTRUCTION_PHASE, CleanupWarningState.CONSTRUCTION_WAIT_FORECAST_MILLIS)
@@ -307,6 +329,19 @@ internal class ServerResourceOwner(
             refreshWarningPhases()
             serviceAdmissionFinished = true
         }
+    }
+
+    /** Claims the callback under the owner state, then invokes it without holding that monitor. */
+    private fun closeServiceAdmission() {
+        val close = synchronized(state) {
+            if (serviceAdmissionCloseInvoked) {
+                null
+            } else {
+                serviceAdmissionCloseInvoked = true
+                serviceAdmissionClose.also { serviceAdmissionClose = null }
+            }
+        }
+        close?.invoke()
     }
 
     private fun CompletionWait.awaitServiceDrain() {

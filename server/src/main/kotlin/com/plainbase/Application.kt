@@ -327,6 +327,7 @@ private fun runOwnedServer(
             val server = resources.construct("HTTP server") {
                 control.createHttpServer(config, routeContext).also { server ->
                     resources.own(ServerResourcePhase.HTTP, server, control.closeHttp)
+                    resources.registerServiceAdmissionClose(server::closeAdmission)
                     control.onHttpAcquired(server)
                 }
             }
