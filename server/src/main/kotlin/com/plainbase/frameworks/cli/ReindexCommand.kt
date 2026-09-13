@@ -24,15 +24,10 @@ import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
+import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
-import com.plainbase.frameworks.sqldelight.PlainbaseDb
-import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightPageCheckpointRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightUrlAliasRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
 
 /**
@@ -155,13 +150,14 @@ object ReindexCommand {
         output: CommandOutput,
     ): PageIndex {
         val database = DatabaseFactory.createDatabase(driver)
+        val repositories = ContentRepositories(database)
         val registry = RootRegistry.of(config.roots.list)
-        val stores = openStores(config, registry, database, decorate)
+        val stores = openStores(config, registry, repositories, decorate)
         try {
             requireEveryRootAvailable(registry, stores, output)
-            val aliasRegistry = UrlAliasRegistry(SqlDelightUrlAliasRepository(database))
-            val checkpoint = SqlDelightPageCheckpointRepository(database)
-            val idMap = SqlDelightIdMapRepository(database)
+            val aliasRegistry = UrlAliasRegistry(repositories.aliases)
+            val checkpoint = repositories.checkpoints
+            val idMap = repositories.idMap
             val searchIndexer = SearchIndexer(
                 provider = Fts5SearchProvider(searchDb),
                 splitter = SectionSplitter(),
@@ -188,7 +184,7 @@ object ReindexCommand {
                 // listener consumes pass-local applied proofs, while SearchIndexer reads current retired-unbound
                 // rows for the generation swap; a CLI that could reap from snapshot omission would be a second
                 // door into the corpus.
-                retirements = SqlDelightRetirementRepository(database),
+                retirements = repositories.retirements,
                 // No search sync listener - only the §B3 checkpoint replace. The search engine is
                 // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
                 listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
@@ -214,7 +210,7 @@ object ReindexCommand {
     private fun openStores(
         config: PlainbaseConfig,
         registry: RootRegistry,
-        database: PlainbaseDb,
+        repositories: ContentRepositories,
         decorate: StoreDecorator,
     ): Map<RootName, ContentStore> {
         val stores = LinkedHashMap<RootName, ContentStore>()
@@ -222,7 +218,7 @@ object ReindexCommand {
             // Main is explicit (it rides the backend-selected store); the fold sees ONLY extras, never re-selecting
             // primary by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
             // disappearance test drives, so dropping it here would disarm that test for main's own tree, silently.
-            stores[registry.primary.name] = decorate(registry.primary.name, mainStore(config, database))
+            stores[registry.primary.name] = decorate(registry.primary.name, mainStore(config, repositories))
             registry.extras.forEach { root ->
                 val store = LocalContentStore(
                     root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
@@ -242,7 +238,7 @@ object ReindexCommand {
     }
 
     /** Main's tree: the CONTENT_DIR store locally, the hydrated DATA_DIR mirror in object mode. */
-    private fun mainStore(config: PlainbaseConfig, database: PlainbaseDb): ContentStore = when (config.storage.backend) {
+    private fun mainStore(config: PlainbaseConfig, repositories: ContentRepositories): ContentStore = when (config.storage.backend) {
         StorageBackend.LOCAL -> LocalContentStore(
             root = config.mainContentRoot(),
             ignoreRules = IgnoreRules(),
@@ -254,14 +250,13 @@ object ReindexCommand {
         StorageBackend.OBJECT -> {
             // Object mode reindexes the DATA_DIR mirror (the bucket is the authority), hydrating it
             // first - under the DataDirLock already held above, race-free (the server is down).
-            val dirtyPages = SqlDelightDirtyPageRepository(database)
             // Build (transport open) BEFORE hydrate, and close it on a hydrate failure so the ktor
             // client never leaks when the bucket is unreachable.
             val hybrid = ObjectContentStoreFactory.build(
                 config,
                 IgnoreRules(),
-                dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
-                isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
+                dirtyPaths = { repositories.dirtyPages.all().map { it.path.path }.toSet() },
+                isDirty = { repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
             )
             runCatching {
                 hybrid.hydrate()

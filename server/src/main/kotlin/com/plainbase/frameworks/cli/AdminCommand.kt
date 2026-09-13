@@ -19,6 +19,7 @@ import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.AuthMode
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.filesystem.DataDirLock
+import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.security.ApiTokenMinter
 import com.plainbase.frameworks.security.Argon2PasswordHasher
 import com.plainbase.frameworks.security.SetupTokenMinter
@@ -26,8 +27,6 @@ import com.plainbase.frameworks.security.TokenHasher
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import com.plainbase.frameworks.sqldelight.PlainbaseDb
 import com.plainbase.frameworks.sqldelight.SqlDelightApiTokenRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightRetirementRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightRoleRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSessionRepository
 import com.plainbase.frameworks.sqldelight.SqlDelightSetupTokenRepository
@@ -252,8 +251,9 @@ object AdminCommand {
 
     /** The retirement itself: mint the OPERATOR proof for a live `(root, id)` binding, or the idempotent/no-binding answers. */
     private fun retire(database: PlainbaseDb, root: RootName, id: PageId, output: CommandOutput): Int {
-        val idMap = SqlDelightIdMapRepository(database)
-        val retirements = SqlDelightRetirementRepository(database)
+        val repositories = ContentRepositories(database)
+        val idMap = repositories.idMap
+        val retirements = repositories.retirements
         // STAMP BEFORE reading the target binding (revoke-before-stamp, C5). The binding read below is the negative
         // evidence this OPERATOR proof rests on; capturing both freshness stamps first means a concurrent restore's
         // re-bind landing between the read and the apply advances binding_epoch past this value and `applyProofs`

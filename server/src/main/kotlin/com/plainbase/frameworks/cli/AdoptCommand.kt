@@ -23,9 +23,8 @@ import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
+import com.plainbase.frameworks.runtime.ContentRepositories
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
-import com.plainbase.frameworks.sqldelight.SqlDelightDirtyPageRepository
-import com.plainbase.frameworks.sqldelight.SqlDelightIdMapRepository
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Path
 import kotlin.time.Clock
@@ -108,6 +107,7 @@ object AdoptCommand {
         val stores = LinkedHashMap<RootName, ContentStore>()
         try {
             val database = DatabaseFactory.createDatabase(driver)
+            val repositories = ContentRepositories(database)
             when (config.storage.backend) {
                 // EVERY configured root, not just main. The identity an adopt writes into a page's frontmatter is
                 // the ONLY copy of it that survives a lost DATA_DIR - so a root this pass skips is a root whose
@@ -130,13 +130,12 @@ object AdoptCommand {
                     // RECORD/MATERIALIZE hydrate first - under the lock already held, race-free (the
                     // server is down). PREVIEW hydrates NOTHING (its contract is zero writes and it is
                     // lock-free): it reads the existing mirror as-is, point-in-time, possibly stale.
-                    val dirtyPages = SqlDelightDirtyPageRepository(database)
                     // Register BEFORE hydrate so a hydrate-failure early return still closes the transport.
                     val hybrid = ObjectContentStoreFactory.build(
                         config,
                         IgnoreRules(),
-                        dirtyPaths = { dirtyPages.all().map { it.path.path }.toSet() },
-                        isDirty = { dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
+                        dirtyPaths = { repositories.dirtyPages.all().map { it.path.path }.toSet() },
+                        isDirty = { repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
                     )
                     stores[registry.primary.name] = hybrid
                     if (mode != AdoptionPass.Mode.PREVIEW && !hydrate(hybrid, output)) {
@@ -147,7 +146,7 @@ object AdoptCommand {
             if (refuseUnavailableRoots(registry, stores, output)) return 1
             val pass = AdoptionPass(
                 sources = stores.map { (root, store) -> AdoptionPass.Source(root, store) },
-                idMap = SqlDelightIdMapRepository(database),
+                idMap = repositories.idMap,
                 identity = PageIdentityService(UuidV7IdProvider()),
                 patcher = FrontmatterPatcher(),
                 // The shared root-loss rule (probe decides, a live-root fault still rethrows). Its availability
