@@ -3,29 +3,21 @@ package com.plainbase.frameworks.cli
 import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageIndex
-import com.plainbase.domain.repository.replaceFrom
 import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.RowsAtStart
-import com.plainbase.domain.service.CitationFactory
-import com.plainbase.domain.service.FrontmatterPatcher
-import com.plainbase.domain.service.IndexBuilder
-import com.plainbase.domain.service.PageIdentityService
 import com.plainbase.domain.service.SearchIndexer
 import com.plainbase.domain.service.SectionSplitter
-import com.plainbase.domain.service.UrlAliasRegistry
-import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
-import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.lifecycle.OfflineStoreResources
-import com.plainbase.frameworks.markdown.FlexmarkRenderer
-import com.plainbase.frameworks.markdown.FrontmatterReader
 import com.plainbase.frameworks.runtime.ContentRepositories
+import com.plainbase.frameworks.runtime.IndexRuntimeFactory
+import com.plainbase.frameworks.runtime.IndexSupport
 import com.plainbase.frameworks.runtime.LocalStoreInputs
 import com.plainbase.frameworks.runtime.OfflineStoreOperations
 import com.plainbase.frameworks.runtime.RootStoreFactory
@@ -171,7 +163,7 @@ object ReindexCommand {
         val registry = RootRegistry.of(config.roots.list)
         val stores = openStores(config, registry, repositories, decorate, operations, resources)
         requireEveryRootAvailable(registry, stores, output)
-        val aliasRegistry = UrlAliasRegistry(repositories.aliases)
+        val aliasRegistry = IndexRuntimeFactory.aliasRegistry(repositories.aliases)
         val checkpoint = repositories.checkpoints
         val idMap = repositories.idMap
         val searchIndexer = SearchIndexer(
@@ -180,30 +172,22 @@ object ReindexCommand {
             retiredUnboundIds = idMap::retiredUnboundIds,
             isRetiredUnbound = idMap::isRetiredUnbound,
         )
-        val builder = IndexBuilder(
-            // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
-            // process is spawned here (the snapshot's commit fields stay null - harmless for this path).
-            sources = registry.roots.map { root ->
-                IndexBuilder.Source(root = root, store = stores[root.name], history = NoOpHistoryProvider)
-            },
-            frontmatterParser = FrontmatterReader(),
-            rendererFactory = { view -> FlexmarkRenderer(view) },
-            identity = PageIdentityService(UuidV7IdProvider()),
-            patcher = FrontmatterPatcher(),
+        val idProvider = IndexRuntimeFactory.idProvider()
+        val support = IndexSupport(
+            idProvider = idProvider,
+            identity = IndexRuntimeFactory.identity(idProvider),
+            frontmatterParser = IndexRuntimeFactory.frontmatterParser(),
+            patcher = IndexRuntimeFactory.patcher(),
             idMap = idMap,
             aliasRegistry = aliasRegistry,
             checkpoint = checkpoint,
-            citations = CitationFactory(),
-            rootRank = registry::rank,
-            registeredRoots = registry.roots.map { it.name }.toSet(),
-            // The offline reindex uses the same durable retirement repository as the server. The checkpoint
-            // listener consumes pass-local applied proofs, while SearchIndexer reads current retired-unbound
-            // rows for the generation swap; a CLI that could reap from snapshot omission would be a second
-            // door into the corpus.
+            citations = IndexRuntimeFactory.citations(),
+        )
+        val builder = IndexRuntimeFactory.offlineReindex(
+            registry = registry,
+            stores = stores,
+            support = support,
             retirements = repositories.retirements,
-            // No search sync listener - only the §B3 checkpoint replace. The search engine is
-            // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
-            listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
             searchIndexer = searchIndexer,
         )
         val snapshot = builder.rebuild() // page-index pass; publishes the snapshot (the sync listener does not fire)
