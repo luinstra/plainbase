@@ -24,6 +24,8 @@ import com.plainbase.frameworks.ktor.LoginRateLimiter
 import com.plainbase.frameworks.ktor.RouteContext
 import com.plainbase.frameworks.ktor.buildRouteContext
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.security.ProxyCsrf
 import com.plainbase.frameworks.security.dummyPasswordHash
 import com.plainbase.frameworks.security.loadOrCreateProxyCsrfKey

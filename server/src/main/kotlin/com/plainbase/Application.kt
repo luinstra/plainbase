@@ -33,8 +33,6 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.git.GitBundleDr
-import com.plainbase.frameworks.koin.HistoryProviders
-import com.plainbase.frameworks.koin.RootStores
 import com.plainbase.frameworks.koin.checkpointModule
 import com.plainbase.frameworks.koin.createContentModule
 import com.plainbase.frameworks.koin.createHistoryModule
@@ -51,10 +49,12 @@ import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.lifecycle.ServerRunControl
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.DeferredObjectHistory
+import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ObjectHistoryCallbacks
 import com.plainbase.frameworks.runtime.RootBootInputs
 import com.plainbase.frameworks.runtime.RootBootProbe
 import com.plainbase.frameworks.runtime.RootHistorySelection
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import com.plainbase.frameworks.scheduling.ExecutorAlarm

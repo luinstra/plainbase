@@ -296,15 +296,22 @@ sourceSets {
 // native-smoke tests from the `nativeTest` source set (folded in below). So `./gradlew build`
 // always exercises every test on the JVM. The `nativeTest` source set additionally feeds the
 // GraalVM native test image - and ONLY it does, so the closed-world image never sees Kotest/MockK.
-tasks.test {
-    useJUnitPlatform()
-    // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
-    val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+val mainRuntimeClasspathInput = sourceSets["main"].runtimeClasspath
+
+fun Test.configurePlainbaseMainRuntimeClasspath() {
     inputs.files(mainRuntimeClasspathInput)
         .withPropertyName("plainbaseMainRuntimeClasspath")
         .withNormalizer(ClasspathNormalizer::class)
     doFirst {
         systemProperty("plainbase.test.mainRuntimeClasspath", mainRuntimeClasspathInput.asPath)
+    }
+}
+
+tasks.test {
+    useJUnitPlatform()
+    // ServerBootCliContractTest consumes this execution-time production classpath and evidence identity.
+    configurePlainbaseMainRuntimeClasspath()
+    doFirst {
         systemProperty(
             "plainbase.test.evidenceDir",
             layout.buildDirectory.dir("reports/cli-contract/run-${UUID.randomUUID()}").get().asFile.absolutePath,
@@ -330,6 +337,7 @@ val acceptanceTest = tasks.register<Test>("acceptanceTest") {
     useJUnitPlatform()
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
+    configurePlainbaseMainRuntimeClasspath()
     filter { includeTestsMatching("com.plainbase.acceptance.*") }
     testLogging { events("passed", "failed", "skipped") }
 }

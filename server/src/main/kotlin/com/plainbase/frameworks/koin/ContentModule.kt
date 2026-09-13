@@ -9,7 +9,6 @@ import com.plainbase.domain.repository.NoTopology
 import com.plainbase.domain.repository.RetirementRepository
 import com.plainbase.domain.root.BindingLatch
 import com.plainbase.domain.root.BindingRef
-import com.plainbase.domain.root.ObjectManifestProvider
 import com.plainbase.domain.root.ObservationEpoch
 import com.plainbase.domain.root.RootConvergence
 import com.plainbase.domain.root.RootLimbo
@@ -18,13 +17,14 @@ import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
 import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.frameworks.config.PlainbaseConfig
-import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.IgnoreRules
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.objectstore.ObjectContentStore
 import com.plainbase.frameworks.runtime.RootBootInputs
+import com.plainbase.frameworks.runtime.RootStoreFactory
+import com.plainbase.frameworks.runtime.RootStores
 import org.koin.core.scope.Scope
 import org.koin.dsl.module
 import org.koin.dsl.onClose
@@ -81,25 +81,15 @@ internal fun createContentModule(
     if (inputs.localStores.containsKey(primary.name)) {
         single<LocalContentStore> { inputs.localStores.getValue(primary.name) }
     }
-    single {
-        val primaryStore = inputs.localStores[primary.name] ?: run {
-            check(config.storage.backend == StorageBackend.OBJECT) {
-                "no prepared LOCAL store for root '${primary.name}': the required LOCAL input was omitted"
-            }
-            get<ContentStore>()
-        }
-        val stores = buildMap {
-            put(primary.name, primaryStore)
-            inputs.registry.extras.forEach { root ->
-                put(
-                    root.name,
-                    requireNotNull(inputs.localStores[root.name]) {
-                        "no prepared LOCAL store for root '${root.name}': the required LOCAL input was omitted"
-                    },
-                )
+    single<RootStores> {
+        RootStoreFactory.roots(
+            registry = inputs.registry,
+            primary = get<ContentStore>(),
+        ) { root ->
+            requireNotNull(inputs.localStores[root.name]) {
+                "no prepared LOCAL store for root '${root.name}': the required LOCAL input was omitted"
             }
         }
-        RootStores(stores)
     }
     fun Scope.buildObject(): ObjectContentStore {
         val dirtyPages = get<DirtyPageRepository>()
@@ -138,34 +128,15 @@ internal fun createContentModule(
     }
     // Backend selection aliases the selected concrete adapter; the other backend remains unconstructed.
     single<ContentStore> {
-        when (config.storage.backend) {
-            StorageBackend.LOCAL -> get<LocalContentStore>()
-            StorageBackend.OBJECT -> get<ObjectContentStore>()
-        }
+        RootStoreFactory.primary(
+            backend = config.storage.backend,
+            local = {
+                requireNotNull(inputs.localStores[primary.name]) {
+                    "no prepared LOCAL store for root '${primary.name}': the required LOCAL input was omitted"
+                }
+                get<LocalContentStore>()
+            },
+            objectStore = { get<ObjectContentStore>() },
+        )
     }
-}
-
-/**
- * The per-root [ContentStore] map, built from the registry - so a name it does not hold is a PROGRAMMING error, not
- * a runtime condition (every root name that arrives from a durable ROW is routed through
- * `PageRootResolver.statusOf` first, which answers DETACHED for exactly those). Declared here, beside the wiring that
- * is its only construction site.
- */
-class RootStores(private val byRoot: Map<RootName, ContentStore>) {
-
-    /**
-     * [root]'s tree. Fails LOUD and NAMED rather than with a bare `NoSuchElementException`: a per-root lookup that
-     * runs on an unregistered root means a guard was missed somewhere upstream, and the message should say which
-     * invariant broke - not leave an operator with a mystery 500.
-     */
-    operator fun get(root: RootName): ContentStore = requireNotNull(byRoot[root]) {
-        "no store for root '$root': a per-root lookup ran on an unregistered root - resolve PageRootResolver.statusOf first"
-    }
-
-    /**
-     * [root]'s bucket listings, or null when it is not object-backed (C3). The rebuild's OBJECT_LIST proof source:
-     * a local root has no bucket to list, and its absence authority is an observation epoch instead - so "no manifest
-     * provider" is the honest shape of "this root does not answer that question", not a missing wire.
-     */
-    fun manifestsOrNull(root: RootName): ObjectManifestProvider? = byRoot[root] as? ObjectManifestProvider
 }

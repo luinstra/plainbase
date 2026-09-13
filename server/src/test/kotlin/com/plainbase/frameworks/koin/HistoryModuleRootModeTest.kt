@@ -15,6 +15,7 @@ import com.plainbase.frameworks.git.GitCliHistoryProvider
 import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.git.NoOpHistoryProvider
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
+import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.ServerOpeners
 import com.plainbase.frameworks.runtime.prepareRootBootInputs
 import io.kotest.assertions.throwables.shouldThrowAny

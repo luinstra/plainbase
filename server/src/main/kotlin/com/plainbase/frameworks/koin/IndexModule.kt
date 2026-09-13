@@ -13,6 +13,8 @@ import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.domain.service.UuidV7ProposalIdProvider
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
+import com.plainbase.frameworks.runtime.HistoryProviders
+import com.plainbase.frameworks.runtime.RootStores
 import org.koin.dsl.module
 
 /**

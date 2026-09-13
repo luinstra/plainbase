@@ -4,9 +4,11 @@ import app.cash.sqldelight.db.SqlDriver
 import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.page.PageIndex
 import com.plainbase.domain.repository.replaceFrom
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.domain.service.CitationFactory
 import com.plainbase.domain.service.FrontmatterPatcher
 import com.plainbase.domain.service.IndexBuilder
@@ -19,16 +21,20 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
-import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
+import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.markdown.FlexmarkRenderer
 import com.plainbase.frameworks.markdown.FrontmatterReader
-import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.runtime.ContentRepositories
+import com.plainbase.frameworks.runtime.LocalStoreInputs
+import com.plainbase.frameworks.runtime.OfflineStoreOperations
+import com.plainbase.frameworks.runtime.RootStoreFactory
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.nio.file.Path
 
 /**
  * `plainbase reindex` - the OFFLINE/ops full-search-rebuild path. It runs the
@@ -75,7 +81,7 @@ object ReindexCommand {
 
     /** Exit codes: 0 success / 1 runtime failure (incl. a server holding the lock) / 2 usage error. */
     fun run(args: List<String>, config: PlainbaseConfig, output: CommandOutput = systemCommandOutput()): Int =
-        run(args, config, NO_DECORATION, output)
+        run(args, config, NO_DECORATION, output, OfflineStoreOperations())
 
     /**
      * The [StoreDecorator] seam: production runs [NO_DECORATION], and the mid-rebuild-disappearance test wraps ONE
@@ -88,6 +94,14 @@ object ReindexCommand {
         config: PlainbaseConfig,
         decorate: StoreDecorator,
         output: CommandOutput = systemCommandOutput(),
+    ): Int = run(args, config, decorate, output, OfflineStoreOperations())
+
+    internal fun run(
+        args: List<String>,
+        config: PlainbaseConfig,
+        decorate: StoreDecorator,
+        output: CommandOutput,
+        operations: OfflineStoreOperations,
     ): Int {
         if (args.isNotEmpty()) {
             output.error(USAGE) // reindex takes no flags
@@ -95,7 +109,7 @@ object ReindexCommand {
         }
         return runCatching {
             config.requireContentDir() // inside try → a bad config exits 1, honoring the contract (not a stack trace)
-            reindex(config, decorate, output)
+            reindex(config, decorate, output, operations)
             0
         }.getOrElse { failure ->
             if (failure is Error) throw failure
@@ -104,7 +118,12 @@ object ReindexCommand {
         }
     }
 
-    private fun reindex(config: PlainbaseConfig, decorate: StoreDecorator, output: CommandOutput) {
+    private fun reindex(
+        config: PlainbaseConfig,
+        decorate: StoreDecorator,
+        output: CommandOutput,
+        operations: OfflineStoreOperations,
+    ) {
         // Resolution 1b: acquire the DATA_DIR lock FIRST. A live server holds it for its lifetime;
         // writing search.db underneath it would risk the cross-process stale-generation regression.
         val lock = DataDirLock.tryAcquire(config.dataDir)
@@ -116,17 +135,13 @@ object ReindexCommand {
             throw IllegalStateException("DATA_DIR ${config.dataDir} is locked by a running server")
         }
         lock.use {
-            val driver = DatabaseFactory.createDriver(config.appDatabasePath)
-            try {
-                SearchDb(config.searchDatabasePath).use { searchDb ->
-                    // The stdout summary remains the fresh page-pass count and per-root breakdown. Search's
-                    // generation swap separately reports accepted input internally after durable retirement filtering.
-                    val snapshot = rebuildSearchIndex(config, driver, searchDb, decorate, output)
-                    // The command's deterministic stdout result contract.
+            operations.openDriver(config.appDatabasePath).use { driver ->
+                operations.openSearch(config.searchDatabasePath).use { searchDb ->
+                    val snapshot = OfflineStoreResources(operations.closeObject).use { resources ->
+                        rebuildSearchIndex(config, driver, searchDb, decorate, output, operations, resources)
+                    }
                     output.result(summary(snapshot, config))
                 }
-            } finally {
-                driver.close()
             }
         }
     }
@@ -148,126 +163,123 @@ object ReindexCommand {
         searchDb: SearchDb,
         decorate: StoreDecorator,
         output: CommandOutput,
+        operations: OfflineStoreOperations,
+        resources: OfflineStoreResources,
     ): PageIndex {
         val database = DatabaseFactory.createDatabase(driver)
         val repositories = ContentRepositories(database)
         val registry = RootRegistry.of(config.roots.list)
-        val stores = openStores(config, registry, repositories, decorate)
-        try {
-            requireEveryRootAvailable(registry, stores, output)
-            val aliasRegistry = UrlAliasRegistry(repositories.aliases)
-            val checkpoint = repositories.checkpoints
-            val idMap = repositories.idMap
-            val searchIndexer = SearchIndexer(
-                provider = Fts5SearchProvider(searchDb),
-                splitter = SectionSplitter(),
-                retiredUnboundIds = idMap::retiredUnboundIds,
-                isRetiredUnbound = idMap::isRetiredUnbound,
-            )
-            val builder = IndexBuilder(
-                // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
-                // process is spawned here (the snapshot's commit fields stay null - harmless for this path).
-                sources = registry.roots.map { root ->
-                    IndexBuilder.Source(root = root, store = stores.getValue(root.name), history = NoOpHistoryProvider)
-                },
-                frontmatterParser = FrontmatterReader(),
-                rendererFactory = { view -> FlexmarkRenderer(view) },
-                identity = PageIdentityService(UuidV7IdProvider()),
-                patcher = FrontmatterPatcher(),
-                idMap = idMap,
-                aliasRegistry = aliasRegistry,
-                checkpoint = checkpoint,
-                citations = CitationFactory(),
-                rootRank = registry::rank,
-                registeredRoots = registry.roots.map { it.name }.toSet(),
-                // The offline reindex uses the same durable retirement repository as the server. The checkpoint
-                // listener consumes pass-local applied proofs, while SearchIndexer reads current retired-unbound
-                // rows for the generation swap; a CLI that could reap from snapshot omission would be a second
-                // door into the corpus.
-                retirements = repositories.retirements,
-                // No search sync listener - only the §B3 checkpoint replace. The search engine is
-                // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
-                listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
-                searchIndexer = searchIndexer,
-            )
-            val snapshot = builder.rebuild() // page-index pass; publishes the snapshot (the sync listener does not fire)
-            requireCompleteGeneration(registry, snapshot, output) // ...and NOW check what the pass actually produced
-            builder.rebuildSearchIndex() // atomic snapshot-read + clean engine rebuild - identical to the endpoint
-            return snapshot
-        } finally {
-            // Release the object-store transport (LocalContentStore is not closeable).
-            stores.values.forEach { (it as? AutoCloseable)?.close() }
-        }
+        val stores = openStores(config, registry, repositories, decorate, operations, resources)
+        requireEveryRootAvailable(registry, stores, output)
+        val aliasRegistry = UrlAliasRegistry(repositories.aliases)
+        val checkpoint = repositories.checkpoints
+        val idMap = repositories.idMap
+        val searchIndexer = SearchIndexer(
+            provider = Fts5SearchProvider(searchDb),
+            splitter = SectionSplitter(),
+            retiredUnboundIds = idMap::retiredUnboundIds,
+            isRetiredUnbound = idMap::isRetiredUnbound,
+        )
+        val builder = IndexBuilder(
+            // The CLI reindex rebuilds the search engine only; search never reads `commit`, so no git
+            // process is spawned here (the snapshot's commit fields stay null - harmless for this path).
+            sources = registry.roots.map { root ->
+                IndexBuilder.Source(root = root, store = stores[root.name], history = NoOpHistoryProvider)
+            },
+            frontmatterParser = FrontmatterReader(),
+            rendererFactory = { view -> FlexmarkRenderer(view) },
+            identity = PageIdentityService(UuidV7IdProvider()),
+            patcher = FrontmatterPatcher(),
+            idMap = idMap,
+            aliasRegistry = aliasRegistry,
+            checkpoint = checkpoint,
+            citations = CitationFactory(),
+            rootRank = registry::rank,
+            registeredRoots = registry.roots.map { it.name }.toSet(),
+            // The offline reindex uses the same durable retirement repository as the server. The checkpoint
+            // listener consumes pass-local applied proofs, while SearchIndexer reads current retired-unbound
+            // rows for the generation swap; a CLI that could reap from snapshot omission would be a second
+            // door into the corpus.
+            retirements = repositories.retirements,
+            // No search sync listener - only the §B3 checkpoint replace. The search engine is
+            // rebuilt explicitly below, not diff-synced as a side effect of the page pass.
+            listeners = listOf(IndexBuilder.PublicationListener(checkpoint::replaceFrom)),
+            searchIndexer = searchIndexer,
+        )
+        val snapshot = builder.rebuild() // page-index pass; publishes the snapshot (the sync listener does not fire)
+        requireCompleteGeneration(registry, snapshot, output) // ...and NOW check what the pass actually produced
+        builder.rebuildSearchIndex() // atomic snapshot-read + clean engine rebuild - identical to the endpoint
+        return snapshot
     }
 
     /**
      * One store per configured root - the offline twin of `createContentModule`'s `RootStores`: main rides the
      * backend-selected store, and extras are LOCAL-only (D10 keeps object mode single-root). Name-keyed; its
      * insertion order is nobody's contract (the source list is built from `registry.roots`, and `IndexBuilder`
-     * re-sorts by rank anyway). A failure part-way through closes whatever was already opened, so an unreachable
-     * bucket cannot leak the ktor transport.
+     * re-sorts by rank anyway). The enclosing command scope owns the raw OBJECT resource while this helper
+     * assembles the named roots.
      */
     private fun openStores(
         config: PlainbaseConfig,
         registry: RootRegistry,
         repositories: ContentRepositories,
         decorate: StoreDecorator,
-    ): Map<RootName, ContentStore> {
-        val stores = LinkedHashMap<RootName, ContentStore>()
-        runCatching {
-            // Main is explicit (it rides the backend-selected store); the fold sees ONLY extras, never re-selecting
-            // primary by name. `decorate` wraps EVERY entry, main's included - it is the seam the mid-rebuild-
-            // disappearance test drives, so dropping it here would disarm that test for main's own tree, silently.
-            stores[registry.primary.name] = decorate(registry.primary.name, mainStore(config, repositories))
-            registry.extras.forEach { root ->
-                val store = LocalContentStore(
-                    root = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
-                    ignoreRules = IgnoreRules(),
-                    // Extras inherit main's DATA_DIR exclusion: a legally-nested data dir is never walked as content.
-                    exclusions = listOf(config.dataDir),
-                    rootName = root.name,
-                )
-                stores[root.name] = decorate(root.name, store)
-            }
-        }.onFailure { failure ->
-            if (failure is Error) throw failure
-            stores.values.forEach { (it as? AutoCloseable)?.close() }
-            throw failure
+        operations: OfflineStoreOperations,
+        resources: OfflineStoreResources,
+    ): RootStores {
+        val primary = decorate(registry.primary.name, mainStore(config, registry, repositories, operations, resources))
+        return RootStoreFactory.roots(registry, primary) { root ->
+            decorate(
+                root.name,
+                operations.openLocal(
+                    localInputs(
+                        config,
+                        requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" },
+                        root.name,
+                    ),
+                ),
+            )
         }
-        return stores
     }
 
     /** Main's tree: the CONTENT_DIR store locally, the hydrated DATA_DIR mirror in object mode. */
-    private fun mainStore(config: PlainbaseConfig, repositories: ContentRepositories): ContentStore = when (config.storage.backend) {
-        StorageBackend.LOCAL -> LocalContentStore(
-            root = config.mainContentRoot(),
-            ignoreRules = IgnoreRules(),
-            // The SAME DATA_DIR exclusion the server's store carries (ADR-0011): a legally-nested data
-            // dir must never be walked as CONTENT, or the CLI indexes plainbase.db/search.db as pages and
-            // assets. The server has always excluded it; these two never did, which is the scan-parity gap.
-            exclusions = listOf(config.dataDir),
-        )
-        StorageBackend.OBJECT -> {
-            // Object mode reindexes the DATA_DIR mirror (the bucket is the authority), hydrating it
-            // first - under the DataDirLock already held above, race-free (the server is down).
-            // Build (transport open) BEFORE hydrate, and close it on a hydrate failure so the ktor
-            // client never leaks when the bucket is unreachable.
-            val hybrid = ObjectContentStoreFactory.build(
-                config,
-                IgnoreRules(),
-                dirtyPaths = { repositories.dirtyPages.all().map { it.path.path }.toSet() },
-                isDirty = { repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
+    private fun mainStore(
+        config: PlainbaseConfig,
+        registry: RootRegistry,
+        repositories: ContentRepositories,
+        operations: OfflineStoreOperations,
+        resources: OfflineStoreResources,
+    ): ContentStore = RootStoreFactory.primary(
+        backend = config.storage.backend,
+        local = {
+            operations.openLocal(localInputs(config, config.mainContentRoot(), registry.primary.name))
+        },
+        objectStore = {
+            val store = resources.ownObject(
+                operations.openObject(
+                    config,
+                    IgnoreRules(),
+                    { repositories.dirtyPages.all().map { it.path.path }.toSet() },
+                    { path -> repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, path)) },
+                    // Offline commands have no proof source; an empty snapshot cannot authorize absence.
+                    { RowsAtStart(emptySet(), BindingEpoch(0)) },
+                ),
             )
-            runCatching {
-                hybrid.hydrate()
-            }.onFailure { failure ->
-                if (failure is Error) throw failure
-                hybrid.close()
-                throw failure
-            }
-            hybrid
-        }
-    }
+            // Hydrate while the command holds the DATA_DIR lock and resource scope.
+            operations.hydrateObject(store)
+            store
+        },
+    )
+
+    private fun localInputs(config: PlainbaseConfig, root: Path, name: RootName): LocalStoreInputs =
+        LocalStoreInputs(
+            root = root,
+            ignoreRules = IgnoreRules(),
+            exclusions = listOf(config.dataDir), // DATA_DIR is state, not corpus.
+            rootName = name,
+            onRootUnavailable = {},
+            onIdentityRebind = {},
+        )
 
     /**
      * The PREFLIGHT: reports and refuses the run up front unless EVERY configured root is there. The search rebuild
@@ -281,10 +293,10 @@ object ReindexCommand {
      */
     private fun requireEveryRootAvailable(
         registry: RootRegistry,
-        stores: Map<RootName, ContentStore>,
+        stores: RootStores,
         output: CommandOutput,
     ) {
-        val missing = registry.roots.filterNot { stores.getValue(it.name).available() }
+        val missing = registry.roots.filterNot { stores[it.name].available() }
         if (missing.isEmpty()) return
         missing.forEach { root ->
             output.error("reindex: root '${root.name}' is not available (${root.localPath ?: "object backend"})")

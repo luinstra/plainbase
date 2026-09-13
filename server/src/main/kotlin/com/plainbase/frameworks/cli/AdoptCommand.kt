@@ -1,12 +1,13 @@
 package com.plainbase.frameworks.cli
 
 import app.cash.sqldelight.db.SqlDriver
-import com.plainbase.domain.content.ContentStore
 import com.plainbase.domain.model.IdentityIssue
+import com.plainbase.domain.root.BindingEpoch
 import com.plainbase.domain.root.RootAvailability
 import com.plainbase.domain.root.RootName
 import com.plainbase.domain.root.RootRegistry
 import com.plainbase.domain.root.RootedPath
+import com.plainbase.domain.root.RowsAtStart
 import com.plainbase.domain.service.AdoptWriteFailed
 import com.plainbase.domain.service.AdoptionPass
 import com.plainbase.domain.service.CitationFactory
@@ -20,10 +21,13 @@ import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.config.StorageBackend
 import com.plainbase.frameworks.filesystem.DataDirLock
 import com.plainbase.frameworks.filesystem.IgnoreRules
-import com.plainbase.frameworks.filesystem.LocalContentStore
+import com.plainbase.frameworks.lifecycle.OfflineStoreResources
 import com.plainbase.frameworks.objectstore.ObjectContentStore
-import com.plainbase.frameworks.objectstore.ObjectContentStoreFactory
 import com.plainbase.frameworks.runtime.ContentRepositories
+import com.plainbase.frameworks.runtime.LocalStoreInputs
+import com.plainbase.frameworks.runtime.OfflineStoreOperations
+import com.plainbase.frameworks.runtime.RootStoreFactory
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.sqldelight.DatabaseFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
 import java.nio.file.Path
@@ -77,7 +81,16 @@ object AdoptCommand {
         return run(args, config, output)
     }
 
-    fun run(args: List<String>, config: PlainbaseConfig, output: CommandOutput = systemCommandOutput()): Int {
+    fun run(args: List<String>, config: PlainbaseConfig, output: CommandOutput = systemCommandOutput()): Int =
+        run(args, config, NO_DECORATION, output, OfflineStoreOperations())
+
+    internal fun run(
+        args: List<String>,
+        config: PlainbaseConfig,
+        decorate: StoreDecorator,
+        output: CommandOutput,
+        operations: OfflineStoreOperations,
+    ): Int {
         val mode = parseMode(args)
         if (mode == null) {
             output.error(USAGE)
@@ -89,7 +102,11 @@ object AdoptCommand {
         // preview never falls out of date, yet a fresh tree gains no plainbase.db from a dry run.
         // That same contract is why it stays lock-free below.
         if (mode == AdoptionPass.Mode.PREVIEW) {
-            return adopt(mode, config, DatabaseFactory.createReadOnlyDriver(config.appDatabasePath), output)
+            return operations.openReadOnlyDriver(config.appDatabasePath).use { driver ->
+                OfflineStoreResources(operations.closeObject).use { resources ->
+                    adopt(mode, config, driver, output, decorate, operations, resources)
+                }
+            }
         }
         // RECORD/MATERIALIZE write the db (MATERIALIZE the files too) and trigger createDriver's
         // implicit non-idempotent migrate, so they hold the DataDirLock BEFORE the driver opens,
@@ -99,99 +116,88 @@ object AdoptCommand {
             output.error("adopt: a Plainbase server is holding ${config.dataDir}; stop it before running this command")
             return 1
         }
-        return lock.use { adopt(mode, config, DatabaseFactory.createDriver(config.appDatabasePath), output) }
+        return lock.use {
+            operations.openDriver(config.appDatabasePath).use { driver ->
+                OfflineStoreResources(operations.closeObject).use { resources ->
+                    adopt(mode, config, driver, output, decorate, operations, resources)
+                }
+            }
+        }
     }
 
-    private fun adopt(mode: AdoptionPass.Mode, config: PlainbaseConfig, driver: SqlDriver, output: CommandOutput): Int {
+    private fun adopt(
+        mode: AdoptionPass.Mode,
+        config: PlainbaseConfig,
+        driver: SqlDriver,
+        output: CommandOutput,
+        decorate: StoreDecorator,
+        operations: OfflineStoreOperations,
+        resources: OfflineStoreResources,
+    ): Int {
         val registry = RootRegistry.of(config.roots.list)
-        val stores = LinkedHashMap<RootName, ContentStore>()
-        try {
-            val database = DatabaseFactory.createDatabase(driver)
-            val repositories = ContentRepositories(database)
-            when (config.storage.backend) {
-                // EVERY configured root, not just main. The identity an adopt writes into a page's frontmatter is
-                // the ONLY copy of it that survives a lost DATA_DIR - so a root this pass skips is a root whose
-                // permalinks and citations die with that directory, which is the exact disaster --write-ids exists
-                // to prevent. Extras are local-only in v1 (D10), so this is the whole local topology.
-                //
-                // Main is EXPLICIT (its tree is `mainContentRoot()`, the env-sourced path, not `localPath`); the fold
-                // sees ONLY extras and never re-selects primary by name. The report below iterates the REGISTRY, so this
-                // map's insertion order is nobody's contract.
-                StorageBackend.LOCAL -> {
-                    stores[registry.primary.name] = localStore(config, config.mainContentRoot(), registry.primary.name)
-                    registry.extras.forEach { root ->
-                        val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
-                        stores[root.name] = localStore(config, path, root.name)
-                    }
-                }
-                StorageBackend.OBJECT -> {
-                    // Object mode is single-root by decision (D10 rejects an explicit roots block over a bucket), so
-                    // there is exactly one tree here: the DATA_DIR mirror (the bucket is the authority).
-                    // RECORD/MATERIALIZE hydrate first - under the lock already held, race-free (the
-                    // server is down). PREVIEW hydrates NOTHING (its contract is zero writes and it is
-                    // lock-free): it reads the existing mirror as-is, point-in-time, possibly stale.
-                    // Register BEFORE hydrate so a hydrate-failure early return still closes the transport.
-                    val hybrid = ObjectContentStoreFactory.build(
+        val database = DatabaseFactory.createDatabase(driver)
+        val repositories = ContentRepositories(database)
+        val rawPrimary = RootStoreFactory.primary(
+            backend = config.storage.backend,
+            local = {
+                operations.openLocal(localInputs(config, config.mainContentRoot(), registry.primary.name))
+            },
+            objectStore = {
+                val raw = resources.ownObject(
+                    operations.openObject(
                         config,
                         IgnoreRules(),
-                        dirtyPaths = { repositories.dirtyPages.all().map { it.path.path }.toSet() },
-                        isDirty = { repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, it)) },
-                    )
-                    stores[registry.primary.name] = hybrid
-                    if (mode != AdoptionPass.Mode.PREVIEW && !hydrate(hybrid, output)) {
-                        return 1
-                    }
-                }
-            }
-            if (refuseUnavailableRoots(registry, stores, output)) return 1
-            val pass = AdoptionPass(
-                sources = stores.map { (root, store) -> AdoptionPass.Source(root, store) },
-                idMap = repositories.idMap,
-                identity = PageIdentityService(UuidV7IdProvider()),
-                patcher = FrontmatterPatcher(),
-                // The shared root-loss rule (probe decides, a live-root fault still rethrows). Its availability
-                // holder is inert here - a CLI serves no 503s and exits - but the CLASSIFICATION is the one every
-                // other rooted call takes, so a vanished disk surfaces as the actionable abort below rather than
-                // as a raw IOException stack trace, and a corrupt file is never laundered into "the disk is gone".
-                rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
-                // The CAS precondition for every `--write-ids` file write: the frozen hash of the bytes the patch
-                // was computed from, so adopt replaces the page it PLANNED and never creates or clobbers one.
-                citations = CitationFactory(),
-                rootRank = registry::rank,
-                registeredRoots = registry.roots.map { it.name }.toSet(),
-            )
-            val qualified = stores.size > 1
-            // ONE global read-only plan across ALL roots, THEN the write (D19). The identity motivation was a
-            // cross-root rank contest, which per-root identity dissolved (ADR-0012), but a WITHIN-root one took
-            // its place with the shared owner gate: a materialized binding whose file lost its `id:` is
-            // displaceable, so the winner's bind sweeps its row and only resolve-before-bind keeps the beaten
-            // owner visible enough to record its issue instead of silently minting it a fresh id - which
-            // `--write-ids` would then put in the FILE. Plus whole-command ATOMICITY (the plan writes nothing,
-            // so a root vanishing mid-scan costs nothing) and preview/write equivalence.
-            val plan = when (val execution = executePlan(pass, mode, qualified, output)) {
-                is PlanExecution.Success -> execution.plan
-                is PlanExecution.Failed -> return execution.exitCode
-            }
-
-            // D7 order, said out loud rather than inherited from a map's insertion order. The two key sets are equal:
-            // LOCAL registers every registry root above, and OBJECT is single-root by D10 (refused at parse).
-            registry.roots.forEach { root ->
-                output.result(
-                    render(plan.report(root.name), root.name, adoptedTree(config, registry, root.name), qualified),
-                    newline = false,
+                        { repositories.dirtyPages.all().map { it.path.path }.toSet() },
+                        { path -> repositories.dirtyPages.isDirty(RootedPath(RootName.PRIMARY, path)) },
+                        // Offline commands have no proof source; an empty snapshot cannot authorize absence.
+                        { RowsAtStart(emptySet(), BindingEpoch(0)) },
+                    ),
                 )
-            }
-            // ONE caveat for the whole run, not one per root (it is about the WRITE mechanism, not about a tree).
-            if (mode != AdoptionPass.Mode.RECORD) output.result(NETWORK_FS_CAVEAT)
-        } finally {
-            stores.values.forEach { (it as? AutoCloseable)?.close() } // the object-store transport; LocalContentStore is not closeable
-            driver.close()
+                raw
+            },
+        )
+        val objectStore = rawPrimary as? ObjectContentStore
+        val primary = decorate(registry.primary.name, rawPrimary)
+        val stores = RootStoreFactory.roots(registry, primary) { root ->
+            val path = requireNotNull(root.localPath) { "extra root '${root.name}' must be local-backed" }
+            decorate(root.name, operations.openLocal(localInputs(config, path, root.name)))
         }
+        if (mode != AdoptionPass.Mode.PREVIEW) {
+            // Mutating hydration runs after lock acquisition; PREVIEW never reaches this branch.
+            objectStore?.let { if (!hydrate(it, output, operations)) return 1 }
+        }
+        if (refuseUnavailableRoots(registry, stores, output)) return 1
+        val pass = AdoptionPass(
+            sources = registry.roots.map { root -> AdoptionPass.Source(root.name, stores[root.name]) },
+            idMap = repositories.idMap,
+            identity = PageIdentityService(UuidV7IdProvider()),
+            patcher = FrontmatterPatcher(),
+            // The shared root-loss rule (probe decides, a live-root fault still rethrows). Its availability
+            // holder is inert here - a CLI serves no 503s and exits.
+            rootLoss = RootLossClassifier(RootAvailability(Clock.System)),
+            citations = CitationFactory(),
+            rootRank = registry::rank,
+            registeredRoots = registry.roots.map { it.name }.toSet(),
+        )
+        val qualified = registry.roots.size > 1
+        // ONE global read-only plan across ALL roots, THEN the write (D19).
+        val plan = when (val execution = executePlan(pass, mode, qualified, output)) {
+            is PlanExecution.Success -> execution.plan
+            is PlanExecution.Failed -> return execution.exitCode
+        }
+
+        registry.roots.forEach { root ->
+            output.result(
+                render(plan.report(root.name), root.name, adoptedTree(config, registry, root.name), qualified),
+                newline = false,
+            )
+        }
+        if (mode != AdoptionPass.Mode.RECORD) output.result(NETWORK_FS_CAVEAT)
         return 0
     }
 
-    private fun hydrate(store: ObjectContentStore, output: CommandOutput): Boolean =
-        runCatching { store.hydrate() }.fold(
+    private fun hydrate(store: ObjectContentStore, output: CommandOutput, operations: OfflineStoreOperations): Boolean =
+        runCatching { operations.hydrateObject(store) }.fold(
             onSuccess = { true },
             onFailure = { failure ->
                 when (failure) {
@@ -304,10 +310,10 @@ object AdoptCommand {
      */
     private fun refuseUnavailableRoots(
         registry: RootRegistry,
-        stores: Map<RootName, ContentStore>,
+        stores: RootStores,
         output: CommandOutput,
     ): Boolean {
-        val missing = registry.roots.filter { it.name in stores }.filterNot { stores.getValue(it.name).available() }
+        val missing = registry.roots.filterNot { stores[it.name].available() }
         if (missing.isEmpty()) return false
         missing.forEach { root ->
             output.error("adopt: root '${root.name}' is not available (${root.localPath ?: "object backend"})")
@@ -322,13 +328,15 @@ object AdoptCommand {
 
     private class CommandEventPublicationFailed(cause: Exception) : RuntimeException(cause)
 
-    /**
-     * One root's offline tree, carrying the SAME DATA_DIR exclusion the server's store does (ADR-0011): a legally-
-     * nested data dir must never be walked as CONTENT, or the CLI indexes plainbase.db/search.db as pages and assets.
-     * The server has always excluded it; the two CLIs never did, which was the scan-parity gap.
-     */
-    private fun localStore(config: PlainbaseConfig, root: Path, name: RootName): LocalContentStore =
-        LocalContentStore(root = root, ignoreRules = IgnoreRules(), exclusions = listOf(config.dataDir), rootName = name)
+    private fun localInputs(config: PlainbaseConfig, root: Path, name: RootName): LocalStoreInputs =
+        LocalStoreInputs(
+            root = root,
+            ignoreRules = IgnoreRules(),
+            exclusions = listOf(config.dataDir), // DATA_DIR is state, not corpus.
+            rootName = name,
+            onRootUnavailable = {},
+            onIdentityRebind = {},
+        )
 
     /** The tree a root's pass actually walked: its own directory locally, the DATA_DIR mirror for an object main. */
     private fun adoptedTree(config: PlainbaseConfig, registry: RootRegistry, root: RootName): Path =
@@ -414,6 +422,8 @@ object AdoptCommand {
     }
 
     private const val USAGE = "usage: plainbase adopt [--write-ids [--dry-run]]"
+
+    private val NO_DECORATION: StoreDecorator = { _, store -> store }
 
     /** Operator-facing durability caveat (plan line 555): network filesystems lose crash-atomicity. */
     private const val NETWORK_FS_CAVEAT =

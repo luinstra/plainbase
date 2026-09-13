@@ -29,9 +29,9 @@ import com.plainbase.domain.service.SectionSplitter
 import com.plainbase.domain.service.UuidV7IdProvider
 import com.plainbase.frameworks.filesystem.LocalContentStore
 import com.plainbase.frameworks.git.NoOpHistoryProvider
-import com.plainbase.frameworks.koin.HistoryProviders
-import com.plainbase.frameworks.koin.RootStores
+import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.RootBootProbe
+import com.plainbase.frameworks.runtime.RootStores
 import com.plainbase.frameworks.scheduling.ExecutorAlarm
 import com.plainbase.frameworks.search.Fts5SearchProvider
 import com.plainbase.frameworks.search.SearchDb

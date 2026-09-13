@@ -2,7 +2,6 @@ package com.plainbase.frameworks.koin
 
 import com.plainbase.domain.history.CommitIdentity
 import com.plainbase.domain.history.HistoryProvider
-import com.plainbase.domain.root.RootName
 import com.plainbase.domain.service.WriteHistoryHook
 import com.plainbase.frameworks.config.PlainbaseConfig
 import com.plainbase.frameworks.git.GitBundleDr
@@ -10,6 +9,7 @@ import com.plainbase.frameworks.git.GitExecutor
 import com.plainbase.frameworks.lifecycle.ServerResourceOwner
 import com.plainbase.frameworks.lifecycle.ServerResourcePhase
 import com.plainbase.frameworks.objectstore.ObjectContentStore
+import com.plainbase.frameworks.runtime.HistoryProviders
 import com.plainbase.frameworks.runtime.RootHistorySelection
 import org.koin.dsl.module
 import org.koin.dsl.onClose
@@ -60,16 +60,5 @@ internal fun createHistoryModule(
         WriteHistoryHook { root, path, bytes, author, committer ->
             histories[root].commit(path, bytes, author, committer)?.sha
         }
-    }
-}
-
-/** The per-root provider map; missing names are programming errors at the lookup boundary. */
-class HistoryProviders(private val byRoot: Map<RootName, HistoryProvider>) {
-
-    /** Primary provider used by primary-only consumers. */
-    val primary: HistoryProvider get() = get(RootName.PRIMARY)
-
-    operator fun get(root: RootName): HistoryProvider = requireNotNull(byRoot[root]) {
-        "no history provider for root '$root': a per-root lookup ran on an unregistered root"
     }
 }
