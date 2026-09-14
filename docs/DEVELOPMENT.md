@@ -76,10 +76,12 @@ Five jobs gate `main` (`.github/workflows/ci.yml`):
 - **`native-gate` (linux-x64)** - `nativeCompile` → `nativeTest` → the positive `gitZombieNativePid1`
   control → the spike (9/9) → the enforced-auth smoke again, against the native binary → the native-startup
   regression tripwire.
-- **`frontend-smoke`** - Playwright, booting both an auth-off and an enforced-builtin server;
+- **`frontend-smoke`** - Playwright, with a fresh scenario server per test attempt;
   carries the CSP zero-violation gate (`csp.spec.ts`) and the enforced-builtin approval flow
   (`review.spec.ts`). Deliberately outside `./gradlew build` - a browser-download flake must never
   paint the JAR floor red.
+
+Focused smoke runs accept `-PsmokeArgs` as whitespace-separated tokens; arguments containing spaces are not preserved as one token.
 
 Release builds (`.github/workflows/release.yml`) produce the universal JAR
 plus three native binaries: linux-x64, linux-arm64, and macos-arm64.

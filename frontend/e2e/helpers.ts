@@ -14,6 +14,19 @@ export async function gotoExpectStatus(page: Page, url: string, status = 200): P
   return response;
 }
 
+/** Waits for the loaded tree UI gate before keyboard search; the always-mounted trigger is not a data signal. */
+export async function waitForSearchReady(page: Page): Promise<void> {
+  await expect(page.locator('[data-pb-sidebar] a[href="/docs"]')).toBeVisible();
+  await expect(page.locator("[data-pb-search-trigger]")).toBeVisible();
+}
+
+/** Navigates with a status check, then waits until keyboard search can safely receive input. */
+export async function gotoAndWaitForSearchReady(page: Page, url: string, status = 200): Promise<Response | null> {
+  const response = await gotoExpectStatus(page, url, status);
+  await waitForSearchReady(page);
+  return response;
+}
+
 /** Plants a marker that a full page (re)load would wipe. */
 export async function plantNoReloadMarker(page: Page) {
   await page.evaluate(() => {

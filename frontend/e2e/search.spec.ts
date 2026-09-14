@@ -1,5 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-import { gotoExpectStatus } from "./helpers";
+import { expect, test, type Page, type Route } from "./smoke-fixtures";
+import { gotoAndWaitForSearchReady, gotoExpectStatus, waitForSearchReady } from "./helpers";
 
 /**
  * Chunk-S7 search-UI acceptance flow against the real server (CIO + embedded SPA + FTS5)
@@ -7,32 +7,73 @@ import { gotoExpectStatus } from "./helpers";
  */
 
 async function openPalette(page: Page) {
+  await waitForSearchReady(page);
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.locator("[data-pb-search-input]")).toBeFocused();
 }
 
 test("Cmd/Ctrl+K opens the palette in Stage 1 (quick-switcher); Esc closes", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await expect(page.locator('[data-pb-search][data-pb-search-stage="jump"]')).toBeVisible();
   await page.keyboard.press("Escape"); // Stage-1 Esc closes
   await expect(page.locator("[data-pb-search]")).toBeHidden();
 });
 
+test("search readiness waits for the delayed initial tree before keyboard use", async ({ page }) => {
+  let releaseTree!: () => void;
+  const treeReleased = new Promise<void>((resolve) => {
+    releaseTree = resolve;
+  });
+  let treeRequestSeen = false;
+  const delayInitialTree = async (route: Route) => {
+    treeRequestSeen = true;
+    await treeReleased;
+    await route.continue();
+  };
+
+  await page.route("**/api/v1/tree", delayInitialTree);
+  try {
+    await gotoExpectStatus(page, "/docs/welcome");
+    let ready = false;
+    const readiness = waitForSearchReady(page).then(() => {
+      ready = true;
+    });
+    await expect.poll(() => treeRequestSeen).toBe(true);
+    expect(ready).toBe(false);
+
+    releaseTree();
+    await readiness;
+
+    let searchRequests = 0;
+    let treeRequestsAfterReady = 0;
+    page.on("request", (request) => {
+      const url = request.url();
+      if (url.includes("/api/v1/search")) searchRequests += 1;
+      if (url.includes("/api/v1/tree")) treeRequestsAfterReady += 1;
+    });
+    await openPalette(page);
+    await page.locator("[data-pb-search-input]").fill("deploy");
+    await expect(page.locator('[data-pb-search-item="jump"]').first()).toContainText("Deploy Guide");
+    expect(searchRequests).toBe(0);
+    expect(treeRequestsAfterReady).toBe(0);
+  } finally {
+    releaseTree();
+    await page.unroute("**/api/v1/tree", delayInitialTree);
+  }
+});
+
 test("Stage 1 quick-switcher is zero-network and Enter navigates via node.url", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
 
   let searchRequests = 0;
   let treeRequestsAfterOpen = 0;
-  let trackTree = false;
-  await page.route("**/api/v1/**", (route) => {
-    const url = route.request().url();
+  page.on("request", (request) => {
+    const url = request.url();
     if (url.includes("/api/v1/search")) searchRequests += 1;
-    if (trackTree && url.includes("/api/v1/tree")) treeRequestsAfterOpen += 1;
-    return route.continue();
+    if (url.includes("/api/v1/tree")) treeRequestsAfterOpen += 1;
   });
 
-  trackTree = true;
   await openPalette(page);
   // Type a partial title; the fuzzy match appears synchronously, no network.
   await page.locator("[data-pb-search-input]").fill("deploy");
@@ -82,7 +123,7 @@ test("a collision-loser quick-switch hit navigates via /p/{root}/{id}", async ({
   ).toEqual(["Shadowed Loser"]);
   const loserTitle = losers[0];
 
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill(loserTitle);
   await expect(page.locator('[data-pb-search-item="jump"]').first()).toContainText(loserTitle);
@@ -92,7 +133,7 @@ test("a collision-loser quick-switch hit navigates via /p/{root}/{id}", async ({
 });
 
 test("activating the bridge enters Stage 2 (full-text only) with a stage label", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -104,7 +145,7 @@ test("activating the bridge enters Stage 2 (full-text only) with a stage label",
 });
 
 test("Stage 2 Esc returns to Stage 1; a second Esc closes", async ({ page }) => {
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -118,7 +159,7 @@ test("Stage 2 Esc returns to Stage 1; a second Esc closes", async ({ page }) => 
 
 test("full-text Enter deep-links to the section anchor, scrolls, and pulses", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -136,7 +177,7 @@ test("full-text Enter deep-links to the section anchor, scrolls, and pulses", as
 test("reduced-motion: deep-link still scrolls but does not pulse", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1280, height: 380 });
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await openPalette(page);
   await page.locator("[data-pb-search-input]").fill("rollback");
   await page.locator("[data-pb-search-bridge]").click();
@@ -168,7 +209,7 @@ test("a deep link to a missing fragment lands at top with no error", async ({ pa
 });
 
 test("the page behind does not scroll while the palette is open", async ({ page }) => {
-  await page.goto("/docs/guides/deploy-guide");
+  await gotoAndWaitForSearchReady(page, "/docs/guides/deploy-guide");
   await openPalette(page);
   // body is scroll-locked while open.
   expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).toBe("hidden");
@@ -179,7 +220,7 @@ test("the page behind does not scroll while the palette is open", async ({ page 
 
 test("dark mode renders the palette via token swap only", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/docs/welcome");
+  await gotoAndWaitForSearchReady(page, "/docs/welcome");
   await page.locator("[data-pb-theme-toggle]").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await openPalette(page);

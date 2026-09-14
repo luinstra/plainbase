@@ -1,19 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./smoke-fixtures";
 import { gotoExpectStatus } from "./helpers";
 
 /**
  * W7 master criterion 6 (Playwright, real server): an edited page shows updated content AND updated
- * history WITHOUT a server restart. Git mode is forced ON in the smoke env (smoke-server.mjs / D-9), so
- * `/history` returns git_enabled:true. The `.smoke-content` repo is freshly `git init`ed with NO seeded
- * commit (MF-4) — so baseline history is EMPTY and the FIRST save creates the first commit. The single
- * long-lived webServer (playwright.config.ts) never restarts across the flow, so "no restart" is
- * inherent; the meaningful assertions are baseline-empty → edit+save → the list GREW + the read view
- * reflects the edit, all served by the same running process.
+ * history WITHOUT a server restart. Each test attempt owns a fresh Git-enabled content copy, so baseline
+ * history is EMPTY and the FIRST save creates the first commit.
  */
-
-// A page NO other smoke spec mutates (edit.spec.ts owns deploy-guide; smoke.spec.ts only navigates to
-// getting-started). An isolated page keeps this spec's baseline-empty → grows-after-save flow clean,
-// regardless of test ordering on the shared git-on server.
 const PATH = "/docs/guides/getting-started";
 
 test("editing a page grows its history without a server restart", async ({ page }) => {
@@ -42,8 +34,7 @@ test("editing a page grows its history without a server restart", async ({ page 
   await save.click();
   await expect(page.locator("[data-pb-editor-notice]")).toBeVisible();
 
-  // 3a. The history GREW — at least one commit row now exists where there was none (the same running
-  // server now reports the first commit; no restart).
+  // 3a. The same server now reports the first commit; the test does not restart it between save and history.
   await gotoExpectStatus(page, `${PATH}?mode=history`);
   await expect(page.locator("[data-pb-history]")).toBeVisible();
   await expect(page.locator("[data-pb-commit]").first()).toBeVisible();

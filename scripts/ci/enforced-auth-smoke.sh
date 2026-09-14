@@ -25,8 +25,7 @@ tmp=$(mktemp -d)
 SERVER_PID=""
 trap '[ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
-# Isolation: assertion 7's PUT mutates CONTENT_DIR — always a throwaway copy, never the checkout
-# (the smoke-server.mjs rationale). No .git in the copy => git auto-detect stays off.
+# This script's throwaway content copy has no .git, so git auto-detection stays off.
 cp -r fixtures/demo-docs "$tmp/content"
 mkdir -p "$tmp/data"
 
@@ -45,14 +44,14 @@ expect_error_code() { # file expected-code desc — pins the frozen envelope pat
 }
 
 # Both setup-token and mint-token print the plaintext on the line immediately BEFORE the
-# "store this now" hint (the smoke-server.mjs parse contract); fail LOUD if the hint is absent.
+# "store this now" hint used by the browser smoke fixture; fail LOUD if the hint is absent.
 parse_token() {
   awk '/^store this now/ { print prev; found = 1; exit } NF { prev = $0 }
        END { if (!found) { print "no store-this-now hint in CLI output" > "/dev/stderr"; exit 1 } }'
 }
 
 # Seed BEFORE boot: the CLI takes the DataDirLock and refuses against a live server, and each
-# invocation releases it on exit before the next acquires it (the smoke-server.mjs precedent).
+# invocation releases it on exit before the next acquires it.
 SETUP_TOKEN=$("$BIN" admin setup-token | parse_token)
 [ -n "$SETUP_TOKEN" ] || fail "could not parse setup-token from 'admin setup-token' output"
 AGENT_TOKEN=$("$BIN" admin mint-token ci-agent read-only | parse_token)

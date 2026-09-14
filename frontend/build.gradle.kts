@@ -50,13 +50,17 @@ tasks.register("build") {
 }
 
 // Playwright smoke flow against the REAL server (installed dist + embedded SPA + fixture
-// tree) — see playwright.config.ts. A separate invocation, NOT part of `build`: it
+// tree) — see playwright.config.ts and the test-scoped server fixture. A separate invocation, NOT part of `build`: it
 // downloads a Chromium on first run, which would break the hermetic JAR floor.
 tasks.register<NpmTask>("smokeTest") {
     group = "verification"
     description = "Runs the Playwright smoke flow against the installed server serving fixtures/demo-docs"
     dependsOn(tasks.npmInstall, ":server:installDist")
-    args.set(listOf("run", "smoke"))
+    // smokeArgs is whitespace-tokenized; callers cannot pass one argument containing spaces.
+    val smokeArgs = providers.gradleProperty("smokeArgs")
+        .map { value -> value.trim().split(Regex("\\s+")).filter(String::isNotBlank) }
+        .getOrElse(emptyList())
+    args.set(listOf("run", "smoke", "--") + smokeArgs)
 }
 
 tasks.register<Delete>("clean") {

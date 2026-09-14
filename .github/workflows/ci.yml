@@ -319,10 +319,9 @@ jobs:
 
   # ---- Playwright smoke (C1c): deliberately OUTSIDE `./gradlew build` (hermetic-floor rationale,
   # frontend/build.gradle.kts) and a separate job so a browser-download/flake never paints the JAR
-  # floor red. Boots ALL FOUR webServers (playwright.config.ts) — auth-off, enforced-builtin
-  # (review.spec.ts approval flow), and the two multi-root installs: both-serving, and one whose
-  # extra root's path is gone (the 503/outage surfaces) — and carries the C1a CSP zero-violation
-  # gate (csp.spec.ts) into CI. ----
+  # floor red. The test-scoped fixture starts exactly one of four scenarios per attempt: auth-off,
+  # enforced-builtin (review.spec.ts approval flow), or either multi-root install. It carries the C1a CSP
+  # zero-violation gate (csp.spec.ts) into CI. ----
   frontend-smoke:
     name: Playwright smoke (open + enforced-builtin + multi-root, CSP gate)
     runs-on: ubuntu-latest
@@ -356,8 +355,17 @@ jobs:
       - name: Install Chromium + system deps
         run: npx --yes playwright@1.63.0 install --with-deps chromium
 
-      - name: Playwright smoke (boots auth-off AND enforced-builtin servers)
+      - name: Playwright smoke (fixture owns a fresh server for every attempt)
         run: ./gradlew :frontend:smokeTest --console=plain
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-failure-artifacts
+          if-no-files-found: warn
+          path: |
+            frontend/test-results/
 
   # ---- The ONE required status check on `main`.
   #

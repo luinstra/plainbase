@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./smoke-fixtures";
 import {
   expandAllSidebarFolders,
   expectNoReload,
@@ -9,8 +9,7 @@ import {
 } from "./helpers";
 
 /**
- * The two-root SPA, against a real two-root server (playwright.config.ts `multi-root` project:
- * SMOKE_ROOTS=multi, `docs` + `extra`, both serving).
+ * The two-root SPA, against a real two-root server with `docs` and `extra` both serving.
  *
  * The sidebar remains one layout column and exposes one root tree at a time. The selector is
  * navigation: choosing a root pushes its server-issued root URL without reloading the shell.

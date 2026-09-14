@@ -12,11 +12,7 @@ gradlew.bat
 node_modules/
 frontend/dist/
 frontend/.node/
-frontend/.smoke-data/
-frontend/.smoke-content/
-frontend/.smoke-data-*/
-frontend/.smoke-content-*/
-frontend/.smoke-extra-*/
+frontend/.smoke-runs/
 frontend/test-results/
 frontend/playwright-report/
 

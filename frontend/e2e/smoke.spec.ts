@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./smoke-fixtures";
 import { expandAllSidebarFolders, expectNoReload, gotoExpectStatus, plantNoReloadMarker } from "./helpers";
 
 /**
