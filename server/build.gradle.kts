@@ -196,7 +196,7 @@ dependencies {
     // needs the logback classes at compile time. Runtime allowlist unaffected (same artifact).
     testImplementation(libs.logback.classic)
 
-    // nativeTest source set: kotlin.test (+ its JUnit 5 binding), the JUnit Platform launcher/engine,
+    // nativeTest source set: kotlin.test (+ its JUnit 6 binding), the JUnit Platform launcher/engine,
     // GraalVM's native JUnit launcher, and the ktor test host ONLY - deliberately no Kotest/MockK, so
     // the native test image's classpath carries no native-hostile engine. The junit-platform pieces
     // and GraalVM launcher are explicit here because the main `test` set inherited the jupiter engine
@@ -411,6 +411,10 @@ graalvmNative {
             // realistic corpora; it stays overridable by a runtime -Xmx for very large trees.
             buildArgs.add("-R:MaxHeapSize=256m")
             buildArgs.add("-J-Xmx6g")
+            // Preserve the macOS 14 deployment floor on newer build hosts.
+            if (System.getProperty("os.name") == "Mac OS X") {
+                buildArgs.add("-H:NativeLinkerOption=-mmacosx-version-min=14.0")
+            }
             resources.autodetect()
         }
         named("test") {
@@ -431,7 +435,7 @@ graalvmNative {
 }
 
 // ---- Re-point the native test image at the nativeTest source set --------------------------
-// How the plugin's native test image gets its test set: GraalVM Native Build Tools 1.1.1 attaches
+// How the plugin's native test image gets its test set: GraalVM Native Build Tools attaches
 // JUnit Platform UID tracking to a JVM `Test` task (system properties
 // `junit.platform.listeners.uid.tracking.{enabled,output.dir}`); `nativeTestCompile`
 // (BuildNativeImageTask) then reads that directory via `testListDirectory` and compiles/runs

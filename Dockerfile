@@ -1,8 +1,13 @@
 # ---- Build stage: Gradle builds backend + frontend (node is downloaded by the build) ----
 # Base pinned by digest (C5 item 8) for a reproducible release image; re-resolve with
 # `docker buildx imagetools inspect eclipse-temurin:21-jdk` when bumping the JDK line.
-FROM eclipse-temurin:21-jdk@sha256:1eeacc8c295ed4805f6ffead2417b1936aad296b02ea9e56b457230befc9e98d AS build
+FROM eclipse-temurin:21-jdk@sha256:1f79c73404fb0cccf9a3459eda22892f368d994b1028d6fb1ae871c1f49749a6 AS build
 WORKDIR /src
+
+# Build-only libatomic1 for Node 26 linux-arm64; use the same distro package-update policy as runtime curl/git.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # C5: the release workflow passes the tag-derived version through so the image's binary
 # self-reports it too (root build.gradle.kts `-PreleaseVersion`, item 8); empty = dev SNAPSHOT.
@@ -21,7 +26,7 @@ RUN ./gradlew :server:installDist --no-daemon ${RELEASE_VERSION:+-PreleaseVersio
 # Native-image variants are produced by CI per platform; the compose tier ships the JAR.
 # Base pinned by digest (C5 item 8); re-resolve with
 # `docker buildx imagetools inspect eclipse-temurin:21-jre` when bumping the JRE line.
-FROM eclipse-temurin:21-jre@sha256:d2b9f8f12212cadcfdf889461531784e8fd097feade954d65b31ee7a71c473ec
+FROM eclipse-temurin:21-jre@sha256:a80c51f2d09a3e7e00d521f1c817bbceb6b3be94109b4a784d46078099882dda
 
 # OCI labels GHCR reads for the package page: `source` connects the package to this repo (so the
 # page shows the repo README + inherits its visibility), `description` is the one line of

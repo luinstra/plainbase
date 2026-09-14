@@ -7,7 +7,9 @@ plugins {
 node {
     // Hermetic builds: Gradle downloads its own Node, so Docker/CI only need a JDK.
     download.set(true)
-    version.set("22.22.3")
+    // Latest stable Node Current; npm is updated separately.
+    version.set("26.8.2")
+    npmVersion.set("12.0.2")
     workDir.set(layout.projectDirectory.dir(".node/node"))
     npmWorkDir.set(layout.projectDirectory.dir(".node/npm"))
 }

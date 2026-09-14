@@ -103,7 +103,7 @@ class ProposalDtoNativeTest {
     }
 
     @Test
-    fun `checkApprove enforced deny+allow holds natively (hole #4)`() {
+    fun `checkApprove enforced deny+allow holds natively`() {
         DatabaseFactory.createInMemoryDriver().use { driver ->
             val db = DatabaseFactory.createDatabase(driver)
             val roles = SqlDelightRoleRepository(db)

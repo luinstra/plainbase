@@ -1,31 +1,32 @@
 [versions]
-kotlin = "2.4.0"
+kotlin = "2.4.20"
 kotlinx-serialization = "1.11.0"
 kotlinx-coroutines = "1.11.0"
-kotlinx-datetime = "0.7.0"
-ktor = "3.5.0"
+kotlinx-datetime = "0.8.0"
+ktor = "3.5.2"
+typesafe-config = "1.4.9"
 # Dependency bump checklist: compare BeginImmediateSqliteDriver's copied connection managers against upstream JdbcSqliteDriver.
 sqldelight = "2.3.2"
-sqlite-jdbc = "3.53.2.0"
-koin = "4.2.1"
-jgit = "7.6.0.202603022253-r"
+sqlite-jdbc = "3.53.4.0"
+koin = "4.2.2"
+jgit = "7.8.0.202609011348-r"
 flexmark = "0.64.8"
-bouncycastle = "1.84"
-mcp = "0.13.0"
-logback = "1.5.34"
-kotlin-logging = "7.0.14"
-graalvm-buildtools = "1.1.1"
-junit = "5.10.1"
-# JUnit Platform trails Jupiter by one major (Jupiter 5.10.x ⇄ Platform 1.10.x) — bump together.
-junit-platform = "1.10.1"
+bouncycastle = "1.86"
+mcp = "0.15.0"
+logback = "1.6.3"
+kotlin-logging = "8.0.4"
+graalvm-buildtools = "1.1.12"
+junit = "6.1.3"
+# JUnit Jupiter and Platform stay aligned at 6.1.3 — bump together.
+junit-platform = "6.1.3"
 node-gradle = "7.1.0"
-kotlinter = "5.6.0"
+kotlinter = "5.7.0"
 ktlint = "1.8.0"
 kover = "0.9.9"
-detekt = "2.0.0-alpha.5"
-kotest = "5.9.1"
-mockk = "1.14.3"
-snakeyaml = "2.4"
+detekt = "2.0.0-alpha.6"
+kotest = "6.2.5"
+mockk = "1.14.11"
+snakeyaml = "2.7"
 
 [libraries]
 # Ktor server — CIO engine ONLY (Netty is banned: reflection-heavy, hostile to native image)
@@ -54,11 +55,8 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 # LocalDate.parse is reflection-free / native-image safe. Owner-approved server dependency.
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 
-# HOCON config (ADR-0009) — typesafe-config. Already on the allowlist transitively (via Ktor); declared
-# EXPLICITLY here so the direct API use (ConfigFactory/Config in PlainbaseConfig) does not depend on a
-# transitive that a Ktor bump could drop. No version: the resolved (Ktor-supplied) one is used, so the module
-# set — and the allowlist — is unchanged (zero drift).
-typesafe-config = { module = "com.typesafe:config" }
+# Direct API dependency for ConfigFactory/Config; request latest stable 1.4.9 instead of Ktor's transitive version.
+typesafe-config = { module = "com.typesafe:config", version.ref = "typesafe-config" }
 
 # Persistence — SQLDelight (compile-time SQL codegen, zero reflection), NOT Exposed
 sqldelight-jdbc-driver = { module = "app.cash.sqldelight:jdbc-driver", version.ref = "sqldelight" }
@@ -92,7 +90,7 @@ kotlin-logging = { module = "io.github.oshai:kotlin-logging", version.ref = "kot
 # kotlin.test is MANDATORY for the nativeTest source set: it runs cleanly inside the closed-world
 # native image (see the test split in server/build.gradle.kts). Kotest/MockK are JVM-only.
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
-# JUnit 5 binding for kotlin.test (pulls junit-jupiter); the engine the native test image runs.
+# JUnit 6 binding for kotlin.test (pulls junit-jupiter); the engine the native test image runs.
 kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
 # JUnit Platform launcher + engine: required on the nativeTest classpath so GraalVM's
 # NativeImageJUnitLauncher entry point and the jupiter engine are present in the native test image.

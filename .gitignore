@@ -43,6 +43,7 @@ frontend/playwright-report/
 
 # Native image build output
 *.build_artifacts.txt
+/server/test-results-native/
 
 # Env
 .env
